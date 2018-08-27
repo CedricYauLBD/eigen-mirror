@@ -31,6 +31,7 @@ class gemm_packing_space {
   aligned_stack_memory_handler<LhsScalar> m_lhs_lifetime;
   aligned_stack_memory_handler<RhsScalar> m_rhs_lifetime;
 
+#if !defined(EIGEN_GPU_COMPILE_PHASE)
   static EIGEN_DONT_INLINE unsigned char* allocateCombined(std::size_t sizeA, std::size_t sizeB, LhsScalar*& blockA,
                                                            RhsScalar*& blockB) {
     check_size_for_overflow<LhsScalar>(sizeA);
@@ -49,9 +50,16 @@ class gemm_packing_space {
     blockB = static_cast<RhsScalar*>(storageB);
     return static_cast<unsigned char*>(storage);
   }
+#endif
 
-  static unsigned char* allocate(std::size_t sizeA, std::size_t sizeB, LhsScalar*& blockA, RhsScalar*& blockB) {
+  EIGEN_DEVICE_FUNC static unsigned char* allocate(std::size_t sizeA, std::size_t sizeB, LhsScalar*& blockA,
+                                                   RhsScalar*& blockB) {
     if (blockA != nullptr || blockB != nullptr || sizeA == 0 || sizeB == 0) return nullptr;
+#if defined(EIGEN_GPU_COMPILE_PHASE)
+    // Device code takes caller-supplied (fixed-size) blocks only: no heap.
+    eigen_assert(false && "dynamic GEMM packing is host-only");
+    return nullptr;
+#else
 #if defined(EIGEN_ALLOCA) && !defined(EIGEN_NO_ALLOCA)
     if (sizeA <= EIGEN_STACK_ALLOCATION_LIMIT / sizeof(LhsScalar) ||
         sizeB <= EIGEN_STACK_ALLOCATION_LIMIT / sizeof(RhsScalar))
@@ -62,18 +70,19 @@ class gemm_packing_space {
         EIGEN_STACK_ALIGN_BYTES > 0 ? EIGEN_STACK_ALIGN_BYTES : alignof(std::max_align_t);
     if ((std::max)(alignof(LhsScalar), alignof(RhsScalar)) > base_alignment) return nullptr;
     return allocateCombined(sizeA, sizeB, blockA, blockB);
+#endif
   }
 
  public:
-  gemm_packing_space(std::size_t sizeA, std::size_t sizeB, LhsScalar* blockA, RhsScalar* blockB)
+  EIGEN_DEVICE_FUNC gemm_packing_space(std::size_t sizeA, std::size_t sizeB, LhsScalar* blockA, RhsScalar* blockB)
       : m_blockA(blockA),
         m_blockB(blockB),
         m_storage(allocate(sizeA, sizeB, m_blockA, m_blockB), 0, true),
         m_lhs_lifetime(blockA == nullptr ? m_blockA : nullptr, sizeA, false),
         m_rhs_lifetime(blockB == nullptr ? m_blockB : nullptr, sizeB, false) {}
 
-  LhsScalar* blockA() const { return m_blockA; }
-  RhsScalar* blockB() const { return m_blockB; }
+  EIGEN_DEVICE_FUNC LhsScalar* blockA() const { return m_blockA; }
+  EIGEN_DEVICE_FUNC RhsScalar* blockB() const { return m_blockB; }
 };
 
 // Runs one gebp call, as C = alpha * A' * B' when `overwrite` holds and the kernel can (gebp_kernel_overwrites), and
@@ -627,14 +636,14 @@ class level3_blocking {
   Index m_kc = 0;
 
  public:
-  level3_blocking() = default;
+  EIGEN_DEVICE_FUNC level3_blocking() = default;
 
-  inline Index mc() const { return m_mc; }
-  inline Index nc() const { return m_nc; }
-  inline Index kc() const { return m_kc; }
+  EIGEN_DEVICE_FUNC inline Index mc() const { return m_mc; }
+  EIGEN_DEVICE_FUNC inline Index nc() const { return m_nc; }
+  EIGEN_DEVICE_FUNC inline Index kc() const { return m_kc; }
 
-  inline LhsScalar* blockA() { return m_blockA; }
-  inline RhsScalar* blockB() { return m_blockB; }
+  EIGEN_DEVICE_FUNC inline LhsScalar* blockA() { return m_blockA; }
+  EIGEN_DEVICE_FUNC inline RhsScalar* blockB() { return m_blockB; }
 };
 
 template <int StorageOrder, typename LhsScalar_, typename RhsScalar_, int MaxRows, int MaxCols, int MaxDepth,
@@ -666,7 +675,7 @@ class gemm_blocking_space<StorageOrder, LhsScalar_, RhsScalar_, MaxRows, MaxCols
 #endif
 
  public:
-  gemm_blocking_space(Index /*rows*/, Index /*cols*/, Index /*depth*/, Index /*num_threads*/,
+  EIGEN_DEVICE_FUNC gemm_blocking_space(Index /*rows*/, Index /*cols*/, Index /*depth*/, Index /*num_threads*/,
                       bool /*full_rows = false*/) {
     this->m_mc = ActualRows;
     this->m_nc = ActualCols;
@@ -682,7 +691,7 @@ class gemm_blocking_space<StorageOrder, LhsScalar_, RhsScalar_, MaxRows, MaxCols
 #endif
   }
 
-  void initParallel(Index, Index, Index, Index) {}
+  EIGEN_DEVICE_FUNC void initParallel(Index, Index, Index, Index) {}
 
   inline void allocateA() {}
   inline void allocateB() {}
@@ -702,7 +711,7 @@ class gemm_blocking_space<StorageOrder, LhsScalar_, RhsScalar_, MaxRows, MaxCols
   Index m_sizeB;
 
  public:
-  gemm_blocking_space(Index rows, Index cols, Index depth, Index num_threads, bool l3_blocking) {
+  EIGEN_DEVICE_FUNC gemm_blocking_space(Index rows, Index cols, Index depth, Index num_threads, bool l3_blocking) {
     this->m_mc = Transpose ? cols : rows;
     this->m_nc = Transpose ? rows : cols;
     this->m_kc = depth;
@@ -719,7 +728,7 @@ class gemm_blocking_space<StorageOrder, LhsScalar_, RhsScalar_, MaxRows, MaxCols
     m_sizeB = this->m_kc * this->m_nc;
   }
 
-  void initParallel(Index rows, Index cols, Index depth, Index num_threads) {
+  EIGEN_DEVICE_FUNC void initParallel(Index rows, Index cols, Index depth, Index num_threads) {
     this->m_mc = Transpose ? cols : rows;
     this->m_nc = Transpose ? rows : cols;
     this->m_kc = depth;
@@ -732,22 +741,33 @@ class gemm_blocking_space<StorageOrder, LhsScalar_, RhsScalar_, MaxRows, MaxCols
   }
 
   // The blocking buffers get the temporaries' alignment (64 bytes in SME builds, EIGEN_STACK_ALIGN_BYTES).
-  void allocateA() {
+  // Device code is fixed-size only: the dynamic blocking never allocates there.
+  EIGEN_DEVICE_FUNC void allocateA() {
+#if defined(EIGEN_GPU_COMPILE_PHASE)
+    eigen_assert(false && "dynamic GEMM blocking is host-only");
+#else
     if (this->m_blockA == 0) this->m_blockA = scratch_new<LhsScalar>(m_sizeA);
+#endif
   }
 
-  void allocateB() {
+  EIGEN_DEVICE_FUNC void allocateB() {
+#if defined(EIGEN_GPU_COMPILE_PHASE)
+    eigen_assert(false && "dynamic GEMM blocking is host-only");
+#else
     if (this->m_blockB == 0) this->m_blockB = scratch_new<RhsScalar>(m_sizeB);
+#endif
   }
 
-  void allocateAll() {
+  EIGEN_DEVICE_FUNC void allocateAll() {
     allocateA();
     allocateB();
   }
 
-  ~gemm_blocking_space() {
+  EIGEN_DEVICE_FUNC ~gemm_blocking_space() {
+#if !defined(EIGEN_GPU_COMPILE_PHASE)
     scratch_delete(this->m_blockA, m_sizeA);
     scratch_delete(this->m_blockB, m_sizeB);
+#endif
   }
 };
 
@@ -1017,14 +1037,14 @@ struct gemm_product_impl<Lhs, Rhs, true>
   }
 
   template <typename Dest>
-  static void scaleAndAddTo(Dest& dst, const Lhs& a_lhs, const Rhs& a_rhs, const Scalar& alpha) {
+  EIGEN_DEVICE_FUNC static void scaleAndAddTo(Dest& dst, const Lhs& a_lhs, const Rhs& a_rhs, const Scalar& alpha) {
     scaleAndAddOrEvalTo(dst, a_lhs, a_rhs, alpha, false);
   }
 
   // dst = alpha * a_lhs * a_rhs, independently of dst's prior contents and, where the GEMM kernel can overwrite,
   // without zeroing it first.
   template <typename Dest>
-  static void scaleAndEvalTo(Dest& dst, const Lhs& a_lhs, const Rhs& a_rhs, const Scalar& alpha) {
+  EIGEN_DEVICE_FUNC static void scaleAndEvalTo(Dest& dst, const Lhs& a_lhs, const Rhs& a_rhs, const Scalar& alpha) {
     scaleAndAddOrEvalTo(dst, a_lhs, a_rhs, alpha, true);
   }
 
@@ -1032,7 +1052,7 @@ struct gemm_product_impl<Lhs, Rhs, true>
   // One body for both: `overwrite` is a runtime flag, so that assignment and accumulation share one
   // instantiation.
   template <typename Dest>
-  static void scaleAndAddOrEvalTo(Dest& dst, const Lhs& a_lhs, const Rhs& a_rhs, const Scalar& alpha, bool overwrite) {
+  EIGEN_DEVICE_FUNC static void scaleAndAddOrEvalTo(Dest& dst, const Lhs& a_lhs, const Rhs& a_rhs, const Scalar& alpha, bool overwrite) {
     scaleAndAddOrEvalTo(gemm_accumulates_in_float<LhsScalar, RhsScalar>(), dst, a_lhs, a_rhs, alpha, overwrite);
   }
 
