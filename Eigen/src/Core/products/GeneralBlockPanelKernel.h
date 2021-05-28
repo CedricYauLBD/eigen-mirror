@@ -1220,13 +1220,13 @@ struct gebp_kernel {
   // into a zeroed result does (see gebp_overwritable_scalar for the scalars that holds for).
   static constexpr bool CanOverwrite = gebp_overwritable_scalar<ResScalar>::value;
 
-  EIGEN_STRONG_INLINE void operator()(const DataMapper& res, const LhsScalar* blockA, const RhsScalar* blockB,
+  EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE void operator()(const DataMapper& res, const LhsScalar* blockA, const RhsScalar* blockB,
                                       Index rows, Index depth, Index cols, ResScalar alpha, Index strideA = -1,
                                       Index strideB = -1, Index offsetA = 0, Index offsetB = 0) const {
     run(false, res, blockA, blockB, rows, depth, cols, alpha, strideA, strideB, offsetA, offsetB);
   }
   // C = alpha * A' * B' over the block, whatever C held (see gebp_overwrite_t).
-  EIGEN_STRONG_INLINE void operator()(gebp_overwrite_t, const DataMapper& res, const LhsScalar* blockA,
+  EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE void operator()(gebp_overwrite_t, const DataMapper& res, const LhsScalar* blockA,
                                       const RhsScalar* blockB, Index rows, Index depth, Index cols, ResScalar alpha,
                                       Index strideA = -1, Index strideB = -1, Index offsetA = 0,
                                       Index offsetB = 0) const {
@@ -1305,7 +1305,7 @@ struct last_row_process_16_packets<LhsScalar, RhsScalar, Index, DataMapper, mr, 
   using SResPacket = typename SwappedTraits::ResPacket;
   using SAccPacket = typename SwappedTraits::AccPacket;
 
-  EIGEN_STRONG_INLINE void operator()(const DataMapper& res, SwappedTraits& straits, const LhsScalar* blA,
+  EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE void operator()(const DataMapper& res, SwappedTraits& straits, const LhsScalar* blA,
                                       const RhsScalar* blB, Index depth, const Index endk, Index i, Index j2,
                                       ResScalar alpha, SAccPacket& C0, bool overwrite = false) const {
     using SResPacketQuarter = typename unpacket_traits<typename unpacket_traits<SResPacket>::half>::half;
