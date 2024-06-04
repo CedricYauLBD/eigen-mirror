@@ -49,47 +49,51 @@ class bdcsvd_impl {
   using ConstArrayRef = Ref<const ArrayXr>;
   using IndicesRef = Ref<ArrayXi>;
 
-  bdcsvd_impl() : m_algoswap(16), m_compU(false), m_compV(false), m_numIters(0), m_info(Success) {}
+  constexpr bdcsvd_impl() : m_algoswap(16), m_compU(false), m_compV(false), m_numIters(0), m_info(Success) {}
 
-  void allocate(Index diagSize, bool compU, bool compV);
+  constexpr void allocate(Index diagSize, bool compU, bool compV);
 
   /** Entry point for the divide-and-conquer phase. */
-  void divide(Index firstCol, Index lastCol, Index firstRowW, Index firstColW, Index shift);
+  constexpr void divide(Index firstCol, Index lastCol, Index firstRowW, Index firstColW, Index shift);
 
   /** Zeroes sub-diagonal entries of the stored bidiagonal that are negligible for the matrix as a whole. */
-  void splitNegligibleSuperdiagonal(Index n);
+  constexpr void splitNegligibleSuperdiagonal(Index n);
 
-  MatrixXr& naiveU() { return m_naiveU; }
-  const MatrixXr& naiveU() const { return m_naiveU; }
-  MatrixXr& naiveV() { return m_naiveV; }
-  const MatrixXr& naiveV() const { return m_naiveV; }
-  MatrixXr& computed() { return m_computed; }
-  const MatrixXr& computed() const { return m_computed; }
-  ComputationInfo info() const { return m_info; }
-  int numIters() const { return m_numIters; }
-  int algoSwap() const { return m_algoswap; }
-  void setAlgoSwap(int s) { m_algoswap = s; }
+  constexpr MatrixXr& naiveU() { return m_naiveU; }
+  constexpr const MatrixXr& naiveU() const { return m_naiveU; }
+  constexpr MatrixXr& naiveV() { return m_naiveV; }
+  constexpr const MatrixXr& naiveV() const { return m_naiveV; }
+  constexpr MatrixXr& computed() { return m_computed; }
+  constexpr const MatrixXr& computed() const { return m_computed; }
+  constexpr ComputationInfo info() const { return m_info; }
+  constexpr int numIters() const { return m_numIters; }
+  constexpr int algoSwap() const { return m_algoswap; }
+  constexpr void setAlgoSwap(int s) { m_algoswap = s; }
 
  private:
-  void computeSVDofM(Index firstCol, Index n, MatrixXr& U, VectorType& singVals, MatrixXr& V);
-  void computeSingVals(const ArrayRef& col0, const ArrayRef& diag, const IndicesRef& perm, VectorType& singVals,
-                       ArrayRef shifts, ArrayRef mus, ArrayRef workspace);
-  void perturbCol0(const ArrayRef& col0, const ArrayRef& diag, const IndicesRef& perm, const VectorType& singVals,
-                   const ArrayRef& shifts, const ArrayRef& mus, ArrayRef zhat);
-  void computeSingVecs(const ArrayRef& zhat, const ArrayRef& diag, const IndicesRef& perm, const VectorType& singVals,
-                       const ArrayRef& shifts, const ArrayRef& mus, MatrixXr& U, MatrixXr& V);
-  void deflation43(Index firstCol, Index shift, Index i, Index size);
-  void deflation44(Index firstColu, Index firstColm, Index firstRowW, Index firstColW, Index i, Index j, Index size);
-  void deflation(Index firstCol, Index lastCol, Index k, Index firstRowW, Index firstColW, Index shift);
-  void structured_update(Block<MatrixXr, Dynamic, Dynamic> A, const MatrixXr& B, Index n1);
-  static EIGEN_STRONG_INLINE RealScalar productOfQuotients(RealScalar firstNumerator, RealScalar firstDenominator,
-                                                           RealScalar secondNumerator, RealScalar secondDenominator);
-  static EIGEN_STRONG_INLINE RealScalar sequentialQuotient(RealScalar numerator, RealScalar firstDenominator,
-                                                           RealScalar secondDenominator);
-  static RealScalar secularEq(RealScalar x, const ConstArrayRef& col0, const ConstArrayRef& diag,
-                              const ConstArrayRef& diagShifted, RealScalar shift);
+  constexpr void computeSVDofM(Index firstCol, Index n, MatrixXr& U, VectorType& singVals, MatrixXr& V);
+  constexpr void computeSingVals(const ArrayRef& col0, const ArrayRef& diag, const IndicesRef& perm,
+                                 VectorType& singVals, ArrayRef shifts, ArrayRef mus, ArrayRef workspace);
+  constexpr void perturbCol0(const ArrayRef& col0, const ArrayRef& diag, const IndicesRef& perm,
+                             const VectorType& singVals, const ArrayRef& shifts, const ArrayRef& mus, ArrayRef zhat);
+  constexpr void computeSingVecs(const ArrayRef& zhat, const ArrayRef& diag, const IndicesRef& perm,
+                                 const VectorType& singVals, const ArrayRef& shifts, const ArrayRef& mus, MatrixXr& U,
+                                 MatrixXr& V);
+  constexpr void deflation43(Index firstCol, Index shift, Index i, Index size);
+  constexpr void deflation44(Index firstColu, Index firstColm, Index firstRowW, Index firstColW, Index i, Index j,
+                             Index size);
+  constexpr void deflation(Index firstCol, Index lastCol, Index k, Index firstRowW, Index firstColW, Index shift);
+  constexpr void structured_update(Block<MatrixXr, Dynamic, Dynamic> A, const MatrixXr& B, Index n1);
+  static EIGEN_STRONG_INLINE constexpr RealScalar productOfQuotients(RealScalar firstNumerator,
+                                                                     RealScalar firstDenominator,
+                                                                     RealScalar secondNumerator,
+                                                                     RealScalar secondDenominator);
+  static EIGEN_STRONG_INLINE constexpr RealScalar sequentialQuotient(RealScalar numerator, RealScalar firstDenominator,
+                                                                     RealScalar secondDenominator);
+  static RealScalar constexpr secularEq(RealScalar x, const ConstArrayRef& col0, const ConstArrayRef& diag,
+                                        const ConstArrayRef& diagShifted, RealScalar shift);
   template <typename SVDType>
-  void computeBaseCase(SVDType& svd, Index n, Index firstCol, Index firstRowW, Index firstColW, Index shift);
+  constexpr void computeBaseCase(SVDType& svd, Index n, Index firstCol, Index firstRowW, Index firstColW, Index shift);
 
   MatrixXr m_naiveU, m_naiveV;
   MatrixXr m_computed;
@@ -106,7 +110,7 @@ class bdcsvd_impl {
 };
 
 template <typename RealScalar_>
-void bdcsvd_impl<RealScalar_>::allocate(Index diagSize, bool compU, bool compV) {
+constexpr void bdcsvd_impl<RealScalar_>::allocate(Index diagSize, bool compU, bool compV) {
   m_compU = compU;
   m_compV = compV;
   m_numIters = 0;
@@ -137,7 +141,7 @@ void bdcsvd_impl<RealScalar_>::allocate(Index diagSize, bool compU, bool compV) 
 // uniformly tiny looks well scaled from the inside and gets resolved for its own relative accuracy. Zeroing here
 // costs one pass and leaves the perturbation within the eps * ||B|| the SVD already carries.
 template <typename RealScalar_>
-void bdcsvd_impl<RealScalar_>::splitNegligibleSuperdiagonal(Index n) {
+constexpr void bdcsvd_impl<RealScalar_>::splitNegligibleSuperdiagonal(Index n) {
   if (n < 2) return;
   // xBDSDC scales d and e by DLANST('M', n, d, e), the largest entry of either, and then splits at
   // 0.9 * DLAMCH('E'). DLAMCH('E') is the unit roundoff, i.e. half of NumTraits::epsilon(), so the
@@ -158,7 +162,8 @@ void bdcsvd_impl<RealScalar_>::splitNegligibleSuperdiagonal(Index n) {
  * enough.
  */
 template <typename RealScalar_>
-void bdcsvd_impl<RealScalar_>::structured_update(Block<MatrixXr, Dynamic, Dynamic> A, const MatrixXr& B, Index n1) {
+constexpr void bdcsvd_impl<RealScalar_>::structured_update(Block<MatrixXr, Dynamic, Dynamic> A, const MatrixXr& B,
+                                                           Index n1) {
   Index n = A.rows();
   if (n > 100) {
     // If the matrices are large enough, let's exploit the sparse structure of A by
@@ -193,8 +198,8 @@ void bdcsvd_impl<RealScalar_>::structured_update(Block<MatrixXr, Dynamic, Dynami
 
 template <typename RealScalar_>
 template <typename SVDType>
-void bdcsvd_impl<RealScalar_>::computeBaseCase(SVDType& svd, Index n, Index firstCol, Index firstRowW, Index firstColW,
-                                               Index shift) {
+constexpr void bdcsvd_impl<RealScalar_>::computeBaseCase(SVDType& svd, Index n, Index firstCol, Index firstRowW,
+                                                         Index firstColW, Index shift) {
   svd.compute(m_computed.block(firstCol, firstCol, n + 1, n));
   m_info = svd.info();
   if (m_info != Success && m_info != NoConvergence) return;
@@ -223,15 +228,16 @@ void bdcsvd_impl<RealScalar_>::computeBaseCase(SVDType& svd, Index n, Index firs
 // to become the first column (*coeff) and to shift all the other columns to the right. There are more details on the
 // reference paper.
 template <typename RealScalar_>
-void bdcsvd_impl<RealScalar_>::divide(Index firstCol, Index lastCol, Index firstRowW, Index firstColW, Index shift) {
+constexpr void bdcsvd_impl<RealScalar_>::divide(Index firstCol, Index lastCol, Index firstRowW, Index firstColW,
+                                                Index shift) {
   // requires rows = cols + 1;
   const Index n = lastCol - firstCol + 1;
   const Index k = n / 2;
   const RealScalar considerZero = (std::numeric_limits<RealScalar>::min)();
-  RealScalar alphaK;
-  RealScalar betaK;
-  RealScalar r0;
-  RealScalar lambda, phi, c0, s0;
+  RealScalar alphaK{};
+  RealScalar betaK{};
+  RealScalar r0{};
+  RealScalar lambda{}, phi{}, c0{}, s0{};
   // We use the other algorithm which is more efficient for small
   // matrices.
   if (n < m_algoswap) {
@@ -346,9 +352,9 @@ void bdcsvd_impl<RealScalar_>::divide(Index firstCol, Index lastCol, Index first
 // order except for possibly the (0,0) entry. The computed SVD is stored U, singVals and V, except
 // that if m_compV is false, then V is not computed. Singular values are sorted in decreasing order.
 template <typename RealScalar_>
-void bdcsvd_impl<RealScalar_>::computeSVDofM(Index firstCol, Index n, MatrixXr& U, VectorType& singVals, MatrixXr& V) {
+constexpr void bdcsvd_impl<RealScalar_>::computeSVDofM(Index firstCol, Index n, MatrixXr& U, VectorType& singVals,
+                                                       MatrixXr& V) {
   const RealScalar considerZero = (std::numeric_limits<RealScalar>::min)();
-  using numext::abs;
   ArrayRef col0 = m_computed.col(firstCol).segment(firstCol, n);
   m_workspace.head(n) = m_computed.block(firstCol, firstCol, n, n).diagonal();
   ArrayRef diag = m_workspace.head(n);
@@ -369,7 +375,7 @@ void bdcsvd_impl<RealScalar_>::computeSVDofM(Index firstCol, Index n, MatrixXr& 
   }
   Index m = 0;  // size of the deflated problem
   for (Index k = 0; k < actual_n; ++k)
-    if (abs(col0(k)) > considerZero) m_workspaceI(m++) = k;
+    if (numext::abs(col0(k)) > considerZero) m_workspaceI(m++) = k;
   Map<ArrayXi> perm(m_workspaceI.data(), m);
 
   Map<ArrayXr> shifts(m_workspace.data() + 1 * n, n);
@@ -405,35 +411,35 @@ void bdcsvd_impl<RealScalar_>::computeSVDofM(Index firstCol, Index n, MatrixXr& 
 }
 
 template <typename RealScalar_>
-EIGEN_STRONG_INLINE typename bdcsvd_impl<RealScalar_>::RealScalar bdcsvd_impl<RealScalar_>::productOfQuotients(
-    RealScalar firstNumerator, RealScalar firstDenominator, RealScalar secondNumerator, RealScalar secondDenominator) {
+EIGEN_STRONG_INLINE constexpr typename bdcsvd_impl<RealScalar_>::RealScalar
+bdcsvd_impl<RealScalar_>::productOfQuotients(RealScalar firstNumerator, RealScalar firstDenominator,
+                                             RealScalar secondNumerator, RealScalar secondDenominator) {
   // Keep the divisions separate: combining their denominators can underflow even when the final product is finite.
   RealScalar firstQuotient = firstNumerator / firstDenominator;
   RealScalar secondQuotient = secondNumerator / secondDenominator;
 #if defined(__FAST_MATH__) || EIGEN_COMP_NVHPC
   // NVHPC does not expose a preprocessor macro for -fast, so retain the barriers in all NVHPC builds.
-  pbarrier(firstQuotient);
-  pbarrier(secondQuotient);
+  if (!is_constant_evaluated()) pbarrier(firstQuotient);
+  if (!is_constant_evaluated()) pbarrier(secondQuotient);
 #endif
   return firstQuotient * secondQuotient;
 }
 
 template <typename RealScalar_>
-EIGEN_STRONG_INLINE typename bdcsvd_impl<RealScalar_>::RealScalar bdcsvd_impl<RealScalar_>::sequentialQuotient(
-    RealScalar numerator, RealScalar firstDenominator, RealScalar secondDenominator) {
+EIGEN_STRONG_INLINE constexpr typename bdcsvd_impl<RealScalar_>::RealScalar
+bdcsvd_impl<RealScalar_>::sequentialQuotient(RealScalar numerator, RealScalar firstDenominator,
+                                             RealScalar secondDenominator) {
   RealScalar firstQuotient = numerator / firstDenominator;
 #if defined(__FAST_MATH__) || EIGEN_COMP_NVHPC
-  pbarrier(firstQuotient);
+  if (!is_constant_evaluated()) pbarrier(firstQuotient);
 #endif
   return firstQuotient / secondDenominator;
 }
 
 template <typename RealScalar_>
-typename bdcsvd_impl<RealScalar_>::RealScalar bdcsvd_impl<RealScalar_>::secularEq(RealScalar mu,
-                                                                                  const ConstArrayRef& col0,
-                                                                                  const ConstArrayRef& diag,
-                                                                                  const ConstArrayRef& diagShifted,
-                                                                                  RealScalar shift) {
+constexpr typename bdcsvd_impl<RealScalar_>::RealScalar bdcsvd_impl<RealScalar_>::secularEq(
+    RealScalar mu, const ConstArrayRef& col0, const ConstArrayRef& diag, const ConstArrayRef& diagShifted,
+    RealScalar shift) {
   RealScalar res = Literal(1);
   for (Index i = 0; i < col0.size(); ++i) {
     res += productOfQuotients(col0(i), diagShifted(i) - mu, col0(i), diag(i) + shift + mu);
@@ -442,13 +448,12 @@ typename bdcsvd_impl<RealScalar_>::RealScalar bdcsvd_impl<RealScalar_>::secularE
 }
 
 template <typename RealScalar_>
-void bdcsvd_impl<RealScalar_>::computeSingVals(const ArrayRef& col0, const ArrayRef& diag, const IndicesRef& perm,
-                                               VectorType& singVals, ArrayRef shifts, ArrayRef mus,
-                                               ArrayRef workspace) {
+constexpr void bdcsvd_impl<RealScalar_>::computeSingVals(const ArrayRef& col0, const ArrayRef& diag,
+                                                         const IndicesRef& perm, VectorType& singVals, ArrayRef shifts,
+                                                         ArrayRef mus, ArrayRef workspace) {
   // See Ren-Cang Li, "Solving Secular Equations Stably and Efficiently",
   // LAPACK Working Note 89 (1994), and LAPACK's xLASD4/xLASD5 for the
   // stability rationale behind pole-relative shifts and safeguarded steps.
-  using numext::abs;
   using std::swap;
 
   Index n = col0.size();
@@ -481,7 +486,7 @@ void bdcsvd_impl<RealScalar_>::computeSingVals(const ArrayRef& col0, const Array
 
     // otherwise, use secular equation to find singular value
     RealScalar left = diag(k);
-    RealScalar right;  // was: = (k != actual_n-1) ? diag(k+1) : (diag(actual_n-1) + col0.matrix().norm());
+    RealScalar right{};  // was: = (k != actual_n-1) ? diag(k+1) : (diag(actual_n-1) + col0.matrix().norm());
     if (k == actual_n - 1)
       right = (diag(actual_n - 1) + col0.matrix().stableNorm());
     else {
@@ -520,7 +525,7 @@ void bdcsvd_impl<RealScalar_>::computeSingVals(const ArrayRef& col0, const Array
     }
 
     // initial guess
-    RealScalar muPrev, muCur;
+    RealScalar muPrev{}, muCur{};
     // we can test exact equality here, because shift comes from `... ? left : right`
     if (numext::equal_strict(shift, left)) {
       muPrev = (right - left) * RealScalar(0.1);
@@ -535,7 +540,7 @@ void bdcsvd_impl<RealScalar_>::computeSingVals(const ArrayRef& col0, const Array
 
     RealScalar fPrev = secularEq(muPrev, activeCol0, activeDiag, shiftedRef, shift);
     RealScalar fCur = secularEq(muCur, activeCol0, activeDiag, shiftedRef, shift);
-    if (abs(fPrev) < abs(fCur)) {
+    if (numext::abs(fPrev) < numext::abs(fCur)) {
       swap(fPrev, fCur);
       swap(muPrev, muCur);
     }
@@ -544,13 +549,14 @@ void bdcsvd_impl<RealScalar_>::computeSingVals(const ArrayRef& col0, const Array
     // samples whose reciprocals may overflow stay on bisection. The interval and residual checks below
     // safeguard each interpolation step.
     const RealScalar minNormal = (std::numeric_limits<RealScalar>::min)();
-    bool useBisection = fPrev * fCur > Literal(0) && !(abs(fCur - fPrev) > NumTraits<RealScalar>::epsilon() &&
-                                                       abs(fPrev) <= (std::numeric_limits<RealScalar>::max)() &&
-                                                       abs(muPrev) >= minNormal && abs(muCur) >= minNormal);
+    bool useBisection =
+        fPrev * fCur > Literal(0) && !(numext::abs(fCur - fPrev) > NumTraits<RealScalar>::epsilon() &&
+                                       numext::abs(fPrev) <= (std::numeric_limits<RealScalar>::max)() &&
+                                       numext::abs(muPrev) >= minNormal && numext::abs(muCur) >= minNormal);
     while (!numext::is_exactly_zero(fCur) &&
-           abs(muCur - muPrev) >
-               Literal(8) * NumTraits<RealScalar>::epsilon() * numext::maxi<RealScalar>(abs(muCur), abs(muPrev)) &&
-           abs(fCur - fPrev) > NumTraits<RealScalar>::epsilon() && !useBisection) {
+           numext::abs(muCur - muPrev) > Literal(8) * NumTraits<RealScalar>::epsilon() *
+                                             numext::maxi<RealScalar>(numext::abs(muCur), numext::abs(muPrev)) &&
+           numext::abs(fCur - fPrev) > NumTraits<RealScalar>::epsilon() && !useBisection) {
       ++m_numIters;
 
       // Find a and b such that the function f(mu) = a / mu + b matches the current and previous samples.
@@ -568,19 +574,19 @@ void bdcsvd_impl<RealScalar_>::computeSingVals(const ArrayRef& col0, const Array
       // we can test exact equality here, because shift comes from `... ? left : right`
       if (numext::equal_strict(shift, left) && (muCur < Literal(0) || muCur > right - left)) useBisection = true;
       if (numext::equal_strict(shift, right) && (muCur < -(right - left) || muCur > Literal(0))) useBisection = true;
-      if (abs(fCur) > abs(fPrev)) useBisection = true;
+      if (numext::abs(fCur) > numext::abs(fPrev)) useBisection = true;
     }
 
     // fall back on bisection method if rational interpolation did not work
     if (useBisection) {
-      RealScalar leftShifted, rightShifted;
+      RealScalar leftShifted{}, rightShifted{};
       // we can test exact equality here, because shift comes from `... ? left : right`
       if (numext::equal_strict(shift, left)) {
         // to avoid overflow, we must have mu > max(real_min, |z(k)|/sqrt(real_max)),
         // the factor 2 is to be more conservative
         leftShifted = numext::maxi<RealScalar>(
             (std::numeric_limits<RealScalar>::min)(),
-            Literal(2) * abs(col0(k)) / numext::sqrt((std::numeric_limits<RealScalar>::max)()));
+            Literal(2) * numext::abs(col0(k)) / numext::sqrt((std::numeric_limits<RealScalar>::max)()));
 
         // check that we did it right:
         eigen_internal_assert(
@@ -591,9 +597,9 @@ void bdcsvd_impl<RealScalar_>::computeSingVals(const ArrayRef& col0, const Array
       } else {
         leftShifted = -(right - left) * RealScalar(0.51);
         if (k + 1 < n)
-          rightShifted =
-              -numext::maxi<RealScalar>((std::numeric_limits<RealScalar>::min)(),
-                                        abs(col0(k + 1)) / numext::sqrt((std::numeric_limits<RealScalar>::max)()));
+          rightShifted = -numext::maxi<RealScalar>(
+              (std::numeric_limits<RealScalar>::min)(),
+              numext::abs(col0(k + 1)) / numext::sqrt((std::numeric_limits<RealScalar>::max)()));
         else
           rightShifted = -(std::numeric_limits<RealScalar>::min)();
       }
@@ -601,8 +607,9 @@ void bdcsvd_impl<RealScalar_>::computeSingVals(const ArrayRef& col0, const Array
       eigen_internal_assert(fLeft < Literal(0));
 
       if (fLeft < Literal(0)) {
-        while (rightShifted - leftShifted > Literal(2) * NumTraits<RealScalar>::epsilon() *
-                                                numext::maxi<RealScalar>(abs(leftShifted), abs(rightShifted))) {
+        while (rightShifted - leftShifted >
+               Literal(2) * NumTraits<RealScalar>::epsilon() *
+                   numext::maxi<RealScalar>(numext::abs(leftShifted), numext::abs(rightShifted))) {
           RealScalar midShifted = (leftShifted + rightShifted) / Literal(2);
           fMid = secularEq(midShifted, activeCol0, activeDiag, shiftedRef, shift);
           eigen_internal_assert((numext::isfinite)(fMid));
@@ -634,10 +641,9 @@ void bdcsvd_impl<RealScalar_>::computeSingVals(const ArrayRef& col0, const Array
 
 // zhat is perturbation of col0 for which singular vectors can be computed stably (see Section 3.1)
 template <typename RealScalar_>
-void bdcsvd_impl<RealScalar_>::perturbCol0(const ArrayRef& col0, const ArrayRef& diag, const IndicesRef& perm,
-                                           const VectorType& singVals, const ArrayRef& shifts, const ArrayRef& mus,
-                                           ArrayRef zhat) {
-  using numext::abs;
+constexpr void bdcsvd_impl<RealScalar_>::perturbCol0(const ArrayRef& col0, const ArrayRef& diag, const IndicesRef& perm,
+                                                     const VectorType& singVals, const ArrayRef& shifts,
+                                                     const ArrayRef& mus, ArrayRef zhat) {
   Index n = col0.size();
   Index m = perm.size();
   if (m == 0) {
@@ -656,7 +662,7 @@ void bdcsvd_impl<RealScalar_>::perturbCol0(const ArrayRef& col0, const ArrayRef&
       // Unsafe FP reassociation may otherwise turn `mus + (shift - dk)` into
       // `(mus + shift) - dk`, losing `mus` when `shift` and `dk` cancel.
       RealScalar diff = shifts(lastIdx) - dk;
-      pbarrier(diff);
+      if (!is_constant_evaluated()) pbarrier(diff);
       RealScalar prod = (singVals(lastIdx) + dk) * (mus(lastIdx) + diff);
 
       for (Index l = 0; l < m; ++l) {
@@ -671,7 +677,7 @@ void bdcsvd_impl<RealScalar_>::perturbCol0(const ArrayRef& col0, const ArrayRef&
           }
           Index j = i < k ? i : perm(l - 1);
           diff = shifts(j) - dk;
-          pbarrier(diff);
+          if (!is_constant_evaluated()) pbarrier(diff);
           prod *= productOfQuotients(singVals(j) + dk, diag(i) + dk, mus(j) + diff, diag(i) - dk);
         }
       }
@@ -685,9 +691,10 @@ void bdcsvd_impl<RealScalar_>::perturbCol0(const ArrayRef& col0, const ArrayRef&
 
 // compute singular vectors
 template <typename RealScalar_>
-void bdcsvd_impl<RealScalar_>::computeSingVecs(const ArrayRef& zhat, const ArrayRef& diag, const IndicesRef& perm,
-                                               const VectorType& singVals, const ArrayRef& shifts, const ArrayRef& mus,
-                                               MatrixXr& U, MatrixXr& V) {
+constexpr void bdcsvd_impl<RealScalar_>::computeSingVecs(const ArrayRef& zhat, const ArrayRef& diag,
+                                                         const IndicesRef& perm, const VectorType& singVals,
+                                                         const ArrayRef& shifts, const ArrayRef& mus, MatrixXr& U,
+                                                         MatrixXr& V) {
   Index n = zhat.size();
   Index m = perm.size();
 
@@ -706,9 +713,9 @@ void bdcsvd_impl<RealScalar_>::computeSingVecs(const ArrayRef& zhat, const Array
         const RealScalar diagonal = diag(i);
         const RealScalar z = zhat(i);
         RealScalar diff = diagonal - shift;
-        pbarrier(diff);
+        if (!is_constant_evaluated()) pbarrier(diff);
         diff -= mu;
-        pbarrier(diff);
+        if (!is_constant_evaluated()) pbarrier(diff);
         const RealScalar sum = diagonal + singularValue;
         U(i, k) = sequentialQuotient(z, diff, sum);
         if (m_compV && l > 0) V(i, k) = sequentialQuotient(diagonal * z, diff, sum);
@@ -733,7 +740,7 @@ void bdcsvd_impl<RealScalar_>::computeSingVecs(const ArrayRef& zhat, const Array
 // i >= 1, di almost null and zi non null.
 // We use a rotation to zero out zi applied to the left of M, and set di = 0.
 template <typename RealScalar_>
-void bdcsvd_impl<RealScalar_>::deflation43(Index firstCol, Index shift, Index i, Index size) {
+constexpr void bdcsvd_impl<RealScalar_>::deflation43(Index firstCol, Index shift, Index i, Index size) {
   Index start = firstCol + shift;
   RealScalar c = m_computed(start, start);
   RealScalar s = m_computed(start + i, start);
@@ -757,8 +764,8 @@ void bdcsvd_impl<RealScalar_>::deflation43(Index firstCol, Index shift, Index i,
 // i,j >= 1, i > j, and |di - dj| < epsilon * norm2(M)
 // We apply two rotations to have zi = 0, and dj = di.
 template <typename RealScalar_>
-void bdcsvd_impl<RealScalar_>::deflation44(Index firstColu, Index firstColm, Index firstRowW, Index firstColW, Index i,
-                                           Index j, Index size) {
+constexpr void bdcsvd_impl<RealScalar_>::deflation44(Index firstColu, Index firstColm, Index firstRowW, Index firstColW,
+                                                     Index i, Index j, Index size) {
   RealScalar s = m_computed(firstColm + i, firstColm);
   RealScalar c = m_computed(firstColm + j, firstColm);
   RealScalar r = numext::hypot(c, s);
@@ -782,9 +789,8 @@ void bdcsvd_impl<RealScalar_>::deflation44(Index firstColu, Index firstColm, Ind
 
 // acts on block from (firstCol+shift, firstCol+shift) to (lastCol+shift, lastCol+shift) [inclusive]
 template <typename RealScalar_>
-void bdcsvd_impl<RealScalar_>::deflation(Index firstCol, Index lastCol, Index k, Index firstRowW, Index firstColW,
-                                         Index shift) {
-  using numext::abs;
+constexpr void bdcsvd_impl<RealScalar_>::deflation(Index firstCol, Index lastCol, Index k, Index firstRowW,
+                                                   Index firstColW, Index shift) {
   const Index length = lastCol + 1 - firstCol;
 
   Block<MatrixXr, Dynamic, 1> col0(m_computed, firstCol + shift, firstCol + shift, length, 1);
@@ -804,7 +810,7 @@ void bdcsvd_impl<RealScalar_>::deflation(Index firstCol, Index lastCol, Index k,
 
   // condition 4.2
   for (Index i = 1; i < length; ++i)
-    if (abs(col0(i)) < epsilon_strict) {
+    if (numext::abs(col0(i)) < epsilon_strict) {
       col0(i) = Literal(0);
     }
 
@@ -899,7 +905,7 @@ void bdcsvd_impl<RealScalar_>::deflation(Index firstCol, Index lastCol, Index k,
   {
     Index i = length - 1;
     // Find last non-deflated entry.
-    while (i > 0 && (diag(i) < considerZero || abs(col0(i)) < considerZero)) --i;
+    while (i > 0 && (diag(i) < considerZero || numext::abs(col0(i)) < considerZero)) --i;
 
     for (; i > 1; --i)
       if ((diag(i) - diag(i - 1)) < epsilon_coarse) {

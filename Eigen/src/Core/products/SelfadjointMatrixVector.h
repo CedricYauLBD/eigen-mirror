@@ -335,7 +335,7 @@ struct selfadjoint_product_impl<Lhs, LhsMode, false, Rhs, 0, true> {
   static_assert(Rhs::ColsAtCompileTime == 1, "The RHS must be a column vector.");
 
   template <typename Dest>
-  static EIGEN_DEVICE_FUNC void run(Dest& dest, const Lhs& a_lhs, const Rhs& a_rhs, const Scalar& alpha) {
+  static EIGEN_DEVICE_FUNC constexpr void run(Dest& dest, const Lhs& a_lhs, const Rhs& a_rhs, const Scalar& alpha) {
     using ResScalar = typename Dest::Scalar;
     using RhsScalar = typename Rhs::Scalar;
 
@@ -391,7 +391,7 @@ struct selfadjoint_product_impl<Lhs, 0, true, Rhs, RhsMode, false> {
   enum { RhsUpLo = RhsMode & (Upper | Lower) };
 
   template <typename Dest>
-  static void run(Dest& dest, const Lhs& a_lhs, const Rhs& a_rhs, const Scalar& alpha) {
+  static constexpr void run(Dest& dest, const Lhs& a_lhs, const Rhs& a_rhs, const Scalar& alpha) {
     // let's simply transpose the product
     Transpose<Dest> destT(dest);
     selfadjoint_product_impl<Transpose<const Rhs>, int(RhsUpLo) == Upper ? Lower : Upper, false, Transpose<const Lhs>,
