@@ -113,7 +113,7 @@ class Toeplitz : public EigenBase<Toeplitz<Scalar_, Rows_, Cols_>> {
    * entries. The circulant's DFT symbol is computed here, once, and reused by
    * every subsequent product. */
   template <typename ColDerived, typename RowDerived>
-  Toeplitz(const MatrixBase<ColDerived>& col, const MatrixBase<RowDerived>& row) : m_col(col), m_row(row) {
+  constexpr Toeplitz(const MatrixBase<ColDerived>& col, const MatrixBase<RowDerived>& row) : m_col(col), m_row(row) {
     EIGEN_STATIC_ASSERT_VECTOR_ONLY(ColDerived)
     EIGEN_STATIC_ASSERT_VECTOR_ONLY(RowDerived)
     EIGEN_INTERNAL_ASSERT_NONEMPTY_MSG(m_col, "Toeplitz generators must be non-empty");
@@ -124,22 +124,22 @@ class Toeplitz : public EigenBase<Toeplitz<Scalar_, Rows_, Cols_>> {
       m_symbol = computeSymbol();
   }
 
-  EIGEN_DEVICE_FUNC Index rows() const { return m_col.size(); }
-  EIGEN_DEVICE_FUNC Index cols() const { return m_row.size(); }
+  EIGEN_DEVICE_FUNC constexpr Index rows() const { return m_col.size(); }
+  EIGEN_DEVICE_FUNC constexpr Index cols() const { return m_row.size(); }
 
   /** \returns the generating first column. */
-  const ColGeneratorType& column() const { return m_col; }
+  constexpr const ColGeneratorType& column() const { return m_col; }
   /** \returns the generating first row. */
-  const RowGeneratorType& row() const { return m_row; }
+  constexpr const RowGeneratorType& row() const { return m_row; }
 
   /** \returns the symbol of the circulant embedding, i.e. the DFT of the first
    * column of the size-p circulant matrix the operator is embedded in. Cached
    * when the operator is large enough for products to take the FFT path,
    * computed on the fly for small operators. */
-  ComplexVector symbol() const { return m_symbol.size() > 0 ? m_symbol : computeSymbol(); }
+  constexpr ComplexVector symbol() const { return m_symbol.size() > 0 ? m_symbol : computeSymbol(); }
 
   /** \returns the coefficient at row \a row and column \a col. */
-  Scalar coeff(Index row, Index col) const {
+  constexpr Scalar coeff(Index row, Index col) const {
     Index k = row - col;
     return k >= 0 ? m_col.coeff(k) : m_row.coeff(-k);
   }
@@ -182,7 +182,7 @@ class Toeplitz : public EigenBase<Toeplitz<Scalar_, Rows_, Cols_>> {
    * and its tail the leading part of the column generator. Row-major destinations
    * use the corresponding row segments. Invoked through \c dense = toeplitz; */
   template <typename Dest>
-  void evalTo(Dest& dst) const {
+  constexpr void evalTo(Dest& dst) const {
     const Index m = rows(), n = cols();
     EIGEN_IF_CONSTEXPR (Dest::IsRowMajor) {
       for (Index i = 0; i < m; ++i) {
@@ -201,7 +201,7 @@ class Toeplitz : public EigenBase<Toeplitz<Scalar_, Rows_, Cols_>> {
 
   /** \internal Computes \c dst += (*this), see evalTo(). */
   template <typename Dest>
-  void addTo(Dest& dst) const {
+  constexpr void addTo(Dest& dst) const {
     const Index m = rows(), n = cols();
     EIGEN_IF_CONSTEXPR (Dest::IsRowMajor) {
       for (Index i = 0; i < m; ++i) {
@@ -220,7 +220,7 @@ class Toeplitz : public EigenBase<Toeplitz<Scalar_, Rows_, Cols_>> {
 
   /** \internal Computes \c dst -= (*this), see evalTo(). */
   template <typename Dest>
-  void subTo(Dest& dst) const {
+  constexpr void subTo(Dest& dst) const {
     const Index m = rows(), n = cols();
     EIGEN_IF_CONSTEXPR (Dest::IsRowMajor) {
       for (Index i = 0; i < m; ++i) {
@@ -243,7 +243,7 @@ class Toeplitz : public EigenBase<Toeplitz<Scalar_, Rows_, Cols_>> {
    * temporary resolves aliasing between the destination and \a x, and
    * \c .noalias() skips it. */
   template <typename Rhs>
-  Product<Toeplitz, Rhs> operator*(const MatrixBase<Rhs>& x) const {
+  constexpr Product<Toeplitz, Rhs> operator*(const MatrixBase<Rhs>& x) const {
     return Product<Toeplitz, Rhs>(*this, x.derived());
   }
 
@@ -251,7 +251,7 @@ class Toeplitz : public EigenBase<Toeplitz<Scalar_, Rows_, Cols_>> {
    * promoted scalar of the product (complex when a real operator is applied to a
    * complex right-hand side); the accumulation runs in the promoted type. */
   template <typename Dest, typename Rhs, typename ProductScalar>
-  void addProduct(Dest& dst, const Rhs& rhs, const ProductScalar& alpha) const {
+  constexpr void addProduct(Dest& dst, const Rhs& rhs, const ProductScalar& alpha) const {
     const Index m = rows(), n = cols();
     EIGEN_INTERNAL_ASSERT_PRODUCT_SHAPE_MSG(*this, rhs, "invalid product: dimensions do not match");
     const bool small = m <= internal::structured_direct_threshold() && n <= internal::structured_direct_threshold();
@@ -312,7 +312,7 @@ class Toeplitz : public EigenBase<Toeplitz<Scalar_, Rows_, Cols_>> {
   }
 
   /** \internal \returns the DFT of the first column of the circulant embedding. */
-  ComplexVector computeSymbol() const {
+  constexpr ComplexVector computeSymbol() const {
     const Index m = rows(), n = cols();
     const Index p = internal::fft_next_good_size(m + n - 1);
     ComplexVector embedding = ComplexVector::Zero(p);
@@ -334,8 +334,8 @@ class Toeplitz : public EigenBase<Toeplitz<Scalar_, Rows_, Cols_>> {
  * \returns a \ref Toeplitz operator with first column \a col and first row \a row.
  * The compile-time dimensions of the operator are deduced from the generators. */
 template <typename ColDerived, typename RowDerived>
-Toeplitz<typename ColDerived::Scalar, ColDerived::SizeAtCompileTime, RowDerived::SizeAtCompileTime> makeToeplitz(
-    const MatrixBase<ColDerived>& col, const MatrixBase<RowDerived>& row) {
+constexpr Toeplitz<typename ColDerived::Scalar, ColDerived::SizeAtCompileTime, RowDerived::SizeAtCompileTime>
+makeToeplitz(const MatrixBase<ColDerived>& col, const MatrixBase<RowDerived>& row) {
   return Toeplitz<typename ColDerived::Scalar, ColDerived::SizeAtCompileTime, RowDerived::SizeAtCompileTime>(col, row);
 }
 

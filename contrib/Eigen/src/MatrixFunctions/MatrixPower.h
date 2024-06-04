@@ -51,7 +51,7 @@ class MatrixPowerParenthesesReturnValue : public ReturnByValue<MatrixPowerParent
    * \param[in] pow  %MatrixPower storing the base.
    * \param[in] p    scalar, the exponent of the matrix power.
    */
-  MatrixPowerParenthesesReturnValue(MatrixPower<MatrixType>& pow, RealScalar p) : m_pow(pow), m_p(p) {}
+  constexpr MatrixPowerParenthesesReturnValue(MatrixPower<MatrixType>& pow, RealScalar p) : m_pow(pow), m_p(p) {}
 
   /**
    * \brief Compute the matrix power.
@@ -59,12 +59,12 @@ class MatrixPowerParenthesesReturnValue : public ReturnByValue<MatrixPowerParent
    * \param[out] result
    */
   template <typename ResultType>
-  inline void evalTo(ResultType& result) const {
+  constexpr void evalTo(ResultType& result) const {
     m_pow.compute(result, m_p);
   }
 
-  Index rows() const { return m_pow.rows(); }
-  Index cols() const { return m_pow.cols(); }
+  constexpr Index rows() const { return m_pow.rows(); }
+  constexpr Index cols() const { return m_pow.cols(); }
 
  private:
   MatrixPower<MatrixType>& m_pow;
@@ -98,14 +98,14 @@ class MatrixPowerAtomic {
   const MatrixType& m_A;
   RealScalar m_p;
 
-  void computePade(int degree, const MatrixType& IminusT, ResultType& res) const;
-  void compute2x2(ResultType& res, RealScalar p) const;
-  void computeBig(ResultType& res) const;
-  static int getPadeDegree(float normIminusT);
-  static int getPadeDegree(double normIminusT);
-  static int getPadeDegree(long double normIminusT);
-  static ComplexScalar computeSuperDiag(const ComplexScalar&, const ComplexScalar&, RealScalar p);
-  static RealScalar computeSuperDiag(RealScalar, RealScalar, RealScalar p);
+  constexpr void computePade(int degree, const MatrixType& IminusT, ResultType& res) const;
+  constexpr void compute2x2(ResultType& res, RealScalar p) const;
+  constexpr void computeBig(ResultType& res) const;
+  static constexpr int getPadeDegree(float normIminusT);
+  static constexpr int getPadeDegree(double normIminusT);
+  static constexpr int getPadeDegree(long double normIminusT);
+  static constexpr ComplexScalar computeSuperDiag(const ComplexScalar&, const ComplexScalar&, RealScalar p);
+  static constexpr RealScalar computeSuperDiag(RealScalar, RealScalar, RealScalar p);
 
  public:
   MatrixPowerAtomic(const MatrixPowerAtomic&) = delete;
@@ -122,7 +122,7 @@ class MatrixPowerAtomic {
    * (or destroyed) before evaluation. Only the upper triangular
    * part of T is read.
    */
-  MatrixPowerAtomic(const MatrixType& T, RealScalar p);
+  constexpr MatrixPowerAtomic(const MatrixType& T, RealScalar p);
 
   /**
    * \brief Compute the matrix power.
@@ -130,17 +130,17 @@ class MatrixPowerAtomic {
    * \param[out] res  \f$ A^p \f$ where A and p are specified in the
    * constructor.
    */
-  void compute(ResultType& res) const;
+  constexpr void compute(ResultType& res) const;
 };
 
 template <typename MatrixType>
-MatrixPowerAtomic<MatrixType>::MatrixPowerAtomic(const MatrixType& T, RealScalar p) : m_A(T), m_p(p) {
+constexpr MatrixPowerAtomic<MatrixType>::MatrixPowerAtomic(const MatrixType& T, RealScalar p) : m_A(T), m_p(p) {
   EIGEN_INTERNAL_ASSERT_SQUARE(T);
   eigen_assert(p > -1 && p < 1);
 }
 
 template <typename MatrixType>
-void MatrixPowerAtomic<MatrixType>::compute(ResultType& res) const {
+constexpr void MatrixPowerAtomic<MatrixType>::compute(ResultType& res) const {
   using std::pow;
   switch (m_A.rows()) {
     case 0:
@@ -158,7 +158,8 @@ void MatrixPowerAtomic<MatrixType>::compute(ResultType& res) const {
 }
 
 template <typename MatrixType>
-void MatrixPowerAtomic<MatrixType>::computePade(int degree, const MatrixType& IminusT, ResultType& res) const {
+constexpr void MatrixPowerAtomic<MatrixType>::computePade(int degree, const MatrixType& IminusT,
+                                                          ResultType& res) const {
   int i = 2 * degree;
   res = (m_p - RealScalar(degree)) / RealScalar(2 * i - 2) * IminusT;
 
@@ -176,7 +177,7 @@ void MatrixPowerAtomic<MatrixType>::computePade(int degree, const MatrixType& Im
 
 // This function assumes that res has the correct size (see bug 614)
 template <typename MatrixType>
-void MatrixPowerAtomic<MatrixType>::compute2x2(ResultType& res, RealScalar p) const {
+constexpr void MatrixPowerAtomic<MatrixType>::compute2x2(ResultType& res, RealScalar p) const {
   using std::abs;
   using std::pow;
   res.coeffRef(0, 0) = pow(m_A.coeff(0, 0), p);
@@ -199,7 +200,7 @@ void MatrixPowerAtomic<MatrixType>::compute2x2(ResultType& res, RealScalar p) co
 }
 
 template <typename MatrixType>
-void MatrixPowerAtomic<MatrixType>::computeBig(ResultType& res) const {
+constexpr void MatrixPowerAtomic<MatrixType>::computeBig(ResultType& res) const {
   using std::ldexp;
   const int digits = std::numeric_limits<RealScalar>::digits;
   const RealScalar maxNormForPade =
@@ -244,7 +245,7 @@ void MatrixPowerAtomic<MatrixType>::computeBig(ResultType& res) const {
 }
 
 template <typename MatrixType>
-inline int MatrixPowerAtomic<MatrixType>::getPadeDegree(float normIminusT) {
+constexpr int MatrixPowerAtomic<MatrixType>::getPadeDegree(float normIminusT) {
   const float maxNormForPade[] = {2.8064004e-1f /* degree = 3 */, 4.3386528e-1f};
   int degree = 3;
   for (; degree <= 4; ++degree)
@@ -253,7 +254,7 @@ inline int MatrixPowerAtomic<MatrixType>::getPadeDegree(float normIminusT) {
 }
 
 template <typename MatrixType>
-inline int MatrixPowerAtomic<MatrixType>::getPadeDegree(double normIminusT) {
+constexpr int MatrixPowerAtomic<MatrixType>::getPadeDegree(double normIminusT) {
   const double maxNormForPade[] = {1.884160592658218e-2 /* degree = 3 */, 6.038881904059573e-2, 1.239917516308172e-1,
                                    1.999045567181744e-1, 2.789358995219730e-1};
   int degree = 3;
@@ -263,7 +264,7 @@ inline int MatrixPowerAtomic<MatrixType>::getPadeDegree(double normIminusT) {
 }
 
 template <typename MatrixType>
-inline int MatrixPowerAtomic<MatrixType>::getPadeDegree(long double normIminusT) {
+constexpr int MatrixPowerAtomic<MatrixType>::getPadeDegree(long double normIminusT) {
 #if LDBL_MANT_DIG == 53
   const int maxPadeDegree = 7;
   const double maxNormForPade[] = {1.884160592658218e-2L /* degree = 3 */, 6.038881904059573e-2L, 1.239917516308172e-1L,
@@ -304,7 +305,7 @@ inline int MatrixPowerAtomic<MatrixType>::getPadeDegree(long double normIminusT)
 }
 
 template <typename MatrixType>
-inline typename MatrixPowerAtomic<MatrixType>::ComplexScalar MatrixPowerAtomic<MatrixType>::computeSuperDiag(
+constexpr typename MatrixPowerAtomic<MatrixType>::ComplexScalar MatrixPowerAtomic<MatrixType>::computeSuperDiag(
     const ComplexScalar& curr, const ComplexScalar& prev, RealScalar p) {
   using std::ceil;
   using std::exp;
@@ -321,7 +322,7 @@ inline typename MatrixPowerAtomic<MatrixType>::ComplexScalar MatrixPowerAtomic<M
 }
 
 template <typename MatrixType>
-inline typename MatrixPowerAtomic<MatrixType>::RealScalar MatrixPowerAtomic<MatrixType>::computeSuperDiag(
+constexpr typename MatrixPowerAtomic<MatrixType>::RealScalar MatrixPowerAtomic<MatrixType>::computeSuperDiag(
     RealScalar curr, RealScalar prev, RealScalar p) {
   using std::exp;
   using std::log;
@@ -368,7 +369,7 @@ class MatrixPower {
    * The class stores a reference to A, so it should not be changed
    * (or destroyed) before evaluation.
    */
-  explicit MatrixPower(const MatrixType& A) : m_A(A), m_conditionNumber(0), m_rank(A.cols()), m_nulls(0) {
+  constexpr explicit MatrixPower(const MatrixType& A) : m_A(A), m_conditionNumber(0), m_rank(A.cols()), m_nulls(0) {
     EIGEN_INTERNAL_ASSERT_SQUARE(A);
   }
 
@@ -379,7 +380,7 @@ class MatrixPower {
    * \return The expression \f$ A^p \f$, where A is specified in the
    * constructor.
    */
-  const MatrixPowerParenthesesReturnValue<MatrixType> operator()(RealScalar p) {
+  constexpr const MatrixPowerParenthesesReturnValue<MatrixType> operator()(RealScalar p) {
     return MatrixPowerParenthesesReturnValue<MatrixType>(*this, p);
   }
 
@@ -391,10 +392,10 @@ class MatrixPower {
    * constructor.
    */
   template <typename ResultType>
-  void compute(ResultType& res, RealScalar p);
+  constexpr void compute(ResultType& res, RealScalar p);
 
-  Index rows() const { return m_A.rows(); }
-  Index cols() const { return m_A.cols(); }
+  constexpr Index rows() const { return m_A.rows(); }
+  constexpr Index cols() const { return m_A.cols(); }
 
  private:
   typedef internal::make_complex_t<Scalar> ComplexScalar;
@@ -436,29 +437,29 @@ class MatrixPower {
    *
    * Only if the fractional part is nonzero, it calls initialize().
    */
-  void split(RealScalar& p, RealScalar& intpart);
+  constexpr void split(RealScalar& p, RealScalar& intpart);
 
   /** \brief Perform Schur decomposition for fractional power. */
-  void initialize();
+  constexpr void initialize();
 
   template <typename ResultType>
-  void computeIntPower(ResultType& res, RealScalar p);
+  constexpr void computeIntPower(ResultType& res, RealScalar p);
 
   template <typename ResultType>
-  void computeFracPower(ResultType& res, RealScalar p);
+  constexpr void computeFracPower(ResultType& res, RealScalar p);
 
   template <int Rows, int Cols, int Options, int MaxRows, int MaxCols>
-  static void revertSchur(Matrix<ComplexScalar, Rows, Cols, Options, MaxRows, MaxCols>& res, const ComplexMatrix& T,
-                          const ComplexMatrix& U);
+  static constexpr void revertSchur(Matrix<ComplexScalar, Rows, Cols, Options, MaxRows, MaxCols>& res,
+                                    const ComplexMatrix& T, const ComplexMatrix& U);
 
   template <int Rows, int Cols, int Options, int MaxRows, int MaxCols>
-  static void revertSchur(Matrix<RealScalar, Rows, Cols, Options, MaxRows, MaxCols>& res, const ComplexMatrix& T,
-                          const ComplexMatrix& U);
+  static constexpr void revertSchur(Matrix<RealScalar, Rows, Cols, Options, MaxRows, MaxCols>& res,
+                                    const ComplexMatrix& T, const ComplexMatrix& U);
 };
 
 template <typename MatrixType>
 template <typename ResultType>
-void MatrixPower<MatrixType>::compute(ResultType& res, RealScalar p) {
+constexpr void MatrixPower<MatrixType>::compute(ResultType& res, RealScalar p) {
   using std::pow;
   switch (cols()) {
     case 0:
@@ -484,7 +485,7 @@ void MatrixPower<MatrixType>::compute(ResultType& res, RealScalar p) {
 }
 
 template <typename MatrixType>
-void MatrixPower<MatrixType>::split(RealScalar& p, RealScalar& intpart) {
+constexpr void MatrixPower<MatrixType>::split(RealScalar& p, RealScalar& intpart) {
   using std::floor;
   using std::pow;
 
@@ -503,7 +504,7 @@ void MatrixPower<MatrixType>::split(RealScalar& p, RealScalar& intpart) {
 }
 
 template <typename MatrixType>
-void MatrixPower<MatrixType>::initialize() {
+constexpr void MatrixPower<MatrixType>::initialize() {
   const ComplexSchur<MatrixType> schurOfA(m_A);
   JacobiRotation<ComplexScalar> rot;
   ComplexScalar eigenvalue;
@@ -539,7 +540,7 @@ void MatrixPower<MatrixType>::initialize() {
 
 template <typename MatrixType>
 template <typename ResultType>
-void MatrixPower<MatrixType>::computeIntPower(ResultType& res, RealScalar p) {
+constexpr void MatrixPower<MatrixType>::computeIntPower(ResultType& res, RealScalar p) {
   using std::abs;
   using std::fmod;
   RealScalar pp = abs(p);
@@ -559,7 +560,7 @@ void MatrixPower<MatrixType>::computeIntPower(ResultType& res, RealScalar p) {
 
 template <typename MatrixType>
 template <typename ResultType>
-void MatrixPower<MatrixType>::computeFracPower(ResultType& res, RealScalar p) {
+constexpr void MatrixPower<MatrixType>::computeFracPower(ResultType& res, RealScalar p) {
   Block<ComplexMatrix, Dynamic, Dynamic> blockTp(m_fT, 0, 0, m_rank, m_rank);
   eigen_assert(m_conditionNumber);
   eigen_assert(m_rank + m_nulls == rows());
@@ -582,15 +583,15 @@ void MatrixPower<MatrixType>::computeFracPower(ResultType& res, RealScalar p) {
 
 template <typename MatrixType>
 template <int Rows, int Cols, int Options, int MaxRows, int MaxCols>
-inline void MatrixPower<MatrixType>::revertSchur(Matrix<ComplexScalar, Rows, Cols, Options, MaxRows, MaxCols>& res,
-                                                 const ComplexMatrix& T, const ComplexMatrix& U) {
+constexpr void MatrixPower<MatrixType>::revertSchur(Matrix<ComplexScalar, Rows, Cols, Options, MaxRows, MaxCols>& res,
+                                                    const ComplexMatrix& T, const ComplexMatrix& U) {
   res.noalias() = U * (T.template triangularView<Upper>() * U.adjoint());
 }
 
 template <typename MatrixType>
 template <int Rows, int Cols, int Options, int MaxRows, int MaxCols>
-inline void MatrixPower<MatrixType>::revertSchur(Matrix<RealScalar, Rows, Cols, Options, MaxRows, MaxCols>& res,
-                                                 const ComplexMatrix& T, const ComplexMatrix& U) {
+constexpr void MatrixPower<MatrixType>::revertSchur(Matrix<RealScalar, Rows, Cols, Options, MaxRows, MaxCols>& res,
+                                                    const ComplexMatrix& T, const ComplexMatrix& U) {
   res.noalias() = (U * (T.template triangularView<Upper>() * U.adjoint())).real();
 }
 
@@ -619,7 +620,7 @@ class MatrixPowerReturnValue : public ReturnByValue<MatrixPowerReturnValue<Deriv
    * \param[in] A  %Matrix (expression), the base of the matrix power.
    * \param[in] p  real scalar, the exponent of the matrix power.
    */
-  MatrixPowerReturnValue(const Derived& A, RealScalar p) : m_A(A), m_p(p) {}
+  constexpr MatrixPowerReturnValue(const Derived& A, RealScalar p) : m_A(A), m_p(p) {}
 
   /**
    * \brief Compute the matrix power.
@@ -628,12 +629,12 @@ class MatrixPowerReturnValue : public ReturnByValue<MatrixPowerReturnValue<Deriv
    * constructor.
    */
   template <typename ResultType>
-  inline void evalTo(ResultType& result) const {
+  constexpr void evalTo(ResultType& result) const {
     MatrixPower<PlainObject>(m_A.eval()).compute(result, m_p);
   }
 
-  Index rows() const { return m_A.rows(); }
-  Index cols() const { return m_A.cols(); }
+  constexpr Index rows() const { return m_A.rows(); }
+  constexpr Index cols() const { return m_A.cols(); }
 
  private:
   const Derived& m_A;
@@ -665,7 +666,7 @@ class MatrixComplexPowerReturnValue : public ReturnByValue<MatrixComplexPowerRet
    * \param[in] A  %Matrix (expression), the base of the matrix power.
    * \param[in] p  complex scalar, the exponent of the matrix power.
    */
-  MatrixComplexPowerReturnValue(const Derived& A, const ComplexScalar& p) : m_A(A), m_p(p) {}
+  constexpr MatrixComplexPowerReturnValue(const Derived& A, const ComplexScalar& p) : m_A(A), m_p(p) {}
 
   /**
    * \brief Compute the matrix power.
@@ -677,12 +678,12 @@ class MatrixComplexPowerReturnValue : public ReturnByValue<MatrixComplexPowerRet
    * constructor.
    */
   template <typename ResultType>
-  inline void evalTo(ResultType& result) const {
+  constexpr void evalTo(ResultType& result) const {
     result = (m_p * m_A.log()).exp();
   }
 
-  Index rows() const { return m_A.rows(); }
-  Index cols() const { return m_A.cols(); }
+  constexpr Index rows() const { return m_A.rows(); }
+  constexpr Index cols() const { return m_A.cols(); }
 
  private:
   const Derived& m_A;
@@ -709,12 +710,13 @@ struct traits<MatrixComplexPowerReturnValue<Derived> > {
 }  // namespace internal
 
 template <typename Derived>
-const MatrixPowerReturnValue<Derived> MatrixBase<Derived>::pow(const RealScalar& p) const {
+constexpr const MatrixPowerReturnValue<Derived> MatrixBase<Derived>::pow(const RealScalar& p) const {
   return MatrixPowerReturnValue<Derived>(derived(), p);
 }
 
 template <typename Derived>
-const MatrixComplexPowerReturnValue<Derived> MatrixBase<Derived>::pow(const internal::make_complex_t<Scalar>& p) const {
+constexpr const MatrixComplexPowerReturnValue<Derived> MatrixBase<Derived>::pow(
+    const internal::make_complex_t<Scalar>& p) const {
   return MatrixComplexPowerReturnValue<Derived>(derived(), p);
 }
 
