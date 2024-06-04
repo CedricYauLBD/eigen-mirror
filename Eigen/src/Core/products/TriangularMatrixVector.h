@@ -38,121 +38,122 @@ struct triangular_matrix_vector_product<Index, Mode, LhsScalar, ConjLhs, RhsScal
   static constexpr bool IsLower = (Mode & Lower) == Lower;
   static constexpr bool HasUnitDiag = (Mode & UnitDiag) == UnitDiag;
   static constexpr bool HasZeroDiag = (Mode & ZeroDiag) == ZeroDiag;
-  static EIGEN_TRMV_DONT_INLINE void run(Index _rows, Index _cols, const LhsScalar* lhs_, Index lhsStride,
-                                         const RhsScalar* rhs_, Index rhsIncr, ResScalar* res_, Index resIncr,
-                                         const RhsScalar& alpha);
+  static constexpr void run(Index _rows, Index _cols, const LhsScalar* lhs_, Index lhsStride, const RhsScalar* rhs_,
+                            Index rhsIncr, ResScalar* res_, Index resIncr, const RhsScalar& alpha);
 };
 
 template <typename Index, int Mode, typename LhsScalar, bool ConjLhs, typename RhsScalar, bool ConjRhs, int Version>
-EIGEN_DONT_INLINE void triangular_matrix_vector_product<Index, Mode, LhsScalar, ConjLhs, RhsScalar, ConjRhs, ColMajor,
-                                                        Version>::run(Index _rows, Index _cols, const LhsScalar* lhs_,
-                                                                      Index lhsStride, const RhsScalar* rhs_,
-                                                                      Index rhsIncr, ResScalar* res_, Index resIncr,
-                                                                      const RhsScalar& alpha) {
-  static const Index PanelWidth = EIGEN_TUNE_TRIANGULAR_PANEL_WIDTH;
-  Index size = (std::min)(_rows, _cols);
-  Index rows = IsLower ? _rows : (std::min)(_rows, _cols);
-  Index cols = IsLower ? (std::min)(_rows, _cols) : _cols;
+constexpr void triangular_matrix_vector_product<Index, Mode, LhsScalar, ConjLhs, RhsScalar, ConjRhs, ColMajor,
+                                                Version>::run(Index _rows, Index _cols, const LhsScalar* lhs_,
+                                                              Index lhsStride, const RhsScalar* rhs_, Index rhsIncr,
+                                                              ResScalar* res_, Index resIncr, const RhsScalar& alpha) {
+  internal::noinline_invoke([&] {
+    constexpr Index PanelWidth = EIGEN_TUNE_TRIANGULAR_PANEL_WIDTH;
+    Index size = (std::min)(_rows, _cols);
+    Index rows = IsLower ? _rows : (std::min)(_rows, _cols);
+    Index cols = IsLower ? (std::min)(_rows, _cols) : _cols;
 
-  using LhsMapper = const_blas_data_mapper<LhsScalar, Index, ColMajor>;
-  using RhsMapper = const_blas_data_mapper<RhsScalar, Index, RowMajor>;
+    using LhsMapper = const_blas_data_mapper<LhsScalar, Index, ColMajor>;
+    using RhsMapper = const_blas_data_mapper<RhsScalar, Index, RowMajor>;
 
-  conj_if<ConjLhs> cjl;
-  conj_if<ConjRhs> cjr;
+    conj_if<ConjLhs> cjl;
+    conj_if<ConjRhs> cjr;
 
-  for (Index pi = 0; pi < size; pi += PanelWidth) {
-    Index actualPanelWidth = (std::min)(PanelWidth, size - pi);
+    for (Index pi = 0; pi < size; pi += PanelWidth) {
+      Index actualPanelWidth = (std::min)(PanelWidth, size - pi);
 
-    // Process the triangular panel using raw pointer operations with 2-column batching
-    // to eliminate expression template overhead and share result loads/stores.
-    EIGEN_IF_CONSTEXPR (IsLower) {
-      Index k = 0;
-      for (; k + 1 < actualPanelWidth; k += 2) {
-        Index i0 = pi + k;
-        Index i1 = i0 + 1;
-        ResScalar s0 = alpha * cjr(rhs_[i0 * rhsIncr]);
-        ResScalar s1 = alpha * cjr(rhs_[i1 * rhsIncr]);
-        const LhsScalar* EIGEN_RESTRICT c0 = lhs_ + i0 * lhsStride;
-        const LhsScalar* EIGEN_RESTRICT c1 = lhs_ + i1 * lhsStride;
+      // Process the triangular panel using raw pointer operations with 2-column batching
+      // to eliminate expression template overhead and share result loads/stores.
+      EIGEN_IF_CONSTEXPR (IsLower) {
+        Index k = 0;
+        for (; k + 1 < actualPanelWidth; k += 2) {
+          Index i0 = pi + k;
+          Index i1 = i0 + 1;
+          ResScalar s0 = alpha * cjr(rhs_[i0 * rhsIncr]);
+          ResScalar s1 = alpha * cjr(rhs_[i1 * rhsIncr]);
+          const LhsScalar* EIGEN_RESTRICT c0 = lhs_ + i0 * lhsStride;
+          const LhsScalar* EIGEN_RESTRICT c1 = lhs_ + i1 * lhsStride;
 
-        // Diagonal of column 0
-        EIGEN_IF_CONSTEXPR (!(HasUnitDiag || HasZeroDiag)) res_[i0] += s0 * cjl(c0[i0]);
-        // Row i1: contribution from column 0 + diagonal of column 1
-        {
-          ResScalar r1 = s0 * cjl(c0[i1]);
-          EIGEN_IF_CONSTEXPR (!(HasUnitDiag || HasZeroDiag)) r1 += s1 * cjl(c1[i1]);
-          res_[i1] += r1;
+          // Diagonal of column 0
+          EIGEN_IF_CONSTEXPR (!(HasUnitDiag || HasZeroDiag)) res_[i0] += s0 * cjl(c0[i0]);
+          // Row i1: contribution from column 0 + diagonal of column 1
+          {
+            ResScalar r1 = s0 * cjl(c0[i1]);
+            EIGEN_IF_CONSTEXPR (!(HasUnitDiag || HasZeroDiag)) r1 += s1 * cjl(c1[i1]);
+            res_[i1] += r1;
+          }
+          // Shared rows where both columns contribute
+          Index panelEnd = pi + actualPanelWidth;
+          for (Index j = i1 + 1; j < panelEnd; ++j) res_[j] += s0 * cjl(c0[j]) + s1 * cjl(c1[j]);
+
+          EIGEN_IF_CONSTEXPR (HasUnitDiag) {
+            res_[i0] += s0;
+            res_[i1] += s1;
+          }
         }
-        // Shared rows where both columns contribute
-        Index panelEnd = pi + actualPanelWidth;
-        for (Index j = i1 + 1; j < panelEnd; ++j) res_[j] += s0 * cjl(c0[j]) + s1 * cjl(c1[j]);
+        if (k < actualPanelWidth) {
+          Index i = pi + k;
+          ResScalar s = alpha * cjr(rhs_[i * rhsIncr]);
+          const LhsScalar* EIGEN_RESTRICT c = lhs_ + i * lhsStride;
+          EIGEN_IF_CONSTEXPR (!(HasUnitDiag || HasZeroDiag)) res_[i] += s * cjl(c[i]);
+          EIGEN_IF_CONSTEXPR (HasUnitDiag) res_[i] += s;
+        }
+      } else {
+        // Upper triangular: process 2 columns at a time
+        Index k = 0;
+        for (; k + 1 < actualPanelWidth; k += 2) {
+          Index i0 = pi + k;
+          Index i1 = i0 + 1;
+          ResScalar s0 = alpha * cjr(rhs_[i0 * rhsIncr]);
+          ResScalar s1 = alpha * cjr(rhs_[i1 * rhsIncr]);
+          const LhsScalar* EIGEN_RESTRICT c0 = lhs_ + i0 * lhsStride;
+          const LhsScalar* EIGEN_RESTRICT c1 = lhs_ + i1 * lhsStride;
 
-        EIGEN_IF_CONSTEXPR (HasUnitDiag) {
-          res_[i0] += s0;
-          res_[i1] += s1;
+          // Shared rows before the diagonal block
+          for (Index j = pi; j < i0; ++j) res_[j] += s0 * cjl(c0[j]) + s1 * cjl(c1[j]);
+
+          // Row i0: diagonal of col0 + contribution from col1
+          {
+            ResScalar r0 = s1 * cjl(c1[i0]);
+            EIGEN_IF_CONSTEXPR (!(HasUnitDiag || HasZeroDiag)) r0 += s0 * cjl(c0[i0]);
+            res_[i0] += r0;
+          }
+          // Diagonal of column 1
+          EIGEN_IF_CONSTEXPR (!(HasUnitDiag || HasZeroDiag)) res_[i1] += s1 * cjl(c1[i1]);
+
+          EIGEN_IF_CONSTEXPR (HasUnitDiag) {
+            res_[i0] += s0;
+            res_[i1] += s1;
+          }
+        }
+        if (k < actualPanelWidth) {
+          Index i = pi + k;
+          ResScalar s = alpha * cjr(rhs_[i * rhsIncr]);
+          const LhsScalar* EIGEN_RESTRICT c = lhs_ + i * lhsStride;
+          for (Index j = pi; j < i; ++j) res_[j] += s * cjl(c[j]);
+          EIGEN_IF_CONSTEXPR (!(HasUnitDiag || HasZeroDiag)) res_[i] += s * cjl(c[i]);
+          EIGEN_IF_CONSTEXPR (HasUnitDiag) res_[i] += s;
         }
       }
-      if (k < actualPanelWidth) {
-        Index i = pi + k;
-        ResScalar s = alpha * cjr(rhs_[i * rhsIncr]);
-        const LhsScalar* EIGEN_RESTRICT c = lhs_ + i * lhsStride;
-        EIGEN_IF_CONSTEXPR (!(HasUnitDiag || HasZeroDiag)) res_[i] += s * cjl(c[i]);
-        EIGEN_IF_CONSTEXPR (HasUnitDiag) res_[i] += s;
-      }
-    } else {
-      // Upper triangular: process 2 columns at a time
-      Index k = 0;
-      for (; k + 1 < actualPanelWidth; k += 2) {
-        Index i0 = pi + k;
-        Index i1 = i0 + 1;
-        ResScalar s0 = alpha * cjr(rhs_[i0 * rhsIncr]);
-        ResScalar s1 = alpha * cjr(rhs_[i1 * rhsIncr]);
-        const LhsScalar* EIGEN_RESTRICT c0 = lhs_ + i0 * lhsStride;
-        const LhsScalar* EIGEN_RESTRICT c1 = lhs_ + i1 * lhsStride;
 
-        // Shared rows before the diagonal block
-        for (Index j = pi; j < i0; ++j) res_[j] += s0 * cjl(c0[j]) + s1 * cjl(c1[j]);
-
-        // Row i0: diagonal of col0 + contribution from col1
-        {
-          ResScalar r0 = s1 * cjl(c1[i0]);
-          EIGEN_IF_CONSTEXPR (!(HasUnitDiag || HasZeroDiag)) r0 += s0 * cjl(c0[i0]);
-          res_[i0] += r0;
-        }
-        // Diagonal of column 1
-        EIGEN_IF_CONSTEXPR (!(HasUnitDiag || HasZeroDiag)) res_[i1] += s1 * cjl(c1[i1]);
-
-        EIGEN_IF_CONSTEXPR (HasUnitDiag) {
-          res_[i0] += s0;
-          res_[i1] += s1;
-        }
-      }
-      if (k < actualPanelWidth) {
-        Index i = pi + k;
-        ResScalar s = alpha * cjr(rhs_[i * rhsIncr]);
-        const LhsScalar* EIGEN_RESTRICT c = lhs_ + i * lhsStride;
-        for (Index j = pi; j < i; ++j) res_[j] += s * cjl(c[j]);
-        EIGEN_IF_CONSTEXPR (!(HasUnitDiag || HasZeroDiag)) res_[i] += s * cjl(c[i]);
-        EIGEN_IF_CONSTEXPR (HasUnitDiag) res_[i] += s;
+      // Rectangular part: delegate to optimized GEMV
+      Index r = IsLower ? rows - pi - actualPanelWidth : pi;
+      if (r > 0) {
+        Index s = IsLower ? pi + actualPanelWidth : 0;
+        general_matrix_vector_product<Index, LhsScalar, LhsMapper, ColMajor, ConjLhs, RhsScalar, RhsMapper, ConjRhs,
+                                      BuiltIn>::run(r, actualPanelWidth,
+                                                    LhsMapper(&lhs_[pi * lhsStride + s], lhsStride),
+                                                    RhsMapper(&rhs_[pi * rhsIncr], rhsIncr), &res_[s], resIncr, alpha);
       }
     }
-
-    // Rectangular part: delegate to optimized GEMV
-    Index r = IsLower ? rows - pi - actualPanelWidth : pi;
-    if (r > 0) {
-      Index s = IsLower ? pi + actualPanelWidth : 0;
-      general_matrix_vector_product<Index, LhsScalar, LhsMapper, ColMajor, ConjLhs, RhsScalar, RhsMapper, ConjRhs,
-                                    BuiltIn>::run(r, actualPanelWidth, LhsMapper(&lhs_[pi * lhsStride + s], lhsStride),
-                                                  RhsMapper(&rhs_[pi * rhsIncr], rhsIncr), &res_[s], resIncr, alpha);
+    EIGEN_IF_CONSTEXPR (!IsLower) {
+      if (cols > size) {
+        general_matrix_vector_product<Index, LhsScalar, LhsMapper, ColMajor, ConjLhs, RhsScalar, RhsMapper,
+                                      ConjRhs>::run(rows, cols - size, LhsMapper(&lhs_[size * lhsStride], lhsStride),
+                                                    RhsMapper(&rhs_[size * rhsIncr], rhsIncr), res_, resIncr, alpha);
+      }
     }
-  }
-  EIGEN_IF_CONSTEXPR (!IsLower) {
-    if (cols > size) {
-      general_matrix_vector_product<Index, LhsScalar, LhsMapper, ColMajor, ConjLhs, RhsScalar, RhsMapper, ConjRhs>::run(
-          rows, cols - size, LhsMapper(&lhs_[size * lhsStride], lhsStride), RhsMapper(&rhs_[size * rhsIncr], rhsIncr),
-          res_, resIncr, alpha);
-    }
-  }
+  });
 }
 
 template <typename Index, int Mode, typename LhsScalar, bool ConjLhs, typename RhsScalar, bool ConjRhs, int Version>
@@ -161,67 +162,70 @@ struct triangular_matrix_vector_product<Index, Mode, LhsScalar, ConjLhs, RhsScal
   static constexpr bool IsLower = (Mode & Lower) == Lower;
   static constexpr bool HasUnitDiag = (Mode & UnitDiag) == UnitDiag;
   static constexpr bool HasZeroDiag = (Mode & ZeroDiag) == ZeroDiag;
-  static EIGEN_TRMV_DONT_INLINE void run(Index _rows, Index _cols, const LhsScalar* lhs_, Index lhsStride,
-                                         const RhsScalar* rhs_, Index rhsIncr, ResScalar* res_, Index resIncr,
-                                         const ResScalar& alpha);
+  static constexpr void run(Index _rows, Index _cols, const LhsScalar* lhs_, Index lhsStride, const RhsScalar* rhs_,
+                            Index rhsIncr, ResScalar* res_, Index resIncr, const ResScalar& alpha);
 };
 
 template <typename Index, int Mode, typename LhsScalar, bool ConjLhs, typename RhsScalar, bool ConjRhs, int Version>
-EIGEN_DONT_INLINE void triangular_matrix_vector_product<Index, Mode, LhsScalar, ConjLhs, RhsScalar, ConjRhs, RowMajor,
-                                                        Version>::run(Index _rows, Index _cols, const LhsScalar* lhs_,
-                                                                      Index lhsStride, const RhsScalar* rhs_,
-                                                                      Index rhsIncr, ResScalar* res_, Index resIncr,
-                                                                      const ResScalar& alpha) {
-  static const Index PanelWidth = EIGEN_TUNE_TRIANGULAR_PANEL_WIDTH;
-  Index diagSize = (std::min)(_rows, _cols);
-  Index rows = IsLower ? _rows : diagSize;
-  Index cols = IsLower ? diagSize : _cols;
+constexpr void triangular_matrix_vector_product<Index, Mode, LhsScalar, ConjLhs, RhsScalar, ConjRhs, RowMajor,
+                                                Version>::run(Index _rows, Index _cols, const LhsScalar* lhs_,
+                                                              Index lhsStride, const RhsScalar* rhs_, Index rhsIncr,
+                                                              ResScalar* res_, Index resIncr, const ResScalar& alpha) {
+  internal::noinline_invoke([&] {
+    constexpr Index PanelWidth = EIGEN_TUNE_TRIANGULAR_PANEL_WIDTH;
+    Index diagSize = (std::min)(_rows, _cols);
+    Index rows = IsLower ? _rows : diagSize;
+    Index cols = IsLower ? diagSize : _cols;
 
-  using LhsMapper = const_blas_data_mapper<LhsScalar, Index, RowMajor>;
-  using RhsMapper = const_blas_data_mapper<RhsScalar, Index, RowMajor>;
+    using LhsMapper = const_blas_data_mapper<LhsScalar, Index, RowMajor>;
+    using RhsMapper = const_blas_data_mapper<RhsScalar, Index, RowMajor>;
 
-  conj_if<ConjLhs> cjl;
-  conj_if<ConjRhs> cjr;
+    conj_if<ConjLhs> cjl;
+    conj_if<ConjRhs> cjr;
 
-  for (Index pi = 0; pi < diagSize; pi += PanelWidth) {
-    Index actualPanelWidth = (std::min)(PanelWidth, diagSize - pi);
+    for (Index pi = 0; pi < diagSize; pi += PanelWidth) {
+      Index actualPanelWidth = (std::min)(PanelWidth, diagSize - pi);
 
-    // Process the triangular panel using raw dot products to eliminate
-    // the cwiseProduct().sum() expression template overhead.
-    for (Index k = 0; k < actualPanelWidth; ++k) {
-      Index i = pi + k;
-      const LhsScalar* EIGEN_RESTRICT row_i = lhs_ + i * lhsStride;
-      ResScalar dot = ResScalar(0);
+      // Process the triangular panel using raw dot products to eliminate
+      // the cwiseProduct().sum() expression template overhead.
+      for (Index k = 0; k < actualPanelWidth; ++k) {
+        Index i = pi + k;
+        const LhsScalar* EIGEN_RESTRICT row_i = lhs_ + i * lhsStride;
+        ResScalar dot = ResScalar(0);
 
-      EIGEN_IF_CONSTEXPR (IsLower) {
-        Index s = pi;
-        Index len = (HasUnitDiag || HasZeroDiag) ? k : k + 1;
-        for (Index j = 0; j < len; ++j) dot += cjl(row_i[s + j]) * cjr(rhs_[s + j]);
-      } else {
-        Index s = (HasUnitDiag || HasZeroDiag) ? i + 1 : i;
-        Index len = pi + actualPanelWidth - s;
-        for (Index j = 0; j < len; ++j) dot += cjl(row_i[s + j]) * cjr(rhs_[s + j]);
+        EIGEN_IF_CONSTEXPR (IsLower) {
+          Index s = pi;
+          Index len = (HasUnitDiag || HasZeroDiag) ? k : k + 1;
+          for (Index j = 0; j < len; ++j) dot += cjl(row_i[s + j]) * cjr(rhs_[s + j]);
+        } else {
+          Index s = (HasUnitDiag || HasZeroDiag) ? i + 1 : i;
+          Index len = pi + actualPanelWidth - s;
+          for (Index j = 0; j < len; ++j) dot += cjl(row_i[s + j]) * cjr(rhs_[s + j]);
+        }
+        res_[i * resIncr] += alpha * dot;
+        EIGEN_IF_CONSTEXPR (HasUnitDiag) res_[i * resIncr] += alpha * cjr(rhs_[i]);
       }
-      res_[i * resIncr] += alpha * dot;
-      EIGEN_IF_CONSTEXPR (HasUnitDiag) res_[i * resIncr] += alpha * cjr(rhs_[i]);
-    }
 
-    // Rectangular part: delegate to optimized GEMV
-    Index r = IsLower ? pi : cols - pi - actualPanelWidth;
-    if (r > 0) {
-      Index s = IsLower ? 0 : pi + actualPanelWidth;
-      general_matrix_vector_product<Index, LhsScalar, LhsMapper, RowMajor, ConjLhs, RhsScalar, RhsMapper, ConjRhs,
-                                    BuiltIn>::run(actualPanelWidth, r, LhsMapper(&lhs_[pi * lhsStride + s], lhsStride),
-                                                  RhsMapper(&rhs_[s], rhsIncr), &res_[pi * resIncr], resIncr, alpha);
+      // Rectangular part: delegate to optimized GEMV
+      Index r = IsLower ? pi : cols - pi - actualPanelWidth;
+      if (r > 0) {
+        Index s = IsLower ? 0 : pi + actualPanelWidth;
+        general_matrix_vector_product<Index, LhsScalar, LhsMapper, RowMajor, ConjLhs, RhsScalar, RhsMapper, ConjRhs,
+                                      BuiltIn>::run(actualPanelWidth, r,
+                                                    LhsMapper(&lhs_[pi * lhsStride + s], lhsStride),
+                                                    RhsMapper(&rhs_[s], rhsIncr), &res_[pi * resIncr], resIncr, alpha);
+      }
     }
-  }
-  EIGEN_IF_CONSTEXPR (IsLower) {
-    if (rows > diagSize) {
-      general_matrix_vector_product<Index, LhsScalar, LhsMapper, RowMajor, ConjLhs, RhsScalar, RhsMapper, ConjRhs>::run(
-          rows - diagSize, cols, LhsMapper(&lhs_[diagSize * lhsStride], lhsStride), RhsMapper(rhs_, rhsIncr),
-          &res_[diagSize * resIncr], resIncr, alpha);
+    EIGEN_IF_CONSTEXPR (IsLower) {
+      if (rows > diagSize) {
+        general_matrix_vector_product<Index, LhsScalar, LhsMapper, RowMajor, ConjLhs, RhsScalar, RhsMapper,
+                                      ConjRhs>::run(rows - diagSize, cols,
+                                                    LhsMapper(&lhs_[diagSize * lhsStride], lhsStride),
+                                                    RhsMapper(rhs_, rhsIncr), &res_[diagSize * resIncr], resIncr,
+                                                    alpha);
+      }
     }
-  }
+  });
 }
 
 #undef EIGEN_TRMV_DONT_INLINE

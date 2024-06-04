@@ -41,76 +41,82 @@ namespace Eigen {
 
 /** \internal Specialization for the data types supported by LAPACKe */
 
+// EIGTYPE and LAPACKE_TYPE name types, which cannot be parenthesized.
+// NOLINTBEGIN(bugprone-macro-parentheses)
 #define EIGEN_LAPACKE_SVD(EIGTYPE, LAPACKE_TYPE, LAPACKE_RTYPE, LAPACKE_PREFIX, EIGCOLROW, LAPACKE_COLROW, OPTIONS) \
   template <>                                                                                                       \
   template <typename Derived>                                                                                       \
-  inline JacobiSVD<Matrix<EIGTYPE, Dynamic, Dynamic, EIGCOLROW, Dynamic, Dynamic>, OPTIONS>&                        \
+  constexpr JacobiSVD<Matrix<EIGTYPE, Dynamic, Dynamic, EIGCOLROW, Dynamic, Dynamic>, OPTIONS>&                     \
   JacobiSVD<Matrix<EIGTYPE, Dynamic, Dynamic, EIGCOLROW, Dynamic, Dynamic>, OPTIONS>::compute_impl(                 \
       const MatrixBase<Derived>& matrix, unsigned int computationOptions) {                                         \
-    /*typedef MatrixType::Scalar Scalar;*/                                                                          \
-    /*typedef MatrixType::RealScalar RealScalar;*/                                                                  \
-    allocate(matrix.rows(), matrix.cols(), computationOptions);                                                     \
+    /* The lambda keeps the non-literal LAPACK workspaces out of the constexpr body, which C++17 rejects. */        \
+    return [&]() -> JacobiSVD& {                                                                                    \
+      /*typedef MatrixType::Scalar Scalar;*/                                                                        \
+      /*typedef MatrixType::RealScalar RealScalar;*/                                                                \
+      allocate(matrix.rows(), matrix.cols(), computationOptions);                                                   \
                                                                                                                     \
-    /*const RealScalar precision = RealScalar(2) * NumTraits<Scalar>::epsilon();*/                                  \
-    m_nonzeroSingularValues = diagSize();                                                                           \
-    /* LAPACK rejects the zero leading dimensions of an empty input, and given valid ones it returns without */     \
-    /* writing U or VT. Set the identities the native path returns. */                                              \
-    if (diagSize() == 0) {                                                                                          \
-      if (computeU()) m_matrixU.setIdentity();                                                                      \
-      if (computeV()) m_matrixV.setIdentity();                                                                      \
+      /*const RealScalar precision = RealScalar(2) * NumTraits<Scalar>::epsilon();*/                                \
+      m_nonzeroSingularValues = diagSize();                                                                         \
+      /* LAPACK rejects the zero leading dimensions of an empty input, and given valid ones it returns without */   \
+      /* writing U or VT. Set the identities the native path returns. */                                            \
+      if (diagSize() == 0) {                                                                                        \
+        if (computeU()) m_matrixU.setIdentity();                                                                    \
+        if (computeV()) m_matrixV.setIdentity();                                                                    \
+        m_isInitialized = true;                                                                                     \
+        return *this;                                                                                               \
+      }                                                                                                             \
+                                                                                                                    \
+      lapack_int ldu, ldvt;                                                                                         \
+      lapack_int matrix_order = LAPACKE_COLROW;                                                                     \
+      char jobu, jobvt;                                                                                             \
+      LAPACKE_TYPE *u, *vt, dummy;                                                                                  \
+      jobu = (m_computeFullU) ? 'A' : (m_computeThinU) ? 'S' : 'N';                                                 \
+      jobvt = (m_computeFullV) ? 'A' : (m_computeThinV) ? 'S' : 'N';                                                \
+      if (computeU()) {                                                                                             \
+        ldu = internal::convert_index<lapack_int>(m_matrixU.outerStride());                                         \
+        u = (LAPACKE_TYPE*)m_matrixU.data();                                                                        \
+      } else {                                                                                                      \
+        ldu = 1;                                                                                                    \
+        u = &dummy;                                                                                                 \
+      }                                                                                                             \
+      MatrixType localV;                                                                                            \
+      lapack_int vt_rows = (m_computeFullV)   ? internal::convert_index<lapack_int>(cols())                         \
+                           : (m_computeThinV) ? internal::convert_index<lapack_int>(diagSize())                     \
+                                              : 1;                                                                  \
+      if (computeV()) {                                                                                             \
+        localV.resize(vt_rows, cols());                                                                             \
+        ldvt = internal::convert_index<lapack_int>(localV.outerStride());                                           \
+        vt = (LAPACKE_TYPE*)localV.data();                                                                          \
+      } else {                                                                                                      \
+        ldvt = 1;                                                                                                   \
+        vt = &dummy;                                                                                                \
+      }                                                                                                             \
+      Matrix<LAPACKE_RTYPE, Dynamic, Dynamic> superb;                                                               \
+      superb.resize(diagSize(), 1);                                                                                 \
+      MatrixType m_temp;                                                                                            \
+      m_temp = matrix;                                                                                              \
+      /* LAPACK reads the copy, whose layout the input expression need not share. */                                \
+      lapack_int lda = internal::convert_index<lapack_int>(m_temp.outerStride());                                   \
+      lapack_int info = LAPACKE_##LAPACKE_PREFIX##gesvd(                                                            \
+          matrix_order, jobu, jobvt, internal::convert_index<lapack_int>(rows()),                                   \
+          internal::convert_index<lapack_int>(cols()), (LAPACKE_TYPE*)m_temp.data(), lda,                           \
+          (LAPACKE_RTYPE*)m_singularValues.data(), u, ldu, vt, ldvt, superb.data());                                \
+      /* Check the result of the LAPACK call */                                                                     \
+      if (info < 0 || !m_singularValues.allFinite()) {                                                              \
+        m_info = InvalidInput;                                                                                      \
+      } else if (info > 0) {                                                                                        \
+        m_info = NoConvergence;                                                                                     \
+      } else {                                                                                                      \
+        m_info = Success;                                                                                           \
+        if (computeV()) m_matrixV = localV.adjoint();                                                               \
+      }                                                                                                             \
+      /* for(int i=0;i<diagSize();i++) if (m_singularValues.coeffRef(i) < precision) { m_nonzeroSingularValues--;   \
+       * m_singularValues.coeffRef(i)=RealScalar(0);}*/                                                             \
       m_isInitialized = true;                                                                                       \
       return *this;                                                                                                 \
-    }                                                                                                               \
-                                                                                                                    \
-    lapack_int ldu, ldvt;                                                                                           \
-    lapack_int matrix_order = LAPACKE_COLROW;                                                                       \
-    char jobu, jobvt;                                                                                               \
-    LAPACKE_TYPE *u, *vt, dummy;                                                                                    \
-    jobu = (m_computeFullU) ? 'A' : (m_computeThinU) ? 'S' : 'N';                                                   \
-    jobvt = (m_computeFullV) ? 'A' : (m_computeThinV) ? 'S' : 'N';                                                  \
-    if (computeU()) {                                                                                               \
-      ldu = internal::convert_index<lapack_int>(m_matrixU.outerStride());                                           \
-      u = (LAPACKE_TYPE*)m_matrixU.data();                                                                          \
-    } else {                                                                                                        \
-      ldu = 1;                                                                                                      \
-      u = &dummy;                                                                                                   \
-    }                                                                                                               \
-    MatrixType localV;                                                                                              \
-    lapack_int vt_rows = (m_computeFullV)   ? internal::convert_index<lapack_int>(cols())                           \
-                         : (m_computeThinV) ? internal::convert_index<lapack_int>(diagSize())                       \
-                                            : 1;                                                                    \
-    if (computeV()) {                                                                                               \
-      localV.resize(vt_rows, cols());                                                                               \
-      ldvt = internal::convert_index<lapack_int>(localV.outerStride());                                             \
-      vt = (LAPACKE_TYPE*)localV.data();                                                                            \
-    } else {                                                                                                        \
-      ldvt = 1;                                                                                                     \
-      vt = &dummy;                                                                                                  \
-    }                                                                                                               \
-    Matrix<LAPACKE_RTYPE, Dynamic, Dynamic> superb;                                                                 \
-    superb.resize(diagSize(), 1);                                                                                   \
-    MatrixType m_temp;                                                                                              \
-    m_temp = matrix;                                                                                                \
-    /* LAPACK reads the copy, whose layout the input expression need not share. */                                  \
-    lapack_int lda = internal::convert_index<lapack_int>(m_temp.outerStride());                                     \
-    lapack_int info = LAPACKE_##LAPACKE_PREFIX##gesvd(                                                              \
-        matrix_order, jobu, jobvt, internal::convert_index<lapack_int>(rows()),                                     \
-        internal::convert_index<lapack_int>(cols()), (LAPACKE_TYPE*)m_temp.data(), lda,                             \
-        (LAPACKE_RTYPE*)m_singularValues.data(), u, ldu, vt, ldvt, superb.data());                                  \
-    /* Check the result of the LAPACK call */                                                                       \
-    if (info < 0 || !m_singularValues.allFinite()) {                                                                \
-      m_info = InvalidInput;                                                                                        \
-    } else if (info > 0) {                                                                                          \
-      m_info = NoConvergence;                                                                                       \
-    } else {                                                                                                        \
-      m_info = Success;                                                                                             \
-      if (computeV()) m_matrixV = localV.adjoint();                                                                 \
-    }                                                                                                               \
-    /* for(int i=0;i<diagSize();i++) if (m_singularValues.coeffRef(i) < precision) { m_nonzeroSingularValues--;     \
-     * m_singularValues.coeffRef(i)=RealScalar(0);}*/                                                               \
-    m_isInitialized = true;                                                                                         \
-    return *this;                                                                                                   \
+    }();                                                                                                            \
   }
+// NOLINTEND(bugprone-macro-parentheses)
 
 #define EIGEN_LAPACK_SVD_OPTIONS(OPTIONS)                                                            \
   EIGEN_LAPACKE_SVD(double, double, double, d, ColMajor, LAPACK_COL_MAJOR, OPTIONS)                  \

@@ -61,9 +61,9 @@ namespace internal {
  *
  */
 template <typename Scalar, typename StorageIndex>
-Index SparseLUImpl<Scalar, StorageIndex>::pivotL(const Index jcol, const RealScalar& diagpivotthresh,
-                                                 IndexVector& perm_r, IndexVector& iperm_c, Index& pivrow,
-                                                 GlobalLU_t& glu) {
+constexpr Index SparseLUImpl<Scalar, StorageIndex>::pivotL(const Index jcol, const RealScalar& diagpivotthresh,
+                                                           IndexVector& perm_r, IndexVector& iperm_c, Index& pivrow,
+                                                           GlobalLU_t& glu) {
   Index fsupc = glu.xsup(glu.supno(jcol));  // First column in the supernode containing the column jcol
   Index nsupc = jcol - fsupc;               // Number of columns in the supernode portion, excluding jcol; nsupc >=0
   Index lptr = glu.xlsub(fsupc);  // pointer to the starting location of the row subscripts for this supernode portion
@@ -78,11 +78,10 @@ Index SparseLUImpl<Scalar, StorageIndex>::pivotL(const Index jcol, const RealSca
   RealScalar pivmax(-1.0);
   Index pivptr = nsupc;
   Index diag = emptyIdxLU;
-  RealScalar rtemp;
-  Index isub, icol, itemp, k;
+  RealScalar rtemp{};
+  Index isub = 0, icol = 0, itemp = 0, k = 0;
   for (isub = nsupc; isub < nsupr; ++isub) {
-    using numext::abs;
-    rtemp = abs(lu_col_ptr[isub]);
+    rtemp = numext::abs(lu_col_ptr[isub]);
     if (rtemp > pivmax) {
       pivmax = rtemp;
       pivptr = isub;
@@ -106,8 +105,7 @@ Index SparseLUImpl<Scalar, StorageIndex>::pivotL(const Index jcol, const RealSca
     // Test if the diagonal element can be used as a pivot (given the threshold value)
     if (diag >= 0) {
       // Diagonal element exists
-      using numext::abs;
-      rtemp = abs(lu_col_ptr[diag]);
+      rtemp = numext::abs(lu_col_ptr[diag]);
       if (rtemp != RealScalar(0.0) && rtemp >= thresh) pivptr = diag;
     }
     pivrow = lsub_ptr[pivptr];

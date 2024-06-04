@@ -29,13 +29,11 @@ namespace internal {
  * \param ncut  The number of largest elements to keep
  **/
 template <typename VectorV, typename VectorI>
-Index QuickSplit(VectorV& row, VectorI& ind, Index ncut) {
+constexpr Index QuickSplit(VectorV& row, VectorI& ind, Index ncut) {
   using RealScalar = typename VectorV::RealScalar;
-  using numext::abs;
-  using std::swap;
-  Index mid;
+  Index mid = 0;
   Index n = row.size(); /* length of the vector */
-  Index first, last;
+  Index first = 0, last = 0;
 
   ncut--; /* to fit the zero-based indices */
   first = 0;
@@ -44,17 +42,17 @@ Index QuickSplit(VectorV& row, VectorI& ind, Index ncut) {
 
   do {
     mid = first;
-    RealScalar abskey = abs(row(mid));
+    RealScalar abskey = numext::abs(row(mid));
     for (Index j = first + 1; j <= last; j++) {
-      if (abs(row(j)) > abskey) {
+      if (numext::abs(row(j)) > abskey) {
         ++mid;
-        swap(row(mid), row(j));
-        swap(ind(mid), ind(j));
+        numext::swap(row(mid), row(j));
+        numext::swap(ind(mid), ind(j));
       }
     }
     /* Interchange for the pivot element */
-    swap(row(mid), row(first));
-    swap(ind(mid), ind(first));
+    numext::swap(row(mid), row(first));
+    numext::swap(ind(mid), ind(first));
 
     if (mid > ncut)
       last = mid - 1;
@@ -116,25 +114,26 @@ class IncompleteLUT : public SparseSolverBase<IncompleteLUT<Scalar_, StorageInde
   enum { ColsAtCompileTime = Dynamic, MaxColsAtCompileTime = Dynamic };
 
  public:
-  IncompleteLUT()
+  constexpr IncompleteLUT()
       : m_droptol(NumTraits<Scalar>::dummy_precision()),
         m_fillfactor(10),
         m_analysisIsOk(false),
         m_factorizationIsOk(false) {}
 
   template <typename MatrixType>
-  explicit IncompleteLUT(const MatrixType& mat, const RealScalar& droptol = NumTraits<Scalar>::dummy_precision(),
-                         int fillfactor = 10)
+  constexpr explicit IncompleteLUT(const MatrixType& mat,
+                                   const RealScalar& droptol = NumTraits<Scalar>::dummy_precision(),
+                                   int fillfactor = 10)
       : m_droptol(droptol), m_fillfactor(fillfactor), m_analysisIsOk(false), m_factorizationIsOk(false) {
     eigen_assert(fillfactor != 0);
     compute(mat);
   }
 
   /** \brief Extraction Method for L-Factor */
-  const FactorType matrixL() const;
+  constexpr const FactorType matrixL() const;
 
   /** \brief Extraction Method for U-Factor */
-  const FactorType matrixU() const;
+  constexpr const FactorType matrixU() const;
 
   constexpr Index rows() const noexcept { return m_lu.rows(); }
 
@@ -149,16 +148,16 @@ class IncompleteLUT : public SparseSolverBase<IncompleteLUT<Scalar_, StorageInde
    *          that cannot be moved by a static row permutation, e.g. it is
    *          structurally singular).
    */
-  ComputationInfo info() const {
+  constexpr ComputationInfo info() const {
     eigen_assert(m_isInitialized && "IncompleteLUT is not initialized.");
     return m_info;
   }
 
   template <typename MatrixType>
-  void analyzePattern(const MatrixType& amat);
+  constexpr void analyzePattern(const MatrixType& amat);
 
   template <typename MatrixType>
-  void factorize(const MatrixType& amat);
+  constexpr void factorize(const MatrixType& amat);
 
   /**
    * Compute an incomplete LU factorization with dual threshold on the matrix mat
@@ -170,17 +169,17 @@ class IncompleteLUT : public SparseSolverBase<IncompleteLUT<Scalar_, StorageInde
    *
    **/
   template <typename MatrixType>
-  IncompleteLUT& compute(const MatrixType& amat) {
+  constexpr IncompleteLUT& compute(const MatrixType& amat) {
     analyzePattern(amat);
     factorize(amat);
     return *this;
   }
 
-  void setDroptol(const RealScalar& droptol);
-  void setFillfactor(int fillfactor);
+  constexpr void setDroptol(const RealScalar& droptol);
+  constexpr void setFillfactor(int fillfactor);
 
   template <typename Rhs, typename Dest>
-  void _solve_impl(const Rhs& b, Dest& x) const {
+  constexpr void _solve_impl(const Rhs& b, Dest& x) const {
     x = m_PinvPr * b;
     x = m_lu.template triangularView<UnitLower>().solve(x);
     x = m_lu.template triangularView<Upper>().solve(x);
@@ -190,11 +189,11 @@ class IncompleteLUT : public SparseSolverBase<IncompleteLUT<Scalar_, StorageInde
  protected:
   /** keeps off-diagonal entries; drops diagonal entries */
   struct keep_diag {
-    inline bool operator()(const Index& row, const Index& col, const Scalar&) const { return row != col; }
+    constexpr bool operator()(const Index& row, const Index& col, const Scalar&) const { return row != col; }
   };
 
   template <typename MatrixType>
-  Index computeRowMatching(const MatrixType& amat);
+  EIGEN_CONSTEXPR20 Index computeRowMatching(const MatrixType& amat);
 
  protected:
   FactorType m_lu;
@@ -214,7 +213,7 @@ class IncompleteLUT : public SparseSolverBase<IncompleteLUT<Scalar_, StorageInde
  *  \param droptol   Drop any element whose magnitude is less than this tolerance
  **/
 template <typename Scalar, typename StorageIndex>
-void IncompleteLUT<Scalar, StorageIndex>::setDroptol(const RealScalar& droptol) {
+constexpr void IncompleteLUT<Scalar, StorageIndex>::setDroptol(const RealScalar& droptol) {
   this->m_droptol = droptol;
 }
 
@@ -223,7 +222,7 @@ void IncompleteLUT<Scalar, StorageIndex>::setDroptol(const RealScalar& droptol) 
  * \param fillfactor  This is used to compute the  number @p fill_in of largest elements to keep on each row.
  **/
 template <typename Scalar, typename StorageIndex>
-void IncompleteLUT<Scalar, StorageIndex>::setFillfactor(int fillfactor) {
+constexpr void IncompleteLUT<Scalar, StorageIndex>::setFillfactor(int fillfactor) {
   this->m_fillfactor = fillfactor;
 }
 
@@ -233,7 +232,8 @@ void IncompleteLUT<Scalar, StorageIndex>::setFillfactor(int fillfactor) {
  * above the main diagonal are zero.
  **/
 template <typename Scalar, typename StorageIndex>
-const typename IncompleteLUT<Scalar, StorageIndex>::FactorType IncompleteLUT<Scalar, StorageIndex>::matrixL() const {
+constexpr const typename IncompleteLUT<Scalar, StorageIndex>::FactorType IncompleteLUT<Scalar, StorageIndex>::matrixL()
+    const {
   eigen_assert(m_factorizationIsOk && "factorize() should be called first");
   return m_lu.template triangularView<UnitLower>();
 }
@@ -244,7 +244,8 @@ const typename IncompleteLUT<Scalar, StorageIndex>::FactorType IncompleteLUT<Sca
  * below the main diagonal are zero.
  **/
 template <typename Scalar, typename StorageIndex>
-const typename IncompleteLUT<Scalar, StorageIndex>::FactorType IncompleteLUT<Scalar, StorageIndex>::matrixU() const {
+constexpr const typename IncompleteLUT<Scalar, StorageIndex>::FactorType IncompleteLUT<Scalar, StorageIndex>::matrixU()
+    const {
   eigen_assert(m_factorizationIsOk && "Factorization must be computed first.");
   return m_lu.template triangularView<Upper>();
 }
@@ -256,7 +257,7 @@ const typename IncompleteLUT<Scalar, StorageIndex>::FactorType IncompleteLUT<Sca
 // already having a nonzero diagonal yield the identity permutation.
 template <typename Scalar, typename StorageIndex>
 template <typename MatrixType_>
-Index IncompleteLUT<Scalar, StorageIndex>::computeRowMatching(const MatrixType_& amat) {
+EIGEN_CONSTEXPR20 Index IncompleteLUT<Scalar, StorageIndex>::computeRowMatching(const MatrixType_& amat) {
   using internal::convert_index;
   const Index n = amat.rows();
   // We only need amat's column-major sparsity pattern; never read scalar
@@ -392,7 +393,7 @@ Index IncompleteLUT<Scalar, StorageIndex>::computeRowMatching(const MatrixType_&
 
 template <typename Scalar, typename StorageIndex>
 template <typename MatrixType_>
-void IncompleteLUT<Scalar, StorageIndex>::analyzePattern(const MatrixType_& amat) {
+constexpr void IncompleteLUT<Scalar, StorageIndex>::analyzePattern(const MatrixType_& amat) {
   EIGEN_INTERNAL_ASSERT_SQUARE_MSG(amat, "The factorization should be done on a square matrix");
   // 1. Compute a static row permutation that makes the diagonal structurally
   //    nonzero. This is a workaround for the lack of partial pivoting in ILUT.
@@ -427,11 +428,8 @@ void IncompleteLUT<Scalar, StorageIndex>::analyzePattern(const MatrixType_& amat
 
 template <typename Scalar, typename StorageIndex>
 template <typename MatrixType_>
-void IncompleteLUT<Scalar, StorageIndex>::factorize(const MatrixType_& amat) {
+constexpr void IncompleteLUT<Scalar, StorageIndex>::factorize(const MatrixType_& amat) {
   using internal::convert_index;
-  using numext::abs;
-  using numext::sqrt;
-  using std::swap;
 
   EIGEN_INTERNAL_ASSERT_SQUARE_MSG(amat, "The factorization should be done on a square matrix");
   Index n = amat.cols();  // Size of the matrix
@@ -502,7 +500,7 @@ void IncompleteLUT<Scalar, StorageIndex>::factorize(const MatrixType_& amat) {
       return;
     }
     // Take the 2-norm of the current row as a relative tolerance
-    rownorm = sqrt(rownorm);
+    rownorm = numext::sqrt(rownorm);
 
     // 3 - eliminate the previous nonzero rows
     Index jj = 0;
@@ -510,16 +508,16 @@ void IncompleteLUT<Scalar, StorageIndex>::factorize(const MatrixType_& amat) {
     while (jj < sizel) {
       // In order to eliminate in the correct order,
       // we must select first the smallest column index among  ju(jj:sizel)
-      Index k;
+      Index k = 0;
       Index minrow = ju.segment(jj, sizel - jj).minCoeff(&k);  // k is relative to the segment
       k += jj;
       if (minrow != ju(jj)) {
         // swap the two locations
         Index j = ju(jj);
-        swap(ju(jj), ju(k));
+        numext::swap(ju(jj), ju(k));
         jr(minrow) = convert_index<StorageIndex>(jj);
         jr(j) = convert_index<StorageIndex>(k);
-        swap(u(jj), u(k));
+        numext::swap(u(jj), u(k));
       }
       // Reset this location
       jr(minrow) = -1;
@@ -531,7 +529,7 @@ void IncompleteLUT<Scalar, StorageIndex>::factorize(const MatrixType_& amat) {
       Scalar fact = u(jj) / ki_it.value();
 
       // drop too small elements
-      if (abs(fact) <= m_droptol) {
+      if (numext::abs(fact) <= m_droptol) {
         jj++;
         continue;
       }
@@ -544,7 +542,7 @@ void IncompleteLUT<Scalar, StorageIndex>::factorize(const MatrixType_& amat) {
         Index jpos = jr(j);
         if (jpos == -1)  // fill-in element
         {
-          Index newpos;
+          Index newpos = 0;
           if (j >= ii)  // dealing with the upper part
           {
             newpos = ii + sizeu;
@@ -589,7 +587,7 @@ void IncompleteLUT<Scalar, StorageIndex>::factorize(const MatrixType_& amat) {
     // store the diagonal element
     // apply a shifting rule to avoid zero pivots (we are doing an incomplete factorization)
     if (u(ii) == Scalar(0)) {
-      u(ii) = sqrt(m_droptol) * rownorm;
+      u(ii) = numext::sqrt(m_droptol) * rownorm;
       ++zero_pivots;
     }
     m_lu.insertBackByOuterInnerUnordered(ii, ii) = u(ii);
@@ -598,7 +596,7 @@ void IncompleteLUT<Scalar, StorageIndex>::factorize(const MatrixType_& amat) {
     // apply the dropping rule first
     len = 0;
     for (Index k = 1; k < sizeu; k++) {
-      if (abs(u(ii + k)) > m_droptol * rownorm) {
+      if (numext::abs(u(ii + k)) > m_droptol * rownorm) {
         ++len;
         u(ii + len) = u(ii + k);
         ju(ii + len) = ju(ii + k);

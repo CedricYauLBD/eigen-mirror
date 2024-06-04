@@ -20,27 +20,26 @@ namespace internal {
 
 template <typename Accumulator, bool = std::is_floating_point<Accumulator>::value>
 struct stable_norm_unscaled_predicate {
-  static inline bool run(const Accumulator&, const Accumulator&) { return false; }
+  static constexpr bool run(const Accumulator&, const Accumulator&) { return false; }
 };
 
 template <typename Accumulator>
 struct stable_norm_unscaled_predicate<Accumulator, true> {
-  static inline bool run(const Accumulator& maxCoeff, const Accumulator& invScale) {
-    using std::sqrt;
+  static constexpr bool run(const Accumulator& maxCoeff, const Accumulator& invScale) {
     // A block has at most 8192 real components. These bounds keep the error
     // from flushed component squares below one epsilon.
-    static const Accumulator kSqrtMin =
-        sqrt((numext::numeric_limits<Accumulator>::min)() * (Accumulator(16384) / NumTraits<Accumulator>::epsilon()));
-    static const Accumulator kSqrtMax = sqrt(NumTraits<Accumulator>::highest() / Accumulator(16384));
+    constexpr Accumulator kSqrtMin = numext::sqrt((numext::numeric_limits<Accumulator>::min)() *
+                                                  (Accumulator(16384) / NumTraits<Accumulator>::epsilon()));
+    constexpr Accumulator kSqrtMax = numext::sqrt(NumTraits<Accumulator>::highest() / Accumulator(16384));
     // A normal invScale avoids fast-math flushing invScale^2.
-    static const Accumulator kSqrtNormalMin = sqrt((numext::numeric_limits<Accumulator>::min)());
+    constexpr Accumulator kSqrtNormalMin = numext::sqrt((numext::numeric_limits<Accumulator>::min)());
     return maxCoeff >= kSqrtMin && maxCoeff <= kSqrtMax && invScale >= kSqrtNormalMin;
   }
 };
 
 template <typename ExpressionType, typename Accumulator>
-inline Accumulator stable_norm_squared_norm(const ExpressionType& block, const Accumulator& invScale,
-                                            const Accumulator& maxCoeff) {
+constexpr Accumulator stable_norm_squared_norm(const ExpressionType& block, const Accumulator& invScale,
+                                               const Accumulator& maxCoeff) {
   if (stable_norm_unscaled_predicate<Accumulator>::run(maxCoeff, invScale)) {
     return block.realView().template cast<Accumulator>().squaredNorm() * numext::abs2(invScale);
   }
@@ -48,8 +47,8 @@ inline Accumulator stable_norm_squared_norm(const ExpressionType& block, const A
 }
 
 template <typename ExpressionType, typename Accumulator>
-inline void stable_norm_kernel(const ExpressionType& block, Accumulator& ssq, Accumulator& scale,
-                               Accumulator& invScale) {
+constexpr void stable_norm_kernel(const ExpressionType& block, Accumulator& ssq, Accumulator& scale,
+                                  Accumulator& invScale) {
   // Component-wise maxima give the required scale without complex hypot calls.
   Accumulator maxCoeff = block.realView().template cast<Accumulator>().cwiseAbs().template maxCoeff<PropagateNaN>();
 
@@ -75,7 +74,8 @@ inline void stable_norm_kernel(const ExpressionType& block, Accumulator& ssq, Ac
 }
 
 template <typename VectorType, typename Accumulator>
-void stable_norm_impl_inner_step(const VectorType& vec, Accumulator& ssq, Accumulator& scale, Accumulator& invScale) {
+constexpr void stable_norm_impl_inner_step(const VectorType& vec, Accumulator& ssq, Accumulator& scale,
+                                           Accumulator& invScale) {
   const Index blockSize = 4096;
 
   Index n = vec.size();
@@ -92,14 +92,14 @@ template <typename VectorType, typename Accumulator,
           bool = bool(traits<VectorType>::Flags & DirectAccessBit) &&
                  (int(inner_stride_at_compile_time<VectorType>::value) != 1)>
 struct stable_norm_vector_dispatch {
-  static inline void run(const VectorType& vec, Accumulator& ssq, Accumulator& scale, Accumulator& invScale) {
+  static constexpr void run(const VectorType& vec, Accumulator& ssq, Accumulator& scale, Accumulator& invScale) {
     stable_norm_impl_inner_step(vec, ssq, scale, invScale);
   }
 };
 
 template <typename VectorType, typename Accumulator>
 struct stable_norm_vector_dispatch<VectorType, Accumulator, true> {
-  static inline void run(const VectorType& vec, Accumulator& ssq, Accumulator& scale, Accumulator& invScale) {
+  static constexpr void run(const VectorType& vec, Accumulator& ssq, Accumulator& scale, Accumulator& invScale) {
     if (vec.innerStride() == 1) {
       using Scalar = typename traits<VectorType>::Scalar;
       using PlainVector = Matrix<Scalar, VectorType::SizeAtCompileTime, 1, 0, VectorType::MaxSizeAtCompileTime, 1>;
@@ -113,14 +113,14 @@ struct stable_norm_vector_dispatch<VectorType, Accumulator, true> {
 };
 
 template <typename VectorType, typename Accumulator>
-inline void stable_norm_impl_inner_dispatch(const VectorType& vec, Accumulator& ssq, Accumulator& scale,
-                                            Accumulator& invScale) {
+constexpr void stable_norm_impl_inner_dispatch(const VectorType& vec, Accumulator& ssq, Accumulator& scale,
+                                               Accumulator& invScale) {
   stable_norm_vector_dispatch<VectorType, Accumulator>::run(vec, ssq, scale, invScale);
 }
 
 template <typename MatrixType, typename Accumulator>
-inline void stable_norm_impl_outer_steps(const MatrixType& mat, Accumulator& ssq, Accumulator& scale,
-                                         Accumulator& invScale) {
+constexpr void stable_norm_impl_outer_steps(const MatrixType& mat, Accumulator& ssq, Accumulator& scale,
+                                            Accumulator& invScale) {
   for (Index j = 0; j < mat.outerSize(); ++j) {
     stable_norm_impl_inner_dispatch(mat.innerVector(j), ssq, scale, invScale);
   }
@@ -128,14 +128,14 @@ inline void stable_norm_impl_outer_steps(const MatrixType& mat, Accumulator& ssq
 
 template <typename MatrixType, typename Accumulator, bool = bool(traits<MatrixType>::Flags & DirectAccessBit)>
 struct stable_norm_matrix_dispatch {
-  static inline void run(const MatrixType& mat, Accumulator& ssq, Accumulator& scale, Accumulator& invScale) {
+  static constexpr void run(const MatrixType& mat, Accumulator& ssq, Accumulator& scale, Accumulator& invScale) {
     stable_norm_impl_outer_steps(mat, ssq, scale, invScale);
   }
 };
 
 template <typename MatrixType, typename Accumulator>
 struct stable_norm_matrix_dispatch<MatrixType, Accumulator, true> {
-  static inline void run(const MatrixType& mat, Accumulator& ssq, Accumulator& scale, Accumulator& invScale) {
+  static constexpr void run(const MatrixType& mat, Accumulator& ssq, Accumulator& scale, Accumulator& invScale) {
     if (mat.innerStride() == 1 && (mat.outerSize() == 1 || mat.outerStride() == mat.innerSize())) {
       using Scalar = typename traits<MatrixType>::Scalar;
       using PlainVector = Matrix<Scalar, MatrixType::SizeAtCompileTime, 1, 0, MatrixType::MaxSizeAtCompileTime, 1>;
@@ -150,15 +150,13 @@ struct stable_norm_matrix_dispatch<MatrixType, Accumulator, true> {
 
 // Avoid instantiating block reductions for statically empty inputs, including in C++14.
 template <typename Derived, std::enable_if_t<Derived::MaxSizeAtCompileTime == 0, int> = 0>
-typename Derived::RealScalar stable_norm_impl(const Derived&) {
+constexpr typename Derived::RealScalar stable_norm_impl(const Derived&) {
   return typename Derived::RealScalar(0);
 }
 
 template <typename VectorType,
           std::enable_if_t<VectorType::IsVectorAtCompileTime && VectorType::MaxSizeAtCompileTime != 0, int> = 0>
-typename VectorType::RealScalar stable_norm_impl(const VectorType& vec) {
-  using numext::sqrt;
-
+constexpr typename VectorType::RealScalar stable_norm_impl(const VectorType& vec) {
   Index n = vec.size();
   if (EIGEN_PREDICT_FALSE(n == 1)) return numext::abs(vec.coeff(0));
 
@@ -170,14 +168,12 @@ typename VectorType::RealScalar stable_norm_impl(const VectorType& vec) {
 
   stable_norm_vector_dispatch<VectorType, Accumulator>::run(vec, ssq, scale, invScale);
 
-  return RealScalar(scale * sqrt(ssq));
+  return RealScalar(scale * numext::sqrt(ssq));
 }
 
 template <typename MatrixType,
           std::enable_if_t<!MatrixType::IsVectorAtCompileTime && MatrixType::MaxSizeAtCompileTime != 0, int> = 0>
-typename MatrixType::RealScalar stable_norm_impl(const MatrixType& mat) {
-  using numext::sqrt;
-
+constexpr typename MatrixType::RealScalar stable_norm_impl(const MatrixType& mat) {
   using RealScalar = typename MatrixType::RealScalar;
   using Accumulator = typename stable_norm_accumulator<RealScalar>::type;
   Accumulator scale(0);
@@ -185,17 +181,17 @@ typename MatrixType::RealScalar stable_norm_impl(const MatrixType& mat) {
   Accumulator ssq(0);  // sum of squares
 
   stable_norm_matrix_dispatch<MatrixType, Accumulator>::run(mat, ssq, scale, invScale);
-  return RealScalar(scale * sqrt(ssq));
+  return RealScalar(scale * numext::sqrt(ssq));
 }
 
-inline int stable_norm_floor_div2(int value) { return value / 2 - ((value < 0 && value % 2 != 0) ? 1 : 0); }
+constexpr int stable_norm_floor_div2(int value) { return value / 2 - ((value < 0 && value % 2 != 0) ? 1 : 0); }
 
-inline int stable_norm_ceil_div2(int value) { return value / 2 + ((value > 0 && value % 2 != 0) ? 1 : 0); }
+constexpr int stable_norm_ceil_div2(int value) { return value / 2 + ((value > 0 && value % 2 != 0) ? 1 : 0); }
 
 template <typename Accumulator>
-inline void blue_norm_accumulate_component(const Accumulator& ax, const Accumulator& tsml, const Accumulator& tbig,
-                                           const Accumulator& ssml, const Accumulator& sbig, bool& notBig,
-                                           Accumulator& asml, Accumulator& amed, Accumulator& abig) {
+constexpr void blue_norm_accumulate_component(const Accumulator& ax, const Accumulator& tsml, const Accumulator& tbig,
+                                              const Accumulator& ssml, const Accumulator& sbig, bool& notBig,
+                                              Accumulator& asml, Accumulator& amed, Accumulator& abig) {
   if (ax > tbig) {
     abig += numext::abs2(ax * sbig);
     notBig = false;
@@ -208,9 +204,9 @@ inline void blue_norm_accumulate_component(const Accumulator& ax, const Accumula
 
 template <typename Scalar, typename Accumulator, bool = NumTraits<Scalar>::IsComplex>
 struct blue_norm_accumulate_scalar {
-  static inline void run(const Scalar& value, const Accumulator& tsml, const Accumulator& tbig, const Accumulator& ssml,
-                         const Accumulator& sbig, bool& notBig, Accumulator& asml, Accumulator& amed,
-                         Accumulator& abig) {
+  static constexpr void run(const Scalar& value, const Accumulator& tsml, const Accumulator& tbig,
+                            const Accumulator& ssml, const Accumulator& sbig, bool& notBig, Accumulator& asml,
+                            Accumulator& amed, Accumulator& abig) {
     const Accumulator ax = numext::abs(Accumulator(value));
     blue_norm_accumulate_component(ax, tsml, tbig, ssml, sbig, notBig, asml, amed, abig);
   }
@@ -218,9 +214,9 @@ struct blue_norm_accumulate_scalar {
 
 template <typename Scalar, typename Accumulator>
 struct blue_norm_accumulate_scalar<Scalar, Accumulator, true> {
-  static inline void run(const Scalar& value, const Accumulator& tsml, const Accumulator& tbig, const Accumulator& ssml,
-                         const Accumulator& sbig, bool& notBig, Accumulator& asml, Accumulator& amed,
-                         Accumulator& abig) {
+  static constexpr void run(const Scalar& value, const Accumulator& tsml, const Accumulator& tbig,
+                            const Accumulator& ssml, const Accumulator& sbig, bool& notBig, Accumulator& asml,
+                            Accumulator& amed, Accumulator& abig) {
     const Accumulator real = numext::abs(Accumulator(numext::real(value)));
     const Accumulator imag = numext::abs(Accumulator(numext::imag(value)));
     blue_norm_accumulate_component(real, tsml, tbig, ssml, sbig, notBig, asml, amed, abig);
@@ -228,13 +224,25 @@ struct blue_norm_accumulate_scalar<Scalar, Accumulator, true> {
   }
 };
 
+// radix^exponent. Constant evaluation cannot call pow, but repeated products of the radix are exact while they stay
+// normal, as every blueNorm threshold does.
+template <typename Accumulator>
+constexpr Accumulator blue_norm_radix_power(int radix, int exponent) {
+  if (!is_constant_evaluated()) {
+    using std::pow;
+    return Accumulator(pow(Accumulator(radix), Accumulator(exponent)));
+  }
+  const Accumulator factor = exponent < 0 ? Accumulator(1) / Accumulator(radix) : Accumulator(radix);
+  Accumulator result(1);
+  for (int i = 0; i < (exponent < 0 ? -exponent : exponent); ++i) result *= factor;
+  return result;
+}
+
 template <typename Derived>
-inline typename NumTraits<typename traits<Derived>::Scalar>::Real blueNorm_impl(const EigenBase<Derived>& _vec) {
+constexpr typename NumTraits<typename traits<Derived>::Scalar>::Real blueNorm_impl(const EigenBase<Derived>& _vec) {
   using RealScalar = typename Derived::RealScalar;
   using Accumulator = typename stable_norm_accumulator<RealScalar>::type;
   using Scalar = typename traits<Derived>::Scalar;
-  using numext::sqrt;
-  using std::pow;
 
   const Derived& vec(_vec.derived());
   if (vec.size() == 0) return RealScalar(0);
@@ -244,17 +252,14 @@ inline typename NumTraits<typename traits<Derived>::Scalar>::Real blueNorm_impl(
   // Algorithm 978, ACM TOMS 44(1), 2017, https://doi.org/10.1145/3061665.
   // These thresholds and the three-accumulator merge follow Reference BLAS
   // xNRM2 (LAPACK 3.12.1), expressed independently for Eigen scalar types.
-  static const int ibeta = std::numeric_limits<Accumulator>::radix;
-  static const int it = NumTraits<Accumulator>::digits();
-  static const int iemin = NumTraits<Accumulator>::min_exponent();
-  static const int iemax = NumTraits<Accumulator>::max_exponent();
-  static const Accumulator tsml = Accumulator(pow(Accumulator(ibeta), Accumulator(stable_norm_ceil_div2(iemin - 1))));
-  static const Accumulator tbig =
-      Accumulator(pow(Accumulator(ibeta), Accumulator(stable_norm_floor_div2(iemax - it + 1))));
-  static const Accumulator ssml =
-      Accumulator(pow(Accumulator(ibeta), Accumulator(-stable_norm_floor_div2(iemin - it))));
-  static const Accumulator sbig =
-      Accumulator(pow(Accumulator(ibeta), Accumulator(-stable_norm_ceil_div2(iemax + it - 1))));
+  constexpr int ibeta = std::numeric_limits<Accumulator>::radix;
+  constexpr int it = NumTraits<Accumulator>::digits();
+  constexpr int iemin = NumTraits<Accumulator>::min_exponent();
+  constexpr int iemax = NumTraits<Accumulator>::max_exponent();
+  Accumulator tsml = blue_norm_radix_power<Accumulator>(ibeta, stable_norm_ceil_div2(iemin - 1));
+  Accumulator tbig = blue_norm_radix_power<Accumulator>(ibeta, stable_norm_floor_div2(iemax - it + 1));
+  Accumulator ssml = blue_norm_radix_power<Accumulator>(ibeta, -stable_norm_floor_div2(iemin - it));
+  Accumulator sbig = blue_norm_radix_power<Accumulator>(ibeta, -stable_norm_ceil_div2(iemax + it - 1));
 
   bool notBig = true;
   Accumulator asml(0);
@@ -276,8 +281,8 @@ inline typename NumTraits<typename traits<Derived>::Scalar>::Real blueNorm_impl(
     sumsq = abig;
   } else if (asml > Accumulator(0)) {
     if (amed > Accumulator(0) || amed > NumTraits<Accumulator>::highest() || amed != amed) {
-      amed = sqrt(amed);
-      asml = sqrt(asml) / ssml;
+      amed = numext::sqrt(amed);
+      asml = numext::sqrt(asml) / ssml;
       // Spell this as in xNRM2 rather than with min/max: when amed is NaN,
       // it must become ymax so that the final result remains NaN.
       const bool smallIsLarger = asml > amed;
@@ -291,7 +296,7 @@ inline typename NumTraits<typename traits<Derived>::Scalar>::Real blueNorm_impl(
   } else {
     sumsq = amed;
   }
-  return RealScalar(scale * sqrt(sumsq));
+  return RealScalar(scale * numext::sqrt(sumsq));
 }
 
 }  // end namespace internal
@@ -308,7 +313,7 @@ inline typename NumTraits<typename traits<Derived>::Scalar>::Real blueNorm_impl(
  * \sa norm(), blueNorm(), hypotNorm()
  */
 template <typename Derived>
-inline typename NumTraits<typename internal::traits<Derived>::Scalar>::Real MatrixBase<Derived>::stableNorm() const {
+constexpr typename NumTraits<typename internal::traits<Derived>::Scalar>::Real MatrixBase<Derived>::stableNorm() const {
   using Nested = typename internal::nested_eval<Derived, 2>::type;
   Nested nested(derived());
   return internal::stable_norm_impl(nested);
@@ -325,7 +330,7 @@ inline typename NumTraits<typename internal::traits<Derived>::Scalar>::Real Matr
  * \sa norm(), stableNorm(), hypotNorm()
  */
 template <typename Derived>
-inline typename NumTraits<typename internal::traits<Derived>::Scalar>::Real MatrixBase<Derived>::blueNorm() const {
+constexpr typename NumTraits<typename internal::traits<Derived>::Scalar>::Real MatrixBase<Derived>::blueNorm() const {
   return internal::blueNorm_impl(*this);
 }
 
@@ -335,7 +340,7 @@ inline typename NumTraits<typename internal::traits<Derived>::Scalar>::Real Matr
  * \sa norm(), stableNorm()
  */
 template <typename Derived>
-inline typename NumTraits<typename internal::traits<Derived>::Scalar>::Real MatrixBase<Derived>::hypotNorm() const {
+constexpr typename NumTraits<typename internal::traits<Derived>::Scalar>::Real MatrixBase<Derived>::hypotNorm() const {
   using Accumulator = typename internal::stable_norm_accumulator<RealScalar>::type;
   // Component reduction avoids rounded complex magnitudes and permits promoted accumulation.
   return RealScalar(internal::redux_with_identity(derived().realView().template cast<Accumulator>().cwiseAbs(),
