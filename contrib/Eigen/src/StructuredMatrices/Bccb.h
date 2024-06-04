@@ -168,7 +168,7 @@ class Bccb : public EigenBase<Bccb<Scalar_, BlockSize_, NumBlocks_>> {
    * symbol are computed here. Subsequent products and solves reuse the applicable
    * cached transform. */
   template <typename Derived>
-  explicit Bccb(const MatrixBase<Derived>& generator) : m_g(generator) {
+  explicit constexpr Bccb(const MatrixBase<Derived>& generator) : m_g(generator) {
     EIGEN_INTERNAL_ASSERT_NONEMPTY_MSG(m_g, "Bccb generator must be non-empty");
     if (m_g.size() > internal::structured_direct_threshold()) {
       m_symbol = computeSymbol();
@@ -176,25 +176,25 @@ class Bccb : public EigenBase<Bccb<Scalar_, BlockSize_, NumBlocks_>> {
     }
   }
 
-  EIGEN_DEVICE_FUNC Index rows() const { return m_g.size(); }
-  EIGEN_DEVICE_FUNC Index cols() const { return m_g.size(); }
+  EIGEN_DEVICE_FUNC constexpr Index rows() const { return m_g.size(); }
+  EIGEN_DEVICE_FUNC constexpr Index cols() const { return m_g.size(); }
 
   /** \returns the circulant block dimension \c n2. */
-  Index blockSize() const { return m_g.rows(); }
+  constexpr Index blockSize() const { return m_g.rows(); }
   /** \returns the number of blocks \c n1 in each block row. */
-  Index numBlocks() const { return m_g.cols(); }
+  constexpr Index numBlocks() const { return m_g.cols(); }
   /** \returns the generating array. */
-  const GeneratorType& generator() const { return m_g; }
+  constexpr const GeneratorType& generator() const { return m_g; }
 
   /** \returns the symbol of the operator: the 2-D DFT of the generating array,
    * an n2 x n1 complex array whose entries are the eigenvalues of the matrix
    * (see \ref eigenvalues for the ordering). Cached when the operator is large
    * enough for products to take the FFT path, computed on the fly for small
    * operators. */
-  ComplexArray symbol() const { return m_symbol.size() > 0 ? m_symbol : computeSymbol(); }
+  constexpr ComplexArray symbol() const { return m_symbol.size() > 0 ? m_symbol : computeSymbol(); }
 
   /** \returns the coefficient at row \a row and column \a col. */
-  Scalar coeff(Index row, Index col) const {
+  constexpr Scalar coeff(Index row, Index col) const {
     const Index n2 = blockSize();
     Index k2 = row % n2 - col % n2;
     if (k2 < 0) k2 += n2;
@@ -209,12 +209,12 @@ class Bccb : public EigenBase<Bccb<Scalar_, BlockSize_, NumBlocks_>> {
    * two-dimensional index reversals (embedding a generator commutes with
    * index-reversing it, per axis, so the padded product symbol follows the same
    * rule at its own grid) -- so no FFT is recomputed. */
-  Bccb transpose() const { return Bccb(reverse2(m_g), reverse2(m_symbol), reverse2(m_prodSymbol)); }
+  constexpr Bccb transpose() const { return Bccb(reverse2(m_g), reverse2(m_symbol), reverse2(m_prodSymbol)); }
 
   /** \returns the complex conjugate of \c *this, itself a \c Bccb operator. The
    * cached symbols, when present, are reused: the symbols of the conjugate are
    * the conjugated two-dimensional index reversals of the symbols. */
-  Bccb conjugate() const {
+  constexpr Bccb conjugate() const {
     return Bccb(m_g.conjugate(), reverse2(m_symbol).conjugate(), reverse2(m_prodSymbol).conjugate());
   }
 
@@ -222,7 +222,9 @@ class Bccb : public EigenBase<Bccb<Scalar_, BlockSize_, NumBlocks_>> {
    * symbols, when present, are reused: the symbols of the adjoint are the
    * elementwise conjugates of the symbols (the eigenvalues conjugate while the
    * 2-D Fourier eigenbasis stays fixed). */
-  Bccb adjoint() const { return Bccb(reverse2(m_g).conjugate(), m_symbol.conjugate(), m_prodSymbol.conjugate()); }
+  constexpr Bccb adjoint() const {
+    return Bccb(reverse2(m_g).conjugate(), m_symbol.conjugate(), m_prodSymbol.conjugate());
+  }
 
   /** \returns the minimum-norm least-squares solution of \c (*this) * x = b,
    * computed directly in the 2-D Fourier domain. Symbol entries whose modulus
@@ -231,7 +233,7 @@ class Bccb : public EigenBase<Bccb<Scalar_, BlockSize_, NumBlocks_>> {
    * \a b. For a non-singular operator this is the exact solution. Supports
    * multiple right-hand sides. */
   template <typename Rhs>
-  Matrix<Scalar, RowsAtCompileTime, Rhs::ColsAtCompileTime> solve(const MatrixBase<Rhs>& b) const {
+  constexpr Matrix<Scalar, RowsAtCompileTime, Rhs::ColsAtCompileTime> solve(const MatrixBase<Rhs>& b) const {
     EIGEN_INTERNAL_ASSERT_SOLVER_RHS_MSG(*this, b, false, "right-hand side has the wrong number of rows");
     const Index N = rows();
     const ComplexArray s = symbol();
@@ -248,7 +250,7 @@ class Bccb : public EigenBase<Bccb<Scalar_, BlockSize_, NumBlocks_>> {
    * same threshold \ref solve uses to decide which Fourier components to invert,
    * and the comparison is strict like SVDBase's, so an entry sitting exactly on
    * the threshold still counts as non-zero. */
-  Index rank() const {
+  constexpr Index rank() const {
     const ComplexArray s = symbol();
     const RealArray mods = s.cwiseAbs();
     return (!(mods.array() < internal::structured_rank_threshold(s, mods))).count();  // NaN entries count as non-zero
@@ -258,7 +260,7 @@ class Bccb : public EigenBase<Bccb<Scalar_, BlockSize_, NumBlocks_>> {
    * generated by the 2-D inverse DFT of the entrywise-inverted symbol.
    * \warning The operator must be non-singular; use \ref solve for a
    * pseudo-inverse solve of a rank-deficient operator. */
-  Bccb inverse() const {
+  constexpr Bccb inverse() const {
     ComplexArray sinv = symbol().cwiseInverse();
     const GeneratorType ginv = generatorFromSymbol(sinv);
     const bool cache = rows() > internal::structured_direct_threshold();
@@ -273,7 +275,7 @@ class Bccb : public EigenBase<Bccb<Scalar_, BlockSize_, NumBlocks_>> {
    * overflow nor underflow when the determinant itself is representable, whatever
    * the ordering of large and small eigenvalues. For a real operator the product
    * is real up to roundoff, and its real part is returned. */
-  Scalar determinant() const {
+  constexpr Scalar determinant() const {
     const ComplexArray s = symbol();
     Complex det(1);
     Index exponent = 0;
@@ -288,13 +290,13 @@ class Bccb : public EigenBase<Bccb<Scalar_, BlockSize_, NumBlocks_>> {
    * eigenvector is the Kronecker product of the 1-D Fourier vectors of
    * frequencies \c f1 and \c f2, i.e. column \c f1*n2 + f2 of \ref eigenvectors.
    * Every BCCB matrix is diagonalized by this same 2-D Fourier basis. */
-  ComplexVector eigenvalues() const { return symbol().reshaped(); }
+  constexpr ComplexVector eigenvalues() const { return symbol().reshaped(); }
 
   /** \returns the unitary matrix of eigenvectors: column \c f1*n2 + f2 is the
    * 2-D Fourier vector matching \c eigenvalues()[f1*n2 + f2].
    * \note The eigenvector matrix is materialized as a dense \c N x \c N matrix;
    * unlike the other methods of this class this costs O(N^2) storage. */
-  ComplexMatrix eigenvectors() const {
+  constexpr ComplexMatrix eigenvectors() const {
     const Index n2 = blockSize(), n1 = numBlocks(), N = rows();
     ComplexMatrix F(N, N);
     for (Index f1 = 0; f1 < n1; ++f1)
@@ -305,7 +307,7 @@ class Bccb : public EigenBase<Bccb<Scalar_, BlockSize_, NumBlocks_>> {
   /** \returns the singular values, sorted in decreasing order: the moduli of the
    * symbol entries. The ordering is shared with \ref matrixU and \ref matrixV,
    * so together they form the SVD \c *this = U * singularValues().asDiagonal() * V^H. */
-  RealVector singularValues() const {
+  EIGEN_CONSTEXPR20 RealVector singularValues() const {
     const ComplexVector s = eigenvalues();
     const RealVector mods = s.cwiseAbs();
     const std::vector<Index> perm = internal::structured_svd_permutation(mods);
@@ -317,7 +319,7 @@ class Bccb : public EigenBase<Bccb<Scalar_, BlockSize_, NumBlocks_>> {
   /** \returns the matrix of left singular vectors \c U: column \c t is the 2-D
    * Fourier vector of the t-th largest symbol entry, scaled by its phase (phase 1
    * for a zero entry). Dense \c N x \c N, see the note in \ref eigenvectors. */
-  ComplexMatrix matrixU() const {
+  EIGEN_CONSTEXPR20 ComplexMatrix matrixU() const {
     const Index n2 = blockSize(), N = rows();
     const ComplexVector s = eigenvalues();
     const RealVector mods = s.cwiseAbs();
@@ -334,7 +336,7 @@ class Bccb : public EigenBase<Bccb<Scalar_, BlockSize_, NumBlocks_>> {
   /** \returns the matrix of right singular vectors \c V: column \c t is the 2-D
    * Fourier vector of the t-th largest symbol entry. Dense \c N x \c N, see the
    * note in \ref eigenvectors. */
-  ComplexMatrix matrixV() const {
+  EIGEN_CONSTEXPR20 ComplexMatrix matrixV() const {
     const Index n2 = blockSize(), N = rows();
     const ComplexVector s = eigenvalues();
     const std::vector<Index> perm = internal::structured_svd_permutation(RealVector(s.cwiseAbs()));
@@ -348,19 +350,19 @@ class Bccb : public EigenBase<Bccb<Scalar_, BlockSize_, NumBlocks_>> {
    * column index, so only contiguous segment copies are involved. Invoked
    * through \c dense = bccb; */
   template <typename Dest>
-  void evalTo(Dest& dst) const {
+  constexpr void evalTo(Dest& dst) const {
     assignTo<SetAssignment>(dst);
   }
 
   /** \internal Computes \c dst += (*this), see evalTo(). */
   template <typename Dest>
-  void addTo(Dest& dst) const {
+  constexpr void addTo(Dest& dst) const {
     assignTo<AddAssignment>(dst);
   }
 
   /** \internal Computes \c dst -= (*this), see evalTo(). */
   template <typename Dest>
-  void subTo(Dest& dst) const {
+  constexpr void subTo(Dest& dst) const {
     assignTo<SubAssignment>(dst);
   }
 
@@ -370,7 +372,7 @@ class Bccb : public EigenBase<Bccb<Scalar_, BlockSize_, NumBlocks_>> {
    * resolves aliasing between the destination and \a x, and \c .noalias() skips
    * it. */
   template <typename Rhs>
-  Product<Bccb, Rhs> operator*(const MatrixBase<Rhs>& x) const {
+  constexpr Product<Bccb, Rhs> operator*(const MatrixBase<Rhs>& x) const {
     return Product<Bccb, Rhs>(*this, x.derived());
   }
 
@@ -378,7 +380,7 @@ class Bccb : public EigenBase<Bccb<Scalar_, BlockSize_, NumBlocks_>> {
    * promoted scalar of the product (complex when a real operator is applied to a
    * complex right-hand side); the accumulation runs in the promoted type. */
   template <typename Dest, typename Rhs, typename ProductScalar>
-  void addProduct(Dest& dst, const Rhs& rhs, const ProductScalar& alpha) const {
+  constexpr void addProduct(Dest& dst, const Rhs& rhs, const ProductScalar& alpha) const {
     const Index N = rows();
     EIGEN_INTERNAL_ASSERT_PRODUCT_SHAPE_MSG(*this, rhs, "invalid product: dimensions do not match");
     if (N <= internal::structured_direct_threshold()) {
@@ -396,7 +398,7 @@ class Bccb : public EigenBase<Bccb<Scalar_, BlockSize_, NumBlocks_>> {
   /** \internal Materializes the dense BCCB representation with the selected
    * assignment mode; shared by evalTo(), addTo() and subTo(). */
   template <DenseAssignment Assignment, typename Dest>
-  void assignTo(Dest& dst) const {
+  constexpr void assignTo(Dest& dst) const {
     const Index n2 = blockSize(), n1 = numBlocks();
     for (Index c1 = 0; c1 < n1; ++c1)
       for (Index j2 = 0; j2 < n2; ++j2) {
@@ -424,7 +426,7 @@ class Bccb : public EigenBase<Bccb<Scalar_, BlockSize_, NumBlocks_>> {
    * the FFTs of the public constructor. Used by transpose(), conjugate(),
    * adjoint() and inverse(), whose symbols are cheap transformations of the
    * existing ones. */
-  Bccb(const GeneratorType& g, const ComplexArray& symbol, const ComplexArray& prodSymbol)
+  constexpr Bccb(const GeneratorType& g, const ComplexArray& symbol, const ComplexArray& prodSymbol)
       : m_g(g), m_symbol(symbol), m_prodSymbol(prodSymbol) {}
 
   /** \internal \returns the symbol products should use for a generating array
@@ -445,7 +447,7 @@ class Bccb : public EigenBase<Bccb<Scalar_, BlockSize_, NumBlocks_>> {
    * the exact one. A 5-smooth axis is kept at its exact size with no embedding.
    * The spectral operations (eigenvalues, solve, rank, determinant, SVD) keep
    * the exact-size symbol, whose entries are the eigenvalues. */
-  ComplexArray computeProdSymbol(const GeneratorType& g) const {
+  constexpr ComplexArray computeProdSymbol(const GeneratorType& g) const {
     const Index n2 = g.rows(), n1 = g.cols();
     const Index p2 = internal::fft_next_good_size(n2) == n2 ? n2 : internal::fft_next_good_size(2 * n2 - 1);
     const Index p1 = internal::fft_next_good_size(n1) == n1 ? n1 : internal::fft_next_good_size(2 * n1 - 1);
@@ -466,7 +468,7 @@ class Bccb : public EigenBase<Bccb<Scalar_, BlockSize_, NumBlocks_>> {
    * operators does not pay off here: the within-block segments are too short at
    * these sizes), for operators below the FFT threshold. */
   template <typename Dest, typename Rhs, typename ProductScalar>
-  void directProductColumn(Dest& dst, const Rhs& rhs, Index k, const ProductScalar& alpha) const {
+  constexpr void directProductColumn(Dest& dst, const Rhs& rhs, Index k, const ProductScalar& alpha) const {
     const Index N = rows();
     // A unit alpha must not multiply: even the identity complex scalar (1,0)
     // pollutes an (Inf,0) value with NaN through the 0*Inf cross term.
@@ -481,7 +483,7 @@ class Bccb : public EigenBase<Bccb<Scalar_, BlockSize_, NumBlocks_>> {
   /** \internal Direct O(N^2) product kernel over every column, see
    * directProductColumn(). */
   template <typename Dest, typename Rhs, typename ProductScalar>
-  void directProduct(Dest& dst, const Rhs& rhs, const ProductScalar& alpha) const {
+  constexpr void directProduct(Dest& dst, const Rhs& rhs, const ProductScalar& alpha) const {
     for (Index k = 0; k < rhs.cols(); ++k) directProductColumn(dst, rhs, k, alpha);
   }
 
@@ -495,8 +497,8 @@ class Bccb : public EigenBase<Bccb<Scalar_, BlockSize_, NumBlocks_>> {
    * (n2, n1) and no padding is involved. As in internal::structured_fft_apply(),
    * the transforms run in plain floating-point arithmetic. */
   template <typename Dest, typename Rhs, typename ProductScalar>
-  void applySymbol(Dest& dst, const ComplexArray& s, const Rhs& rhs, const ProductScalar& alpha,
-                   bool accumulate) const {
+  constexpr void applySymbol(Dest& dst, const ComplexArray& s, const Rhs& rhs, const ProductScalar& alpha,
+                             bool accumulate) const {
     const Index n2 = blockSize(), n1 = numBlocks();
     const Index p2 = s.rows(), p1 = s.cols();  // the symbol's transform grid: (n2, n1) or the padded product grid
     const bool padded = p2 != n2 || p1 != n1;
@@ -530,7 +532,7 @@ class Bccb : public EigenBase<Bccb<Scalar_, BlockSize_, NumBlocks_>> {
    * transforms are the identity (and unsupported by the kissfft backend), hence
    * the guards. */
   template <bool Inverse>
-  void transform2(ComplexArray& X) const {
+  constexpr void transform2(ComplexArray& X) const {
     auto&& fft = internal::structured_fft_engine<RealScalar>();
     const Index n2 = X.rows(), n1 = X.cols();
     // Both passes share one output buffer (resized by the engine) and one packed
@@ -562,20 +564,20 @@ class Bccb : public EigenBase<Bccb<Scalar_, BlockSize_, NumBlocks_>> {
   }
 
   /** \internal In-place 2-D forward FFT. */
-  void fft2(ComplexArray& X) const { transform2<false>(X); }
+  constexpr void fft2(ComplexArray& X) const { transform2<false>(X); }
 
   /** \internal In-place 2-D inverse FFT. */
-  void ifft2(ComplexArray& X) const { transform2<true>(X); }
+  constexpr void ifft2(ComplexArray& X) const { transform2<true>(X); }
 
   /** \internal Reconstructs the generating array from an exact-size symbol. */
-  GeneratorType generatorFromSymbol(ComplexArray symbol) const {
+  constexpr GeneratorType generatorFromSymbol(ComplexArray symbol) const {
     ifft2(symbol);
     GeneratorType generator = internal::structured_scalar_part_impl<Scalar>::run(symbol);
     return generator;
   }
 
   /** \internal \returns the 2-D DFT of the generating array. */
-  ComplexArray computeSymbol() const {
+  constexpr ComplexArray computeSymbol() const {
     ComplexArray s = m_g.template cast<Complex>();
     fft2(s);
     return s;
@@ -585,7 +587,7 @@ class Bccb : public EigenBase<Bccb<Scalar_, BlockSize_, NumBlocks_>> {
    * result(k2, k1) = M((-k2) mod n2, (-k1) mod n1). Row 0 and column 0 stay in
    * place; the rest is a two-dimensional reversal. Empty input stays empty. */
   template <typename MatType>
-  static MatType reverse2(const MatType& M) {
+  static constexpr MatType reverse2(const MatType& M) {
     const Index r = M.rows(), c = M.cols();
     MatType R(r, c);
     if (M.size() == 0) return R;
@@ -601,7 +603,7 @@ class Bccb : public EigenBase<Bccb<Scalar_, BlockSize_, NumBlocks_>> {
    * exp(2 pi i (b1 f1 / n1 + i2 f2 / n2)) / sqrt(N). All frequency products are
    * accumulated incrementally modulo their length, so the angles stay O(2 pi) at
    * full accuracy and no Index overflow can occur. */
-  void fourierColumn(ComplexMatrix& F, Index f1, Index f2, Index dstCol) const {
+  constexpr void fourierColumn(ComplexMatrix& F, Index f1, Index f2, Index dstCol) const {
     const Index n2 = blockSize(), n1 = numBlocks();
     const RealScalar scale = RealScalar(1) / numext::sqrt(RealScalar(rows()));
     ComplexVector w2(n2);
@@ -621,8 +623,8 @@ class Bccb : public EigenBase<Bccb<Scalar_, BlockSize_, NumBlocks_>> {
   }
 
   /** \internal Projects the complex determinant onto \c Scalar. */
-  static Scalar toScalar(const Complex& z, std::true_type /*scalar_is_real*/) { return numext::real(z); }
-  static Scalar toScalar(const Complex& z, std::false_type /*scalar_is_real*/) { return z; }
+  static constexpr Scalar toScalar(const Complex& z, std::true_type /*scalar_is_real*/) { return numext::real(z); }
+  static constexpr Scalar toScalar(const Complex& z, std::false_type /*scalar_is_real*/) { return z; }
 
   GeneratorType m_g;
   ComplexArray m_symbol;
@@ -635,7 +637,7 @@ class Bccb : public EigenBase<Bccb<Scalar_, BlockSize_, NumBlocks_>> {
  * \returns a \ref Bccb operator with generating array \a generator. The
  * compile-time dimensions of the operator are deduced from the array. */
 template <typename Derived>
-Bccb<typename Derived::Scalar, Derived::RowsAtCompileTime, Derived::ColsAtCompileTime> makeBccb(
+constexpr Bccb<typename Derived::Scalar, Derived::RowsAtCompileTime, Derived::ColsAtCompileTime> makeBccb(
     const MatrixBase<Derived>& generator) {
   return Bccb<typename Derived::Scalar, Derived::RowsAtCompileTime, Derived::ColsAtCompileTime>(generator);
 }

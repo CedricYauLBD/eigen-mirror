@@ -21,21 +21,21 @@ namespace Eigen {
 namespace internal {
 
 template <typename QRSolver, typename VectorType>
-void lmpar2(const QRSolver &qr, const VectorType &diag, const VectorType &qtb, typename VectorType::Scalar m_delta,
-            typename VectorType::Scalar &par, VectorType &x)
+constexpr void lmpar2(const QRSolver &qr, const VectorType &diag, const VectorType &qtb,
+                      typename VectorType::Scalar m_delta, typename VectorType::Scalar &par, VectorType &x)
 
 {
   using std::abs;
   using std::sqrt;
   typedef typename QRSolver::Scalar Scalar;
   /* Local variables */
-  Index j;
-  Scalar fp;
-  Scalar parc, parl;
-  Index iter;
-  Scalar temp, paru;
-  Scalar gnorm;
-  Scalar dxnorm;
+  Index j = 0;
+  Scalar fp{};
+  Scalar parc{}, parl{};
+  Index iter = 0;
+  Scalar temp{}, paru{};
+  Scalar gnorm{};
+  Scalar dxnorm{};
 
   /* Function Body */
   const Scalar dwarf = (std::numeric_limits<Scalar>::min)();
