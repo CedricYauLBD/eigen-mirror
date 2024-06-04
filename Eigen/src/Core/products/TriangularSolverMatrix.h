@@ -503,196 +503,197 @@ Index triangular_solve_kc(Index size, Index otherSize, Index extent, std::ptrdif
  */
 template <typename Scalar, typename Index, int Mode, bool Conjugate, int TriStorageOrder, int OtherInnerStride>
 struct triangular_solve_matrix<Scalar, Index, OnTheLeft, Mode, Conjugate, TriStorageOrder, ColMajor, OtherInnerStride> {
-  static EIGEN_DONT_INLINE void run(Index size, Index otherSize, const Scalar* _tri, Index triStride, Scalar* _other,
-                                    Index otherIncr, Index otherStride, level3_blocking<Scalar, Scalar>& blocking);
+  static void run(Index size, Index otherSize, const Scalar* _tri, Index triStride, Scalar* _other, Index otherIncr,
+                  Index otherStride, level3_blocking<Scalar, Scalar>& blocking);
 };
 
 template <typename Scalar, typename Index, int Mode, bool Conjugate, int TriStorageOrder, int OtherInnerStride>
-EIGEN_DONT_INLINE void triangular_solve_matrix<Scalar, Index, OnTheLeft, Mode, Conjugate, TriStorageOrder, ColMajor,
-                                               OtherInnerStride>::run(Index size, Index otherSize, const Scalar* _tri,
-                                                                      Index triStride, Scalar* _other, Index otherIncr,
-                                                                      Index otherStride,
-                                                                      level3_blocking<Scalar, Scalar>& blocking) {
-  std::ptrdiff_t l1, l2, l3;
-  manage_caching_sizes(GetAction, &l1, &l2, &l3);
-  EIGEN_IF_CONSTEXPR ((OtherInnerStride == 1 && triangular_solve_packet_traits<Scalar>::Enabled)) {
-    using PacketTraits = triangular_solve_packet_traits<Scalar>;
-    if (PacketTraits::use_unblocked(size, otherSize, l1)) {
-      const Index origin = (Mode & Lower) ? 0 : size - 1;
-      trsmKernelL<Scalar, Index, Mode, Conjugate, TriStorageOrder, OtherInnerStride, true>::kernel(
-          size, otherSize, _tri + origin * (triStride + 1), triStride, _other + origin, otherIncr, otherStride);
-      return;
+void triangular_solve_matrix<Scalar, Index, OnTheLeft, Mode, Conjugate, TriStorageOrder, ColMajor,
+                             OtherInnerStride>::run(Index size, Index otherSize, const Scalar* _tri, Index triStride,
+                                                    Scalar* _other, Index otherIncr, Index otherStride,
+                                                    level3_blocking<Scalar, Scalar>& blocking) {
+  internal::noinline_invoke([&] {
+    std::ptrdiff_t l1 = 0, l2 = 0, l3 = 0;
+    manage_caching_sizes(GetAction, &l1, &l2, &l3);
+    EIGEN_IF_CONSTEXPR ((OtherInnerStride == 1 && triangular_solve_packet_traits<Scalar>::Enabled)) {
+      using PacketTraits = triangular_solve_packet_traits<Scalar>;
+      if (PacketTraits::use_unblocked(size, otherSize, l1)) {
+        const Index origin = (Mode & Lower) ? 0 : size - 1;
+        trsmKernelL<Scalar, Index, Mode, Conjugate, TriStorageOrder, OtherInnerStride, true>::kernel(
+            size, otherSize, _tri + origin * (triStride + 1), triStride, _other + origin, otherIncr, otherStride);
+        return;
+      }
     }
-  }
 #if defined(EIGEN_VECTORIZE_AVX512) && defined(EIGEN_USE_AVX512_TRSM_L_KERNELS) && EIGEN_USE_AVX512_TRSM_L_KERNELS && \
     EIGEN_ENABLE_AVX512_NOCOPY_TRSM_L_CUTOFFS
-  EIGEN_IF_CONSTEXPR ((OtherInnerStride == 1 &&
-                       (std::is_same<Scalar, float>::value || std::is_same<Scalar, double>::value))) {
-    // Very rough cutoffs to determine when to call trsm w/o packing
-    // For small problem sizes trsmKernel compiled with clang is generally faster.
-    // TODO: Investigate better heuristics for cutoffs.
-    double L2Cap = 0.5;  // 50% of L2 size
-    if (size < avx512_trsm_cutoff<Scalar>(l2, otherSize, L2Cap)) {
-      trsmKernelL<Scalar, Index, Mode, Conjugate, TriStorageOrder, 1, /*Specialized=*/true>::kernel(
-          size, otherSize, _tri, triStride, _other, 1, otherStride);
-      return;
+    EIGEN_IF_CONSTEXPR ((OtherInnerStride == 1 &&
+                         (std::is_same<Scalar, float>::value || std::is_same<Scalar, double>::value))) {
+      // Very rough cutoffs to determine when to call trsm w/o packing
+      // For small problem sizes trsmKernel compiled with clang is generally faster.
+      // TODO: Investigate better heuristics for cutoffs.
+      double L2Cap = 0.5;  // 50% of L2 size
+      if (size < avx512_trsm_cutoff<Scalar>(l2, otherSize, L2Cap)) {
+        trsmKernelL<Scalar, Index, Mode, Conjugate, TriStorageOrder, 1, /*Specialized=*/true>::kernel(
+            size, otherSize, _tri, triStride, _other, 1, otherStride);
+        return;
+      }
     }
-  }
 #endif
 
-  using TriMapper = const_blas_data_mapper<Scalar, Index, TriStorageOrder>;
-  using OtherMapper = blas_data_mapper<Scalar, Index, ColMajor, Unaligned, OtherInnerStride>;
-  TriMapper tri(_tri, triStride);
+    using TriMapper = const_blas_data_mapper<Scalar, Index, TriStorageOrder>;
+    using OtherMapper = blas_data_mapper<Scalar, Index, ColMajor, Unaligned, OtherInnerStride>;
+    TriMapper tri(_tri, triStride);
 
-  using Traits = gebp_traits<Scalar, Scalar>;
+    using Traits = gebp_traits<Scalar, Scalar>;
 
-  // The diagonal panels are updated by gebp with a depth of SmallPanelWidth. The DoublePacket kernel that FMA targets
-  // with 16 registers use is one packet tall; where that is narrower than nr (complex<double> with AVX2+FMA), such
-  // shallow updates run slowly, so its panels are twice as wide.
+    // The diagonal panels are updated by gebp with a depth of SmallPanelWidth. The DoublePacket kernel that FMA targets
+    // with 16 registers use is one packet tall; where that is narrower than nr (complex<double> with AVX2+FMA), such
+    // shallow updates run slowly, so its panels are twice as wide.
 #ifdef EIGEN_HAS_SINGLE_INSTRUCTION_MADD
-  constexpr bool WidePanels = is_double_packet<typename Traits::AccPacket>::value && Traits::NumberOfRegisters < 32 &&
-                              int(Traits::mr) < int(Traits::nr);
+    constexpr bool WidePanels = is_double_packet<typename Traits::AccPacket>::value && Traits::NumberOfRegisters < 32 &&
+                                int(Traits::mr) < int(Traits::nr);
 #else
-  constexpr bool WidePanels = false;
+    constexpr bool WidePanels = false;
 #endif
-  enum {
-    SmallPanelWidth = WidePanels ? 2 * Traits::nr : plain_enum_max(Traits::mr, Traits::nr),
-    IsLower = (Mode & Lower) == Lower
-  };
+    enum {
+      SmallPanelWidth = WidePanels ? 2 * Traits::nr : plain_enum_max(Traits::mr, Traits::nr),
+      IsLower = (Mode & Lower) == Lower
+    };
 
-  // Every k-block updates the rows of the right-hand side beyond it through gebp, so a right-hand side
-  // solved whole streams through the caches size/kc times (issue #3162); column panels that stay in
-  // cache keep those sweeps out of memory. This kernel packs the slabs of the triangle by rows, which
-  // costs more the deeper they are, so a large triangle alone does not deepen it.
-  const std::ptrdiff_t budget = triangular_solve_budget<Scalar>(l2, l3);
-  const Index nc = triangular_solve_panel_columns(size, otherSize, budget, Index(Traits::nr));
-  const Index mc = (numext::mini)(size, blocking.mc());  // cache block size along the M direction
-  // The tr solve below packs up to panelWidth x kc entries of the triangle into blockA, where panelWidth is
-  // SmallPanelWidth or, with the packet kernel, at most blockARows.
-  const Index blockARows = (numext::maxi)(mc, Index(SmallPanelWidth));
-  // cache block size along the K direction
-  const Index kc = triangular_solve_kc<Scalar>(size, otherSize, (numext::maxi)(blockARows, nc), budget,
-                                               /*slabRuns=*/false, blocking);
+    // Every k-block updates the rows of the right-hand side beyond it through gebp, so a right-hand side
+    // solved whole streams through the caches size/kc times (issue #3162); column panels that stay in
+    // cache keep those sweeps out of memory. This kernel packs the slabs of the triangle by rows, which
+    // costs more the deeper they are, so a large triangle alone does not deepen it.
+    const std::ptrdiff_t budget = triangular_solve_budget<Scalar>(l2, l3);
+    const Index nc = triangular_solve_panel_columns(size, otherSize, budget, Index(Traits::nr));
+    const Index mc = (numext::mini)(size, blocking.mc());  // cache block size along the M direction
+    // The tr solve below packs up to panelWidth x kc entries of the triangle into blockA, where panelWidth is
+    // SmallPanelWidth or, with the packet kernel, at most blockARows.
+    const Index blockARows = (numext::maxi)(mc, Index(SmallPanelWidth));
+    // cache block size along the K direction
+    const Index kc = triangular_solve_kc<Scalar>(size, otherSize, (numext::maxi)(blockARows, nc), budget,
+                                                 /*slabRuns=*/false, blocking);
 
-  std::size_t sizeA = kc * blockARows;
-  std::size_t sizeB = kc * nc;
+    std::size_t sizeA = kc * blockARows;
+    std::size_t sizeB = kc * nc;
 
-  ei_declare_aligned_stack_constructed_variable(Scalar, blockA, sizeA, blocking.blockA());
-  ei_declare_aligned_stack_constructed_variable(Scalar, blockB, sizeB, blocking.blockB());
+    ei_declare_aligned_stack_constructed_variable(Scalar, blockA, sizeA, blocking.blockA());
+    ei_declare_aligned_stack_constructed_variable(Scalar, blockB, sizeB, blocking.blockB());
 
-  gebp_kernel<Scalar, Scalar, Index, OtherMapper, Traits::mr, Traits::nr, Conjugate, false> gebp_kernel;
-  gemm_pack_lhs<Scalar, Index, TriMapper, Traits::mr, Traits::LhsProgress, typename Traits::LhsPacket4Packing,
-                TriStorageOrder>
-      pack_lhs;
-  gemm_pack_rhs<Scalar, Index, OtherMapper, Traits::nr, ColMajor, false, true> pack_rhs;
+    gebp_kernel<Scalar, Scalar, Index, OtherMapper, Traits::mr, Traits::nr, Conjugate, false> gebp_kernel;
+    gemm_pack_lhs<Scalar, Index, TriMapper, Traits::mr, Traits::LhsProgress, typename Traits::LhsPacket4Packing,
+                  TriStorageOrder>
+        pack_lhs;
+    gemm_pack_rhs<Scalar, Index, OtherMapper, Traits::nr, ColMajor, false, true> pack_rhs;
 
-  // the goal here is to subdivide the Rhs panels such that we keep some cache
-  // coherence when accessing the rhs elements
-  Index subcols = otherSize > 0 ? l2 / (4 * sizeof(Scalar) * numext::maxi<Index>(otherStride, size)) : 0;
-  Index colStep = Traits::nr;
-  // Width of the diagonal panels solved between gebp updates of their depth.
-  Index panelWidth = SmallPanelWidth;
-  EIGEN_IF_CONSTEXPR ((OtherInnerStride == 1 && triangular_solve_packet_traits<Scalar>::UseUnblocked)) {
-    // The packet kernel solves a whole diagonal block faster than narrow panels do, since those
-    // interleave slower rank-SmallPanelWidth gebp updates; a block deeper than its workspace is split
-    // evenly. That needs a tile of two packets of right-hand sides where the registers allow: a single
-    // packet measured slower. pack_rhs reads each kc x subcols chunk right after its solve, so a chunk should
-    // stay in L2; packet-aligned chunks confine any column tail to an Rhs panel's last chunk.
-    using PacketTraits = triangular_solve_packet_traits<Scalar>;
-    const Index rows = Index(PacketTraits::RegisterRows), packet = Index(PacketTraits::PacketSize);
-    if (otherSize >= Index(plain_enum_min(2, PacketTraits::RhsPackets)) * packet) {
-      const Index panels = numext::div_ceil(kc, Index(PacketTraits::WorkspaceRows));
-      panelWidth = (numext::mini)(blockARows, rows * numext::div_ceil(numext::div_ceil(kc, panels), rows));
-      colStep = colStep % packet == 0 ? colStep : packet % colStep == 0 ? packet : colStep * packet;
-      subcols = Index(l2 / (2 * std::ptrdiff_t(sizeof(Scalar)) * kc));
+    // the goal here is to subdivide the Rhs panels such that we keep some cache
+    // coherence when accessing the rhs elements
+    Index subcols = otherSize > 0 ? l2 / (4 * sizeof(Scalar) * numext::maxi<Index>(otherStride, size)) : 0;
+    Index colStep = Traits::nr;
+    // Width of the diagonal panels solved between gebp updates of their depth.
+    Index panelWidth = SmallPanelWidth;
+    EIGEN_IF_CONSTEXPR ((OtherInnerStride == 1 && triangular_solve_packet_traits<Scalar>::UseUnblocked)) {
+      // The packet kernel solves a whole diagonal block faster than narrow panels do, since those
+      // interleave slower rank-SmallPanelWidth gebp updates; a block deeper than its workspace is split
+      // evenly. That needs a tile of two packets of right-hand sides where the registers allow: a single
+      // packet measured slower. pack_rhs reads each kc x subcols chunk right after its solve, so a chunk should
+      // stay in L2; packet-aligned chunks confine any column tail to an Rhs panel's last chunk.
+      using PacketTraits = triangular_solve_packet_traits<Scalar>;
+      const Index rows = Index(PacketTraits::RegisterRows), packet = Index(PacketTraits::PacketSize);
+      if (otherSize >= Index(plain_enum_min(2, PacketTraits::RhsPackets)) * packet) {
+        const Index panels = numext::div_ceil(kc, Index(PacketTraits::WorkspaceRows));
+        panelWidth = (numext::mini)(blockARows, rows * numext::div_ceil(numext::div_ceil(kc, panels), rows));
+        colStep = colStep % packet == 0 ? colStep : packet % colStep == 0 ? packet : colStep * packet;
+        subcols = Index(l2 / (2 * std::ptrdiff_t(sizeof(Scalar)) * kc));
+      }
     }
-  }
-  subcols = numext::maxi<Index>(numext::round_down(subcols, colStep), colStep);
+    subcols = numext::maxi<Index>(numext::round_down(subcols, colStep), colStep);
 
-  for (Index j0 = 0; j0 < otherSize; j0 += nc) {
-    const Index cols = (numext::mini)(otherSize - j0, nc);
-    Scalar* _panel = _other + j0 * otherStride;
-    OtherMapper other(_panel, otherStride, otherIncr);
+    for (Index j0 = 0; j0 < otherSize; j0 += nc) {
+      const Index cols = (numext::mini)(otherSize - j0, nc);
+      Scalar* _panel = _other + j0 * otherStride;
+      OtherMapper other(_panel, otherStride, otherIncr);
 
-    for (Index k2 = IsLower ? 0 : size; IsLower ? k2 < size : k2 > 0; IsLower ? k2 += kc : k2 -= kc) {
-      const Index actual_kc = (numext::mini)(IsLower ? size - k2 : k2, kc);
+      for (Index k2 = IsLower ? 0 : size; IsLower ? k2 < size : k2 > 0; IsLower ? k2 += kc : k2 -= kc) {
+        const Index actual_kc = (numext::mini)(IsLower ? size - k2 : k2, kc);
 
-      // We have selected and packed a big horizontal panel R1 of rhs. Let B be the packed copy of this panel,
-      // and R2 the remaining part of rhs. The corresponding vertical panel of lhs is split into
-      // A11 (the triangular part) and A21 the remaining rectangular part.
-      // Then the high level algorithm is:
-      //  - B = R1                    => general block copy (done during the next step)
-      //  - R1 = A11^-1 B             => tricky part
-      //  - update B from the new R1  => actually this has to be performed continuously during the above step
-      //  - R2 -= A21 * B             => GEPP
+        // We have selected and packed a big horizontal panel R1 of rhs. Let B be the packed copy of this panel,
+        // and R2 the remaining part of rhs. The corresponding vertical panel of lhs is split into
+        // A11 (the triangular part) and A21 the remaining rectangular part.
+        // Then the high level algorithm is:
+        //  - B = R1                    => general block copy (done during the next step)
+        //  - R1 = A11^-1 B             => tricky part
+        //  - update B from the new R1  => actually this has to be performed continuously during the above step
+        //  - R2 -= A21 * B             => GEPP
 
-      // The tricky part: compute R1 = A11^-1 B while updating B from R1
-      // The idea is to split A11 into multiple small vertical panels.
-      // Each panel can be split into a small triangular part T1k which is processed without optimization,
-      // and the remaining small part T2k which is processed using gebp with appropriate block strides
-      for (Index j2 = 0; j2 < cols; j2 += subcols) {
-        Index actual_cols = (numext::mini)(cols - j2, subcols);
-        // for each small vertical panels [T1k^T, T2k^T]^T of lhs
-        for (Index k1 = 0; k1 < actual_kc; k1 += panelWidth) {
-          Index actualPanelWidth = numext::mini<Index>(actual_kc - k1, panelWidth);
-          // tr solve
-          {
-            Index i = IsLower ? k2 + k1 : k2 - k1 - 1;
+        // The tricky part: compute R1 = A11^-1 B while updating B from R1
+        // The idea is to split A11 into multiple small vertical panels.
+        // Each panel can be split into a small triangular part T1k which is processed without optimization,
+        // and the remaining small part T2k which is processed using gebp with appropriate block strides
+        for (Index j2 = 0; j2 < cols; j2 += subcols) {
+          Index actual_cols = (numext::mini)(cols - j2, subcols);
+          // for each small vertical panels [T1k^T, T2k^T]^T of lhs
+          for (Index k1 = 0; k1 < actual_kc; k1 += panelWidth) {
+            Index actualPanelWidth = numext::mini<Index>(actual_kc - k1, panelWidth);
+            // tr solve
+            {
+              Index i = IsLower ? k2 + k1 : k2 - k1 - 1;
 #if defined(EIGEN_VECTORIZE_AVX512) && defined(EIGEN_USE_AVX512_TRSM_L_KERNELS) && EIGEN_USE_AVX512_TRSM_L_KERNELS
-            EIGEN_IF_CONSTEXPR ((OtherInnerStride == 1 &&
-                                 (std::is_same<Scalar, float>::value || std::is_same<Scalar, double>::value))) {
-              i = IsLower ? k2 + k1 : k2 - k1 - actualPanelWidth;
-            }
+              EIGEN_IF_CONSTEXPR ((OtherInnerStride == 1 &&
+                                   (std::is_same<Scalar, float>::value || std::is_same<Scalar, double>::value))) {
+                i = IsLower ? k2 + k1 : k2 - k1 - actualPanelWidth;
+              }
 #endif
-            using DiagonalKernel =
-                trsmKernelL<Scalar, Index, Mode, Conjugate, TriStorageOrder, OtherInnerStride, /*Specialized=*/true>;
-            const Scalar* diagonal = _tri + i + i * triStride;
-            Scalar* rhs = _panel + i * otherIncr + j2 * otherStride;
-            // Narrow panels keep their compile-time width bound, which lets compilers shorten the scalar
-            // kernel's loops; the packet kernel solves wider ones.
-            if (panelWidth == Index(SmallPanelWidth))
-              DiagonalKernel::kernel(numext::mini<Index>(actualPanelWidth, SmallPanelWidth), actual_cols, diagonal,
-                                     triStride, rhs, otherIncr, otherStride);
-            else
-              DiagonalKernel::kernel(actualPanelWidth, actual_cols, diagonal, triStride, rhs, otherIncr, otherStride);
-          }
+              using DiagonalKernel =
+                  trsmKernelL<Scalar, Index, Mode, Conjugate, TriStorageOrder, OtherInnerStride, /*Specialized=*/true>;
+              const Scalar* diagonal = _tri + i + i * triStride;
+              Scalar* rhs = _panel + i * otherIncr + j2 * otherStride;
+              // Narrow panels keep their compile-time width bound, which lets compilers shorten the scalar
+              // kernel's loops; the packet kernel solves wider ones.
+              if (panelWidth == Index(SmallPanelWidth))
+                DiagonalKernel::kernel(numext::mini<Index>(actualPanelWidth, SmallPanelWidth), actual_cols, diagonal,
+                                       triStride, rhs, otherIncr, otherStride);
+              else
+                DiagonalKernel::kernel(actualPanelWidth, actual_cols, diagonal, triStride, rhs, otherIncr, otherStride);
+            }
 
-          Index lengthTarget = actual_kc - k1 - actualPanelWidth;
-          Index startBlock = IsLower ? k2 + k1 : k2 - k1 - actualPanelWidth;
-          Index blockBOffset = IsLower ? k1 : lengthTarget;
+            Index lengthTarget = actual_kc - k1 - actualPanelWidth;
+            Index startBlock = IsLower ? k2 + k1 : k2 - k1 - actualPanelWidth;
+            Index blockBOffset = IsLower ? k1 : lengthTarget;
 
-          // update the respective rows of B from other
-          pack_rhs(blockB + actual_kc * j2, other.getSubMapper(startBlock, j2), actualPanelWidth, actual_cols,
-                   actual_kc, blockBOffset);
+            // update the respective rows of B from other
+            pack_rhs(blockB + actual_kc * j2, other.getSubMapper(startBlock, j2), actualPanelWidth, actual_cols,
+                     actual_kc, blockBOffset);
 
-          // GEBP
-          if (lengthTarget > 0) {
-            Index startTarget = IsLower ? k2 + k1 + actualPanelWidth : k2 - actual_kc;
+            // GEBP
+            if (lengthTarget > 0) {
+              Index startTarget = IsLower ? k2 + k1 + actualPanelWidth : k2 - actual_kc;
 
-            pack_lhs(blockA, tri.getSubMapper(startTarget, startBlock), actualPanelWidth, lengthTarget);
+              pack_lhs(blockA, tri.getSubMapper(startTarget, startBlock), actualPanelWidth, lengthTarget);
 
-            gebp_kernel(other.getSubMapper(startTarget, j2), blockA, blockB + actual_kc * j2, lengthTarget,
-                        actualPanelWidth, actual_cols, Scalar(-1), actualPanelWidth, actual_kc, 0, blockBOffset);
+              gebp_kernel(other.getSubMapper(startTarget, j2), blockA, blockB + actual_kc * j2, lengthTarget,
+                          actualPanelWidth, actual_cols, Scalar(-1), actualPanelWidth, actual_kc, 0, blockBOffset);
+            }
           }
         }
-      }
 
-      // R2 -= A21 * B => GEPP
-      {
-        Index start = IsLower ? k2 + kc : 0;
-        Index end = IsLower ? size : k2 - kc;
-        for (Index i2 = start; i2 < end; i2 += mc) {
-          const Index actual_mc = (numext::mini)(mc, end - i2);
-          if (actual_mc > 0) {
-            pack_lhs(blockA, tri.getSubMapper(i2, IsLower ? k2 : k2 - kc), actual_kc, actual_mc);
+        // R2 -= A21 * B => GEPP
+        {
+          Index start = IsLower ? k2 + kc : 0;
+          Index end = IsLower ? size : k2 - kc;
+          for (Index i2 = start; i2 < end; i2 += mc) {
+            const Index actual_mc = (numext::mini)(mc, end - i2);
+            if (actual_mc > 0) {
+              pack_lhs(blockA, tri.getSubMapper(i2, IsLower ? k2 : k2 - kc), actual_kc, actual_mc);
 
-            gebp_kernel(other.getSubMapper(i2, 0), blockA, blockB, actual_mc, actual_kc, cols, Scalar(-1), -1, -1, 0,
-                        0);
+              gebp_kernel(other.getSubMapper(i2, 0), blockA, blockB, actual_mc, actual_kc, cols, Scalar(-1), -1, -1, 0,
+                          0);
+            }
           }
         }
       }
     }
-  }
+  });
 }
 
 /* Optimized triangular solver with multiple left hand sides and the triangular matrix on the right
@@ -700,140 +701,143 @@ EIGEN_DONT_INLINE void triangular_solve_matrix<Scalar, Index, OnTheLeft, Mode, C
 template <typename Scalar, typename Index, int Mode, bool Conjugate, int TriStorageOrder, int OtherInnerStride>
 struct triangular_solve_matrix<Scalar, Index, OnTheRight, Mode, Conjugate, TriStorageOrder, ColMajor,
                                OtherInnerStride> {
-  static EIGEN_DONT_INLINE void run(Index size, Index otherSize, const Scalar* _tri, Index triStride, Scalar* _other,
-                                    Index otherIncr, Index otherStride, level3_blocking<Scalar, Scalar>& blocking);
+  static void run(Index size, Index otherSize, const Scalar* _tri, Index triStride, Scalar* _other, Index otherIncr,
+                  Index otherStride, level3_blocking<Scalar, Scalar>& blocking);
 };
 
 template <typename Scalar, typename Index, int Mode, bool Conjugate, int TriStorageOrder, int OtherInnerStride>
-EIGEN_DONT_INLINE void triangular_solve_matrix<Scalar, Index, OnTheRight, Mode, Conjugate, TriStorageOrder, ColMajor,
-                                               OtherInnerStride>::run(Index size, Index otherSize, const Scalar* _tri,
-                                                                      Index triStride, Scalar* _other, Index otherIncr,
-                                                                      Index otherStride,
-                                                                      level3_blocking<Scalar, Scalar>& blocking) {
-  Index rows = otherSize;
+void triangular_solve_matrix<Scalar, Index, OnTheRight, Mode, Conjugate, TriStorageOrder, ColMajor,
+                             OtherInnerStride>::run(Index size, Index otherSize, const Scalar* _tri, Index triStride,
+                                                    Scalar* _other, Index otherIncr, Index otherStride,
+                                                    level3_blocking<Scalar, Scalar>& blocking) {
+  internal::noinline_invoke([&] {
+    Index rows = otherSize;
 
-  std::ptrdiff_t l1, l2, l3;
-  manage_caching_sizes(GetAction, &l1, &l2, &l3);
+    std::ptrdiff_t l1 = 0, l2 = 0, l3 = 0;
+    manage_caching_sizes(GetAction, &l1, &l2, &l3);
 
 #if defined(EIGEN_VECTORIZE_AVX512) && defined(EIGEN_USE_AVX512_TRSM_R_KERNELS) && EIGEN_USE_AVX512_TRSM_R_KERNELS && \
     EIGEN_ENABLE_AVX512_NOCOPY_TRSM_R_CUTOFFS
-  EIGEN_IF_CONSTEXPR ((OtherInnerStride == 1 &&
-                       (std::is_same<Scalar, float>::value || std::is_same<Scalar, double>::value))) {
-    // TODO: Investigate better heuristics for cutoffs.
-    double L2Cap = 0.5;  // 50% of L2 size
-    if (size < avx512_trsm_cutoff<Scalar>(l2, rows, L2Cap)) {
-      trsmKernelR<Scalar, Index, Mode, Conjugate, TriStorageOrder, OtherInnerStride, /*Specialized=*/true>::kernel(
-          size, rows, _tri, triStride, _other, 1, otherStride);
-      return;
-    }
-  }
-#endif
-
-  using LhsMapper = blas_data_mapper<Scalar, Index, ColMajor, Unaligned, OtherInnerStride>;
-  using RhsMapper = const_blas_data_mapper<Scalar, Index, TriStorageOrder>;
-  LhsMapper lhs(_other, otherStride, otherIncr);
-  RhsMapper rhs(_tri, triStride);
-
-  using Traits = gebp_traits<Scalar, Scalar>;
-  enum {
-    RhsStorageOrder = TriStorageOrder,
-    SmallPanelWidth = plain_enum_max(Traits::mr, Traits::nr),
-    IsLower = (Mode & Lower) == Lower
-  };
-
-  // Every k-block sweeps all rows of the left-hand side through gebp and packs its slab of a
-  // column-major triangle one column run at a time, so a large triangle alone deepens this kernel
-  // (issue #3162); a row-major triangle is packed by rows, as on the left.
-  const std::ptrdiff_t budget = triangular_solve_budget<Scalar>(l2, l3);
-  Index mc = (numext::mini)(rows, blocking.mc());  // cache block size along the M direction
-  // cache block size along the K direction
-  const Index kc = triangular_solve_kc<Scalar>(size, rows, (numext::maxi)(mc, size), budget,
-                                               /*slabRuns=*/TriStorageOrder == ColMajor, blocking);
-  // blockA packs kc x mc entries of the left-hand side, and rows can far exceed size. Past half the
-  // budget a deeper kc takes proportionally fewer rows per pass, so blockA does not outgrow the buffer
-  // the blocking chose.
-  if (kc > blocking.kc()) {
-    const std::ptrdiff_t maxA = (numext::maxi)(std::ptrdiff_t(blocking.kc()) * mc, budget / 2);
-    mc = (numext::mini)(mc, (numext::maxi)(Index(Traits::mr), numext::round_down(Index(maxA / kc), Index(Traits::mr))));
-  }
-
-  std::size_t sizeA = kc * mc;
-  std::size_t sizeB = kc * size;
-
-  ei_declare_aligned_stack_constructed_variable(Scalar, blockA, sizeA, blocking.blockA());
-  ei_declare_aligned_stack_constructed_variable(Scalar, blockB, sizeB, blocking.blockB());
-
-  gebp_kernel<Scalar, Scalar, Index, LhsMapper, Traits::mr, Traits::nr, false, Conjugate> gebp_kernel;
-  gemm_pack_rhs<Scalar, Index, RhsMapper, Traits::nr, RhsStorageOrder> pack_rhs;
-  gemm_pack_rhs<Scalar, Index, RhsMapper, Traits::nr, RhsStorageOrder, false, true> pack_rhs_panel;
-  gemm_pack_lhs<Scalar, Index, LhsMapper, Traits::mr, Traits::LhsProgress, typename Traits::LhsPacket4Packing, ColMajor,
-                false, true>
-      pack_lhs_panel;
-
-  for (Index k2 = IsLower ? size : 0; IsLower ? k2 > 0 : k2 < size; IsLower ? k2 -= kc : k2 += kc) {
-    const Index actual_kc = (numext::mini)(IsLower ? k2 : size - k2, kc);
-    Index actual_k2 = IsLower ? k2 - actual_kc : k2;
-
-    Index startPanel = IsLower ? 0 : k2 + actual_kc;
-    Index rs = IsLower ? actual_k2 : size - actual_k2 - actual_kc;
-    Scalar* geb = blockB + actual_kc * actual_kc;
-
-    if (rs > 0) pack_rhs(geb, rhs.getSubMapper(actual_k2, startPanel), actual_kc, rs);
-
-    // triangular packing (we only pack the panels off the diagonal,
-    // neglecting the blocks overlapping the diagonal
-    {
-      for (Index j2 = 0; j2 < actual_kc; j2 += SmallPanelWidth) {
-        Index actualPanelWidth = numext::mini<Index>(actual_kc - j2, SmallPanelWidth);
-        Index actual_j2 = actual_k2 + j2;
-        Index panelOffset = IsLower ? j2 + actualPanelWidth : 0;
-        Index panelLength = IsLower ? actual_kc - j2 - actualPanelWidth : j2;
-
-        if (panelLength > 0)
-          pack_rhs_panel(blockB + j2 * actual_kc, rhs.getSubMapper(actual_k2 + panelOffset, actual_j2), panelLength,
-                         actualPanelWidth, actual_kc, panelOffset);
+    EIGEN_IF_CONSTEXPR ((OtherInnerStride == 1 &&
+                         (std::is_same<Scalar, float>::value || std::is_same<Scalar, double>::value))) {
+      // TODO: Investigate better heuristics for cutoffs.
+      double L2Cap = 0.5;  // 50% of L2 size
+      if (size < avx512_trsm_cutoff<Scalar>(l2, rows, L2Cap)) {
+        trsmKernelR<Scalar, Index, Mode, Conjugate, TriStorageOrder, OtherInnerStride, /*Specialized=*/true>::kernel(
+            size, rows, _tri, triStride, _other, 1, otherStride);
+        return;
       }
     }
+#endif
 
-    for (Index i2 = 0; i2 < rows; i2 += mc) {
-      const Index actual_mc = (numext::mini)(mc, rows - i2);
+    using LhsMapper = blas_data_mapper<Scalar, Index, ColMajor, Unaligned, OtherInnerStride>;
+    using RhsMapper = const_blas_data_mapper<Scalar, Index, TriStorageOrder>;
+    LhsMapper lhs(_other, otherStride, otherIncr);
+    RhsMapper rhs(_tri, triStride);
 
-      // triangular solver kernel
+    using Traits = gebp_traits<Scalar, Scalar>;
+    enum {
+      RhsStorageOrder = TriStorageOrder,
+      SmallPanelWidth = plain_enum_max(Traits::mr, Traits::nr),
+      IsLower = (Mode & Lower) == Lower
+    };
+
+    // Every k-block sweeps all rows of the left-hand side through gebp and packs its slab of a
+    // column-major triangle one column run at a time, so a large triangle alone deepens this kernel
+    // (issue #3162); a row-major triangle is packed by rows, as on the left.
+    const std::ptrdiff_t budget = triangular_solve_budget<Scalar>(l2, l3);
+    Index mc = (numext::mini)(rows, blocking.mc());  // cache block size along the M direction
+    // cache block size along the K direction
+    const Index kc = triangular_solve_kc<Scalar>(size, rows, (numext::maxi)(mc, size), budget,
+                                                 /*slabRuns=*/TriStorageOrder == ColMajor, blocking);
+    // blockA packs kc x mc entries of the left-hand side, and rows can far exceed size. Past half the
+    // budget a deeper kc takes proportionally fewer rows per pass, so blockA does not outgrow the buffer
+    // the blocking chose.
+    if (kc > blocking.kc()) {
+      const std::ptrdiff_t maxA = (numext::maxi)(std::ptrdiff_t(blocking.kc()) * mc, budget / 2);
+      mc = (numext::mini)(mc,
+                          (numext::maxi)(Index(Traits::mr), numext::round_down(Index(maxA / kc), Index(Traits::mr))));
+    }
+
+    std::size_t sizeA = kc * mc;
+    std::size_t sizeB = kc * size;
+
+    ei_declare_aligned_stack_constructed_variable(Scalar, blockA, sizeA, blocking.blockA());
+    ei_declare_aligned_stack_constructed_variable(Scalar, blockB, sizeB, blocking.blockB());
+
+    gebp_kernel<Scalar, Scalar, Index, LhsMapper, Traits::mr, Traits::nr, false, Conjugate> gebp_kernel;
+    gemm_pack_rhs<Scalar, Index, RhsMapper, Traits::nr, RhsStorageOrder> pack_rhs;
+    gemm_pack_rhs<Scalar, Index, RhsMapper, Traits::nr, RhsStorageOrder, false, true> pack_rhs_panel;
+    gemm_pack_lhs<Scalar, Index, LhsMapper, Traits::mr, Traits::LhsProgress, typename Traits::LhsPacket4Packing,
+                  ColMajor, false, true>
+        pack_lhs_panel;
+
+    for (Index k2 = IsLower ? size : 0; IsLower ? k2 > 0 : k2 < size; IsLower ? k2 -= kc : k2 += kc) {
+      const Index actual_kc = (numext::mini)(IsLower ? k2 : size - k2, kc);
+      Index actual_k2 = IsLower ? k2 - actual_kc : k2;
+
+      Index startPanel = IsLower ? 0 : k2 + actual_kc;
+      Index rs = IsLower ? actual_k2 : size - actual_k2 - actual_kc;
+      Scalar* geb = blockB + actual_kc * actual_kc;
+
+      if (rs > 0) pack_rhs(geb, rhs.getSubMapper(actual_k2, startPanel), actual_kc, rs);
+
+      // triangular packing (we only pack the panels off the diagonal,
+      // neglecting the blocks overlapping the diagonal
       {
-        // for each small block of the diagonal (=> vertical panels of rhs)
-        for (Index j2 = IsLower ? (actual_kc - ((actual_kc % SmallPanelWidth) ? Index(actual_kc % SmallPanelWidth)
-                                                                              : Index(SmallPanelWidth)))
-                                : 0;
-             IsLower ? j2 >= 0 : j2 < actual_kc; IsLower ? j2 -= SmallPanelWidth : j2 += SmallPanelWidth) {
+        for (Index j2 = 0; j2 < actual_kc; j2 += SmallPanelWidth) {
           Index actualPanelWidth = numext::mini<Index>(actual_kc - j2, SmallPanelWidth);
-          Index absolute_j2 = actual_k2 + j2;
+          Index actual_j2 = actual_k2 + j2;
           Index panelOffset = IsLower ? j2 + actualPanelWidth : 0;
           Index panelLength = IsLower ? actual_kc - j2 - actualPanelWidth : j2;
 
-          // GEBP
-          if (panelLength > 0) {
-            gebp_kernel(lhs.getSubMapper(i2, absolute_j2), blockA, blockB + j2 * actual_kc, actual_mc, panelLength,
-                        actualPanelWidth, Scalar(-1), actual_kc, actual_kc,  // strides
-                        panelOffset, panelOffset);                           // offsets
-          }
-
-          {
-            // unblocked triangular solve
-            trsmKernelR<Scalar, Index, Mode, Conjugate, TriStorageOrder, OtherInnerStride,
-                        /*Specialized=*/true>::kernel(actualPanelWidth, actual_mc,
-                                                      _tri + absolute_j2 + absolute_j2 * triStride, triStride,
-                                                      _other + i2 * otherIncr + absolute_j2 * otherStride, otherIncr,
-                                                      otherStride);
-          }
-          // pack the just computed part of lhs to A
-          pack_lhs_panel(blockA, lhs.getSubMapper(i2, absolute_j2), actualPanelWidth, actual_mc, actual_kc, j2);
+          if (panelLength > 0)
+            pack_rhs_panel(blockB + j2 * actual_kc, rhs.getSubMapper(actual_k2 + panelOffset, actual_j2), panelLength,
+                           actualPanelWidth, actual_kc, panelOffset);
         }
       }
 
-      if (rs > 0)
-        gebp_kernel(lhs.getSubMapper(i2, startPanel), blockA, geb, actual_mc, actual_kc, rs, Scalar(-1), -1, -1, 0, 0);
+      for (Index i2 = 0; i2 < rows; i2 += mc) {
+        const Index actual_mc = (numext::mini)(mc, rows - i2);
+
+        // triangular solver kernel
+        {
+          // for each small block of the diagonal (=> vertical panels of rhs)
+          for (Index j2 = IsLower ? (actual_kc - ((actual_kc % SmallPanelWidth) ? Index(actual_kc % SmallPanelWidth)
+                                                                                : Index(SmallPanelWidth)))
+                                  : 0;
+               IsLower ? j2 >= 0 : j2 < actual_kc; IsLower ? j2 -= SmallPanelWidth : j2 += SmallPanelWidth) {
+            Index actualPanelWidth = numext::mini<Index>(actual_kc - j2, SmallPanelWidth);
+            Index absolute_j2 = actual_k2 + j2;
+            Index panelOffset = IsLower ? j2 + actualPanelWidth : 0;
+            Index panelLength = IsLower ? actual_kc - j2 - actualPanelWidth : j2;
+
+            // GEBP
+            if (panelLength > 0) {
+              gebp_kernel(lhs.getSubMapper(i2, absolute_j2), blockA, blockB + j2 * actual_kc, actual_mc, panelLength,
+                          actualPanelWidth, Scalar(-1), actual_kc, actual_kc,  // strides
+                          panelOffset, panelOffset);                           // offsets
+            }
+
+            {
+              // unblocked triangular solve
+              trsmKernelR<Scalar, Index, Mode, Conjugate, TriStorageOrder, OtherInnerStride,
+                          /*Specialized=*/true>::kernel(actualPanelWidth, actual_mc,
+                                                        _tri + absolute_j2 + absolute_j2 * triStride, triStride,
+                                                        _other + i2 * otherIncr + absolute_j2 * otherStride, otherIncr,
+                                                        otherStride);
+            }
+            // pack the just computed part of lhs to A
+            pack_lhs_panel(blockA, lhs.getSubMapper(i2, absolute_j2), actualPanelWidth, actual_mc, actual_kc, j2);
+          }
+        }
+
+        if (rs > 0)
+          gebp_kernel(lhs.getSubMapper(i2, startPanel), blockA, geb, actual_mc, actual_kc, rs, Scalar(-1), -1, -1, 0,
+                      0);
+      }
     }
-  }
+  });
 }
 }  // end namespace internal
 
