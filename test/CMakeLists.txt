@@ -280,7 +280,7 @@ add_test(NAME cmake_version_header
 set_property(TEST cmake_version_header PROPERTY LABELS "Official")
 
 ei_add_test(clz)
-ei_add_test(rand)
+ei_add_test(rand "-pthread" "${CMAKE_THREAD_LIBS_INIT}")
 ei_add_test(realview)
 ei_add_test(complex_components)
 ei_add_test(meta)
