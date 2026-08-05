@@ -52,3 +52,18 @@ Concurrent jobs may share one local directory on a POSIX or NTFS filesystem,
 but not over network shares.  The build scripts record per-job cache hits and
 misses via `CCACHE_STATSLOG` and `ccache --show-log-stats` so that concurrent
 jobs sharing a cache directory do not zero or mix each other's counters.
+
+## MSVC coverage for merge requests
+
+The nightly Windows jobs need the dedicated Windows runners, so merge requests
+get their MSVC coverage from `build:windows:cross:...`, which cross-compiles the
+smoke tests on a hosted Linux runner by running the real MSVC toolchain under
+Wine, and `test:windows:cross:...`, which runs the resulting binaries on a
+hosted Windows runner.  Both use hosted runners and pre-baked images, so they
+also run in forks.
+
+Visual Studio is not redistributable, so the toolchain is not part of the CI
+image (see `ci/docker/ubuntu-24.04-amd64-msvc-wine-build/`); it is downloaded
+from Microsoft's installer manifests by `ci/scripts/setup.msvc-wine.sh` on each
+run.  Nothing is licensed or activated at run time: the compiler builds with no
+network access once installed.
