@@ -844,15 +844,15 @@ struct bunch_kaufman<Lower> {
 template <>
 struct bunch_kaufman<Upper> {
   template <typename MatrixType, typename TranspositionType, typename SubDiagType>
-  EIGEN_DEVICE_FUNC static EIGEN_STRONG_INLINE Index unblocked(MatrixType& mat, TranspositionType& transpositions, SubDiagType& subdiag,
-                                             Index k0 = 0) {
+  EIGEN_DEVICE_FUNC static EIGEN_STRONG_INLINE Index unblocked(MatrixType& mat, TranspositionType& transpositions,
+                                                               SubDiagType& subdiag, Index k0 = 0) {
     Transpose<MatrixType> matt(mat);
     return bunch_kaufman<Lower>::unblocked(matt, transpositions, subdiag, k0);
   }
 
   template <typename MatrixType, typename TranspositionType, typename SubDiagType, typename WorkspaceType>
-  EIGEN_DEVICE_FUNC static EIGEN_STRONG_INLINE Index blocked(MatrixType& mat, TranspositionType& transpositions, SubDiagType& subdiag,
-                                           WorkspaceType& workspace) {
+  EIGEN_DEVICE_FUNC static EIGEN_STRONG_INLINE Index blocked(MatrixType& mat, TranspositionType& transpositions,
+                                                             SubDiagType& subdiag, WorkspaceType& workspace) {
     Transpose<MatrixType> matt(mat);
     return bunch_kaufman<Lower>::blocked(matt, transpositions, subdiag, workspace);
   }
@@ -1034,7 +1034,8 @@ EIGEN_DEVICE_FUNC void BunchKaufman<MatrixType_, UpLo_>::_solve_impl(const RhsTy
 
 template <typename MatrixType_, int UpLo_>
 template <bool Conjugate, typename RhsType, typename DstType>
-EIGEN_DEVICE_FUNC void BunchKaufman<MatrixType_, UpLo_>::_solve_impl_transposed(const RhsType& rhs, DstType& dst) const {
+EIGEN_DEVICE_FUNC void BunchKaufman<MatrixType_, UpLo_>::_solve_impl_transposed(const RhsType& rhs,
+                                                                                DstType& dst) const {
   // A^{-1} b = P^T L^{-*} D^{-1} L^{-1} P b   (and the conjugated variants for transpose / adjoint solves).
   dst = m_transpositions * rhs;
   matrixL().template conjugateIf<!Conjugate>().solveInPlace(dst);
@@ -1158,7 +1159,8 @@ SelfAdjointView<MatrixType, UpLo>::bunchKaufman() const {
  * \sa SelfAdjointView::bunchKaufman()
  */
 template <typename Derived>
-EIGEN_DEVICE_FUNC inline BunchKaufman<typename MatrixBase<Derived>::PlainObject> MatrixBase<Derived>::bunchKaufman() const {
+EIGEN_DEVICE_FUNC inline BunchKaufman<typename MatrixBase<Derived>::PlainObject> MatrixBase<Derived>::bunchKaufman()
+    const {
   return BunchKaufman<PlainObject>(derived());
 }
 

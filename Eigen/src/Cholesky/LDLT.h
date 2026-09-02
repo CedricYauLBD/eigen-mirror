@@ -613,8 +613,8 @@ struct ldlt_inplace<Lower> {
   }
 
   template <typename MatrixType, typename TranspositionType, typename Workspace, typename WType>
-  EIGEN_DEVICE_FUNC static bool update(MatrixType& mat, const TranspositionType& transpositions, Workspace& tmp, const WType& w,
-                     const typename MatrixType::RealScalar& sigma = 1) {
+  EIGEN_DEVICE_FUNC static bool update(MatrixType& mat, const TranspositionType& transpositions, Workspace& tmp,
+                                       const WType& w, const typename MatrixType::RealScalar& sigma = 1) {
     // Apply the permutation to the input w
     tmp = transpositions * w;
 
@@ -625,8 +625,8 @@ struct ldlt_inplace<Lower> {
 template <>
 struct ldlt_inplace<Upper> {
   template <typename MatrixType, typename TranspositionType, typename Workspace>
-  EIGEN_DEVICE_FUNC static EIGEN_STRONG_INLINE bool unblocked(MatrixType& mat, TranspositionType& transpositions, Workspace& temp,
-                                            SignMatrix& sign) {
+  EIGEN_DEVICE_FUNC static EIGEN_STRONG_INLINE bool unblocked(MatrixType& mat, TranspositionType& transpositions,
+                                                              Workspace& temp, SignMatrix& sign) {
     Transpose<MatrixType> matt(mat);
     return ldlt_inplace<Lower>::unblocked(matt, transpositions, temp, sign);
   }
@@ -639,8 +639,9 @@ struct ldlt_inplace<Upper> {
   }
 
   template <typename MatrixType, typename TranspositionType, typename Workspace, typename WType>
-  EIGEN_DEVICE_FUNC static EIGEN_STRONG_INLINE bool update(MatrixType& mat, TranspositionType& transpositions, Workspace& tmp, WType& w,
-                                         const typename MatrixType::RealScalar& sigma = 1) {
+  EIGEN_DEVICE_FUNC static EIGEN_STRONG_INLINE bool update(MatrixType& mat, TranspositionType& transpositions,
+                                                           Workspace& tmp, WType& w,
+                                                           const typename MatrixType::RealScalar& sigma = 1) {
     Transpose<MatrixType> matt(mat);
     return ldlt_inplace<Lower>::update(matt, transpositions, tmp, w.conjugate(), sigma);
   }
@@ -855,8 +856,8 @@ EIGEN_DEVICE_FUNC MatrixType LDLT<MatrixType, UpLo_>::reconstructedMatrix() cons
  * \sa MatrixBase::ldlt()
  */
 template <typename MatrixType, unsigned int UpLo>
-EIGEN_DEVICE_FUNC inline LDLT<typename SelfAdjointView<MatrixType, UpLo>::PlainObject, UpLo> SelfAdjointView<MatrixType, UpLo>::ldlt()
-    const {
+EIGEN_DEVICE_FUNC inline LDLT<typename SelfAdjointView<MatrixType, UpLo>::PlainObject, UpLo>
+SelfAdjointView<MatrixType, UpLo>::ldlt() const {
   return LDLT<PlainObject, UpLo>(m_matrix);
 }
 

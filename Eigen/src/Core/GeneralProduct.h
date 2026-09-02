@@ -452,7 +452,8 @@ struct gemv_single_column<true, ConjugateLhs, ConjugateRhs> {
 template <>
 struct gemv_dense_selector<OnTheRight, ColMajor, true> {
   template <typename Lhs, typename Rhs, typename Dest>
-  EIGEN_DEVICE_FUNC static inline void run(const Lhs& lhs, const Rhs& rhs, Dest& dest, const typename Dest::Scalar& alpha) {
+  EIGEN_DEVICE_FUNC static inline void run(const Lhs& lhs, const Rhs& rhs, Dest& dest,
+                                           const typename Dest::Scalar& alpha) {
     using LhsScalar = typename Lhs::Scalar;
     using RhsScalar = typename Rhs::Scalar;
     using ResScalar = typename Dest::Scalar;

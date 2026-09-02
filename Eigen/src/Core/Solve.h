@@ -149,7 +149,7 @@ struct Assignment<DstXprType, Solve<Transpose<const DecType>, RhsType>, internal
 template <typename DstXprType, typename DecType, typename RhsType, typename Scalar>
 struct Assignment<
     DstXprType,
-    Solve<CwiseUnaryOp<internal::scalar_conjugate_op<typename DecType::Scalar>, const Transpose<const DecType> >,
+    Solve<CwiseUnaryOp<internal::scalar_conjugate_op<typename DecType::Scalar>, const Transpose<const DecType>>,
           RhsType>,
     internal::assign_op<Scalar, Scalar>, Dense2Dense> {
   using SrcXprType =
