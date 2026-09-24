@@ -359,7 +359,7 @@ namespace internal {
 template <int K, int Size, bool Last = (K == Size - 1)>
 struct unrolled_partial_lu_step {
   template <typename MatrixTypeRef, typename PivIndex>
-  static EIGEN_STRONG_INLINE void run(MatrixTypeRef& lu, PivIndex* row_transpositions, PivIndex& nb_transpositions,
+  EIGEN_DEVICE_FUNC static EIGEN_STRONG_INLINE void run(MatrixTypeRef& lu, PivIndex* row_transpositions, PivIndex& nb_transpositions,
                                       Index& first_zero_pivot) {
     using Scalar = typename MatrixTypeRef::Scalar;
     using Scoring = scalar_score_coeff_op<Scalar>;
@@ -389,7 +389,7 @@ struct unrolled_partial_lu_step {
 template <int K, int Size>
 struct unrolled_partial_lu_step<K, Size, /*Last=*/true> {
   template <typename MatrixTypeRef, typename PivIndex>
-  static EIGEN_STRONG_INLINE void run(MatrixTypeRef& lu, PivIndex* row_transpositions, PivIndex&,
+  EIGEN_DEVICE_FUNC static EIGEN_STRONG_INLINE void run(MatrixTypeRef& lu, PivIndex* row_transpositions, PivIndex&,
                                       Index& first_zero_pivot) {
     using Scoring = scalar_score_coeff_op<typename MatrixTypeRef::Scalar>;
     row_transpositions[K] = PivIndex(K);
@@ -409,7 +409,7 @@ struct unrolled_partial_lu {
 template <int Size>
 struct unrolled_partial_lu<true, Size> {
   template <typename MatrixTypeRef, typename PivIndex>
-  static EIGEN_STRONG_INLINE bool run(MatrixTypeRef& lu, PivIndex* row_transpositions, PivIndex& nb_transpositions,
+  EIGEN_DEVICE_FUNC static EIGEN_STRONG_INLINE bool run(MatrixTypeRef& lu, PivIndex* row_transpositions, PivIndex& nb_transpositions,
                                       Index& first_zero_pivot) {
     nb_transpositions = 0;
     first_zero_pivot = -1;
@@ -437,7 +437,8 @@ struct generic_partial_lu_impl {
   using BlockType = Ref<Matrix<Scalar, Dynamic, Dynamic, StorageOrder>>;
   using RealScalar = typename MatrixType::RealScalar;
 
-  static void apply_row_transpositions(BlockType& matrix, Index first, Index count, const PivIndex* transpositions) {
+  EIGEN_DEVICE_FUNC static void apply_row_transpositions(BlockType& matrix, Index first, Index count,
+                                                         const PivIndex* transpositions) {
     EIGEN_IF_CONSTEXPR (StorageOrder == ColMajor) {
       // Keep the pivot rows of one column in cache, even when the outer stride maps every column to the same set.
       for (Index j = 0; j < matrix.cols(); ++j)
