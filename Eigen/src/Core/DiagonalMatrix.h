@@ -205,6 +205,10 @@ class DiagonalBase : public EigenBase<Derived> {
     return EIGEN_CWISE_BINARY_RETURN_TYPE(Derived, OtherDerived, internal::scalar_difference_op)(lhs.derived(),
                                                                                                  rhs.derived());
   }
+
+ protected:
+  EIGEN_DEFAULT_COPY_CONSTRUCTOR(DiagonalBase)
+  EIGEN_DEFAULT_EMPTY_CONSTRUCTOR_AND_DESTRUCTOR(DiagonalBase)
 };
 
 /** \class DiagonalMatrix

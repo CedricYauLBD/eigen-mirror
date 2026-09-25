@@ -93,7 +93,13 @@ class PermutationBase : public EigenBase<Derived> {
   using Traits = internal::traits<Derived>;
   using Base = EigenBase<Derived>;
 
+ protected:
+  EIGEN_DEFAULT_COPY_CONSTRUCTOR(PermutationBase)
+  EIGEN_DEFAULT_EMPTY_CONSTRUCTOR_AND_DESTRUCTOR(PermutationBase)
+
  public:
+  EIGEN_DEVICE_FUNC PermutationBase& operator=(const PermutationBase&) = default;
+
 #ifndef EIGEN_PARSED_BY_DOXYGEN
   using IndicesType = typename Traits::IndicesType;
   enum {

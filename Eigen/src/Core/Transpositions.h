@@ -98,6 +98,12 @@ class TranspositionsBase {
   /** \returns the adjoint transformation. Its matrix is a real permutation, so this equals transpose() and inverse().
    */
   Transpose<TranspositionsBase> adjoint() const { return Transpose<TranspositionsBase>(derived()); }
+
+  EIGEN_DEVICE_FUNC TranspositionsBase& operator=(const TranspositionsBase&) = default;
+
+ protected:
+  EIGEN_DEFAULT_COPY_CONSTRUCTOR(TranspositionsBase)
+  EIGEN_DEFAULT_EMPTY_CONSTRUCTOR_AND_DESTRUCTOR(TranspositionsBase)
 };
 
 namespace internal {

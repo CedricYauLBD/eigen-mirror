@@ -51,7 +51,11 @@ class SparseCompressedBase : public SparseMatrixBase<Derived> {
   class InnerIterator;
   class ReverseInnerIterator;
 
+  EIGEN_DEVICE_FUNC SparseCompressedBase& operator=(const SparseCompressedBase&) = default;
+
  protected:
+  EIGEN_DEFAULT_COPY_CONSTRUCTOR(SparseCompressedBase)
+
   using IndexVector = typename Base::IndexVector;
   Eigen::Map<IndexVector> innerNonZeros() {
     return Eigen::Map<IndexVector>(innerNonZeroPtr(), isCompressed() ? 0 : derived().outerSize());

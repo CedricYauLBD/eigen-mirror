@@ -60,12 +60,20 @@ class RankRevealingBase {
   using Scalar = typename internal::traits<Derived>::Scalar;
   using RealScalar = typename NumTraits<Scalar>::Real;
 
+  EIGEN_DEVICE_FUNC RankRevealingBase& operator=(const RankRevealingBase&) = default;
+  EIGEN_DEVICE_FUNC RankRevealingBase& operator=(RankRevealingBase&&) = default;
+
+ protected:
+  EIGEN_DEFAULT_COPY_CONSTRUCTOR(RankRevealingBase)
+  EIGEN_DEVICE_FUNC RankRevealingBase(RankRevealingBase&&) = default;
+
   RankRevealingBase()
       : m_usePrescribedThreshold(false),
         m_prescribedThreshold(RealScalar(0)),
         m_maxpivot(RealScalar(0)),
         m_nonzero_pivots(0) {}
 
+ public:
   /** Allows to prescribe a threshold to be used by certain methods, such as rank(),
    * which need to determine when pivots are to be considered nonzero. This is not used for the
    * decomposition itself, except by CompleteOrthogonalDecomposition, whose rank is determined by compute().
