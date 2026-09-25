@@ -12,6 +12,7 @@
 #include "NonCommutativeScalar.h"
 
 #include <array>
+#include <Eigen/SparseCore>
 #include <Eigen/src/Core/util/Meta.h>
 
 struct FooReturnType {
@@ -27,6 +28,11 @@ struct ScalarBinaryOpTraits<CommutativeScalarOptIn, CommutativeScalarOptIn> {
   static constexpr bool IsCommutative = true;
 };
 }  // namespace Eigen
+template <typename T>
+void check_base_constructors_hidden() {
+  static_assert(!std::is_default_constructible<T>::value, "Base default constructor must stay hidden");
+  static_assert(!std::is_constructible<T, const T&>::value, "Base copy constructor must stay hidden");
+}
 
 using Eigen::internal::apply_op_from_left;
 using Eigen::internal::apply_op_from_right;
@@ -337,6 +343,16 @@ EIGEN_DECLARE_TEST(meta) {
   {
     VERIFY((std::is_convertible<decltype(fix<3>()), int>::value));
     VERIFY((!std::is_convertible<int, decltype(fix<DynamicIndex>())>::value));
+  }
+
+  {
+    using BandType = internal::BandMatrix<double>;
+    using SparseRefType = Ref<SparseMatrix<double>>;
+    check_base_constructors_hidden<internal::BandMatrixBase<BandType>>();
+    check_base_constructors_hidden<internal::SparseRefBase<SparseRefType>>();
+    static_assert(std::is_default_constructible<BandType>::value, "Concrete band matrices remain constructible");
+    static_assert(std::is_copy_constructible<BandType>::value, "Concrete band matrices remain copyable");
+    static_assert(std::is_copy_constructible<SparseRefType>::value, "Sparse references remain copyable");
   }
 
   VERIFY((internal::has_ReturnType<FooReturnType>::value));
