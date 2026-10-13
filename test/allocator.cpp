@@ -6,6 +6,7 @@
 // This Source Code Form is subject to the terms of the Mozilla
 // Public License v. 2.0. If a copy of the MPL was not distributed
 // with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
+// SPDX-License-Identifier: MPL-2.0
 
 #include "main.h"
 
@@ -119,9 +120,12 @@ static void test_monotonic_stack_buffer() {
     ptrs.push_back(p);
   }
 
-  // Verify no overlap between consecutive allocations.
-  for (std::size_t i = 1; i < ptrs.size(); ++i) {
-    VERIFY(static_cast<char*>(ptrs[i]) >= static_cast<char*>(ptrs[i - 1]) + 64);
+  // Pairwise, not consecutive: libc++ carves the buffer from the end downward.
+  for (std::size_t i = 0; i < ptrs.size(); ++i) {
+    for (std::size_t j = i + 1; j < ptrs.size(); ++j) {
+      VERIFY(static_cast<char*>(ptrs[i]) + 64 <= static_cast<char*>(ptrs[j]) ||
+             static_cast<char*>(ptrs[j]) + 64 <= static_cast<char*>(ptrs[i]));
+    }
   }
 }
 
@@ -386,6 +390,17 @@ static void test_alignment_extremes() {
   VERIFY(p2 != nullptr);
   VERIFY(is_aligned(p2, 256));
   r->deallocate(p2, 128, 256);
+
+#ifdef EIGEN_EXCEPTIONS
+  bool threw = false;
+  try {
+    void* p3 = r->allocate(128, 512);
+    r->deallocate(p3, 128, 512);
+  } catch (const std::bad_alloc&) {
+    threw = true;
+  }
+  VERIFY(threw);
+#endif
 
   // Monotonic with various alignments.
   Eigen::monotonic_buffer_resource arena(8192);

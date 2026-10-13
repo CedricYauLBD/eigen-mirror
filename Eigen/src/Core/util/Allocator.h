@@ -10,6 +10,7 @@
 // This Source Code Form is subject to the terms of the Mozilla
 // Public License v. 2.0. If a copy of the MPL was not distributed
 // with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
+// SPDX-License-Identifier: MPL-2.0
 
 #ifndef EIGEN_ALLOCATOR_H
 #define EIGEN_ALLOCATOR_H
@@ -59,13 +60,13 @@ static constexpr std::size_t pmr_default_alignment = EIGEN_DEFAULT_ALIGN_BYTES >
 static constexpr std::size_t max_supported_alignment = 256;
 
 // Validate and normalize a requested alignment for handmade_aligned_malloc.
-// The alignment must be a power of two; anything the backend cannot satisfy
-// (above max_supported_alignment) is a hard error rather than a silent clamp.
+// The alignment must be a power of two. An alignment above max_supported_alignment
+// throws std::bad_alloc even under NDEBUG: handmade_aligned_malloc would wrap its
+// uint8_t offset and free() a pointer malloc never returned.
 // Sub-word alignments are raised to sizeof(void*), which is always satisfiable.
 inline std::size_t clamp_alignment(std::size_t alignment) {
   eigen_assert(alignment != 0 && (alignment & (alignment - 1)) == 0 && "alignment must be a power of two");
-  eigen_assert(alignment <= max_supported_alignment &&
-               "requested alignment exceeds the maximum supported by handmade_aligned_malloc (256)");
+  if (alignment > max_supported_alignment) throw_std_bad_alloc();
   if (alignment < sizeof(void*)) return sizeof(void*);
   return alignment;
 }
