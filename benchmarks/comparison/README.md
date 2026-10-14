@@ -83,5 +83,5 @@ reference kernels, validate the reference result against Eigen outside the timed
 flop count through `eigen_bench::setFlopRate` with a formula from `bench_common.h`, and register the
 grid with `REGISTER_COMPARISON_POINT`, which registers both arms of each point adjacently so a ratio is
 never formed across minutes of drift. A source whose reference is a LAPACK routine carries the
-`// EIGEN_BENCH_REFERENCE_FAMILY: lapack` marker so it is built Eigen-only against a library with no
-LAPACK. `ctest` runs one iteration of every tiny cell, which exercises the validation.
+`// EIGEN_BENCH_REFERENCE_FAMILY: lapack` marker, alone on its line, so it is built Eigen-only against
+a library with no LAPACK. `ctest` runs one iteration of every tiny cell, which exercises the validation.

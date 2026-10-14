@@ -199,7 +199,8 @@ foreach(_source IN LISTS _comparison_sources)
   # ("// EIGEN_BENCH_REFERENCE_FAMILY: lapack"). Without a LAPACK to link it
   # is built Eigen-only: with the reference arm it would declare and call a
   # routine that does not resolve, and the link failure would lose both arms.
-  file(STRINGS "${_source}" _family_line REGEX "EIGEN_BENCH_REFERENCE_FAMILY: *lapack")
+  # The marker must be a whole line, so prose that quotes it does not count.
+  file(STRINGS "${_source}" _family_line REGEX "^[ \t]*//[ \t]*EIGEN_BENCH_REFERENCE_FAMILY:[ \t]*lapack[ \t]*$")
   set(_has_reference ${EIGEN_BENCH_BLAS_FOUND})
   if(_family_line AND NOT EIGEN_BENCH_LAPACK_AVAILABLE)
     set(_has_reference FALSE)
