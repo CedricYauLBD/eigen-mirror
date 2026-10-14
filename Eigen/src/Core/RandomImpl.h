@@ -82,10 +82,15 @@ inline eigen_pcg_state& eigen_tl_random_state() {
   return tl_state;
 }
 
+// pcg32_srandom_r (O'Neill, "PCG: A Family of Simple Fast Space-Efficient Statistically Good Algorithms for Random
+// Number Generation", HMC-CS-2014-0905) seeds from two words, initstate and initseq. Deriving both from one seed as
+// inc = 2*seed+1 would give seed and seed ^ 2^63 the same increment and states differing by 2^63 forever
+// (2^63 * a = 2^63 mod 2^64 for odd a), so each output of one stream would be the other's shifted by 4 bits.
+// Hashing the seed with splitmix64_mix for the increment decorrelates the two.
 inline void set_random_seed(uint64_t seed) {
   eigen_pcg_state& s = eigen_tl_random_state();
   s.state = 0;
-  s.inc = (seed << 1) | 1;
+  s.inc = (splitmix64_mix(seed) << 1) | 1;
   pcg_xsh_rs_step(&s.state, s.inc);
   s.state += seed;
   pcg_xsh_rs_step(&s.state, s.inc);

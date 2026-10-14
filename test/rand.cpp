@@ -266,6 +266,27 @@ void check_seed_backend() {
 }
 
 #if EIGEN_HAS_THREAD_LOCAL_RANDOM
+// With inc = 2*seed+1, seeds s and s ^ 2^63 shared the increment and their states differed by exactly 2^63 at every
+// step, so each XSH-RS output of one stream equaled the other's shifted by 4 bits, up to one flipped bit.
+void check_seed_high_bit_streams() {
+  using Device = internal::eigen_random_device;
+  constexpr int samples = 64;
+  for (uint64_t seed : {uint64_t(0), uint64_t(7), uint64_t(0x123456780000002aULL)}) {
+    unsigned a[samples], b[samples];
+    Eigen::setRandomSeed(seed);
+    for (unsigned& x : a) x = Device::run();
+    Eigen::setRandomSeed(seed ^ (uint64_t(1) << 63));
+    for (unsigned& y : b) y = Device::run();
+    int shifted = 0;
+    for (int i = 0; i < samples; ++i) {
+      const int d1 = internal::popcount<unsigned>(((a[i] << 4) ^ b[i]) & 0xfffffff0u);
+      const int d2 = internal::popcount<unsigned>(((b[i] << 4) ^ a[i]) & 0xfffffff0u);
+      if (d1 <= 1 || d2 <= 1) ++shifted;
+    }
+    VERIFY(shifted <= 1);
+  }
+}
+
 void check_thread_safety() {
   using Vector = Matrix<uint32_t, Dynamic, 1>;
   constexpr int num_threads = 4;
@@ -426,6 +447,7 @@ EIGEN_DECLARE_TEST(rand) {
   CALL_SUBTEST_16(check_seed_backend());
 
 #if EIGEN_HAS_THREAD_LOCAL_RANDOM
+  CALL_SUBTEST_16(check_seed_high_bit_streams());
   CALL_SUBTEST_17(check_thread_safety());
 #endif
 }
