@@ -85,7 +85,7 @@ including %Eigen headers to request a PCG-XSH-RS backend with per-thread state. 
 translation unit that includes %Eigen.
 
 The PCG backend is active when \c EIGEN_HAS_THREAD_LOCAL_RANDOM is 1. It requires host-side \c thread_local support
-and that \c EIGEN_AVOID_THREAD_LOCAL is not defined. Otherwise, including during GPU device compilation, the
+and that \c EIGEN_AVOID_THREAD_LOCAL is not defined. Otherwise, including during GPU or SYCL device compilation, the
 generator retains the \c std::rand() fallback; defining \c EIGEN_USE_PCG_RANDOM alone does not guarantee thread safety.
 
 With PCG active, Eigen::setRandomSeed() seeds only the calling thread. Every thread starts from the same default

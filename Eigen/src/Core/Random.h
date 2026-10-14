@@ -40,7 +40,7 @@ struct functor_traits<scalar_random_op<Scalar> > {
  * Otherwise, this calls \c std::srand(static_cast<unsigned>(seed)), affecting
  * process-global state. This fallback also applies when \c EIGEN_USE_PCG_RANDOM
  * is defined but thread-local storage is unavailable or disabled by
- * \c EIGEN_AVOID_THREAD_LOCAL, or during GPU device compilation.
+ * \c EIGEN_AVOID_THREAD_LOCAL, or during GPU or SYCL device compilation.
  *
  * \sa DenseBase::Random(), DenseBase::setRandom(), \ref TopicMultiThreading
  */
