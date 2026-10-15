@@ -55,18 +55,38 @@ namespace internal {
   struct general_matrix_matrix_product<Index, EIGTYPE, LhsStorageOrder, ConjugateLhs, EIGTYPE, RhsStorageOrder,     \
                                        ConjugateRhs, ColMajor, 1> {                                                 \
     typedef gebp_traits<EIGTYPE, EIGTYPE> Traits;                                                                   \
+    /* BLAS does not read C when beta is zero. */                                                                   \
+    static constexpr bool CanOverwrite = true;                                                                      \
                                                                                                                     \
     static void run(Index rows, Index cols, Index depth, const EIGTYPE* lhs_, Index lhsStride, const EIGTYPE* rhs_, \
                     Index rhsStride, EIGTYPE* res, Index resIncr, Index resStride, EIGTYPE alpha,                   \
                     level3_blocking<EIGTYPE, EIGTYPE>& /*blocking*/, GemmParallelInfo<Index>* /*info = 0*/) {       \
-      using std::conj;                                                                                              \
       if (rows == 0 || cols == 0 || depth == 0) return;                                                             \
+      run_blas(rows, cols, depth, lhs_, lhsStride, rhs_, rhsStride, res, resIncr, resStride, alpha, EIGTYPE(1));    \
+    }                                                                                                               \
+    /* As run, but res = alpha * lhs * rhs, without reading res. */                                                 \
+    static void run_overwrite(Index rows, Index cols, Index depth, const EIGTYPE* lhs_, Index lhsStride,            \
+                              const EIGTYPE* rhs_, Index rhsStride, EIGTYPE* res, Index resIncr, Index resStride,   \
+                              EIGTYPE alpha, level3_blocking<EIGTYPE, EIGTYPE>& /*blocking*/,                       \
+                              GemmParallelInfo<Index>* /*info*/ = 0) {                                              \
+      if (rows == 0 || cols == 0) return;                                                                           \
+      if (depth == 0 || numext::is_exactly_zero(alpha)) {                                                           \
+        gemm_zero_result(res, rows, cols, resIncr, resStride);                                                      \
+        return;                                                                                                     \
+      }                                                                                                             \
+      run_blas(rows, cols, depth, lhs_, lhsStride, rhs_, rhsStride, res, resIncr, resStride, alpha, EIGTYPE(0));    \
+    }                                                                                                               \
+                                                                                                                    \
+   private:                                                                                                         \
+    static void run_blas(Index rows, Index cols, Index depth, const EIGTYPE* lhs_, Index lhsStride,                 \
+                         const EIGTYPE* rhs_, Index rhsStride, EIGTYPE* res, Index resIncr, Index resStride,        \
+                         EIGTYPE alpha, EIGTYPE beta) {                                                             \
+      using std::conj;                                                                                              \
       EIGEN_ONLY_USED_FOR_DEBUG(resIncr);                                                                           \
       eigen_assert(resIncr == 1);                                                                                   \
       char transa, transb;                                                                                          \
       BlasIndex m, n, k, lda, ldb, ldc;                                                                             \
       const EIGTYPE *a, *b;                                                                                         \
-      EIGTYPE beta(1);                                                                                              \
       MatrixX##EIGPREFIX a_tmp, b_tmp;                                                                              \
                                                                                                                     \
       /* Set transpose options */                                                                                   \
