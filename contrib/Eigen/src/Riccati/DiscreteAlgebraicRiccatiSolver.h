@@ -1,0 +1,454 @@
+// This file is part of Eigen, a lightweight C++ template library
+// for linear algebra.
+//
+// This Source Code Form is subject to the terms of the Mozilla
+// Public License v. 2.0. If a copy of the MPL was not distributed
+// with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
+// SPDX-FileCopyrightText: The Eigen Authors
+// SPDX-License-Identifier: MPL-2.0
+
+#ifndef EIGEN_DISCRETE_ALGEBRAIC_RICCATI_SOLVER_H
+#define EIGEN_DISCRETE_ALGEBRAIC_RICCATI_SOLVER_H
+
+// IWYU pragma: private
+#include "./InternalHeaderCheck.h"
+
+namespace Eigen {
+
+namespace internal {
+
+/** \internal The QZ decomposition used for a given scalar type. */
+template <typename MatrixType, bool IsComplex = NumTraits<typename MatrixType::Scalar>::IsComplex>
+struct riccati_qz {
+  using type = RealQZ<MatrixType>;
+};
+template <typename MatrixType>
+struct riccati_qz<MatrixType, true> {
+  using type = ComplexQZ<MatrixType>;
+};
+
+/** \internal \returns the 1-norm (maximum absolute column sum) of \p m. */
+template <typename Derived>
+typename NumTraits<typename Derived::Scalar>::Real riccati_norm1(const MatrixBase<Derived>& m) {
+  return m.size() == 0 ? typename NumTraits<typename Derived::Scalar>::Real(0)
+                       : m.cwiseAbs().colwise().sum().maxCoeff();
+}
+
+/** \internal \returns the distance from |\p x| to the next larger representable number, as NumPy's spacing(). */
+template <typename RealScalar>
+RealScalar riccati_spacing(const RealScalar& x) {
+  EIGEN_USING_STD(frexp);
+  int e;
+  frexp(x, &e);
+  return numext::ldexp(NumTraits<RealScalar>::epsilon(), e - 1);
+}
+
+/** \internal
+ * Computes the power-of-two scaling of the nonnegative square matrix \p M that balances the 2-norms of its rows and
+ * columns, as LAPACK's xGEBAL with JOB='S'. \p M is overwritten by the balanced matrix and the exponents of the
+ * scaling factors are returned in \p exponents, such that the balanced matrix is \f$ D^{-1} M D \f$ with
+ * \f$ D = \mathrm{diag}(2^{e_i}) \f$.
+ */
+template <typename RealMatrix>
+void riccati_balance_exponents(RealMatrix& M, VectorXi& exponents) {
+  using RealScalar = typename RealMatrix::Scalar;
+  const Index n = M.rows();
+  const RealScalar radix(2);
+  const RealScalar factor(0.95);
+  const RealScalar sfmin1 = (std::numeric_limits<RealScalar>::min)() / NumTraits<RealScalar>::epsilon();
+  const RealScalar sfmax1 = RealScalar(1) / sfmin1;
+  const RealScalar sfmin2 = sfmin1 * radix;
+  const RealScalar sfmax2 = RealScalar(1) / sfmin2;
+
+  exponents.setZero(n);
+  Matrix<RealScalar, Dynamic, 1> scale = Matrix<RealScalar, Dynamic, 1>::Ones(n);
+  bool noconv = true;
+  while (noconv) {
+    noconv = false;
+    for (Index i = 0; i < n; ++i) {
+      RealScalar c = M.col(i).norm();
+      RealScalar r = M.row(i).norm();
+      RealScalar ca = M.col(i).maxCoeff();
+      RealScalar ra = M.row(i).maxCoeff();
+      if (numext::is_exactly_zero(c) || numext::is_exactly_zero(r)) continue;
+
+      RealScalar g = r / radix;
+      RealScalar f(1);
+      const RealScalar s = c + r;
+      int e = 0;
+      while (c < g && numext::maxi(f, numext::maxi(c, ca)) < sfmax2 && numext::mini(r, numext::mini(g, ra)) > sfmin2) {
+        f *= radix;
+        c *= radix;
+        ca *= radix;
+        r /= radix;
+        g /= radix;
+        ra /= radix;
+        ++e;
+      }
+      g = c / radix;
+      while (g >= r && numext::maxi(r, ra) < sfmax2 && numext::mini(numext::mini(f, c), numext::mini(g, ca)) > sfmin2) {
+        f /= radix;
+        c /= radix;
+        g /= radix;
+        ca /= radix;
+        r *= radix;
+        ra *= radix;
+        --e;
+      }
+
+      if (c + r >= factor * s) continue;
+      if (f < RealScalar(1) && scale(i) < RealScalar(1) && f * scale(i) <= sfmin1) continue;
+      if (f > RealScalar(1) && scale(i) > RealScalar(1) && scale(i) >= sfmax1 / f) continue;
+      scale(i) *= f;
+      exponents(i) += e;
+      noconv = true;
+      M.row(i) /= f;
+      M.col(i) *= f;
+    }
+  }
+}
+
+/** \internal Rounds \p d / 2 to the nearest integer, ties to even (as NumPy's round()). */
+inline int riccati_half_round_even(int d) {
+  const int q = (d >= 0) ? d / 2 : -((-d + 1) / 2);  // floor(d / 2)
+  if (d % 2 == 0) return q;
+  return (q % 2 == 0) ? q : q + 1;
+}
+
+}  // namespace internal
+
+/** \ingroup Riccati_Module
+ *
+ * \class DiscreteAlgebraicRiccatiSolver
+ *
+ * \brief Solves the discrete-time algebraic Riccati equation (DARE)
+ *
+ * \tparam MatrixType_ the type of the solution matrix \f$ X \f$, a square matrix of real or complex scalars;
+ * this is expected to be an instantiation of the Matrix class template.
+ *
+ * This class computes the stabilizing solution \f$ X \f$ of the discrete-time algebraic Riccati equation
+ * \f[ A^* X A - X - (A^* X B) (R + B^* X B)^{-1} (B^* X A) + Q = 0 \f]
+ * or of its generalized version
+ * \f[ A^* X A - E^* X E - (A^* X B + S) (R + B^* X B)^{-1} (B^* X A + S^*) + Q = 0, \f]
+ * where \f$ A \f$ and \f$ E \f$ are \f$ m \times m \f$, \f$ B \f$ and \f$ S \f$ are \f$ m \times n \f$,
+ * \f$ Q \f$ is \f$ m \times m \f$ selfadjoint, \f$ R \f$ is \f$ n \times n \f$ selfadjoint and \f$ E \f$ is
+ * nonsingular. \f$ R \f$ itself does not need to be invertible.
+ *
+ * For a solution to exist, the eigenvalues of \f$ A \f$ outside the unit disc have to be controllable and the
+ * associated symplectic pencil (see below) must not have eigenvalues on, or too close to, the unit circle.
+ *
+ * The solver follows the generalized eigenvalue approach of [1]: it forms the extended symplectic pencil
+ * \f[
+ * \begin{bmatrix} A & 0 & B \\ -Q & E^* & -S \\ S^* & 0 & R \end{bmatrix}
+ * - \lambda
+ * \begin{bmatrix} E & 0 & 0 \\ 0 & A^* & 0 \\ 0 & -B^* & 0 \end{bmatrix},
+ * \f]
+ * optionally balances it as in [3], deflates it by the columns of \f$ R \f$, computes its generalized Schur form
+ * (RealQZ or ComplexQZ) and reorders it such that the eigenvalues inside the unit circle come first. The
+ * leading \f$ m \f$ Schur vectors \f$ [U_1; U_2] \f$ span the stable deflating subspace and
+ * \f$ X = U_2 U_1^{-1} \f$ (for the generalized equation, \f$ U_1 \f$ is first replaced by \f$ E U_1 \f$).
+ * The computation is reported as failed if the pencil does not have exactly \f$ m \f$ eigenvalues inside the unit
+ * circle, if \f$ U_1 \f$ is numerically singular, or if \f$ U_1^* U_2 \f$ is far from selfadjoint, which happens
+ * when the pencil has eigenvalues too close to the unit circle [2].
+ *
+ * Balancing usually improves the accuracy for badly scaled data, but it can also cost accuracy, notably when \f$ B \f$
+ * is very small compared to the other matrices; compute(..., false) solves without it.
+ *
+ * The algorithm follows SciPy's \c scipy.linalg.solve_discrete_are, with two differences: the generalized
+ * equation combines the stable subspace with the balanced \f$ E \f$ (SciPy uses the original one, which is wrong when
+ * balancing scales the pencil), and the number of stable eigenvalues is checked.
+ *
+ * Example:
+ * \code
+ * MatrixXd A(2, 2), B(2, 1), Q(2, 2), R(1, 1);
+ * A << 1, 1, 0, 1;
+ * B << 0, 1;
+ * Q.setIdentity();
+ * R << 1;
+ * DiscreteAlgebraicRiccatiSolver<MatrixXd> dare(A, B, Q, R);
+ * if (dare.info() == Success) {
+ *   MatrixXd X = dare.solution();
+ *   MatrixXd K = (R + B.transpose() * X * B).ldlt().solve(B.transpose() * X * A);  // optimal feedback gain
+ * }
+ * \endcode
+ *
+ * References:
+ * - [1] P. Van Dooren, "A Generalized Eigenvalue Approach For Solving Riccati Equations", SIAM J. Sci. Stat. Comput.,
+ *   2(2), 1981.
+ * - [2] A. J. Laub, "A Schur Method for Solving Algebraic Riccati Equations", MIT LIDS-R-859, 1978.
+ * - [3] P. Benner, "Symplectic Balancing of Hamiltonian Matrices", SIAM J. Sci. Comput., 22(5), 2001.
+ *
+ * \sa class RealQZ, class ComplexQZ
+ */
+template <typename MatrixType_>
+class DiscreteAlgebraicRiccatiSolver {
+ public:
+  using MatrixType = MatrixType_;
+  using Scalar = typename MatrixType::Scalar;
+  using RealScalar = typename NumTraits<Scalar>::Real;
+
+  /** \brief Default constructor; the solver is initialized by calling compute(). */
+  DiscreteAlgebraicRiccatiSolver() : m_info(InvalidInput), m_isInitialized(false) {}
+
+  /** \brief Constructor; solves the discrete-time algebraic Riccati equation.
+   *
+   * This is equivalent to calling compute(const EigenBase<InputTypeA>&, const EigenBase<InputTypeB>&,
+   * const EigenBase<InputTypeQ>&, const EigenBase<InputTypeR>&, bool).
+   */
+  template <typename InputTypeA, typename InputTypeB, typename InputTypeQ, typename InputTypeR>
+  DiscreteAlgebraicRiccatiSolver(const EigenBase<InputTypeA>& A, const EigenBase<InputTypeB>& B,
+                                 const EigenBase<InputTypeQ>& Q, const EigenBase<InputTypeR>& R, bool balance = true)
+      : m_info(InvalidInput), m_isInitialized(false) {
+    compute(A, B, Q, R, balance);
+  }
+
+  /** \brief Constructor; solves the generalized discrete-time algebraic Riccati equation.
+   *
+   * This is equivalent to calling compute(const EigenBase<InputTypeA>&, const EigenBase<InputTypeB>&,
+   * const EigenBase<InputTypeQ>&, const EigenBase<InputTypeR>&, const EigenBase<InputTypeE>&,
+   * const EigenBase<InputTypeS>&, bool).
+   */
+  template <typename InputTypeA, typename InputTypeB, typename InputTypeQ, typename InputTypeR, typename InputTypeE,
+            typename InputTypeS>
+  DiscreteAlgebraicRiccatiSolver(const EigenBase<InputTypeA>& A, const EigenBase<InputTypeB>& B,
+                                 const EigenBase<InputTypeQ>& Q, const EigenBase<InputTypeR>& R,
+                                 const EigenBase<InputTypeE>& E, const EigenBase<InputTypeS>& S, bool balance = true)
+      : m_info(InvalidInput), m_isInitialized(false) {
+    compute(A, B, Q, R, E, S, balance);
+  }
+
+  /** \brief Solves \f$ A^* X A - X - (A^* X B) (R + B^* X B)^{-1} (B^* X A) + Q = 0 \f$.
+   *
+   * \param[in] A        square \f$ m \times m \f$ matrix
+   * \param[in] B        \f$ m \times n \f$ matrix
+   * \param[in] Q        selfadjoint \f$ m \times m \f$ matrix
+   * \param[in] R        selfadjoint \f$ n \times n \f$ matrix
+   * \param[in] balance  whether the symplectic pencil is balanced before the QZ decomposition, see the class
+   *                     documentation
+   *
+   * \returns a reference to \c *this
+   *
+   * The result of the computation is reported by info().
+   */
+  template <typename InputTypeA, typename InputTypeB, typename InputTypeQ, typename InputTypeR>
+  DiscreteAlgebraicRiccatiSolver& compute(const EigenBase<InputTypeA>& A, const EigenBase<InputTypeB>& B,
+                                          const EigenBase<InputTypeQ>& Q, const EigenBase<InputTypeR>& R,
+                                          bool balance = true) {
+    return computeImpl(A.derived(), B.derived(), Q.derived(), R.derived(), nullptr, nullptr, balance);
+  }
+
+  /** \brief Solves \f$ A^* X A - E^* X E - (A^* X B + S) (R + B^* X B)^{-1} (B^* X A + S^*) + Q = 0 \f$.
+   *
+   * \param[in] A        square \f$ m \times m \f$ matrix
+   * \param[in] B        \f$ m \times n \f$ matrix
+   * \param[in] Q        selfadjoint \f$ m \times m \f$ matrix
+   * \param[in] R        selfadjoint \f$ n \times n \f$ matrix
+   * \param[in] E        nonsingular \f$ m \times m \f$ matrix
+   * \param[in] S        \f$ m \times n \f$ matrix
+   * \param[in] balance  whether the symplectic pencil is balanced before the QZ decomposition, see the class
+   *                     documentation
+   *
+   * \returns a reference to \c *this
+   *
+   * Pass the identity for \p E or zero for \p S to leave out one of the generalized terms.
+   * The result of the computation is reported by info().
+   */
+  template <typename InputTypeA, typename InputTypeB, typename InputTypeQ, typename InputTypeR, typename InputTypeE,
+            typename InputTypeS>
+  DiscreteAlgebraicRiccatiSolver& compute(const EigenBase<InputTypeA>& A, const EigenBase<InputTypeB>& B,
+                                          const EigenBase<InputTypeQ>& Q, const EigenBase<InputTypeR>& R,
+                                          const EigenBase<InputTypeE>& E, const EigenBase<InputTypeS>& S,
+                                          bool balance = true) {
+    const DynamicMatrix e = E.derived();
+    const DynamicMatrix s = S.derived();
+    return computeImpl(A.derived(), B.derived(), Q.derived(), R.derived(), &e, &s, balance);
+  }
+
+  /** \returns the stabilizing solution \f$ X \f$ of the Riccati equation, which is selfadjoint.
+   *
+   * \pre The solver has been initialized and info() returns \c Success.
+   */
+  const MatrixType& solution() const {
+    eigen_assert(m_isInitialized && "DiscreteAlgebraicRiccatiSolver is not initialized.");
+    eigen_assert(m_info == Success && "The Riccati equation could not be solved.");
+    return m_X;
+  }
+
+  /** \brief Reports whether the last computation was successful.
+   *
+   * \returns \c Success if the computation was successful,
+   *          \c InvalidInput if an input matrix is not finite, \p Q or \p R is not selfadjoint, or \p E is
+   *          numerically singular,
+   *          \c NoConvergence if the QZ iteration did not converge, and
+   *          \c NumericalIssue if the stable deflating subspace of the symplectic pencil could not be isolated
+   *          (no stabilizing solution exists, or the pencil has eigenvalues too close to the unit circle).
+   */
+  ComputationInfo info() const {
+    eigen_assert(m_isInitialized && "DiscreteAlgebraicRiccatiSolver is not initialized.");
+    return m_info;
+  }
+
+ protected:
+  using DynamicMatrix = Matrix<Scalar, Dynamic, Dynamic>;
+  using RealDynamicMatrix = Matrix<RealScalar, Dynamic, Dynamic>;
+
+  static bool isSelfAdjoint(const DynamicMatrix& M) {
+    return internal::riccati_norm1(M - M.adjoint()) <=
+           RealScalar(100) * internal::riccati_spacing(internal::riccati_norm1(M));
+  }
+
+  DiscreteAlgebraicRiccatiSolver& computeImpl(const DynamicMatrix& A, const DynamicMatrix& B, const DynamicMatrix& Q,
+                                              const DynamicMatrix& R, const DynamicMatrix* E, const DynamicMatrix* S,
+                                              bool balance);
+
+  MatrixType m_X;
+  ComputationInfo m_info;
+  bool m_isInitialized;
+};
+
+template <typename MatrixType_>
+DiscreteAlgebraicRiccatiSolver<MatrixType_>& DiscreteAlgebraicRiccatiSolver<MatrixType_>::computeImpl(
+    const DynamicMatrix& A, const DynamicMatrix& B, const DynamicMatrix& Q, const DynamicMatrix& R,
+    const DynamicMatrix* E, const DynamicMatrix* S, bool balance) {
+  const Index m = B.rows();
+  const Index n = B.cols();
+  eigen_assert(A.rows() == m && A.cols() == m && "A must be square with as many rows as B.");
+  eigen_assert(Q.rows() == m && Q.cols() == m && "Q must have the same size as A.");
+  eigen_assert(R.rows() == n && R.cols() == n && "R must be square with as many columns as B.");
+  eigen_assert((E == nullptr || (E->rows() == m && E->cols() == m)) && "E must have the same size as A.");
+  eigen_assert((S == nullptr || (S->rows() == m && S->cols() == n)) && "S must have the same size as B.");
+
+  m_isInitialized = true;
+  m_info = InvalidInput;
+
+  if (!A.allFinite() || !B.allFinite() || !Q.allFinite() || !R.allFinite()) return *this;
+  if ((E != nullptr && !E->allFinite()) || (S != nullptr && !S->allFinite())) return *this;
+  if (!isSelfAdjoint(Q) || !isSelfAdjoint(R)) return *this;
+  if (E != nullptr && m > 0) {
+    const RealScalar minSingularValue = JacobiSVD<DynamicMatrix>(*E).singularValues()(m - 1);
+    if (numext::is_exactly_zero(minSingularValue) ||
+        minSingularValue < NumTraits<RealScalar>::epsilon() * internal::riccati_norm1(*E))
+      return *this;
+  }
+
+  // Form the extended symplectic pencil H - lambda J.
+  const Index p = 2 * m + n;
+  DynamicMatrix H = DynamicMatrix::Zero(p, p);
+  DynamicMatrix J = DynamicMatrix::Zero(p, p);
+  H.topLeftCorner(m, m) = A;
+  H.topRightCorner(m, n) = B;
+  H.block(m, 0, m, m) = -Q;
+  if (E != nullptr)
+    H.block(m, m, m, m) = E->adjoint();
+  else
+    H.block(m, m, m, m).setIdentity();
+  if (S != nullptr) {
+    H.block(m, 2 * m, m, n) = -*S;
+    H.bottomLeftCorner(n, m) = S->adjoint();
+  }
+  H.bottomRightCorner(n, n) = R;
+
+  if (E != nullptr)
+    J.topLeftCorner(m, m) = *E;
+  else
+    J.topLeftCorner(m, m).setIdentity();
+  J.block(m, m, m, m) = A.adjoint();
+  J.block(2 * m, m, n, m) = -B.adjoint();
+
+  // Balance the pencil without destroying its symplectic structure: the scaling is diag(D, D^-1, D_R),
+  // with D derived from the xGEBAL scaling of |H| + |J| with zeroed diagonal, see [3].
+  Matrix<RealScalar, Dynamic, 1> scaling;
+  bool balanced = false;
+  if (balance) {
+    RealDynamicMatrix M = H.cwiseAbs() + J.cwiseAbs();
+    M.diagonal().setZero();
+    VectorXi exponents;
+    internal::riccati_balance_exponents(M, exponents);
+    if (!(exponents.array() == 0).all()) {
+      balanced = true;
+      scaling.resize(p);
+      for (Index i = 0; i < m; ++i) {
+        const int d = internal::riccati_half_round_even(exponents(m + i) - exponents(i));
+        scaling(i) = numext::ldexp(RealScalar(1), d);
+        scaling(m + i) = numext::ldexp(RealScalar(1), -d);
+      }
+      for (Index i = 2 * m; i < p; ++i) scaling(i) = numext::ldexp(RealScalar(1), exponents(i));
+      // H <- D H D^-1, J <- D J D^-1 with D = diag(scaling), exact in floating point.
+      H = scaling.asDiagonal() * H * scaling.cwiseInverse().asDiagonal();
+      J = scaling.asDiagonal() * J * scaling.cwiseInverse().asDiagonal();
+    }
+  }
+
+  // Deflate the pencil by the columns belonging to R, see [1].
+  DynamicMatrix Hd, Jd;
+  if (n > 0) {
+    const DynamicMatrix W = HouseholderQR<DynamicMatrix>(H.rightCols(n)).householderQ();
+    Hd = W.rightCols(2 * m).adjoint() * H.leftCols(2 * m);
+    Jd = W.rightCols(2 * m).adjoint() * J.leftCols(2 * m);
+  } else {
+    Hd = H;
+    Jd = J;
+  }
+
+  // Generalized Schur form with the eigenvalues inside the unit circle first.
+  typename internal::riccati_qz<DynamicMatrix>::type qz(Hd, Jd, true);
+  if (qz.info() == NoConvergence) {
+    m_info = NoConvergence;
+    return *this;
+  }
+  DynamicMatrix SS = qz.matrixS();
+  DynamicMatrix TT = qz.matrixT();
+  DynamicMatrix QQ = qz.matrixQ();
+  DynamicMatrix ZZ = qz.matrixZ().adjoint();
+  m_info = NumericalIssue;
+  if (qz.info() != Success) {
+    // ComplexQZ reports NumericalIssue when its direct reduction of a 2x2 block leaves a subdiagonal entry of S above
+    // eps ||S||, although the reduction is only backward stable to a few eps ||S||. Accept the decomposition if
+    // ||Q (S, T) Z^* - (Hd, Jd)||_F <= 10 (2m) eps ||(Hd, Jd)||_F once that entry is dropped.
+    internal::clean_generalized_schur_form(SS, TT);
+    const RealScalar bound = RealScalar(10 * 2 * m) * NumTraits<RealScalar>::epsilon();
+    if (!((QQ * SS * ZZ.adjoint() - Hd).norm() <= bound * Hd.norm() &&
+          (QQ * TT * ZZ.adjoint() - Jd).norm() <= bound * Jd.norm()))
+      return *this;
+  }
+  // The eigenvalues of the symplectic pencil come in pairs (lambda, 1 / conj(lambda)), so exactly m of them lie
+  // inside the unit circle if a stabilizing solution exists. (SciPy does not check this.)
+  if (internal::reorder_generalized_schur_inside_unit_circle(SS, TT, QQ, ZZ) != m) return *this;
+
+  // The leading m right Schur vectors span the stable deflating subspace.
+  DynamicMatrix U = ZZ.leftCols(m);
+  if (E != nullptr) {
+    // U belongs to the balanced pencil, so it is combined with the balanced E held in J. (SciPy combines it with the
+    // original E, which yields wrong solutions or spurious failures whenever balancing scales the pencil.)
+    U.topRows(m) = (J.topLeftCorner(m, m) * U.topRows(m)).eval();
+    U = HouseholderQR<DynamicMatrix>(U).householderQ() * DynamicMatrix::Identity(2 * m, m);
+  }
+  const DynamicMatrix U1 = U.topRows(m);
+  const DynamicMatrix U2 = U.bottomRows(m);
+
+  // Check the conditioning of U1 through its LU factor.
+  const PartialPivLU<DynamicMatrix> lu(U1);
+  if (m > 0) {
+    const DynamicMatrix upper = lu.matrixLU().template triangularView<Upper>();
+    const Matrix<RealScalar, Dynamic, 1> sv = JacobiSVD<DynamicMatrix>(upper).singularValues();
+    if (!(sv(m - 1) >= NumTraits<RealScalar>::epsilon() * sv(0)) || numext::is_exactly_zero(sv(0))) return *this;
+  }
+  // X = U2 U1^-1 is computed as (U1^-* U2^*)^*.
+  DynamicMatrix X = lu.adjoint().solve(U2.adjoint());
+  X.adjointInPlace();
+  if (balanced) X = scaling.head(m).asDiagonal() * X * scaling.head(m).asDiagonal();
+
+  // A large deviation of U1^* U2 from selfadjointness indicates failure, see Theorem 5 in [2].
+  const DynamicMatrix uSym = U1.adjoint() * U2;
+  const RealScalar symThreshold =
+      numext::maxi(internal::riccati_spacing(RealScalar(1000)), RealScalar(0.1) * internal::riccati_norm1(uSym));
+  if (!(internal::riccati_norm1(uSym - uSym.adjoint()) <= symThreshold)) return *this;
+
+  m_X = (X + X.adjoint()) / RealScalar(2);
+  m_info = Success;
+  return *this;
+}
+
+}  // namespace Eigen
+
+#endif  // EIGEN_DISCRETE_ALGEBRAIC_RICCATI_SOLVER_H
