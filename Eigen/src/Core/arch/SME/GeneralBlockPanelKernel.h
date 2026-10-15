@@ -112,12 +112,34 @@ static constexpr int kSmeNrCD = sme_block<std::complex<double>>::nr;
 // do reach them, from the SYMM above-diagonal transposed pack.
 // ---------------------------------------------------------------------------
 
+// Appends the leading w <= svl lanes of v to cur, which holds `fill` < svl lanes, and stores cur at out whenever it
+// fills. A packed panel's lines are contiguous, so a panel narrower than whole vectors is stored in whole vectors
+// this way: a predicated store of each partial line costs about 10 ns on Apple M4 in streaming mode.
+template <typename Scalar>
+EIGEN_ALWAYS_INLINE void sme_append_lanes(typename sme_packet_traits<Scalar>::type& cur, int& fill, Scalar*& out,
+                                          typename sme_packet_traits<Scalar>::type v, int w,
+                                          int svl) __arm_streaming EIGEN_SME_ZA_AGNOSTIC {
+  using Traits = sme_packet_traits<Scalar>;
+  const auto joined = psplice(Traits::whilelt(0, fill), cur, v);  // cur[0, fill) then v[0, svl - fill)
+  if (fill + w < svl) {
+    cur = joined;
+    fill += w;
+    return;
+  }
+  pstoreu(Traits::ptrue(), out, joined);
+  out += svl;
+  // The rest of v, lanes [svl - fill, w), moves to the front.
+  cur = psplice(svbic_b_z(svptrue_b8(), Traits::whilelt(0, w), Traits::whilelt(0, svl - fill)), v, v);
+  fill += w - svl;
+}
+
 // Copy `width` contiguous source columns per depth step into a depth-major
 // packed panel of width `width`, for the depth sub-range [k0, k1).  Both dst and
 // src are indexed by the absolute depth index k (dst[k*width+off],
 // src[k*src_stride+off]); the caller offsets `src` to the region's column base
-// and `dst` to the panel base.  A panel with svl < width <= 2*svl stores each packed
-// line with one two-vector store; others store svl-wide predicated chunks, each
+// and `dst` to the panel base.  A full 2*svl panel stores each packed line with one
+// two-vector store, a narrower one other than svl appends its lines into whole vectors
+// (sme_append_lanes); others store svl-wide predicated chunks, each
 // streamed over the depth sub-range.  The chunk loop is outermost so each chunk's
 // predicate is computed once instead of per depth step (the runtime chunk count
 // keeps the compiler from hoisting it on its own).  The symm packers reuse this
@@ -146,21 +168,19 @@ static EIGEN_ALWAYS_INLINE void sve_copy_panel_range(Scalar* EIGEN_RESTRICT dst,
     for (; k < k1; ++k) pstoreu_x2(pn, &dst[k * width], ploadu_x2(pn, &src[k * src_stride]));
     return;
   }
-  if (width > svl && width < 2 * svl) {
-    // Tail panel: each packed line in one counter-predicated two-vector store, four steps in flight.
-    const svcount_t pn = Traits::whilelt_c2(0, width);
-    Index k = k0;
-    for (; k + 4 <= k1; k += 4) {
-      const auto v0 = ploadu_x2(pn, &src[k * src_stride]);
-      const auto v1 = ploadu_x2(pn, &src[(k + 1) * src_stride]);
-      const auto v2 = ploadu_x2(pn, &src[(k + 2) * src_stride]);
-      const auto v3 = ploadu_x2(pn, &src[(k + 3) * src_stride]);
-      pstoreu_x2(pn, &dst[k * width], v0);
-      pstoreu_x2(pn, &dst[(k + 1) * width], v1);
-      pstoreu_x2(pn, &dst[(k + 2) * width], v2);
-      pstoreu_x2(pn, &dst[(k + 3) * width], v3);
+  if (width < 2 * svl && width != svl) {
+    // Tail panel: whole-vector stores of the appended lines (see sme_append_lanes).
+    const int w_lo = sme_min(width, svl), w_hi = width - w_lo;
+    const svbool_t pg_lo = Traits::whilelt(0, w_lo), pg_hi = Traits::whilelt(0, w_hi);
+    typename Traits::type cur = pset1<typename Traits::type>(Scalar(0));
+    int fill = 0;
+    Scalar* out = dst + k0 * width;
+    for (Index k = k0; k < k1; ++k) {
+      const Scalar* s = &src[k * src_stride];
+      sme_append_lanes(cur, fill, out, ploadu(pg_lo, s), w_lo, svl);
+      if (w_hi > 0) sme_append_lanes(cur, fill, out, ploadu(pg_hi, sme_offset(s, svl)), w_hi, svl);
     }
-    for (; k < k1; ++k) pstoreu_x2(pn, &dst[k * width], ploadu_x2(pn, &src[k * src_stride]));
+    if (fill > 0) pstoreu(Traits::whilelt(0, fill), out, cur);
     return;
   }
   for (int off = 0; off < width; off += svl) {
@@ -232,6 +252,41 @@ static EIGEN_ALWAYS_INLINE void sve_copy_panel_range(std::complex<RealScalar>* E
   const RealScalar* EIGEN_RESTRICT rsrc = reinterpret_cast<const RealScalar*>(src);
   const int svl = Traits::size();
   const Index step = Index(2 * width);
+  if (width % svl != 0 && width < 2 * svl) {
+    // A depth step is width real parts, then width imaginary parts, of at most two chunks each: appended into
+    // whole vectors (see sme_append_lanes).
+    const int w0 = sme_min(width, svl), w1 = width - w0;
+    const svbool_t pg_w0 = Traits::whilelt(0, w0), pg_w1 = Traits::whilelt(0, w1);
+    const svbool_t pg_lo0 = Traits::whilelt(0, 2 * w0), pg_hi0 = Traits::whilelt(svl, 2 * w0);
+    const svbool_t pg_lo1 = Traits::whilelt(0, 2 * w1), pg_hi1 = Traits::whilelt(svl, 2 * w1);
+    Vec cur = pset1<Vec>(RealScalar(0));
+    int fill = 0;
+    RealScalar* out = rdst + k0 * step;
+    for (Index k = k0; k < k1; ++k) {
+      const RealScalar* p = rsrc + Index(2) * k * src_stride;
+      const Vec lo0 = ploadu(pg_lo0, p), hi0 = ploadu(pg_hi0, sme_offset(p, svl));
+      Vec im0 = puzp2(lo0, hi0);
+      EIGEN_IF_CONSTEXPR (Conjugate) {
+        im0 = pnegate(pg_w0, im0);
+      }
+      sme_append_lanes(cur, fill, out, puzp1(lo0, hi0), w0, svl);
+      if (w1 > 0) {
+        const RealScalar* p1 = sme_offset(p, 2 * svl);
+        const Vec lo1 = ploadu(pg_lo1, p1), hi1 = ploadu(pg_hi1, sme_offset(p1, svl));
+        Vec im1 = puzp2(lo1, hi1);
+        EIGEN_IF_CONSTEXPR (Conjugate) {
+          im1 = pnegate(pg_w1, im1);
+        }
+        sme_append_lanes(cur, fill, out, puzp1(lo1, hi1), w1, svl);
+        sme_append_lanes(cur, fill, out, im0, w0, svl);
+        sme_append_lanes(cur, fill, out, im1, w1, svl);
+      } else {
+        sme_append_lanes(cur, fill, out, im0, w0, svl);
+      }
+    }
+    if (fill > 0) pstoreu(Traits::whilelt(0, fill), out, cur);
+    return;
+  }
   for (int off = 0; off < width; off += svl) {
     const int w = width - off;
     const int lanes = 2 * w;
