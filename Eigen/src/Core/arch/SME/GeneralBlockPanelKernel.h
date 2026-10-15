@@ -1495,11 +1495,9 @@ EIGEN_ALWAYS_INLINE void sme_store_za_tile(Scalar* EIGEN_RESTRICT C, Index C_str
   const Vec vzero = pset1<Vec>(Scalar(0));
   const Vec valpha = pset1<Vec>(alpha);
 
-  // Two C slices are loaded before either is stored: a C line the caller wrote
-  // from non-streaming code just before the kernel does not forward across the
-  // mode switch on Apple M4, and a serial load/store pays that latency per slice.
-  // C = A*B meets the condition on every call, since evalTo zeroes the
-  // destination first. SVE vectors are sizeless, hence the spelled-out pair.
+  // Two C slices are loaded before either is stored: on Apple M4 a C line the SME unit does not hold (as after a
+  // non-streaming access) costs 10-30 ns, which loads issued together overlap. Four measured up to 1.7x slower on
+  // double blocks. SVE vectors are sizeless, hence the spelled-out pair.
   if (C_stride_row == 1) {
     // Column-major C: extract vertical slices (columns of the ZA tile)
     int ci = 0;
@@ -1561,16 +1559,18 @@ EIGEN_ALWAYS_INLINE void sme_store_za_tile(Scalar* EIGEN_RESTRICT C, Index C_str
  * pattern repeats across blocks).
  *****************************************************************************/
 
-// Full 2*svl x 2*svl block into column-major C: four columns per vertical four-slice read of the two tiles that
-// share them, each column loaded and stored whole with two-vector accesses, all four loaded before any is stored.
+// The `cols` columns of a tile pair stacked in rows (TileLo above TileHi) into column-major C, `rows` in
+// (svl, 2*svl] of them: four columns per vertical four-slice read, each column loaded and stored whole with
+// two-vector accesses, all four loaded before any is stored.
 template <int TileLo, int TileHi, typename Scalar, typename Index>
-EIGEN_ALWAYS_INLINE void sme_store_tile_pair_colmajor(Scalar* EIGEN_RESTRICT C, Index ldc, Scalar alpha,
-                                                      int svl) __arm_streaming __arm_inout("za") {
+EIGEN_ALWAYS_INLINE void sme_store_tile_pair_colmajor(Scalar* EIGEN_RESTRICT C, Index ldc, Scalar alpha, int svl,
+                                                      int rows, int cols) __arm_streaming __arm_inout("za") {
   using Traits = sme_packet_traits<Scalar>;
-  const svcount_t pn = Traits::ptrue_c();
+  const svcount_t pn = rows == 2 * svl ? Traits::ptrue_c() : Traits::whilelt_c2(0, rows);
   const svbool_t pg = Traits::ptrue();
   const typename Traits::type valpha = pset1<typename Traits::type>(alpha);
-  for (int c = 0; c < svl; c += 4) {
+  int c = 0;
+  for (; c + 4 <= cols; c += 4) {
     const auto lo = sme_read_ver_za_vg4<TileLo, Scalar>(uint32_t(c));
     const auto hi = sme_read_ver_za_vg4<TileHi, Scalar>(uint32_t(c));
     Scalar* p = C + Index(c) * ldc;
@@ -1585,6 +1585,14 @@ EIGEN_ALWAYS_INLINE void sme_store_tile_pair_colmajor(Scalar* EIGEN_RESTRICT C, 
     pstoreu_x2(pn, p + 3 * ldc,
                pcreate(pmadd(pg, pget<3>(lo), valpha, pget<0>(c3)), pmadd(pg, pget<3>(hi), valpha, pget<1>(c3))));
   }
+  const typename Traits::type vzero = pset1<typename Traits::type>(Scalar(0));
+  for (; c < cols; ++c) {
+    Scalar* p = C + Index(c) * ldc;
+    const auto cc = ploadu_x2(pn, p);
+    pstoreu_x2(pn, p,
+               pcreate(pmadd(pg, sme_read_ver_za<TileLo>(vzero, pg, uint32_t(c)), valpha, pget<0>(cc)),
+                       pmadd(pg, sme_read_ver_za<TileHi>(vzero, pg, uint32_t(c)), valpha, pget<1>(cc))));
+  }
 }
 
 template <typename Scalar, typename Index>
@@ -1592,10 +1600,12 @@ EIGEN_ALWAYS_INLINE void sme_store_2x2_grid(Scalar* EIGEN_RESTRICT C, Index C_st
                                             Scalar alpha, Index row_start, int rlo, int rhi, Index col_start, int clo,
                                             int chi) __arm_streaming __arm_inout("za") {
   const int svl = sme_packet_traits<Scalar>::size();
-  if (svl >= 4 && C_stride_row == 1 && rlo == svl && rhi == svl && clo == svl && chi == svl) {
+  if (svl >= 4 && C_stride_row == 1 && rlo == svl && rhi > 0) {
+    // Rows in both tile rows: each column is one two-vector access, rather than one per tile.
     Scalar* c0 = C + row_start + col_start * C_stride_col;
-    sme_store_tile_pair_colmajor<0, 2>(c0, C_stride_col, alpha, svl);
-    sme_store_tile_pair_colmajor<1, 3>(c0 + Index(svl) * C_stride_col, C_stride_col, alpha, svl);
+    sme_store_tile_pair_colmajor<0, 2>(c0, C_stride_col, alpha, svl, rlo + rhi, clo);
+    if (chi > 0)
+      sme_store_tile_pair_colmajor<1, 3>(c0 + Index(svl) * C_stride_col, C_stride_col, alpha, svl, rlo + rhi, chi);
     return;
   }
   sme_store_za_tile<Scalar, 0>(C, C_stride_row, C_stride_col, alpha, row_start, rlo, col_start, clo);
