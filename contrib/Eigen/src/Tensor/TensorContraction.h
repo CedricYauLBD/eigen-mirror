@@ -586,6 +586,8 @@ struct TensorContractionEvaluatorBase {
         m_rhs_inner_dim_contiguous = false;
       }
     }
+    eigen_assert(!m_rhs_inner_dim_reordered ||
+                 (ContractDims > 1 && !m_rhs_inner_dim_contiguous));
 
     // After the sort above, eval_op_indices[*].first is in ascending order. The
     // contracted LHS dims are the contiguous prefix of storage iff that prefix
@@ -657,6 +659,25 @@ struct TensorContractionEvaluatorBase {
     static_cast<const Derived*>(this)->template evalProductAsync<EvalToCallback, Unaligned>(buffer, std::move(done));
   }
 #endif  // EIGEN_USE_THREADS
+
+  template <typename Func>
+  EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE static void dispatchContraction(
+      Func&& fn, bool lhs_inner_dim_contiguous, bool rhs_inner_dim_contiguous,
+      bool rhs_inner_dim_reordered) {
+    // m_rhs_inner_dim_reordered is only ever set when ContractDims > 1 and
+    // !m_rhs_inner_dim_contiguous. Canonicalizing rhs_r at compile time avoids
+    // instantiating unreachable contractions (reducing 8 combinations to 4 when
+    // ContractDims <= 1, and to 6 when ContractDims > 1).
+    internal::tensor_contraction_dispatch(
+        [&](auto lhs_c, auto rhs_c, auto rhs_r) {
+          constexpr bool kRhsReordered =
+              (ContractDims > 1) && !rhs_c() && rhs_r();
+          fn(lhs_c, rhs_c, internal::bool_constant<kRhsReordered>{});
+        },
+        lhs_inner_dim_contiguous, rhs_inner_dim_contiguous,
+        (ContractDims > 1) && !rhs_inner_dim_contiguous &&
+            rhs_inner_dim_reordered);
+  }
 
   template <bool lhs_inner_dim_contiguous, bool rhs_inner_dim_contiguous, bool rhs_inner_dim_reordered, int Alignment>
   void evalProductSequential(Scalar* buffer) const {
@@ -1058,11 +1079,12 @@ struct TensorEvaluator<const TensorContractionOp<Indices, LeftArgType, RightArgT
 
   template <int Alignment>
   void evalProduct(Scalar* buffer) const {
-    internal::tensor_contraction_dispatch(
+    Base::dispatchContraction(
         [&](auto lhs_c, auto rhs_c, auto rhs_r) {
           this->template evalProductSequential<lhs_c(), rhs_c(), rhs_r(), Alignment>(buffer);
         },
-        this->m_lhs_inner_dim_contiguous, this->m_rhs_inner_dim_contiguous, this->m_rhs_inner_dim_reordered);
+        this->m_lhs_inner_dim_contiguous, this->m_rhs_inner_dim_contiguous,
+        this->m_rhs_inner_dim_reordered);
   }
 };
 
