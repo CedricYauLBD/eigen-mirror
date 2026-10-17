@@ -22,6 +22,7 @@ eigen_add_benchmark(bench_gemm_scaled_double bench_gemm_scaled.cpp DEFINITIONS S
 eigen_add_benchmark(bench_gemm_scaled_complex bench_gemm_scaled.cpp DEFINITIONS "SCALAR=std::complex<float>")
 eigen_add_benchmark(bench_gemm_scaled_complex_double bench_gemm_scaled.cpp DEFINITIONS "SCALAR=std::complex<double>")
 eigen_add_benchmark(bench_gemv bench_gemv.cpp)
+eigen_add_benchmark(bench_gemv_degenerate bench_gemv_degenerate.cpp)
 eigen_add_benchmark(bench_vecadd bench_vecadd.cpp)
 eigen_add_benchmark(bench_trsm bench_trsm.cpp)
 eigen_add_benchmark(bench_trsm_packet bench_trsm_packet.cpp)
