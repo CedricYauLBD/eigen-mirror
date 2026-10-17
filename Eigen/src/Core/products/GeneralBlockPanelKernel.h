@@ -132,6 +132,33 @@ inline void manage_caching_sizes(Action action, std::ptrdiff_t* l1, std::ptrdiff
  *
  * \sa setCpuCacheSizes */
 
+// Tag for the gebp_kernel call that assigns C = alpha * A' * B' over the block instead of accumulating into it,
+// independently of C's prior contents. A kernel offers it by declaring `static constexpr bool CanOverwrite = true`
+// next to that overload; every other kernel, including user specializations, keeps the accumulate-only contract and
+// the GEMM driver zeroes the result before calling it. A specialization inheriting a true CanOverwrite while hiding
+// the tagged overload must declare it false.
+struct gebp_overwrite_t {};
+template <typename Gebp, typename = void>
+struct gebp_kernel_overwrites : std::false_type {};
+template <typename Gebp>
+struct gebp_kernel_overwrites<Gebp, std::enable_if_t<Gebp::CanOverwrite>> : std::true_type {};
+
+// Whether an overwriting kernel should overwrite a rows x cols x depth product rather than have the driver zero the
+// result first: Gebp::overwrite_pays where the kernel declares it, true otherwise.
+template <typename Gebp, typename Index>
+EIGEN_ALWAYS_INLINE bool gebp_overwrite_pays_impl(int, Index rows, Index cols, Index depth,
+                                                  decltype(Gebp::overwrite_pays(rows, cols, depth))* = nullptr) {
+  return Gebp::overwrite_pays(rows, cols, depth);
+}
+template <typename Gebp, typename Index>
+EIGEN_ALWAYS_INLINE bool gebp_overwrite_pays_impl(long, Index, Index, Index) {
+  return true;
+}
+template <typename Gebp, typename Index>
+EIGEN_ALWAYS_INLINE bool gebp_overwrite_pays(Index rows, Index cols, Index depth) {
+  return gebp_overwrite_pays_impl<Gebp>(0, rows, cols, depth);
+}
+
 #ifdef EIGEN_VECTORIZE_SME
 // True for the scalar pairs the SME gebp_kernel specializes (see
 // arch/SME/GeneralBlockPanelKernel.h, which static_asserts that it agrees with
@@ -1096,6 +1123,13 @@ class gebp_traits<RealScalar, std::complex<RealScalar>, false, ConjRhs_, Arch, P
  *  |real |cplx | no vectorization yet, would require to pack A with duplication
  *  |cplx |real | easy vectorization
  */
+// The result scalars whose kernel stores may overwrite: assigning one is known to give what adding it onto a zero
+// does. Other scalars, including custom ones over a built-in real type, keep accumulating.
+template <typename Scalar>
+struct gebp_overwritable_scalar : bool_constant<std::is_arithmetic<Scalar>::value> {};
+template <typename Real>
+struct gebp_overwritable_scalar<std::complex<Real>> : bool_constant<std::is_arithmetic<Real>::value> {};
+
 template <typename LhsScalar, typename RhsScalar, typename Index, typename DataMapper, int mr, int nr,
           bool ConjugateLhs, bool ConjugateRhs>
 struct gebp_kernel {
@@ -1142,10 +1176,44 @@ struct gebp_kernel {
     ResPacketSize = Traits::ResPacketSize
   };
 
-  EIGEN_DONT_INLINE void operator()(const DataMapper& res, const LhsScalar* blockA, const RhsScalar* blockB, Index rows,
-                                    Index depth, Index cols, ResScalar alpha, Index strideA = -1, Index strideB = -1,
-                                    Index offsetA = 0, Index offsetB = 0) const;
+  // Overwriting starts each result packet from zero instead of loading it, so it computes exactly what accumulating
+  // into a zeroed result does (see gebp_overwritable_scalar for the scalars that holds for).
+  static constexpr bool CanOverwrite = gebp_overwritable_scalar<ResScalar>::value;
+
+  EIGEN_STRONG_INLINE void operator()(const DataMapper& res, const LhsScalar* blockA, const RhsScalar* blockB,
+                                      Index rows, Index depth, Index cols, ResScalar alpha, Index strideA = -1,
+                                      Index strideB = -1, Index offsetA = 0, Index offsetB = 0) const {
+    run<false>(res, blockA, blockB, rows, depth, cols, alpha, strideA, strideB, offsetA, offsetB);
+  }
+  // C = alpha * A' * B' over the block, whatever C held (see gebp_overwrite_t).
+  EIGEN_STRONG_INLINE void operator()(gebp_overwrite_t, const DataMapper& res, const LhsScalar* blockA,
+                                      const RhsScalar* blockB, Index rows, Index depth, Index cols, ResScalar alpha,
+                                      Index strideA = -1, Index strideB = -1, Index offsetA = 0,
+                                      Index offsetB = 0) const {
+    run<true>(res, blockA, blockB, rows, depth, cols, alpha, strideA, strideB, offsetA, offsetB);
+  }
+
+  template <bool Overwrite>
+  EIGEN_DONT_INLINE void run(const DataMapper& res, const LhsScalar* blockA, const RhsScalar* blockB, Index rows,
+                             Index depth, Index cols, ResScalar alpha, Index strideA, Index strideB, Index offsetA,
+                             Index offsetB) const;
 };
+
+// One scalar result, alpha * c: added to the destination, or, overwriting, assigned as the sum onto zero that
+// accumulating into a zeroed destination computes. Overloaded rather than branched on, so that accumulation asks of
+// the scalar only the `dst += alpha * c` it always did.
+template <typename ResScalar, typename Alpha, typename Acc>
+EIGEN_ALWAYS_INLINE void gebp_store_scalar_impl(std::false_type, ResScalar& dst, const Alpha& alpha, const Acc& c) {
+  dst += alpha * c;
+}
+template <typename ResScalar, typename Alpha, typename Acc>
+EIGEN_ALWAYS_INLINE void gebp_store_scalar_impl(std::true_type, ResScalar& dst, const Alpha& alpha, const Acc& c) {
+  dst = ResScalar(0) + alpha * c;
+}
+template <bool Overwrite, typename ResScalar, typename Alpha, typename Acc>
+EIGEN_ALWAYS_INLINE void gebp_store_scalar(ResScalar& dst, const Alpha& alpha, const Acc& c) {
+  gebp_store_scalar_impl(bool_constant<Overwrite>(), dst, alpha, c);
+}
 
 template <typename LhsScalar, typename RhsScalar, typename Index, typename DataMapper, int mr, int nr,
           bool ConjugateLhs, bool ConjugateRhs,
@@ -1163,7 +1231,8 @@ struct last_row_process_16_packets {
 
   EIGEN_STRONG_INLINE void operator()(const DataMapper& res, SwappedTraits& straits, const LhsScalar* blA,
                                       const RhsScalar* blB, Index depth, const Index endk, Index i, Index j2,
-                                      ResScalar alpha, SAccPacket& C0) const {
+                                      ResScalar alpha, SAccPacket& C0, bool overwrite = false) const {
+    EIGEN_UNUSED_VARIABLE(overwrite);
     EIGEN_UNUSED_VARIABLE(res);
     EIGEN_UNUSED_VARIABLE(straits);
     EIGEN_UNUSED_VARIABLE(blA);
@@ -1191,13 +1260,14 @@ struct last_row_process_16_packets<LhsScalar, RhsScalar, Index, DataMapper, mr, 
 
   EIGEN_STRONG_INLINE void operator()(const DataMapper& res, SwappedTraits& straits, const LhsScalar* blA,
                                       const RhsScalar* blB, Index depth, const Index endk, Index i, Index j2,
-                                      ResScalar alpha, SAccPacket& C0) const {
+                                      ResScalar alpha, SAccPacket& C0, bool overwrite = false) const {
     using SResPacketQuarter = typename unpacket_traits<typename unpacket_traits<SResPacket>::half>::half;
     using SLhsPacketQuarter = typename unpacket_traits<typename unpacket_traits<SLhsPacket>::half>::half;
     using SRhsPacketQuarter = typename unpacket_traits<typename unpacket_traits<SRhsPacket>::half>::half;
     using SAccPacketQuarter = typename unpacket_traits<typename unpacket_traits<SAccPacket>::half>::half;
 
-    SResPacketQuarter R = res.template gatherPacket<SResPacketQuarter>(i, j2);
+    SResPacketQuarter R =
+        overwrite ? pset1<SResPacketQuarter>(ResScalar(0)) : res.template gatherPacket<SResPacketQuarter>(i, j2);
     SResPacketQuarter alphav = pset1<SResPacketQuarter>(alpha);
 
     if (depth - endk > 0) {
@@ -1390,7 +1460,7 @@ struct gebp_peeled_loop {
 // GEBPTraits determines the packet types (supports full/half/quarter sizes).
 // Accumulator layout: C[j + p * NrCols] for column j, LHS packet p.
 template <int MrPackets, int NrCols, typename GEBPTraits, typename LhsScalar_, typename RhsScalar_, typename ResScalar_,
-          typename Index_, typename DataMapper_, typename LinearMapper_, typename FullLhsPacket>
+          typename Index_, typename DataMapper_, typename LinearMapper_, typename FullLhsPacket, bool Overwrite = false>
 EIGEN_ALWAYS_INLINE void gebp_micro_panel_impl(GEBPTraits& traits, const DataMapper_& res, const LhsScalar_* blockA,
                                                const RhsScalar_* blockB, ResScalar_ alpha, Index_ i, Index_ j2,
                                                Index_ depth, Index_ strideA, Index_ strideB, Index_ offsetA,
@@ -1488,7 +1558,8 @@ EIGEN_ALWAYS_INLINE void gebp_micro_panel_impl(GEBPTraits& traits, const DataMap
   for (int j = 0; j < NrCols; ++j) {
     LinearMapper_ r = res.getLinearMapper(i, j2 + j);
     for (int p = 0; p < MrPackets; ++p) {
-      alignas(ResPacketLocal) ResPacketLocal R = r.template loadPacket<ResPacketLocal>(p * ResPacketSz);
+      alignas(ResPacketLocal) ResPacketLocal R =
+          Overwrite ? pset1<ResPacketLocal>(ResScalar_(0)) : r.template loadPacket<ResPacketLocal>(p * ResPacketSz);
       traits.acc(C[j + p * NrCols], alphav, R);
       r.storePacket(p * ResPacketSz, R);
     }
@@ -1509,11 +1580,10 @@ EIGEN_ALWAYS_INLINE void gebp_micro_panel_impl(GEBPTraits& traits, const DataMap
 #endif
 template <typename LhsScalar, typename RhsScalar, typename Index, typename DataMapper, int mr, int nr,
           bool ConjugateLhs, bool ConjugateRhs>
-EIGEN_DONT_INLINE void gebp_kernel<LhsScalar, RhsScalar, Index, DataMapper, mr, nr, ConjugateLhs,
-                                   ConjugateRhs>::operator()(const DataMapper& res, const LhsScalar* blockA,
-                                                             const RhsScalar* blockB, Index rows, Index depth,
-                                                             Index cols, ResScalar alpha, Index strideA, Index strideB,
-                                                             Index offsetA, Index offsetB) const {
+template <bool Overwrite>
+EIGEN_DONT_INLINE void gebp_kernel<LhsScalar, RhsScalar, Index, DataMapper, mr, nr, ConjugateLhs, ConjugateRhs>::run(
+    const DataMapper& res, const LhsScalar* blockA, const RhsScalar* blockB, Index rows, Index depth, Index cols,
+    ResScalar alpha, Index strideA, Index strideB, Index offsetA, Index offsetB) const {
   Traits traits;
   SwappedTraits straits;
 
@@ -1547,8 +1617,8 @@ EIGEN_DONT_INLINE void gebp_kernel<LhsScalar, RhsScalar, Index, DataMapper, mr, 
     constexpr int NrC = decltype(nrc_tag)::value;
     using LTraits = std::remove_reference_t<decltype(local_traits)>;
     gebp_micro_panel_impl<MrP, NrC, LTraits, LhsScalar, RhsScalar, ResScalar, Index, DataMapper, LinearMapper,
-                          LhsPacket>(local_traits, res, blockA, blockB, alpha, i, j2, depth, strideA, strideB, offsetA,
-                                     offsetB, prefetch_res_offset, peeled_kc, pk);
+                          LhsPacket, Overwrite>(local_traits, res, blockA, blockB, alpha, i, j2, depth, strideA,
+                                                strideB, offsetA, offsetB, prefetch_res_offset, peeled_kc, pk);
   };
 
   // Budget (in bytes) for co-residency of the RHS block and a strip of the
@@ -1655,19 +1725,19 @@ EIGEN_DONT_INLINE void gebp_kernel<LhsScalar, RhsScalar, Index, DataMapper, mr, 
       EIGEN_IF_CONSTEXPR (nr >= 8) {
         for (Index j2 = 0; j2 < packet_cols8; j2 += 8) {
           gebp_micro_panel_impl<1, 8, HalfTraits, LhsScalar, RhsScalar, ResScalar, Index, DataMapper, LinearMapper,
-                                LhsPacket>(half_traits, res, blockA, blockB, alpha, i, j2, depth, strideA, strideB,
-                                           offsetA, offsetB, prefetch_res_offset, peeled_kc, pk);
+                                LhsPacket, Overwrite>(half_traits, res, blockA, blockB, alpha, i, j2, depth, strideA,
+                                                      strideB, offsetA, offsetB, prefetch_res_offset, peeled_kc, pk);
         }
       }
       for (Index j2 = packet_cols8; j2 < packet_cols4; j2 += 4) {
         gebp_micro_panel_impl<1, 4, HalfTraits, LhsScalar, RhsScalar, ResScalar, Index, DataMapper, LinearMapper,
-                              LhsPacket>(half_traits, res, blockA, blockB, alpha, i, j2, depth, strideA, strideB,
-                                         offsetA, offsetB, prefetch_res_offset, peeled_kc, pk);
+                              LhsPacket, Overwrite>(half_traits, res, blockA, blockB, alpha, i, j2, depth, strideA,
+                                                    strideB, offsetA, offsetB, prefetch_res_offset, peeled_kc, pk);
       }
       for (Index j2 = packet_cols4; j2 < cols; j2++) {
         gebp_micro_panel_impl<1, 1, HalfTraits, LhsScalar, RhsScalar, ResScalar, Index, DataMapper, LinearMapper,
-                              LhsPacket>(half_traits, res, blockA, blockB, alpha, i, j2, depth, strideA, strideB,
-                                         offsetA, offsetB, prefetch_res_offset, peeled_kc, pk);
+                              LhsPacket, Overwrite>(half_traits, res, blockA, blockB, alpha, i, j2, depth, strideA,
+                                                    strideB, offsetA, offsetB, prefetch_res_offset, peeled_kc, pk);
       }
     }
   }
@@ -1679,19 +1749,19 @@ EIGEN_DONT_INLINE void gebp_kernel<LhsScalar, RhsScalar, Index, DataMapper, mr, 
       EIGEN_IF_CONSTEXPR (nr >= 8) {
         for (Index j2 = 0; j2 < packet_cols8; j2 += 8) {
           gebp_micro_panel_impl<1, 8, QuarterTraits, LhsScalar, RhsScalar, ResScalar, Index, DataMapper, LinearMapper,
-                                LhsPacket>(quarter_traits, res, blockA, blockB, alpha, i, j2, depth, strideA, strideB,
-                                           offsetA, offsetB, prefetch_res_offset, peeled_kc, pk);
+                                LhsPacket, Overwrite>(quarter_traits, res, blockA, blockB, alpha, i, j2, depth, strideA,
+                                                      strideB, offsetA, offsetB, prefetch_res_offset, peeled_kc, pk);
         }
       }
       for (Index j2 = packet_cols8; j2 < packet_cols4; j2 += 4) {
         gebp_micro_panel_impl<1, 4, QuarterTraits, LhsScalar, RhsScalar, ResScalar, Index, DataMapper, LinearMapper,
-                              LhsPacket>(quarter_traits, res, blockA, blockB, alpha, i, j2, depth, strideA, strideB,
-                                         offsetA, offsetB, prefetch_res_offset, peeled_kc, pk);
+                              LhsPacket, Overwrite>(quarter_traits, res, blockA, blockB, alpha, i, j2, depth, strideA,
+                                                    strideB, offsetA, offsetB, prefetch_res_offset, peeled_kc, pk);
       }
       for (Index j2 = packet_cols4; j2 < cols; j2++) {
         gebp_micro_panel_impl<1, 1, QuarterTraits, LhsScalar, RhsScalar, ResScalar, Index, DataMapper, LinearMapper,
-                              LhsPacket>(quarter_traits, res, blockA, blockB, alpha, i, j2, depth, strideA, strideB,
-                                         offsetA, offsetB, prefetch_res_offset, peeled_kc, pk);
+                              LhsPacket, Overwrite>(quarter_traits, res, blockA, blockB, alpha, i, j2, depth, strideA,
+                                                    strideB, offsetA, offsetB, prefetch_res_offset, peeled_kc, pk);
       }
     }
   }
@@ -1738,14 +1808,14 @@ EIGEN_DONT_INLINE void gebp_kernel<LhsScalar, RhsScalar, Index, DataMapper, mr, 
 
             blB += 8;
           }
-          res(i, j2 + 0) += alpha * C0;
-          res(i, j2 + 1) += alpha * C1;
-          res(i, j2 + 2) += alpha * C2;
-          res(i, j2 + 3) += alpha * C3;
-          res(i, j2 + 4) += alpha * C4;
-          res(i, j2 + 5) += alpha * C5;
-          res(i, j2 + 6) += alpha * C6;
-          res(i, j2 + 7) += alpha * C7;
+          gebp_store_scalar<Overwrite>(res(i, j2 + 0), alpha, C0);
+          gebp_store_scalar<Overwrite>(res(i, j2 + 1), alpha, C1);
+          gebp_store_scalar<Overwrite>(res(i, j2 + 2), alpha, C2);
+          gebp_store_scalar<Overwrite>(res(i, j2 + 3), alpha, C3);
+          gebp_store_scalar<Overwrite>(res(i, j2 + 4), alpha, C4);
+          gebp_store_scalar<Overwrite>(res(i, j2 + 5), alpha, C5);
+          gebp_store_scalar<Overwrite>(res(i, j2 + 6), alpha, C6);
+          gebp_store_scalar<Overwrite>(res(i, j2 + 7), alpha, C7);
         }
       }
     }
@@ -1834,7 +1904,8 @@ EIGEN_DONT_INLINE void gebp_kernel<LhsScalar, RhsScalar, Index, DataMapper, mr, 
                                        SAccPacket>
                 SAccPacketHalf;
 
-            SResPacketHalf R = res.template gatherPacket<SResPacketHalf>(i, j2);
+            SResPacketHalf R =
+                Overwrite ? pset1<SResPacketHalf>(ResScalar(0)) : res.template gatherPacket<SResPacketHalf>(i, j2);
             SResPacketHalf alphav = pset1<SResPacketHalf>(alpha);
 
             if (depth - endk > 0) {
@@ -1856,9 +1927,9 @@ EIGEN_DONT_INLINE void gebp_kernel<LhsScalar, RhsScalar, Index, DataMapper, mr, 
             // template form, so that LhsProgress < 16 paths don't
             // fail to compile
             last_row_process_16_packets<LhsScalar, RhsScalar, Index, DataMapper, mr, nr, ConjugateLhs, ConjugateRhs> p;
-            p(res, straits, blA, blB, depth, endk, i, j2, alpha, C0);
+            p(res, straits, blA, blB, depth, endk, i, j2, alpha, C0, Overwrite);
           } else {
-            SResPacket R = res.template gatherPacket<SResPacket>(i, j2);
+            SResPacket R = Overwrite ? pset1<SResPacket>(ResScalar(0)) : res.template gatherPacket<SResPacket>(i, j2);
             SResPacket alphav = pset1<SResPacket>(alpha);
             straits.acc(C0, alphav, R);
             res.scatterPacket(i, j2, R);
@@ -1886,10 +1957,10 @@ EIGEN_DONT_INLINE void gebp_kernel<LhsScalar, RhsScalar, Index, DataMapper, mr, 
 
             blB += 4;
           }
-          res(i, j2 + 0) += alpha * C0;
-          res(i, j2 + 1) += alpha * C1;
-          res(i, j2 + 2) += alpha * C2;
-          res(i, j2 + 3) += alpha * C3;
+          gebp_store_scalar<Overwrite>(res(i, j2 + 0), alpha, C0);
+          gebp_store_scalar<Overwrite>(res(i, j2 + 1), alpha, C1);
+          gebp_store_scalar<Overwrite>(res(i, j2 + 2), alpha, C2);
+          gebp_store_scalar<Overwrite>(res(i, j2 + 3), alpha, C3);
         }
       }
     }
@@ -1907,7 +1978,7 @@ EIGEN_DONT_INLINE void gebp_kernel<LhsScalar, RhsScalar, Index, DataMapper, mr, 
           RhsScalar B_0 = blB[k];
           C0 = cj.pmadd(A0, B_0, C0);
         }
-        res(i, j2) += alpha * C0;
+        gebp_store_scalar<Overwrite>(res(i, j2), alpha, C0);
       }
     }
   }

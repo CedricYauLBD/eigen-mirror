@@ -1416,6 +1416,28 @@ EIGEN_SME_DECLARE_GEMM_PACKERS(std::complex<double>, kSmeMrCD, kSmeNrCD)
 
 #undef EIGEN_SME_DECLARE_GEMM_PACKERS
 
+// Overwriting stores (gebp_overwrite_t) still load C, then clear the loaded bits and accumulate onto that +0: the
+// result is what accumulating into a zeroed C gives, whatever C held, and the memory accesses stay those of
+// accumulation. On Apple M4, stores into lines the SME unit has not just loaded measure slower than the load, FMA
+// and store they replace, so dropping the loads loses at many sizes. The all-zero mask is opaque to the compiler,
+// which would otherwise fold the AND and the loads away.
+template <bool Overwrite>
+EIGEN_ALWAYS_INLINE svuint64_t sme_c_mask() __arm_streaming EIGEN_SME_ZA_AGNOSTIC {
+  svuint64_t m = svdup_u64(Overwrite ? 0 : ~uint64_t(0));
+  EIGEN_IF_CONSTEXPR (Overwrite) __asm__("" : "+w"(m));
+  return m;
+}
+template <bool Overwrite>
+EIGEN_ALWAYS_INLINE svfloat32_t sme_c_value(svuint64_t m, svfloat32_t v) __arm_streaming EIGEN_SME_ZA_AGNOSTIC {
+  EIGEN_IF_CONSTEXPR (!Overwrite) return v;
+  return svreinterpret_f32_u64(svand_u64_x(svptrue_b64(), svreinterpret_u64_f32(v), m));
+}
+template <bool Overwrite>
+EIGEN_ALWAYS_INLINE svfloat64_t sme_c_value(svuint64_t m, svfloat64_t v) __arm_streaming EIGEN_SME_ZA_AGNOSTIC {
+  EIGEN_IF_CONSTEXPR (!Overwrite) return v;
+  return svreinterpret_f64_u64(svand_u64_x(svptrue_b64(), svreinterpret_u64_f64(v), m));
+}
+
 /*****************************************************************************
  * sme_store_za_tile -- Store one ZA tile back to C with alpha scaling.
  *
@@ -1423,12 +1445,13 @@ EIGEN_SME_DECLARE_GEMM_PACKERS(std::complex<double>, kSmeMrCD, kSmeNrCD)
  * (both <= the runtime svl).
  *****************************************************************************/
 
-template <typename Scalar, int TileId, typename Index>
+template <typename Scalar, int TileId, bool Overwrite = false, typename Index>
 EIGEN_ALWAYS_INLINE void sme_store_za_tile(Scalar* EIGEN_RESTRICT C, Index C_stride_row, Index C_stride_col,
                                            Scalar alpha, Index row_start, int pw, Index col_start,
                                            int cw) __arm_streaming __arm_inout("za") {
   using Traits = sme_packet_traits<Scalar>;
   using Vec = typename Traits::type;
+  const svuint64_t cmask = sme_c_mask<Overwrite>();
   const svbool_t pg_m = Traits::whilelt(0, pw);
   const svbool_t pg_n = Traits::whilelt(0, cw);
   // FMLA and FADD have equal latency/throughput on ARMv9 cores, and
@@ -1443,22 +1466,22 @@ EIGEN_ALWAYS_INLINE void sme_store_za_tile(Scalar* EIGEN_RESTRICT C, Index C_str
   // Two C slices are loaded before either is stored: a C line the caller wrote
   // from non-streaming code just before the kernel does not forward across the
   // mode switch on Apple M4, and a serial load/store pays that latency per slice.
-  // C = A*B meets the condition on every call, since evalTo zeroes the
-  // destination first. SVE vectors are sizeless, hence the spelled-out pair.
+  // C = A*B meets the condition where the driver zeroes the destination first
+  // (gebp_overwrite_pays). SVE vectors are sizeless, hence the spelled-out pair.
   if (C_stride_row == 1) {
     // Column-major C: extract vertical slices (columns of the ZA tile)
     int ci = 0;
     for (; ci + 2 <= cw; ci += 2) {
       Scalar* p0 = C + row_start + (col_start + ci) * C_stride_col;
       Scalar* p1 = p0 + C_stride_col;
-      Vec c0 = ploadu(pg_m, p0);
-      Vec c1 = ploadu(pg_m, p1);
+      Vec c0 = sme_c_value<Overwrite>(cmask, ploadu(pg_m, p0));
+      Vec c1 = sme_c_value<Overwrite>(cmask, ploadu(pg_m, p1));
       pstoreu(pg_m, p0, pmadd(pg_m, sme_read_ver_za<TileId>(vzero, pg_m, (uint32_t)ci), valpha, c0));
       pstoreu(pg_m, p1, pmadd(pg_m, sme_read_ver_za<TileId>(vzero, pg_m, (uint32_t)(ci + 1)), valpha, c1));
     }
     if (ci < cw) {
       Scalar* pC = C + row_start + (col_start + ci) * C_stride_col;
-      Vec vc = ploadu(pg_m, pC);
+      Vec vc = sme_c_value<Overwrite>(cmask, ploadu(pg_m, pC));
       pstoreu(pg_m, pC, pmadd(pg_m, sme_read_ver_za<TileId>(vzero, pg_m, (uint32_t)ci), valpha, vc));
     }
   } else if (C_stride_col == 1) {
@@ -1467,14 +1490,14 @@ EIGEN_ALWAYS_INLINE void sme_store_za_tile(Scalar* EIGEN_RESTRICT C, Index C_str
     for (; ri + 2 <= pw; ri += 2) {
       Scalar* p0 = C + (row_start + ri) * C_stride_row + col_start;
       Scalar* p1 = p0 + C_stride_row;
-      Vec c0 = ploadu(pg_n, p0);
-      Vec c1 = ploadu(pg_n, p1);
+      Vec c0 = sme_c_value<Overwrite>(cmask, ploadu(pg_n, p0));
+      Vec c1 = sme_c_value<Overwrite>(cmask, ploadu(pg_n, p1));
       pstoreu(pg_n, p0, pmadd(pg_n, sme_read_hor_za<TileId>(vzero, pg_n, (uint32_t)ri), valpha, c0));
       pstoreu(pg_n, p1, pmadd(pg_n, sme_read_hor_za<TileId>(vzero, pg_n, (uint32_t)(ri + 1)), valpha, c1));
     }
     if (ri < pw) {
       Scalar* pC = C + (row_start + ri) * C_stride_row + col_start;
-      Vec vc = ploadu(pg_n, pC);
+      Vec vc = sme_c_value<Overwrite>(cmask, ploadu(pg_n, pC));
       pstoreu(pg_n, pC, pmadd(pg_n, sme_read_hor_za<TileId>(vzero, pg_n, (uint32_t)ri), valpha, vc));
     }
   } else {
@@ -1488,7 +1511,8 @@ EIGEN_ALWAYS_INLINE void sme_store_za_tile(Scalar* EIGEN_RESTRICT C, Index C_str
       vres = pmul(pg_n, vres, valpha);
       pstoreu(pg_n, scratch, vres);
       for (int ci = 0; ci < cw; ++ci) {
-        C[(row_start + ri) * C_stride_row + (col_start + ci) * C_stride_col] += scratch[ci];
+        Scalar& c = C[(row_start + ri) * C_stride_row + (col_start + ci) * C_stride_col];
+        c = (Overwrite ? Scalar(0) : c) + scratch[ci];
       }
     }
   }
@@ -1508,13 +1532,14 @@ EIGEN_ALWAYS_INLINE void sme_store_za_tile(Scalar* EIGEN_RESTRICT C, Index C_str
 
 // Full 2*svl x 2*svl block into column-major C: four columns per vertical four-slice read of the two tiles that
 // share them, each column loaded and stored whole with two-vector accesses, all four loaded before any is stored.
-template <int TileLo, int TileHi, typename Scalar, typename Index>
+template <int TileLo, int TileHi, bool Overwrite = false, typename Scalar, typename Index>
 EIGEN_ALWAYS_INLINE void sme_store_tile_pair_colmajor(Scalar* EIGEN_RESTRICT C, Index ldc, Scalar alpha,
                                                       int svl) __arm_streaming __arm_inout("za") {
   using Traits = sme_packet_traits<Scalar>;
   const svcount_t pn = Traits::ptrue_c();
   const svbool_t pg = Traits::ptrue();
   const typename Traits::type valpha = pset1<typename Traits::type>(alpha);
+  const svuint64_t m = sme_c_mask<Overwrite>();
   for (int c = 0; c < svl; c += 4) {
     const auto lo = sme_read_ver_za_vg4<TileLo, Scalar>(uint32_t(c));
     const auto hi = sme_read_ver_za_vg4<TileHi, Scalar>(uint32_t(c));
@@ -1522,35 +1547,40 @@ EIGEN_ALWAYS_INLINE void sme_store_tile_pair_colmajor(Scalar* EIGEN_RESTRICT C, 
     const auto c0 = ploadu_x2(pn, p), c1 = ploadu_x2(pn, p + ldc), c2 = ploadu_x2(pn, p + 2 * ldc),
                c3 = ploadu_x2(pn, p + 3 * ldc);
     pstoreu_x2(pn, p,
-               pcreate(pmadd(pg, pget<0>(lo), valpha, pget<0>(c0)), pmadd(pg, pget<0>(hi), valpha, pget<1>(c0))));
+               pcreate(pmadd(pg, pget<0>(lo), valpha, sme_c_value<Overwrite>(m, pget<0>(c0))),
+                       pmadd(pg, pget<0>(hi), valpha, sme_c_value<Overwrite>(m, pget<1>(c0)))));
     pstoreu_x2(pn, p + ldc,
-               pcreate(pmadd(pg, pget<1>(lo), valpha, pget<0>(c1)), pmadd(pg, pget<1>(hi), valpha, pget<1>(c1))));
+               pcreate(pmadd(pg, pget<1>(lo), valpha, sme_c_value<Overwrite>(m, pget<0>(c1))),
+                       pmadd(pg, pget<1>(hi), valpha, sme_c_value<Overwrite>(m, pget<1>(c1)))));
     pstoreu_x2(pn, p + 2 * ldc,
-               pcreate(pmadd(pg, pget<2>(lo), valpha, pget<0>(c2)), pmadd(pg, pget<2>(hi), valpha, pget<1>(c2))));
+               pcreate(pmadd(pg, pget<2>(lo), valpha, sme_c_value<Overwrite>(m, pget<0>(c2))),
+                       pmadd(pg, pget<2>(hi), valpha, sme_c_value<Overwrite>(m, pget<1>(c2)))));
     pstoreu_x2(pn, p + 3 * ldc,
-               pcreate(pmadd(pg, pget<3>(lo), valpha, pget<0>(c3)), pmadd(pg, pget<3>(hi), valpha, pget<1>(c3))));
+               pcreate(pmadd(pg, pget<3>(lo), valpha, sme_c_value<Overwrite>(m, pget<0>(c3))),
+                       pmadd(pg, pget<3>(hi), valpha, sme_c_value<Overwrite>(m, pget<1>(c3)))));
   }
 }
 
-template <typename Scalar, typename Index>
+template <bool Overwrite = false, typename Scalar, typename Index>
 EIGEN_ALWAYS_INLINE void sme_store_2x2_grid(Scalar* EIGEN_RESTRICT C, Index C_stride_row, Index C_stride_col,
                                             Scalar alpha, Index row_start, int rlo, int rhi, Index col_start, int clo,
                                             int chi) __arm_streaming __arm_inout("za") {
   const int svl = sme_packet_traits<Scalar>::size();
   if (svl >= 4 && C_stride_row == 1 && rlo == svl && rhi == svl && clo == svl && chi == svl) {
     Scalar* c0 = C + row_start + col_start * C_stride_col;
-    sme_store_tile_pair_colmajor<0, 2>(c0, C_stride_col, alpha, svl);
-    sme_store_tile_pair_colmajor<1, 3>(c0 + Index(svl) * C_stride_col, C_stride_col, alpha, svl);
+    sme_store_tile_pair_colmajor<0, 2, Overwrite>(c0, C_stride_col, alpha, svl);
+    sme_store_tile_pair_colmajor<1, 3, Overwrite>(c0 + Index(svl) * C_stride_col, C_stride_col, alpha, svl);
     return;
   }
-  sme_store_za_tile<Scalar, 0>(C, C_stride_row, C_stride_col, alpha, row_start, rlo, col_start, clo);
+  sme_store_za_tile<Scalar, 0, Overwrite>(C, C_stride_row, C_stride_col, alpha, row_start, rlo, col_start, clo);
   if (chi > 0) {
-    sme_store_za_tile<Scalar, 1>(C, C_stride_row, C_stride_col, alpha, row_start, rlo, col_start + svl, chi);
+    sme_store_za_tile<Scalar, 1, Overwrite>(C, C_stride_row, C_stride_col, alpha, row_start, rlo, col_start + svl, chi);
   }
   if (rhi > 0) {
-    sme_store_za_tile<Scalar, 2>(C, C_stride_row, C_stride_col, alpha, row_start + svl, rhi, col_start, clo);
+    sme_store_za_tile<Scalar, 2, Overwrite>(C, C_stride_row, C_stride_col, alpha, row_start + svl, rhi, col_start, clo);
     if (chi > 0) {
-      sme_store_za_tile<Scalar, 3>(C, C_stride_row, C_stride_col, alpha, row_start + svl, rhi, col_start + svl, chi);
+      sme_store_za_tile<Scalar, 3, Overwrite>(C, C_stride_row, C_stride_col, alpha, row_start + svl, rhi,
+                                              col_start + svl, chi);
     }
   }
 }
@@ -1841,7 +1871,7 @@ struct sme_complex_cell<Scalar, R, C, ConjLhs, ConjRhs, false> {
  * per-depth-step loads.
  *****************************************************************************/
 
-template <bool ConjLhs, bool ConjRhs, typename Scalar, typename Index>
+template <bool ConjLhs, bool ConjRhs, bool Overwrite = false, typename Scalar, typename Index>
 EIGEN_ALWAYS_INLINE void sme_process(Scalar* EIGEN_RESTRICT C, Index C_stride_row, Index C_stride_col,
                                      const Scalar* EIGEN_RESTRICT blA, const Scalar* EIGEN_RESTRICT blB, Index depth,
                                      Scalar alpha, Index row_start, int pw, Index col_start, int cw,
@@ -1933,7 +1963,8 @@ EIGEN_ALWAYS_INLINE void sme_process(Scalar* EIGEN_RESTRICT C, Index C_stride_ro
       }
 
       // Store the (up to) 2x2 grid of tiles for this sub-block pass.
-      sme_store_2x2_grid(C, C_stride_row, C_stride_col, alpha, row_start + rt, rlo, rhi, col_start + ct, clo, chi);
+      sme_store_2x2_grid<Overwrite>(C, C_stride_row, C_stride_col, alpha, row_start + rt, rlo, rhi, col_start + ct, clo,
+                                    chi);
     }
   }
 }
@@ -2050,7 +2081,7 @@ EIGEN_ALWAYS_INLINE void sme_process(std::complex<RealScalar>* EIGEN_RESTRICT C,
 
 // A RHS panel of at most svl columns fills only one tile column of the 2 x 2 grid, so the four tiles are stacked along
 // M instead: a full LHS panel (tiles 0 and 1) and the next one (tiles 2 and 3, pw1 rows) against the same B vector.
-template <typename Scalar, typename Index>
+template <bool Overwrite = false, typename Scalar, typename Index>
 EIGEN_ALWAYS_INLINE void sme_process_narrow(Scalar* EIGEN_RESTRICT C, Index C_stride_row, Index C_stride_col,
                                             const Scalar* EIGEN_RESTRICT blA0, Index step0,
                                             const Scalar* EIGEN_RESTRICT blA1, Index step1, int pw1,
@@ -2075,12 +2106,13 @@ EIGEN_ALWAYS_INLINE void sme_process_narrow(Scalar* EIGEN_RESTRICT C, Index C_st
     sme_mopa<2>(p1lo, pn, a1lo, b);
     sme_mopa<3>(p1hi, pn, a1hi, b);
   }
-  sme_store_za_tile<Scalar, 0>(C, C_stride_row, C_stride_col, alpha, row_start, svl, col_start, cw);
-  sme_store_za_tile<Scalar, 1>(C, C_stride_row, C_stride_col, alpha, row_start + svl, svl, col_start, cw);
-  sme_store_za_tile<Scalar, 2>(C, C_stride_row, C_stride_col, alpha, row_start + 2 * svl, sme_min(pw1, svl), col_start,
-                               cw);
+  sme_store_za_tile<Scalar, 0, Overwrite>(C, C_stride_row, C_stride_col, alpha, row_start, svl, col_start, cw);
+  sme_store_za_tile<Scalar, 1, Overwrite>(C, C_stride_row, C_stride_col, alpha, row_start + svl, svl, col_start, cw);
+  sme_store_za_tile<Scalar, 2, Overwrite>(C, C_stride_row, C_stride_col, alpha, row_start + 2 * svl, sme_min(pw1, svl),
+                                          col_start, cw);
   if (pw1 > svl)
-    sme_store_za_tile<Scalar, 3>(C, C_stride_row, C_stride_col, alpha, row_start + 3 * svl, pw1 - svl, col_start, cw);
+    sme_store_za_tile<Scalar, 3, Overwrite>(C, C_stride_row, C_stride_col, alpha, row_start + 3 * svl, pw1 - svl,
+                                            col_start, cw);
 }
 
 // Tile Dst += tile Src, four columns per step.
@@ -2097,7 +2129,7 @@ EIGEN_ALWAYS_INLINE void sme_fold_tile() __arm_streaming __arm_inout("za") {
 
 // A block that fills one or two tiles (pw or cw <= svl): FMOPAs into one tile wait on each other, so consecutive
 // depth steps go to the spare tiles and the partial sums are folded before the store.
-template <typename Scalar, typename Index>
+template <bool Overwrite = false, typename Scalar, typename Index>
 EIGEN_ALWAYS_INLINE void sme_process_split(Scalar* EIGEN_RESTRICT C, Index C_stride_row, Index C_stride_col,
                                            const Scalar* EIGEN_RESTRICT blA, const Scalar* EIGEN_RESTRICT blB,
                                            Index depth, Scalar alpha, Index row_start, int pw, Index col_start, int cw,
@@ -2124,7 +2156,7 @@ EIGEN_ALWAYS_INLINE void sme_process_split(Scalar* EIGEN_RESTRICT C, Index C_str
     sme_fold_tile<0, 1, Scalar>();
     sme_fold_tile<2, 3, Scalar>();
     sme_fold_tile<0, 2, Scalar>();
-    sme_store_za_tile<Scalar, 0>(C, C_stride_row, C_stride_col, alpha, row_start, pw, col_start, cw);
+    sme_store_za_tile<Scalar, 0, Overwrite>(C, C_stride_row, C_stride_col, alpha, row_start, pw, col_start, cw);
   } else if (pw <= svl) {
     // Tiles 0 and 1 take the even depth steps, 2 and 3 the odd ones.
     for (; k + 2 <= depth; k += 2) {
@@ -2143,7 +2175,7 @@ EIGEN_ALWAYS_INLINE void sme_process_split(Scalar* EIGEN_RESTRICT C, Index C_str
     }
     sme_fold_tile<0, 2, Scalar>();
     sme_fold_tile<1, 3, Scalar>();
-    sme_store_2x2_grid(C, C_stride_row, C_stride_col, alpha, row_start, pw, 0, col_start, svl, cw - svl);
+    sme_store_2x2_grid<Overwrite>(C, C_stride_row, C_stride_col, alpha, row_start, pw, 0, col_start, svl, cw - svl);
   } else {
     // cw <= svl < pw: tiles 0 and 2 take the even depth steps, 1 and 3 the odd ones.
     for (; k + 2 <= depth; k += 2) {
@@ -2162,29 +2194,36 @@ EIGEN_ALWAYS_INLINE void sme_process_split(Scalar* EIGEN_RESTRICT C, Index C_str
     }
     sme_fold_tile<0, 1, Scalar>();
     sme_fold_tile<2, 3, Scalar>();
-    sme_store_2x2_grid(C, C_stride_row, C_stride_col, alpha, row_start, svl, pw - svl, col_start, cw, 0);
+    sme_store_2x2_grid<Overwrite>(C, C_stride_row, C_stride_col, alpha, row_start, svl, pw - svl, col_start, cw, 0);
   }
 }
 
 // One pw x cw block: sme_process_split when it fills at most two tiles of the 2 x 2 grid; complex blocks keep
-// sme_process. `split_ok` (sme_split_ok) holds once per call, outside the block loops.
-template <bool ConjLhs, bool ConjRhs, bool FoldRealAlpha, typename Scalar, typename Index>
+// sme_process. `split_ok` (sme_split_ok) holds once per call, outside the block loops. Overwrite assigns the block
+// instead of accumulating into it.
+template <bool ConjLhs, bool ConjRhs, bool FoldRealAlpha, bool Overwrite = false, typename Scalar, typename Index>
 EIGEN_ALWAYS_INLINE void sme_process_block(Scalar* C, Index rs, Index cs, const Scalar* blA, const Scalar* blB,
                                            Index depth, Scalar alpha, Index row_start, int pw, Index col_start, int cw,
                                            Index a_step, bool split_ok, Index,
                                            Index) __arm_streaming __arm_inout("za") {
   const int svl = sme_packet_traits<Scalar>::size();
   if (split_ok && (pw <= svl || cw <= svl))
-    sme_process_split(C, rs, cs, blA, blB, depth, alpha, row_start, pw, col_start, cw, a_step);
+    sme_process_split<Overwrite>(C, rs, cs, blA, blB, depth, alpha, row_start, pw, col_start, cw, a_step);
   else
-    sme_process<ConjLhs, ConjRhs>(C, rs, cs, blA, blB, depth, alpha, row_start, pw, col_start, cw, a_step);
+    sme_process<ConjLhs, ConjRhs, Overwrite>(C, rs, cs, blA, blB, depth, alpha, row_start, pw, col_start, cw, a_step);
 }
-template <bool ConjLhs, bool ConjRhs, bool FoldRealAlpha, typename RealScalar, typename Index>
+template <bool ConjLhs, bool ConjRhs, bool FoldRealAlpha, bool Overwrite = false, typename RealScalar, typename Index>
 EIGEN_ALWAYS_INLINE void sme_process_block(std::complex<RealScalar>* C, Index rs, Index cs,
                                            const std::complex<RealScalar>* blA, const std::complex<RealScalar>* blB,
                                            Index depth, std::complex<RealScalar> alpha, Index row_start, int pw,
                                            Index col_start, int cw, Index a_step, bool, Index rows,
                                            Index cols) __arm_streaming __arm_inout("za") {
+  // Complex kernels do not advertise overwriting (sme_gebp_kernel::CanOverwrite); a direct tagged call zeroes the block
+  // and accumulates.
+  EIGEN_IF_CONSTEXPR (Overwrite) {
+    for (int c = 0; c < cw; ++c)
+      for (int r = 0; r < pw; ++r) C[(row_start + r) * rs + (col_start + c) * cs] = std::complex<RealScalar>(0);
+  }
   sme_process<ConjLhs, ConjRhs, FoldRealAlpha>(C, rs, cs, blA, blB, depth, alpha, row_start, pw, col_start, cw, a_step,
                                                rows, cols);
 }
@@ -2202,14 +2241,14 @@ EIGEN_ALWAYS_INLINE bool sme_narrow_ok() __arm_streaming EIGEN_SME_ZA_AGNOSTIC {
 }
 
 // sme_process_narrow for real scalars; complex panels keep the 2 x 2 path.
-template <typename Scalar, typename Index>
+template <bool Overwrite, typename Scalar, typename Index>
 EIGEN_ALWAYS_INLINE void sme_process_narrow_dispatch(Scalar* C, Index rs, Index cs, const Scalar* blA0, Index step0,
                                                      const Scalar* blA1, Index step1, int pw1, const Scalar* blB,
                                                      int cw, Index depth, Scalar alpha, Index row_start,
                                                      Index col_start) __arm_streaming __arm_inout("za") {
-  sme_process_narrow(C, rs, cs, blA0, step0, blA1, step1, pw1, blB, cw, depth, alpha, row_start, col_start);
+  sme_process_narrow<Overwrite>(C, rs, cs, blA0, step0, blA1, step1, pw1, blB, cw, depth, alpha, row_start, col_start);
 }
-template <typename RealScalar, typename Index>
+template <bool Overwrite, typename RealScalar, typename Index>
 EIGEN_ALWAYS_INLINE void sme_process_narrow_dispatch(std::complex<RealScalar>*, Index, Index,
                                                      const std::complex<RealScalar>*, Index,
                                                      const std::complex<RealScalar>*, Index, int,
@@ -2230,7 +2269,8 @@ static EIGEN_ALWAYS_INLINE void sme_prefetch_next_c(const Scalar* C, Index C_str
       __builtin_prefetch(reinterpret_cast<const char*>(C + i + (j + c) * C_stride_col) + b, 1, 2);
 }
 
-template <typename Scalar, bool ConjLhs, bool ConjRhs, bool FoldRealAlpha = false, typename Index>
+template <typename Scalar, bool ConjLhs, bool ConjRhs, bool FoldRealAlpha = false, bool Overwrite = false,
+          typename Index>
 EIGEN_DONT_INLINE __arm_locally_streaming __arm_new("za") void sme_gebp_impl(
     Scalar* C, Index C_stride_row, Index C_stride_col, const Scalar* blockA, const Scalar* blockB, Index rows,
     Index depth, Index cols, Scalar alpha, Index strideA, Index strideB, Index offsetA, Index offsetB) {
@@ -2256,9 +2296,9 @@ EIGEN_DONT_INLINE __arm_locally_streaming __arm_new("za") void sme_gebp_impl(
       if (narrow_ok && cw <= sme_packet_traits<typename NumTraits<Scalar>::Real>::size())
         for (; i + MR < rows; i += 2 * MR) {
           const int pw1 = static_cast<int>(sme_min(rows - i - MR, Index(MR)));
-          sme_process_narrow_dispatch(C, C_stride_row, C_stride_col, blockA + i * strideA + offsetA * MR, Index(MR),
-                                      blockA + (i + MR) * strideA + offsetA * pw1, Index(pw1), pw1, blB, cw, depth,
-                                      alpha, i, j);
+          sme_process_narrow_dispatch<Overwrite>(C, C_stride_row, C_stride_col, blockA + i * strideA + offsetA * MR,
+                                                 Index(MR), blockA + (i + MR) * strideA + offsetA * pw1, Index(pw1),
+                                                 pw1, blB, cw, depth, alpha, i, j);
         }
     }
     for (; i < rows; i += MR) {
@@ -2267,8 +2307,8 @@ EIGEN_DONT_INLINE __arm_locally_streaming __arm_new("za") void sme_gebp_impl(
       if (prefetch_c)
         sme_prefetch_next_c(C, C_stride_row, C_stride_col, i + MR < rows ? i + MR : Index(0),
                             i + MR < rows ? j : j + NR, rows, cols, MR, NR);
-      sme_process_block<ConjLhs, ConjRhs, FoldRealAlpha>(C, C_stride_row, C_stride_col, blA, blB, depth, alpha, i, pw,
-                                                         j, cw, Index(pw), split_ok, rows, cols);
+      sme_process_block<ConjLhs, ConjRhs, FoldRealAlpha, Overwrite>(
+          C, C_stride_row, C_stride_col, blA, blB, depth, alpha, i, pw, j, cw, Index(pw), split_ok, rows, cols);
     }
   }
 }
@@ -2279,35 +2319,35 @@ EIGEN_DONT_INLINE __arm_locally_streaming __arm_new("za") void sme_gebp_impl(
 // other product gets the kernel without that path.  Real scalars have one.
 template <typename Scalar, bool ConjLhs, bool ConjRhs, bool IsComplex = NumTraits<Scalar>::IsComplex>
 struct sme_gebp_dispatch {
-  template <typename Index>
+  template <bool Overwrite = false, typename Index>
   static void run(Scalar* C, Index C_stride_row, Index C_stride_col, const Scalar* blockA, const Scalar* blockB,
                   Index rows, Index depth, Index cols, Scalar alpha, Index strideA, Index strideB, Index offsetA,
                   Index offsetB) {
-    sme_gebp_impl<Scalar, ConjLhs, ConjRhs, false>(C, C_stride_row, C_stride_col, blockA, blockB, rows, depth, cols,
-                                                   alpha, strideA, strideB, offsetA, offsetB);
+    sme_gebp_impl<Scalar, ConjLhs, ConjRhs, false, Overwrite>(C, C_stride_row, C_stride_col, blockA, blockB, rows,
+                                                              depth, cols, alpha, strideA, strideB, offsetA, offsetB);
   }
 };
 
 template <typename Scalar, bool ConjLhs, bool ConjRhs>
 struct sme_gebp_dispatch<Scalar, ConjLhs, ConjRhs, true> {
-  template <typename Index>
+  template <bool Overwrite = false, typename Index>
   static void run(Scalar* C, Index C_stride_row, Index C_stride_col, const Scalar* blockA, const Scalar* blockB,
                   Index rows, Index depth, Index cols, Scalar alpha, Index strideA, Index strideB, Index offsetA,
                   Index offsetB) {
     using RealScalar = typename NumTraits<Scalar>::Real;
     if (numext::imag(alpha) == RealScalar(0) && numext::real(alpha) != RealScalar(1)) {
-      sme_gebp_impl<Scalar, ConjLhs, ConjRhs, true>(C, C_stride_row, C_stride_col, blockA, blockB, rows, depth, cols,
-                                                    alpha, strideA, strideB, offsetA, offsetB);
+      sme_gebp_impl<Scalar, ConjLhs, ConjRhs, true, Overwrite>(C, C_stride_row, C_stride_col, blockA, blockB, rows,
+                                                               depth, cols, alpha, strideA, strideB, offsetA, offsetB);
     } else {
-      sme_gebp_impl<Scalar, ConjLhs, ConjRhs, false>(C, C_stride_row, C_stride_col, blockA, blockB, rows, depth, cols,
-                                                     alpha, strideA, strideB, offsetA, offsetB);
+      sme_gebp_impl<Scalar, ConjLhs, ConjRhs, false, Overwrite>(C, C_stride_row, C_stride_col, blockA, blockB, rows,
+                                                                depth, cols, alpha, strideA, strideB, offsetA, offsetB);
     }
   }
 };
 
 // gebp with the LHS read from a ColMajor source: rows i..i+pw of column k are
 // at lhs + i + k * lda, the packed layout with a_step = lda. Real scalars only.
-template <typename Scalar, typename Index>
+template <typename Scalar, typename Index, bool Overwrite = false>
 EIGEN_DONT_INLINE __arm_locally_streaming __arm_new("za") void sme_gebp_impl_direct_lhs(
     Scalar* C, Index C_stride_row, Index C_stride_col, const Scalar* lhs, Index lda, const Scalar* blockB, Index rows,
     Index depth, Index cols, Scalar alpha, Index strideB, Index offsetB) {
@@ -2319,13 +2359,15 @@ EIGEN_DONT_INLINE __arm_locally_streaming __arm_new("za") void sme_gebp_impl_dir
     const Scalar* blB = blockB + j * strideB + offsetB * cw;
     Index i = 0;
     if (narrow_ok && cw <= sme_packet_traits<Scalar>::size())
-      for (; i + MR < rows; i += 2 * MR)
-        sme_process_narrow(C, C_stride_row, C_stride_col, lhs + i, lda, lhs + i + MR, lda,
-                           static_cast<int>(sme_min(rows - i - MR, Index(MR))), blB, cw, depth, alpha, i, j);
+      for (; i + MR < rows; i += 2 * MR) {
+        const int pw1 = static_cast<int>(sme_min(rows - i - MR, Index(MR)));
+        sme_process_narrow<Overwrite>(C, C_stride_row, C_stride_col, lhs + i, lda, lhs + i + MR, lda, pw1, blB, cw,
+                                      depth, alpha, i, j);
+      }
     for (; i < rows; i += MR) {
       const int pw = static_cast<int>(sme_min(rows - i, Index(MR)));
-      sme_process_block<false, false, false>(C, C_stride_row, C_stride_col, lhs + i, blB, depth, alpha, i, pw, j, cw,
-                                             lda, split_ok, rows, cols);
+      sme_process_block<false, false, false, Overwrite>(C, C_stride_row, C_stride_col, lhs + i, blB, depth, alpha, i,
+                                                        pw, j, cw, lda, split_ok, rows, cols);
     }
   }
 }
@@ -2794,10 +2836,49 @@ EIGEN_ALWAYS_INLINE void sme_gebp_neon(Scalar* C, Index C_stride_row, Index C_st
 template <typename Scalar, typename Index, typename DataMapper, int mr, int nr, bool ConjugateLhs, bool ConjugateRhs>
 struct sme_gebp_kernel {
   using ResScalar = Scalar;
+  // Real kernels overwrite in their stores (sme_c_mask). Complex ones would have to zero each block first, which
+  // measures slower than the driver zeroing the whole result once, so complex products keep that.
+  static constexpr bool CanOverwrite = !NumTraits<Scalar>::IsComplex;
+  // Whether overwriting a rows x cols result pays over zeroing it first (gebp_overwrite_pays). The NEON small-block
+  // path has nothing to gain: it zeroes and accumulates either way. Otherwise, on Apple M4, overwriting pays for
+  // 32-bit scalars at every size, and for 64-bit ones up to a 128 KB result, past which zeroing up front measures
+  // 1-6% faster.
+  static bool overwrite_pays(Index rows, Index cols, Index depth) {
+    if (rows <= 0 || cols <= 0 || sme_kernel_with_neon<Scalar>(rows, cols, depth, depth, depth)) return false;
+    // rows * cols <= 128 KB / sizeof(Scalar), without forming a product a narrow Index cannot hold.
+    return sizeof(Scalar) == 4 || rows <= Index((128 * 1024) / sizeof(Scalar)) / cols;
+  }
 
   EIGEN_DONT_INLINE void operator()(const DataMapper& res, const Scalar* blockA, const Scalar* blockB, Index rows,
                                     Index depth, Index cols, ResScalar alpha, Index strideA = -1, Index strideB = -1,
                                     Index offsetA = 0, Index offsetB = 0) {
+    run<false>(res, blockA, blockB, rows, depth, cols, alpha, strideA, strideB, offsetA, offsetB);
+  }
+  // C = alpha * A' * B' over the block, whatever C held (see gebp_overwrite_t).
+  EIGEN_DONT_INLINE void operator()(gebp_overwrite_t, const DataMapper& res, const Scalar* blockA, const Scalar* blockB,
+                                    Index rows, Index depth, Index cols, ResScalar alpha, Index strideA = -1,
+                                    Index strideB = -1, Index offsetA = 0, Index offsetB = 0) {
+    run<true>(res, blockA, blockB, rows, depth, cols, alpha, strideA, strideB, offsetA, offsetB);
+  }
+
+  // The LHS block read from its ColMajor source (see sme_direct_lhs_ok); only
+  // instantiated for real scalars.
+  EIGEN_DONT_INLINE void run_direct_lhs(const DataMapper& res, const Scalar* lhs, Index lhsStride, const Scalar* blockB,
+                                        Index rows, Index depth, Index cols, ResScalar alpha, Index strideB = -1,
+                                        Index offsetB = 0) {
+    run_direct_lhs_impl<false>(res, lhs, lhsStride, blockB, rows, depth, cols, alpha, strideB, offsetB);
+  }
+  EIGEN_DONT_INLINE void run_direct_lhs(gebp_overwrite_t, const DataMapper& res, const Scalar* lhs, Index lhsStride,
+                                        const Scalar* blockB, Index rows, Index depth, Index cols, ResScalar alpha,
+                                        Index strideB = -1, Index offsetB = 0) {
+    run_direct_lhs_impl<true>(res, lhs, lhsStride, blockB, rows, depth, cols, alpha, strideB, offsetB);
+  }
+
+ private:
+  template <bool Overwrite>
+  EIGEN_ALWAYS_INLINE void run(const DataMapper& res, const Scalar* blockA, const Scalar* blockB, Index rows,
+                               Index depth, Index cols, ResScalar alpha, Index strideA, Index strideB, Index offsetA,
+                               Index offsetB) {
     // Real scalars never reach the kernel conjugated (conj_helper folds it into
     // the identity long before), so the real path stays free of the flags.
     static_assert(NumTraits<Scalar>::IsComplex || (!ConjugateLhs && !ConjugateRhs),
@@ -2808,36 +2889,45 @@ struct sme_gebp_kernel {
     if (strideA == -1) strideA = depth;
     if (strideB == -1) strideB = depth;
 
-    if (rows <= 0 || cols <= 0 || depth <= 0) return;
+    if (rows <= 0 || cols <= 0) return;
 
     Scalar* C_base = const_cast<Scalar*>(&res(0, 0));
     const Index C_stride_row = &res(1, 0) - &res(0, 0);
     const Index C_stride_col = &res(0, 1) - &res(0, 0);
 
+    if (depth <= 0) {
+      EIGEN_IF_CONSTEXPR (Overwrite) gemm_zero_result(C_base, rows, cols, C_stride_row, C_stride_col);
+      return;
+    }
     if (sme_kernel_with_neon<Scalar>(rows, cols, depth, strideA, strideB)) {
+      EIGEN_IF_CONSTEXPR (Overwrite) gemm_zero_result(C_base, rows, cols, C_stride_row, C_stride_col);
       sme_gebp_neon<Scalar, ConjugateLhs, ConjugateRhs>(C_base, C_stride_row, C_stride_col, blockA, blockB, rows, depth,
                                                         cols, alpha, strideA, strideB, offsetA, offsetB);
       return;
     }
 
     sme_fpsr_guard fpsr;
-    sme_gebp_dispatch<Scalar, ConjugateLhs, ConjugateRhs>::run(C_base, C_stride_row, C_stride_col, blockA, blockB, rows,
-                                                               depth, cols, alpha, strideA, strideB, offsetA, offsetB);
+    sme_gebp_dispatch<Scalar, ConjugateLhs, ConjugateRhs>::template run<Overwrite>(
+        C_base, C_stride_row, C_stride_col, blockA, blockB, rows, depth, cols, alpha, strideA, strideB, offsetA,
+        offsetB);
   }
 
-  // The LHS block read from its ColMajor source (see sme_direct_lhs_ok); only
-  // instantiated for real scalars.
-  EIGEN_DONT_INLINE void run_direct_lhs(const DataMapper& res, const Scalar* lhs, Index lhsStride, const Scalar* blockB,
-                                        Index rows, Index depth, Index cols, ResScalar alpha, Index strideB = -1,
-                                        Index offsetB = 0) {
+  template <bool Overwrite>
+  EIGEN_ALWAYS_INLINE void run_direct_lhs_impl(const DataMapper& res, const Scalar* lhs, Index lhsStride,
+                                               const Scalar* blockB, Index rows, Index depth, Index cols,
+                                               ResScalar alpha, Index strideB, Index offsetB) {
     if (strideB == -1) strideB = depth;
-    if (rows <= 0 || cols <= 0 || depth <= 0) return;
+    if (rows <= 0 || cols <= 0) return;
     Scalar* C_base = const_cast<Scalar*>(&res(0, 0));
     const Index C_stride_row = &res(1, 0) - &res(0, 0);
     const Index C_stride_col = &res(0, 1) - &res(0, 0);
+    if (depth <= 0) {
+      EIGEN_IF_CONSTEXPR (Overwrite) gemm_zero_result(C_base, rows, cols, C_stride_row, C_stride_col);
+      return;
+    }
     sme_fpsr_guard fpsr;
-    sme_gebp_impl_direct_lhs<Scalar, Index>(C_base, C_stride_row, C_stride_col, lhs, lhsStride, blockB, rows, depth,
-                                            cols, alpha, strideB, offsetB);
+    sme_gebp_impl_direct_lhs<Scalar, Index, Overwrite>(C_base, C_stride_row, C_stride_col, lhs, lhsStride, blockB, rows,
+                                                       depth, cols, alpha, strideB, offsetB);
   }
 };
 
