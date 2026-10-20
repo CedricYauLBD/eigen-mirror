@@ -50,6 +50,9 @@
 #include "main.h"
 #include <contrib/Eigen/Riccati>
 
+#include <algorithm>
+#include <vector>
+
 namespace {
 
 // Residual of A^* X A - E^* X E - (A^* X B + S) (R + B^* X B)^-1 (B^* X A + S^*) + Q.
@@ -315,10 +318,13 @@ void dare_generalized_scipy_cases() {
   E << 6.463130e-01, 2.760251e-01, 1.626117e-01, 7.093648e-01, 6.797027e-01, 1.189977e-01, 7.546867e-01, 6.550980e-01,
       4.983641e-01;
   const MatrixXd Q = MatrixXd::Identity(3, 3), R = MatrixXd::Identity(2, 2);
+  // SciPy's tolerance is for real arithmetic; the complex solve reaches residuals of 0.9-1.7e-11 depending on the
+  // rounding of equivalent transformations.
+  const double atol = NumTraits<Scalar>::IsComplex ? 3e-11 : 1.5e-11;
   check_generalized_dare<MatrixType>(A.cast<Scalar>(), B.cast<Scalar>(), Q.cast<Scalar>(), R.cast<Scalar>(),
-                                     E.cast<Scalar>(), MatrixType::Zero(3, 2), 1.5e-11);
+                                     E.cast<Scalar>(), MatrixType::Zero(3, 2), atol);
   check_generalized_dare<MatrixType>(A.cast<Scalar>(), B.cast<Scalar>(), Q.cast<Scalar>(), R.cast<Scalar>(),
-                                     E.cast<Scalar>(), MatrixType::Ones(3, 2), 1.5e-11);
+                                     E.cast<Scalar>(), MatrixType::Ones(3, 2), atol);
   if (NumTraits<Scalar>::IsComplex) return;
 
   // Reported under SciPy PR 6616: E omitted, S given.
@@ -549,7 +555,7 @@ void generalized_schur_reordering(Index size) {
     }
   }
 
-  const Index selected = internal::reorder_generalized_schur_inside_unit_circle(S, T, Q, Z);
+  const Index selected = internal::reorder_generalized_schur_inside_unit_circle(S, T, &Q, Z);
   VERIFY_IS_EQUAL(selected, inside);
   // Each swap is accepted only if it is backward stable to 20 eps ||(S, T)||_F locally, see the strong stability test.
   const RealScalar bound = RealScalar(20) * RealScalar(size) * eps;
@@ -574,12 +580,108 @@ void generalized_schur_reordering(Index size) {
   }
 }
 
+// Generalized eigenvalues of the diagonal block of size bs at (k, k) of (S, T), sorted.
+template <typename MatrixType>
+std::vector<std::complex<typename MatrixType::RealScalar>> block_eigenvalues(const MatrixType& S, const MatrixType& T,
+                                                                             Index k, Index bs) {
+  using Complex = std::complex<typename MatrixType::RealScalar>;
+  using ComplexMatrix = Matrix<Complex, Dynamic, Dynamic>;
+  const ComplexMatrix s = S.block(k, k, bs, bs).template cast<Complex>();
+  const ComplexMatrix t = T.block(k, k, bs, bs).template cast<Complex>();
+  const Matrix<Complex, Dynamic, 1> ev = ComplexEigenSolver<ComplexMatrix>(t.inverse() * s).eigenvalues();
+  std::vector<Complex> v(ev.data(), ev.data() + ev.size());
+  std::sort(v.begin(), v.end(), [](const Complex& a, const Complex& b) {
+    return a.imag() < b.imag() || (a.imag() == b.imag() && a.real() < b.real());
+  });
+  return v;
+}
+
+// Swaps the diagonal blocks of sizes n1 and n2 at row/column j = 1 of a generalized Schur form of size n1 + n2 + 2.
+template <typename MatrixType>
+void generalized_schur_swap(Index n1, Index n2) {
+  using Scalar = typename MatrixType::Scalar;
+  using RealScalar = typename MatrixType::RealScalar;
+  const Index j = 1, size = n1 + n2 + 2;
+  MatrixType S = MatrixType::Random(size, size).template triangularView<Upper>();
+  MatrixType T = MatrixType::Random(size, size).template triangularView<Upper>();
+  T.diagonal().array() += Scalar(2);
+  // A 2x2 block (s, t) with t = I and s = [a, 1; -1, a] has the eigenvalues a +- i.
+  const Index starts[] = {j, j + n1};
+  const Index sizes[] = {n1, n2};
+  for (int b = 0; b < 2; ++b) {
+    if (sizes[b] != 2) continue;
+    const Index k = starts[b];
+    const Scalar a = Scalar(b == 0 ? 0.5 : -0.25);
+    S.template block<2, 2>(k, k) << a, Scalar(1), Scalar(-1), a;
+    T.template block<2, 2>(k, k).setIdentity();
+  }
+  const MatrixType S0 = S, T0 = T;
+  MatrixType Q = MatrixType::Identity(size, size), Z = MatrixType::Identity(size, size);
+  const auto upper = block_eigenvalues(S0, T0, j, n1);
+  const auto lower = block_eigenvalues(S0, T0, j + n1, n2);
+
+  VERIFY(internal::swap_generalized_schur_blocks(S, T, &Q, Z, j, n1, n2));
+  const auto newUpper = block_eigenvalues(S, T, j, n2);
+  const auto newLower = block_eigenvalues(S, T, j + n2, n1);
+  const RealScalar eps = NumTraits<RealScalar>::epsilon();
+  for (Index i = 0; i < n2; ++i)
+    VERIFY(std::abs(newUpper[i] - lower[i]) <= RealScalar(100) * eps * (RealScalar(1) + std::abs(lower[i])));
+  for (Index i = 0; i < n1; ++i)
+    VERIFY(std::abs(newLower[i] - upper[i]) <= RealScalar(100) * eps * (RealScalar(1) + std::abs(upper[i])));
+  // Exact structure: zero block boundary, T upper triangular, S zero below its 2x2 diagonal blocks.
+  VERIFY_IS_EQUAL(S.block(j + n2, j, n1, n2), MatrixType::Zero(n1, n2));
+  VERIFY_IS_EQUAL(T.template triangularView<StrictlyLower>().toDenseMatrix(), MatrixType::Zero(size, size));
+  for (Index c = 0; c < size; ++c)
+    for (Index r = c + 1; r < size; ++r)
+      if (!((r == j + 1 && c == j && n2 == 2) || (r == j + n2 + 1 && c == j + n2 && n1 == 2)))
+        VERIFY_IS_EQUAL(S(r, c), Scalar(0));
+  // Backward error and orthogonality.
+  const RealScalar bound = RealScalar(20) * RealScalar(size) * eps;
+  VERIFY((Q * S * Z.adjoint() - S0).norm() <= bound * S0.norm());
+  VERIFY((Q * T * Z.adjoint() - T0).norm() <= bound * T0.norm());
+  VERIFY((Q.adjoint() * Q - MatrixType::Identity(size, size)).norm() <= bound);
+  VERIFY((Z.adjoint() * Z - MatrixType::Identity(size, size)).norm() <= bound);
+}
+
+#if defined(EIGEN_TEST_PART_6) || defined(EIGEN_TEST_PART_ALL)
+// A rejected swap leaves all matrices untouched, and the reordering then reports failure.
+void generalized_schur_rejected_swap() {
+  // Equal 2x2 blocks make the generalized Sylvester equation singular.
+  MatrixXd S(4, 4), T = MatrixXd::Identity(4, 4);
+  S << 0.5, 1, 0.3, 0.2,  //
+      -1, 0.5, 0.1, 0.4,  //
+      0, 0, 0.5, 1,       //
+      0, 0, -1, 0.5;
+  MatrixXd Q = MatrixXd::Identity(4, 4), Z = MatrixXd::Identity(4, 4);
+  const MatrixXd S0 = S, T0 = T, Q0 = Q, Z0 = Z;
+  VERIFY(!internal::swap_generalized_schur_blocks(S, T, &Q, Z, 0, 2, 2));
+  VERIFY_IS_EQUAL(S, S0);
+  VERIFY_IS_EQUAL(T, T0);
+  VERIFY_IS_EQUAL(Q, Q0);
+  VERIFY_IS_EQUAL(Z, Z0);
+
+  // The 1x1 blocks 0/0 and 1/2 of a singular pencil cannot be swapped, so the eigenvalue 1/2 cannot be selected.
+  MatrixXd S2(2, 2), T2(2, 2);
+  S2 << 0, 0, 0, 0.5;
+  T2 << 0, 0, 0, 1;
+  MatrixXd Q2 = MatrixXd::Identity(2, 2), Z2 = MatrixXd::Identity(2, 2);
+  const MatrixXd S20 = S2, T20 = T2;
+  VERIFY_IS_EQUAL(internal::reorder_generalized_schur_inside_unit_circle(S2, T2, &Q2, Z2), Index(-1));
+  VERIFY_IS_EQUAL(S2, S20);
+  VERIFY_IS_EQUAL(T2, T20);
+}
+#endif
+
 EIGEN_DECLARE_TEST(riccati) {
   CALL_SUBTEST_1(dare_scipy_real_cases<MatrixXd>());
   CALL_SUBTEST_1(dare_generalized_scipy_cases<MatrixXd>());
   CALL_SUBTEST_1(dare_generalized_balanced());
   CALL_SUBTEST_1(dare_invalid_input());
   CALL_SUBTEST_1(dare_no_stabilizing_solution());
+  CALL_SUBTEST_6(generalized_schur_rejected_swap());
+  for (Index n1 = 1; n1 <= 2; ++n1)
+    for (Index n2 = 1; n2 <= 2; ++n2) CALL_SUBTEST_6(generalized_schur_swap<MatrixXd>(n1, n2));
+  CALL_SUBTEST_6(generalized_schur_swap<MatrixXcd>(1, 1));
   CALL_SUBTEST_4(dare_complex_qz_2x2_block());
   CALL_SUBTEST_7(dare_scipy_complex_cases());
   CALL_SUBTEST_7(dare_scipy_real_cases<MatrixXcd>());

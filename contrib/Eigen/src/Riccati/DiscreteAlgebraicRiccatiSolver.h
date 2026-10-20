@@ -473,10 +473,10 @@ DiscreteAlgebraicRiccatiSolver<MatrixType_>& DiscreteAlgebraicRiccatiSolver<Matr
   }
   DynamicMatrix SS = qz.matrixS();
   DynamicMatrix TT = qz.matrixT();
-  DynamicMatrix QQ = qz.matrixQ();
   DynamicMatrix ZZ = qz.matrixZ().adjoint();
   m_info = NumericalIssue;
   if (qz.info() != Success) {
+    const DynamicMatrix QQ = qz.matrixQ();
     // ComplexQZ reports NumericalIssue when its direct reduction of a 2x2 block leaves a subdiagonal entry of S above
     // eps ||S||, although the reduction is only backward stable to a few eps ||S||. Accept the decomposition if
     // ||Q (S, T) Z^* - (Hd, Jd)||_F <= 10 (2m) eps ||(Hd, Jd)||_F once that entry is dropped.
@@ -488,7 +488,7 @@ DiscreteAlgebraicRiccatiSolver<MatrixType_>& DiscreteAlgebraicRiccatiSolver<Matr
   }
   // The eigenvalues of the symplectic pencil come in pairs (lambda, 1 / conj(lambda)), so exactly m of them lie
   // inside the unit circle if a stabilizing solution exists. (SciPy does not check this.)
-  if (internal::reorder_generalized_schur_inside_unit_circle(SS, TT, QQ, ZZ) != m) return *this;
+  if (internal::reorder_generalized_schur_inside_unit_circle<DynamicMatrix>(SS, TT, nullptr, ZZ) != m) return *this;
 
   // The leading m right Schur vectors span the stable deflating subspace.
   DynamicMatrix U = ZZ.leftCols(m);
