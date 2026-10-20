@@ -403,10 +403,7 @@ DiscreteAlgebraicRiccatiSolver<MatrixType_>& DiscreteAlgebraicRiccatiSolver<Matr
   if ((E != nullptr && !E->allFinite()) || (S != nullptr && !S->allFinite())) return *this;
   if (!isSelfAdjoint(Q) || !isSelfAdjoint(R)) return *this;
   if (E != nullptr && m > 0) {
-    const RealScalar minSingularValue = JacobiSVD<DynamicMatrix>(*E).singularValues()(m - 1);
-    if (numext::is_exactly_zero(minSingularValue) ||
-        minSingularValue < NumTraits<RealScalar>::epsilon() * internal::riccati_norm1(*E))
-      return *this;
+    if (!(RealScalar(m) * PartialPivLU<DynamicMatrix>(*E).rcond() >= NumTraits<RealScalar>::epsilon())) return *this;
   }
 
   // Form the extended symplectic pencil H - lambda J.
@@ -460,9 +457,9 @@ DiscreteAlgebraicRiccatiSolver<MatrixType_>& DiscreteAlgebraicRiccatiSolver<Matr
   // Deflate the pencil by the columns belonging to R, see [1].
   DynamicMatrix Hd, Jd;
   if (n > 0) {
-    const DynamicMatrix W = HouseholderQR<DynamicMatrix>(H.rightCols(n)).householderQ();
-    Hd = W.rightCols(2 * m).adjoint() * H.leftCols(2 * m);
-    Jd = W.rightCols(2 * m).adjoint() * J.leftCols(2 * m);
+    const HouseholderQR<DynamicMatrix> qr(H.rightCols(n));
+    Hd = (qr.householderQ().adjoint() * H.leftCols(2 * m)).bottomRows(2 * m);
+    Jd = (qr.householderQ().adjoint() * J.leftCols(2 * m)).bottomRows(2 * m);
   } else {
     Hd = H;
     Jd = J;
@@ -501,16 +498,12 @@ DiscreteAlgebraicRiccatiSolver<MatrixType_>& DiscreteAlgebraicRiccatiSolver<Matr
     U.topRows(m) = (J.topLeftCorner(m, m) * U.topRows(m)).eval();
     U = HouseholderQR<DynamicMatrix>(U).householderQ() * DynamicMatrix::Identity(2 * m, m);
   }
-  const DynamicMatrix U1 = U.topRows(m);
-  const DynamicMatrix U2 = U.bottomRows(m);
+  const auto U1 = U.topRows(m);
+  const auto U2 = U.bottomRows(m);
 
-  // Check the conditioning of U1 through its LU factor.
+  // rcond() bounds 1 / kappa_1(U1) from above and kappa_1 <= m kappa_2, so this rejects only kappa_2(U1) > 1 / eps.
   const PartialPivLU<DynamicMatrix> lu(U1);
-  if (m > 0) {
-    const DynamicMatrix upper = lu.matrixLU().template triangularView<Upper>();
-    const Matrix<RealScalar, Dynamic, 1> sv = JacobiSVD<DynamicMatrix>(upper).singularValues();
-    if (!(sv(m - 1) >= NumTraits<RealScalar>::epsilon() * sv(0)) || numext::is_exactly_zero(sv(0))) return *this;
-  }
+  if (m > 0 && !(RealScalar(m) * lu.rcond() >= NumTraits<RealScalar>::epsilon())) return *this;
   // X = U2 U1^-1 is computed as (U1^-* U2^*)^*.
   DynamicMatrix X = lu.adjoint().solve(U2.adjoint());
   X.adjointInPlace();

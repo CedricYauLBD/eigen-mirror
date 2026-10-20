@@ -82,32 +82,27 @@ bool generalized_schur_swap_sylvester(const LocalMatrix& A, const LocalMatrix& B
   const Index k = n1 * n2;
 
   // Column-major vectorization with unknowns [vec(X); vec(Y)].
+  // K = [I (x) A11, -(A22^T (x) I); I (x) B11, -(B22^T (x) I)].
   SylvesterMatrix K = SylvesterMatrix::Zero(2 * k, 2 * k);
-  SylvesterVector rhs(2 * k);
   for (Index c = 0; c < n2; ++c) {
-    for (Index r = 0; r < n1; ++r) {
-      const Index row = c * n1 + r;
-      for (Index i = 0; i < n1; ++i) {
-        K(row, c * n1 + i) = A(r, i);
-        K(k + row, c * n1 + i) = B(r, i);
-      }
-      for (Index i = 0; i < n2; ++i) {
-        K(row, k + i * n1 + r) = -A(n1 + i, n1 + c);
-        K(k + row, k + i * n1 + r) = -B(n1 + i, n1 + c);
-      }
-      rhs(row) = -A(r, n1 + c);
-      rhs(k + row) = -B(r, n1 + c);
+    K.block(c * n1, c * n1, n1, n1) = A.topLeftCorner(n1, n1);
+    K.block(k + c * n1, c * n1, n1, n1) = B.topLeftCorner(n1, n1);
+    for (Index i = 0; i < n2; ++i) {
+      K.block(c * n1, k + i * n1, n1, n1).diagonal().setConstant(-A(n1 + i, n1 + c));
+      K.block(k + c * n1, k + i * n1, n1, n1).diagonal().setConstant(-B(n1 + i, n1 + c));
     }
   }
+  SylvesterVector rhs(2 * k);
+  rhs << -A.topRightCorner(n1, n2).reshaped(), -B.topRightCorner(n1, n2).reshaped();
   const FullPivLU<SylvesterMatrix> sylvester(K);
   if (!sylvester.isInvertible()) return false;
   const SylvesterVector sol = sylvester.solve(rhs);
 
   LocalMatrix basis(m, n2);
-  basis.topRows(n1) = Map<const LocalMatrix>(sol.data(), n1, n2);
+  basis.topRows(n1) = sol.head(k).reshaped(n1, n2);
   basis.bottomRows(n2).setIdentity();
   Zl = HouseholderQR<LocalMatrix>(basis).householderQ();
-  basis.topRows(n1) = Map<const LocalMatrix>(sol.data() + k, n1, n2);
+  basis.topRows(n1) = sol.tail(k).reshaped(n1, n2);
   Ql = HouseholderQR<LocalMatrix>(basis).householderQ();
   return true;
 }
@@ -173,6 +168,21 @@ bool swap_generalized_schur_blocks(MatrixType& S, MatrixType& T, MatrixType& Q, 
   S.block(j, j, m, m) = An;
   T.block(j, j, m, m) = Bn;
   const Index right = n - j - m;
+  if (m == 2) {
+    // Ql and Zl are plane rotations [w0, -conj(w1); w1, conj(w0)] = JacobiRotation(w0, -w1).
+    const JacobiRotation<Scalar> gq(Ql(0, 0), -Ql(1, 0)), gz(Zl(0, 0), -Zl(1, 0));
+    if (right > 0) {
+      S.rightCols(right).applyOnTheLeft(j, j + 1, gq.adjoint());
+      T.rightCols(right).applyOnTheLeft(j, j + 1, gq.adjoint());
+    }
+    if (j > 0) {
+      S.topRows(j).applyOnTheRight(j, j + 1, gz);
+      T.topRows(j).applyOnTheRight(j, j + 1, gz);
+    }
+    Q.applyOnTheRight(j, j + 1, gq);
+    Z.applyOnTheRight(j, j + 1, gz);
+    return true;
+  }
   if (right > 0) {
     S.block(j, j + m, m, right) = Ql.adjoint() * S.block(j, j + m, m, right);
     T.block(j, j + m, m, right) = Ql.adjoint() * T.block(j, j + m, m, right);
