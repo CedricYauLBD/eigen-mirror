@@ -447,8 +447,10 @@ void dare_no_stabilizing_solution() {
   MatrixXd A(2, 2), B(2, 1);
   A << 2, 0, 0, 0.5;
   B << 0, 1;
-  DiscreteAlgebraicRiccatiSolver<MatrixXd> dare(A, B, MatrixXd::Identity(2, 2), MatrixXd::Identity(1, 1));
-  VERIFY_IS_EQUAL(dare.info(), NumericalIssue);
+  DiscreteAlgebraicRiccatiSolver<MatrixXd> dare;
+  for (bool balance : {true, false})
+    VERIFY_IS_EQUAL(dare.compute(A, B, MatrixXd::Identity(2, 2), MatrixXd::Identity(1, 1), balance).info(),
+                    NumericalIssue);
 }
 
 #endif

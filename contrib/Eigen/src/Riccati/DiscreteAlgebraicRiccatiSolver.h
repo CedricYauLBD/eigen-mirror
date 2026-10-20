@@ -501,9 +501,12 @@ DiscreteAlgebraicRiccatiSolver<MatrixType_>& DiscreteAlgebraicRiccatiSolver<Matr
   const auto U1 = U.topRows(m);
   const auto U2 = U.bottomRows(m);
 
-  // rcond() bounds 1 / kappa_1(U1) from above and kappa_1 <= m kappa_2, so this rejects only kappa_2(U1) > 1 / eps.
+  // [U1; U2] has orthonormal columns, so ||X||_2 = sqrt(1 - sigma_min(U1)^2) / sigma_min(U1). The test
+  // m rcond(U1) >= eps used for E never rejects kappa_2(U1) <= 1 / eps, but as rcond() bounds 1 / kappa_1 from above
+  // it can accept larger kappa_2: it accepts the non-stabilizable problem of dare_no_stabilizing_solution() with a
+  // meaningless ||X|| ~ 1e16. U1 is therefore held to rcond(U1) >= eps.
   const PartialPivLU<DynamicMatrix> lu(U1);
-  if (m > 0 && !(RealScalar(m) * lu.rcond() >= NumTraits<RealScalar>::epsilon())) return *this;
+  if (m > 0 && !(lu.rcond() >= NumTraits<RealScalar>::epsilon())) return *this;
   // X = U2 U1^-1 is computed as (U1^-* U2^*)^*.
   DynamicMatrix X = lu.adjoint().solve(U2.adjoint());
   X.adjointInPlace();
