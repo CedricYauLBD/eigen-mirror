@@ -5,7 +5,47 @@
 // Public License v. 2.0. If a copy of the MPL was not distributed
 // with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
 // SPDX-FileCopyrightText: The Eigen Authors
-// SPDX-License-Identifier: MPL-2.0
+// SPDX-FileCopyrightText: 2001-2002 Enthought, Inc.
+// SPDX-FileCopyrightText: 2003 SciPy Developers
+// SPDX-License-Identifier: MPL-2.0 AND BSD-3-Clause
+//
+// This file incorporates work covered by the following copyright and
+// permission notice:
+//
+//   dare_scipy_complex_cases(), dare_scipy_real_cases() and dare_generalized_scipy_cases()
+//   are adapted from the solve_discrete_are tests of SciPy 1.18.0 (scipy/linalg/tests/test_solvers.py and
+//   scipy/linalg/tests/data/gendare_20170120_data.npz):
+//
+//    Copyright (c) 2001-2002 Enthought, Inc. 2003, SciPy Developers.
+//    All rights reserved.
+//
+//    Redistribution and use in source and binary forms, with or without
+//    modification, are permitted provided that the following conditions
+//    are met:
+//
+//    1. Redistributions of source code must retain the above copyright
+//       notice, this list of conditions and the following disclaimer.
+//
+//    2. Redistributions in binary form must reproduce the above
+//       copyright notice, this list of conditions and the following
+//       disclaimer in the documentation and/or other materials provided
+//       with the distribution.
+//
+//    3. Neither the name of the copyright holder nor the names of its
+//       contributors may be used to endorse or promote products derived
+//       from this software without specific prior written permission.
+//
+//    THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+//    "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+//    LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+//    A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+//    OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+//    SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+//    LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+//    DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+//    THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+//    (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+//    OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 #include "main.h"
 #include <contrib/Eigen/Riccati>
@@ -49,13 +89,12 @@ void check_generalized_dare(const MatrixType& A, const MatrixType& B, const Matr
   VERIFY(dare_residual(A, B, Q, R, E, S, X).cwiseAbs().maxCoeff() <= atol);
 }
 
-// Real test cases are also solved in complex arithmetic to exercise the ComplexQZ code path.
-void check_real_dare(const MatrixXd& A, const MatrixXd& B, const MatrixXd& Q, const MatrixXd& R, double atol,
-                     bool alsoComplex = true) {
-  check_dare<MatrixXd>(A, B, Q, R, atol);
-  if (alsoComplex)
-    check_dare<MatrixXcd>(A.cast<std::complex<double>>(), B.cast<std::complex<double>>(),
-                          Q.cast<std::complex<double>>(), R.cast<std::complex<double>>(), atol);
+// Solves a real test case in the arithmetic of MatrixType; the real cases are also solved in complex arithmetic to
+// exercise the ComplexQZ code path.
+template <typename MatrixType>
+void check_real_dare(const MatrixXd& A, const MatrixXd& B, const MatrixXd& Q, const MatrixXd& R, double atol) {
+  using Scalar = typename MatrixType::Scalar;
+  check_dare<MatrixType>(A.cast<Scalar>(), B.cast<Scalar>(), Q.cast<Scalar>(), R.cast<Scalar>(), atol);
 }
 
 // Backward error check for a computed solution X:
@@ -89,10 +128,9 @@ void verify_stabilizing(const DynMatrix& A, const DynMatrix& B, const DynMatrix&
 
 }  // namespace
 
-// The test cases of scipy.linalg.solve_discrete_are, most of them from
-// P. Benner, A. J. Laub, V. Mehrmann, "A Collection of Benchmark Examples for the Numerical Solution of Algebraic
-// Riccati Equations II: Discrete-Time Case", Tech. Report SPC 95_23, TU Chemnitz-Zwickau, 1995 (DAREX).
-void dare_scipy_cases() {
+#if defined(EIGEN_TEST_PART_7) || defined(EIGEN_TEST_PART_ALL)
+// The test cases of scipy.linalg.solve_discrete_are with complex data.
+void dare_scipy_complex_cases() {
   using cd = std::complex<double>;
   {  // complex A; real B, Q, R
     MatrixXcd A(2, 2), B(2, 1), Q(2, 2), R(1, 1);
@@ -118,11 +156,19 @@ void dare_scipy_cases() {
     R << cd(2, 0), cd(0, -2), cd(0, 2), cd(3, 0);
     check_dare(A, B, Q, R, 1.5e-13);
   }
+}
+#endif
+
+// The test cases of scipy.linalg.solve_discrete_are with real data, most of them from
+// P. Benner, A. J. Laub, V. Mehrmann, "A Collection of Benchmark Examples for the Numerical Solution of Algebraic
+// Riccati Equations II: Discrete-Time Case", Tech. Report SPC 95_23, TU Chemnitz-Zwickau, 1995 (DAREX).
+template <typename MatrixType>
+void dare_scipy_real_cases() {
   {  // SciPy gh-2251
     MatrixXd A(3, 3), B(3, 1);
     A << 0.63399379, 0.54906824, 0.76253406, 0.5404729, 0.53745766, 0.08731853, 0.27524045, 0.84922129, 0.4681622;
     B << 0.96861695, 0.05532739, 0.78934047;
-    check_real_dare(A, B, MatrixXd::Identity(3, 3), MatrixXd::Identity(1, 1), 1.5e-14);
+    check_real_dare<MatrixType>(A, B, MatrixXd::Identity(3, 3), MatrixXd::Identity(1, 1), 1.5e-14);
   }
   {  // DAREX 1
     MatrixXd A(2, 2), B(2, 1), Q(2, 2), R(1, 1);
@@ -130,7 +176,7 @@ void dare_scipy_cases() {
     B << 1, -1;
     Q << 9, 6, 6, 4;
     R << 1;
-    check_real_dare(A, B, Q, R, 1.5e-13);
+    check_real_dare<MatrixType>(A, B, Q, R, 1.5e-13);
   }
   {  // DAREX 2
     MatrixXd A(2, 2), B(2, 2), Q(2, 2), R(2, 2);
@@ -138,7 +184,7 @@ void dare_scipy_cases() {
     B << 4.877, 4.877, -1.1895, 3.569;
     Q << 0.005, 0, 0, 0.02;
     R << 1. / 3, 0, 0, 3;
-    check_real_dare(A, B, Q, R, 1.5e-16);
+    check_real_dare<MatrixType>(A, B, Q, R, 1.5e-16);
   }
   {  // DAREX 3: singular R
     MatrixXd A(2, 2), B(2, 1), Q(2, 2), R(1, 1);
@@ -148,7 +194,7 @@ void dare_scipy_cases() {
     R << 0;
     // SciPy's bound of 1.5e-18 holds there only because LAPACK happens to round to the exact solution; X has O(1)
     // entries, so a residual of a few eps is backward stable.
-    check_real_dare(A, B, Q, R, 4 * NumTraits<double>::epsilon());
+    check_real_dare<MatrixType>(A, B, Q, R, 4 * NumTraits<double>::epsilon());
   }
   {  // DAREX 4 (without the generalized term S)
     MatrixXd A(2, 2), B(2, 2), Q(2, 2), R(2, 2);
@@ -157,7 +203,7 @@ void dare_scipy_cases() {
     Q << -4, -4, -4, 7;
     Q /= 11;
     R << 9, 3, 3, 1;
-    check_real_dare(A, B, Q, R, 1.5e-14);
+    check_real_dare<MatrixType>(A, B, Q, R, 1.5e-14);
   }
   {  // DAREX 5
     MatrixXd A(2, 2), B(2, 1), Q(2, 2), R(1, 1);
@@ -165,28 +211,28 @@ void dare_scipy_cases() {
     B << 0, 1;
     Q << 1, 2, 2, 4;
     R << 1;
-    check_real_dare(A, B, Q, R, 1.5e-14);
+    check_real_dare<MatrixType>(A, B, Q, R, 1.5e-14);
   }
   {  // DAREX 6
     MatrixXd A(4, 4), B(4, 2), Q(4, 4);
     A << 0.998, 0.067, 0, 0, -.067, 0.998, 0, 0, 0, 0, 0.998, 0.153, 0, 0, -.153, 0.998;
     B << 0.0033, 0.0200, 0.1000, -.0007, 0.0400, 0.0073, -.0028, 0.1000;
     Q << 1.87, 0, 0, -0.244, 0, 0.744, 0.205, 0, 0, 0.205, 0.589, 0, -0.244, 0, 0, 1.048;
-    check_real_dare(A, B, Q, MatrixXd::Identity(2, 2), 1.5e-13);
+    check_real_dare<MatrixType>(A, B, Q, MatrixXd::Identity(2, 2), 1.5e-13);
   }
   {  // DAREX 7
     MatrixXd A(4, 4), B(4, 2);
     A << 0.984750, -.079903, 0.0009054, -.0010765, 0.041588, 0.998990, -.0358550, 0.0126840, -.546620, 0.044916,
         -.3299100, 0.1931800, 2.662400, -.100450, -.9245500, -.2632500;
     B << 0.0037112, 0.0007361, -.0870510, 9.3411e-6, -1.198440, -4.1378e-4, -3.192700, 9.2535e-4;
-    check_real_dare(A, B, MatrixXd::Identity(4, 4) * 1e-2, MatrixXd::Identity(2, 2), 1.5e-14);
+    check_real_dare<MatrixType>(A, B, MatrixXd::Identity(4, 4) * 1e-2, MatrixXd::Identity(2, 2), 1.5e-14);
   }
   {  // DAREX 8
     MatrixXd A(4, 4), B(4, 4), Q(4, 4);
     A << -0.6, -2.2, -3.6, -5.400018, 1.0, 0.6, 0.8, 3.399982, 0.0, 1.0, 1.8, 3.799982, 0.0, 0.0, 0.0, -0.999982;
     B << 1.0, -1.0, -1.0, -1.0, 0.0, 1.0, -1.0, -1.0, 0.0, 0.0, 1.0, -1.0, 0.0, 0.0, 0.0, 1.0;
     Q << 2, 1, 3, 6, 1, 2, 2, 5, 3, 2, 6, 11, 6, 5, 11, 22;
-    check_real_dare(A, B, Q, MatrixXd::Identity(4, 4), 2.5e-13);
+    check_real_dare<MatrixType>(A, B, Q, MatrixXd::Identity(4, 4), 2.5e-13);
   }
   {  // DAREX 9
     MatrixXd A(5, 5), B(5, 2);
@@ -195,7 +241,7 @@ void dare_scipy_cases() {
     A *= 0.01;
     B << 0.0434, -0.0122, 2.6606, -1.0453, 3.7530, -5.5100, 3.6076, -6.6000, 0.4617, -0.9148;
     B *= 0.01;
-    check_real_dare(A, B, MatrixXd::Identity(5, 5), MatrixXd::Identity(2, 2), 1.5e-13);
+    check_real_dare<MatrixType>(A, B, MatrixXd::Identity(5, 5), MatrixXd::Identity(2, 2), 1.5e-13);
   }
   {  // DAREX 10
     MatrixXd A = MatrixXd::Zero(6, 6), B = MatrixXd::Zero(6, 2), Q(6, 6), R(2, 2);
@@ -203,7 +249,7 @@ void dare_scipy_cases() {
     B(2, 0) = B(5, 1) = 1;
     Q << 1, 1, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, -1, 0, 0, 0, 0, -1, 1, 0, 0, 0, 0, 0, 0, 0;
     R << 3, 0, 0, 1;
-    check_real_dare(A, B, Q, R, 1.5e-14);
+    check_real_dare<MatrixType>(A, B, Q, R, 1.5e-14);
   }
   {  // DAREX 11
     MatrixXd A(9, 9), B(9, 3);
@@ -223,20 +269,20 @@ void dare_scipy_cases() {
     B *= 0.001;
     VectorXd q = VectorXd::Zero(9);
     q(0) = q(4) = 50;
-    check_real_dare(A, B, MatrixXd(q.asDiagonal()), MatrixXd::Identity(3, 3), 1.5e-12);
+    check_real_dare<MatrixType>(A, B, MatrixXd(q.asDiagonal()), MatrixXd::Identity(3, 3), 1.5e-12);
   }
   {  // DAREX 12: numerically the least accurate example
     MatrixXd A(2, 2), B(2, 1);
     A << 0, 1e6, 0, 0;
     B << 0, 1;
-    check_real_dare(A, B, MatrixXd::Identity(2, 2), MatrixXd::Identity(1, 1), 2.0e-2);
+    check_real_dare<MatrixType>(A, B, MatrixXd::Identity(2, 2), MatrixXd::Identity(1, 1), 2.0e-2);
   }
   {  // DAREX 13
     MatrixXd A(3, 3);
     A << 16, 10, -2, 10, 13, -8, -2, -8, 7;
     A /= 9;
-    check_real_dare(A, MatrixXd::Identity(3, 3), 1e6 * MatrixXd::Identity(3, 3), 1e6 * MatrixXd::Identity(3, 3),
-                    2.0e-4);
+    check_real_dare<MatrixType>(A, MatrixXd::Identity(3, 3), 1e6 * MatrixXd::Identity(3, 3),
+                                1e6 * MatrixXd::Identity(3, 3), 2.0e-4);
   }
   {  // DAREX 14
     MatrixXd A = MatrixXd::Zero(4, 4), B = MatrixXd::Zero(4, 1), Q = MatrixXd::Zero(4, 4), R(1, 1);
@@ -247,19 +293,21 @@ void dare_scipy_cases() {
     R << 0.25;
     // ComplexQZ locates the pencil eigenvalue at 1 - 2.24e-8 less accurately than RealQZ and LAPACK's ZGGES, so the
     // complex solve misses SciPy's bound (residual 7.6e-5 instead of 2.4e-8 with ZGGES).
-    check_real_dare(A, B, Q, R, 1.5e-6, /*alsoComplex=*/false);
+    if (!NumTraits<typename MatrixType::Scalar>::IsComplex) check_real_dare<MatrixType>(A, B, Q, R, 1.5e-6);
   }
   {  // DAREX 15
     const Index n = 100;
     MatrixXd A = MatrixXd::Zero(n, n), B = MatrixXd::Zero(n, 1);
     A.diagonal(1).setOnes();
     B(n - 1, 0) = 1;
-    check_real_dare(A, B, MatrixXd::Identity(n, n), MatrixXd::Identity(1, 1), 1.5e-10);
+    check_real_dare<MatrixType>(A, B, MatrixXd::Identity(n, n), MatrixXd::Identity(1, 1), 1.5e-10);
   }
 }
 
 // The generalized test cases of scipy.linalg.solve_discrete_are.
+template <typename MatrixType>
 void dare_generalized_scipy_cases() {
+  using Scalar = typename MatrixType::Scalar;
   MatrixXd A(3, 3), B(3, 2), E(3, 3);
   A << 2.769230e-01, 8.234578e-01, 9.502220e-01, 4.617139e-02, 6.948286e-01, 3.444608e-02, 9.713178e-02, 3.170995e-01,
       4.387444e-01;
@@ -267,11 +315,11 @@ void dare_generalized_scipy_cases() {
   E << 6.463130e-01, 2.760251e-01, 1.626117e-01, 7.093648e-01, 6.797027e-01, 1.189977e-01, 7.546867e-01, 6.550980e-01,
       4.983641e-01;
   const MatrixXd Q = MatrixXd::Identity(3, 3), R = MatrixXd::Identity(2, 2);
-  check_generalized_dare<MatrixXd>(A, B, Q, R, E, MatrixXd::Zero(3, 2), 1.5e-11);
-  check_generalized_dare<MatrixXd>(A, B, Q, R, E, MatrixXd::Ones(3, 2), 1.5e-11);
-  check_generalized_dare<MatrixXcd>(A.cast<std::complex<double>>(), B.cast<std::complex<double>>(),
-                                    Q.cast<std::complex<double>>(), R.cast<std::complex<double>>(),
-                                    E.cast<std::complex<double>>(), MatrixXcd::Ones(3, 2), 1.5e-11);
+  check_generalized_dare<MatrixType>(A.cast<Scalar>(), B.cast<Scalar>(), Q.cast<Scalar>(), R.cast<Scalar>(),
+                                     E.cast<Scalar>(), MatrixType::Zero(3, 2), 1.5e-11);
+  check_generalized_dare<MatrixType>(A.cast<Scalar>(), B.cast<Scalar>(), Q.cast<Scalar>(), R.cast<Scalar>(),
+                                     E.cast<Scalar>(), MatrixType::Ones(3, 2), 1.5e-11);
+  if (NumTraits<Scalar>::IsComplex) return;
 
   // Reported under SciPy PR 6616: E omitted, S given.
   MatrixXd A2(8, 8), B2(8, 2), Q2(8, 8), R2(2, 2), S2(8, 2);
@@ -316,8 +364,94 @@ void dare_generalized_scipy_cases() {
       8.762219354284593e-07, 1.5285528673410845e-07, 7.043760079665012e-07, 1.8058957219255395e-07,
       -1.0243476139042563e-06, 6.619287295779458e-08, -1.6830289137993863e-06, 2.9471233851484255e-08,
       2.409523332122225e-08, 4.306143497422768e-07, 1.2366259786610292e-08, -6.06921957130162e-07;
-  check_generalized_dare<MatrixXd>(A2, B2, Q2, R2, MatrixXd::Identity(8, 8), S2, 3.5e-16);
+  check_generalized_dare<MatrixType>(A2.cast<Scalar>(), B2.cast<Scalar>(), Q2.cast<Scalar>(), R2.cast<Scalar>(),
+                                     MatrixType::Identity(8, 8), S2.cast<Scalar>(), 3.5e-16);
 }
+
+#if defined(EIGEN_TEST_PART_1) || defined(EIGEN_TEST_PART_ALL)
+// Regression test: with E != I, the stable subspace of the balanced pencil must be combined with the balanced E.
+// Combining it with the original E, as SciPy does, returns a solution with residual 3.9 for this problem.
+void dare_generalized_balanced() {
+  MatrixXd A(2, 2), B(2, 1), Q(2, 2), R(1, 1), E(2, 2), S(2, 1);
+  A << 0.9, 0, 0, 2;
+  B << 1e-4, 1;
+  Q << 1, 0, 0, 1e4;
+  R << 1;
+  E << 1, 0.5, 0, 1;
+  S << 0, 0;
+  DiscreteAlgebraicRiccatiSolver<MatrixXd> dare(A, B, Q, R, E, S);
+  VERIFY_IS_EQUAL(dare.info(), Success);
+  verify_dare_backward_error<MatrixXd>(A, B, Q, R, E, S, dare.solution());
+  verify_stabilizing<MatrixXd>(A, B, R, E, S, dare.solution());
+}
+#endif
+
+#if defined(EIGEN_TEST_PART_4) || defined(EIGEN_TEST_PART_ALL)
+// Regression test: ComplexQZ reports NumericalIssue for the deflated 2x2 pencil of this problem, whose subdiagonal
+// entry its direct 2x2 reduction leaves at 2.1 eps ||S||; the decomposition is still backward stable.
+void dare_complex_qz_2x2_block() {
+  using cf = std::complex<float>;
+  MatrixXcf A(1, 1), B(1, 1), Q(1, 1), R(1, 1), E(1, 1), S(1, 1);
+  A << cf(1.34278035f, -1.30643785f);
+  B << cf(-0.928204715f, 1.51564276f);
+  Q << cf(2.26285052f, 0);
+  R << cf(1.4296701f, 0);
+  E << cf(0.936707854f, 0.0122698545f);
+  S << cf(-0.0921620131f, -0.450842977f);
+  DiscreteAlgebraicRiccatiSolver<MatrixXcf> dare(A, B, Q, R, E, S);
+  VERIFY_IS_EQUAL(dare.info(), Success);
+  verify_dare_backward_error<MatrixXcf>(A, B, Q, R, E, S, dare.solution());
+  verify_stabilizing<MatrixXcf>(A, B, R, E, S, dare.solution());
+}
+#endif
+
+#if defined(EIGEN_TEST_PART_1) || defined(EIGEN_TEST_PART_ALL)
+void dare_invalid_input() {
+  const MatrixXd Id = MatrixXd::Identity(3, 3);
+  DiscreteAlgebraicRiccatiSolver<MatrixXd> dare;
+
+  // Q or R not symmetric.
+  MatrixXd nonsymmetric(3, 3);
+  nonsymmetric << 0, 1, 2, 3, 4, 5, 6, 7, 8;
+  VERIFY_IS_EQUAL(dare.compute(Id, Id, nonsymmetric, Id).info(), InvalidInput);
+  VERIFY_IS_EQUAL(dare.compute(Id, Id, Id, nonsymmetric).info(), InvalidInput);
+
+  // Singular E.
+  MatrixXd singular = MatrixXd::Constant(3, 3, 1e12);
+  singular(2, 2) -= 1;
+  VERIFY_IS_EQUAL(dare.compute(Id, Id, Id, Id, singular, MatrixXd::Zero(3, 3)).info(), InvalidInput);
+
+  // Non-finite input.
+  const MatrixXd nan = MatrixXd::Constant(3, 3, std::numeric_limits<double>::quiet_NaN());
+  VERIFY_IS_EQUAL(dare.compute(nan, Id, Id, Id).info(), InvalidInput);
+  VERIFY_IS_EQUAL(dare.compute(Id, nan, Id, Id).info(), InvalidInput);
+  VERIFY_IS_EQUAL(dare.compute(Id, Id, nan, Id).info(), InvalidInput);
+  VERIFY_IS_EQUAL(dare.compute(Id, Id, Id, nan).info(), InvalidInput);
+  VERIFY_IS_EQUAL(dare.compute(Id, Id, Id, Id, nan, Id).info(), InvalidInput);
+  VERIFY_IS_EQUAL(dare.compute(Id, Id, Id, Id, Id, nan).info(), InvalidInput);
+
+  // Incompatible sizes.
+  const MatrixXd rect = MatrixXd::Ones(3, 2);
+  VERIFY_RAISES_ASSERT(dare.compute(rect, Id, Id, Id));
+  VERIFY_RAISES_ASSERT(dare.compute(Id, Id, rect, Id));
+  VERIFY_RAISES_ASSERT(dare.compute(Id, Id, Id, rect));
+  VERIFY_RAISES_ASSERT(dare.compute(Id, Id, Id, Id, rect, Id));
+  VERIFY_RAISES_ASSERT(dare.compute(Id, Id, Id, Id, Id, MatrixXd::Ones(3, 2)));
+
+  // The solver recovers from a failed computation.
+  VERIFY_IS_EQUAL(dare.compute(Id * 0.5, Id, Id, Id).info(), Success);
+}
+
+void dare_no_stabilizing_solution() {
+  // The unstable mode 2 is not controllable, so no stabilizing solution exists.
+  MatrixXd A(2, 2), B(2, 1);
+  A << 2, 0, 0, 0.5;
+  B << 0, 1;
+  DiscreteAlgebraicRiccatiSolver<MatrixXd> dare(A, B, MatrixXd::Identity(2, 2), MatrixXd::Identity(1, 1));
+  VERIFY_IS_EQUAL(dare.info(), NumericalIssue);
+}
+
+#endif
 
 // Random problems with a unique stabilizing solution whose conditioning stays moderate: A = U T U^* with U unitary and
 // T upper triangular with eigenvalue moduli in [0.1, 0.8], except for at most n well controllable ones in [1.25, 2]; Q
@@ -389,84 +523,6 @@ void dare_random(Index maxM, Index maxN) {
   }
 }
 
-// Regression test: with E != I, the stable subspace of the balanced pencil must be combined with the balanced E.
-// Combining it with the original E, as SciPy does, returns a solution with residual 3.9 for this problem.
-void dare_generalized_balanced() {
-  MatrixXd A(2, 2), B(2, 1), Q(2, 2), R(1, 1), E(2, 2), S(2, 1);
-  A << 0.9, 0, 0, 2;
-  B << 1e-4, 1;
-  Q << 1, 0, 0, 1e4;
-  R << 1;
-  E << 1, 0.5, 0, 1;
-  S << 0, 0;
-  DiscreteAlgebraicRiccatiSolver<MatrixXd> dare(A, B, Q, R, E, S);
-  VERIFY_IS_EQUAL(dare.info(), Success);
-  verify_dare_backward_error<MatrixXd>(A, B, Q, R, E, S, dare.solution());
-  verify_stabilizing<MatrixXd>(A, B, R, E, S, dare.solution());
-}
-
-// Regression test: ComplexQZ reports NumericalIssue for the deflated 2x2 pencil of this problem, whose subdiagonal
-// entry its direct 2x2 reduction leaves at 2.1 eps ||S||; the decomposition is still backward stable.
-void dare_complex_qz_2x2_block() {
-  using cf = std::complex<float>;
-  MatrixXcf A(1, 1), B(1, 1), Q(1, 1), R(1, 1), E(1, 1), S(1, 1);
-  A << cf(1.34278035f, -1.30643785f);
-  B << cf(-0.928204715f, 1.51564276f);
-  Q << cf(2.26285052f, 0);
-  R << cf(1.4296701f, 0);
-  E << cf(0.936707854f, 0.0122698545f);
-  S << cf(-0.0921620131f, -0.450842977f);
-  DiscreteAlgebraicRiccatiSolver<MatrixXcf> dare(A, B, Q, R, E, S);
-  VERIFY_IS_EQUAL(dare.info(), Success);
-  verify_dare_backward_error<MatrixXcf>(A, B, Q, R, E, S, dare.solution());
-  verify_stabilizing<MatrixXcf>(A, B, R, E, S, dare.solution());
-}
-
-void dare_invalid_input() {
-  const MatrixXd Id = MatrixXd::Identity(3, 3);
-  DiscreteAlgebraicRiccatiSolver<MatrixXd> dare;
-
-  // Q or R not symmetric.
-  MatrixXd nonsymmetric(3, 3);
-  nonsymmetric << 0, 1, 2, 3, 4, 5, 6, 7, 8;
-  VERIFY_IS_EQUAL(dare.compute(Id, Id, nonsymmetric, Id).info(), InvalidInput);
-  VERIFY_IS_EQUAL(dare.compute(Id, Id, Id, nonsymmetric).info(), InvalidInput);
-
-  // Singular E.
-  MatrixXd singular = MatrixXd::Constant(3, 3, 1e12);
-  singular(2, 2) -= 1;
-  VERIFY_IS_EQUAL(dare.compute(Id, Id, Id, Id, singular, MatrixXd::Zero(3, 3)).info(), InvalidInput);
-
-  // Non-finite input.
-  const MatrixXd nan = MatrixXd::Constant(3, 3, std::numeric_limits<double>::quiet_NaN());
-  VERIFY_IS_EQUAL(dare.compute(nan, Id, Id, Id).info(), InvalidInput);
-  VERIFY_IS_EQUAL(dare.compute(Id, nan, Id, Id).info(), InvalidInput);
-  VERIFY_IS_EQUAL(dare.compute(Id, Id, nan, Id).info(), InvalidInput);
-  VERIFY_IS_EQUAL(dare.compute(Id, Id, Id, nan).info(), InvalidInput);
-  VERIFY_IS_EQUAL(dare.compute(Id, Id, Id, Id, nan, Id).info(), InvalidInput);
-  VERIFY_IS_EQUAL(dare.compute(Id, Id, Id, Id, Id, nan).info(), InvalidInput);
-
-  // Incompatible sizes.
-  const MatrixXd rect = MatrixXd::Ones(3, 2);
-  VERIFY_RAISES_ASSERT(dare.compute(rect, Id, Id, Id));
-  VERIFY_RAISES_ASSERT(dare.compute(Id, Id, rect, Id));
-  VERIFY_RAISES_ASSERT(dare.compute(Id, Id, Id, rect));
-  VERIFY_RAISES_ASSERT(dare.compute(Id, Id, Id, Id, rect, Id));
-  VERIFY_RAISES_ASSERT(dare.compute(Id, Id, Id, Id, Id, MatrixXd::Ones(3, 2)));
-
-  // The solver recovers from a failed computation.
-  VERIFY_IS_EQUAL(dare.compute(Id * 0.5, Id, Id, Id).info(), Success);
-}
-
-void dare_no_stabilizing_solution() {
-  // The unstable mode 2 is not controllable, so no stabilizing solution exists.
-  MatrixXd A(2, 2), B(2, 1);
-  A << 2, 0, 0, 0.5;
-  B << 0, 1;
-  DiscreteAlgebraicRiccatiSolver<MatrixXd> dare(A, B, MatrixXd::Identity(2, 2), MatrixXd::Identity(1, 1));
-  VERIFY_IS_EQUAL(dare.info(), NumericalIssue);
-}
-
 // Checks the reordering of a generalized Schur form directly.
 template <typename MatrixType>
 void generalized_schur_reordering(Index size) {
@@ -517,12 +573,15 @@ void generalized_schur_reordering(Index size) {
 }
 
 EIGEN_DECLARE_TEST(riccati) {
-  CALL_SUBTEST_1(dare_scipy_cases());
-  CALL_SUBTEST_1(dare_generalized_scipy_cases());
+  CALL_SUBTEST_1(dare_scipy_real_cases<MatrixXd>());
+  CALL_SUBTEST_1(dare_generalized_scipy_cases<MatrixXd>());
   CALL_SUBTEST_1(dare_generalized_balanced());
-  CALL_SUBTEST_1(dare_complex_qz_2x2_block());
   CALL_SUBTEST_1(dare_invalid_input());
   CALL_SUBTEST_1(dare_no_stabilizing_solution());
+  CALL_SUBTEST_4(dare_complex_qz_2x2_block());
+  CALL_SUBTEST_7(dare_scipy_complex_cases());
+  CALL_SUBTEST_7(dare_scipy_real_cases<MatrixXcd>());
+  CALL_SUBTEST_7(dare_generalized_scipy_cases<MatrixXcd>());
   for (int i = 0; i < g_repeat; i++) {
     CALL_SUBTEST_2(dare_random<MatrixXd>(20, 6));
     CALL_SUBTEST_3(dare_random<MatrixXcd>(20, 6));

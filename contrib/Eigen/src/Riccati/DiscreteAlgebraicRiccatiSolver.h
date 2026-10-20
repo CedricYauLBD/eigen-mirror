@@ -5,7 +5,95 @@
 // Public License v. 2.0. If a copy of the MPL was not distributed
 // with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
 // SPDX-FileCopyrightText: The Eigen Authors
-// SPDX-License-Identifier: MPL-2.0
+// SPDX-FileCopyrightText: 2001-2002 Enthought, Inc.
+// SPDX-FileCopyrightText: 2003 SciPy Developers
+// SPDX-FileCopyrightText: 1992-2025 The University of Tennessee and The University of Tennessee Research Foundation
+// SPDX-FileCopyrightText: 2000-2025 The University of California Berkeley
+// SPDX-FileCopyrightText: 2006-2025 The University of Colorado Denver
+// SPDX-License-Identifier: MPL-2.0 AND BSD-3-Clause
+//
+// This file incorporates work covered by the following copyright and
+// permission notices:
+//
+//   DiscreteAlgebraicRiccatiSolver is adapted from scipy.linalg.solve_discrete_are
+//   (scipy/linalg/_solvers.py, SciPy 1.18.0):
+//
+//    Copyright (c) 2001-2002 Enthought, Inc. 2003, SciPy Developers.
+//    All rights reserved.
+//
+//    Redistribution and use in source and binary forms, with or without
+//    modification, are permitted provided that the following conditions
+//    are met:
+//
+//    1. Redistributions of source code must retain the above copyright
+//       notice, this list of conditions and the following disclaimer.
+//
+//    2. Redistributions in binary form must reproduce the above
+//       copyright notice, this list of conditions and the following
+//       disclaimer in the documentation and/or other materials provided
+//       with the distribution.
+//
+//    3. Neither the name of the copyright holder nor the names of its
+//       contributors may be used to endorse or promote products derived
+//       from this software without specific prior written permission.
+//
+//    THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+//    "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+//    LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+//    A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+//    OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+//    SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+//    LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+//    DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+//    THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+//    (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+//    OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+//
+//   internal::riccati_balance_exponents() is adapted from LAPACK's xGEBAL
+//   (https://github.com/Reference-LAPACK/lapack):
+//
+//    Copyright (c) 1992-2025 The University of Tennessee and The University
+//                            of Tennessee Research Foundation.  All rights
+//                            reserved.
+//    Copyright (c) 2000-2025 The University of California Berkeley. All
+//                            rights reserved.
+//    Copyright (c) 2006-2025 The University of Colorado Denver.  All rights
+//                            reserved.
+//
+//    Redistribution and use in source and binary forms, with or without
+//    modification, are permitted provided that the following conditions are
+//    met:
+//
+//    - Redistributions of source code must retain the above copyright
+//      notice, this list of conditions and the following disclaimer.
+//
+//    - Redistributions in binary form must reproduce the above copyright
+//      notice, this list of conditions and the following disclaimer listed
+//      in this license in the documentation and/or other materials
+//      provided with the distribution.
+//
+//    - Neither the name of the copyright holders nor the names of its
+//      contributors may be used to endorse or promote products derived from
+//      this software without specific prior written permission.
+//
+//    The copyright holders provide no reassurances that the source code
+//    provided does not infringe any patent, copyright, or any other
+//    intellectual property rights of third parties.  The copyright holders
+//    disclaim any liability to any recipient for claims brought against
+//    recipient by any third party for infringement of that parties
+//    intellectual property rights.
+//
+//    THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+//    "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+//    LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+//    A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+//    OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+//    SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+//    LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+//    DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+//    THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+//    (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+//    OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 #ifndef EIGEN_DISCRETE_ALGEBRAIC_RICCATI_SOLVER_H
 #define EIGEN_DISCRETE_ALGEBRAIC_RICCATI_SOLVER_H
@@ -158,19 +246,9 @@ inline int riccati_half_round_even(int d) {
  * equation combines the stable subspace with the balanced \f$ E \f$ (SciPy uses the original one, which is wrong when
  * balancing scales the pencil), and the number of stable eigenvalues is checked.
  *
- * Example:
- * \code
- * MatrixXd A(2, 2), B(2, 1), Q(2, 2), R(1, 1);
- * A << 1, 1, 0, 1;
- * B << 0, 1;
- * Q.setIdentity();
- * R << 1;
- * DiscreteAlgebraicRiccatiSolver<MatrixXd> dare(A, B, Q, R);
- * if (dare.info() == Success) {
- *   MatrixXd X = dare.solution();
- *   MatrixXd K = (R + B.transpose() * X * B).ldlt().solve(B.transpose() * X * A);  // optimal feedback gain
- * }
- * \endcode
+ * Example: a discrete-time LQR controller for a sampled double integrator.
+ * \include DiscreteAlgebraicRiccatiSolver.cpp
+ * Output: \verbinclude DiscreteAlgebraicRiccatiSolver.out
  *
  * References:
  * - [1] P. Van Dooren, "A Generalized Eigenvalue Approach For Solving Riccati Equations", SIAM J. Sci. Stat. Comput.,
