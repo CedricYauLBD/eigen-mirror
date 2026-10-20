@@ -14,6 +14,53 @@
 #include <Eigen/PaStiXSupport>
 #include <contrib/Eigen/SparseExtra>
 
+template <typename Scalar>
+void test_pastix_reuse() {
+  using Sparse = SparseMatrix<Scalar, RowMajor, long long>;
+  using Dense = Matrix<Scalar, Dynamic, Dynamic, RowMajor>;
+  Sparse matrix(5, 5);
+  for (Index i = 0; i < matrix.rows(); ++i) {
+    matrix.insert(i, i) = Scalar(4);
+    if (i > 0) matrix.insert(i, i - 1) = Scalar(-1);
+    if (i + 1 < matrix.rows()) matrix.insert(i, i + 1) = Scalar(1);
+  }
+  Dense expected(5, 2);
+  for (Index i = 0; i < expected.rows(); ++i) {
+    expected(i, 0) = Scalar(i + 1);
+    expected(i, 1) = Scalar(2 - i);
+  }
+  PastixLU<Sparse> solver;
+  solver.iparm(IPARM_THREAD_NBR) = 1;
+  solver.analyzePattern(matrix);
+  VERIFY_IS_EQUAL(solver.info(), Success);
+  for (int iteration = 0; iteration < 2; ++iteration) {
+    for (Index i = 0; i < matrix.rows(); ++i) matrix.coeffRef(i, i) += Scalar(1);
+    solver.factorize(matrix);
+    VERIFY_IS_EQUAL(solver.info(), Success);
+    const Dense rhs = matrix * expected;
+    const Dense result = solver.solve(rhs);
+    VERIFY_IS_EQUAL(solver.info(), Success);
+    VERIFY((result - expected).norm() <=
+           128 * NumTraits<typename NumTraits<Scalar>::Real>::epsilon() * expected.norm());
+  }
+  solver.compute(matrix);
+  VERIFY_IS_EQUAL(solver.info(), Success);
+  const Dense rhs = matrix * expected;
+  const Dense result = solver.solve(rhs);
+  VERIFY_IS_EQUAL(solver.info(), Success);
+  VERIFY_IS_APPROX(result, expected);
+
+  Sparse diagonal(2, 2);
+  diagonal.insert(0, 0) = Scalar(2);
+  diagonal.insert(1, 1) = Scalar(3);
+  solver.compute(diagonal);
+  VERIFY_IS_EQUAL(solver.info(), Success);
+  const Matrix<Scalar, 2, 1> diagonalRhs(Scalar(2), Scalar(3));
+  const Matrix<Scalar, 2, 1> diagonalResult = solver.solve(diagonalRhs);
+  VERIFY_IS_EQUAL(solver.info(), Success);
+  VERIFY_IS_APPROX(diagonalResult, (Matrix<Scalar, 2, 1>::Ones()));
+}
+
 template <typename T>
 void test_pastix_T() {
   PastixLLT<SparseMatrix<T, ColMajor>, Eigen::Lower> pastix_llt_lower;
@@ -49,5 +96,9 @@ EIGEN_DECLARE_TEST(pastix_support) {
   CALL_SUBTEST_1(test_pastix_T<float>());
   CALL_SUBTEST_2(test_pastix_T<double>());
   CALL_SUBTEST_3((test_pastix_T_LU<std::complex<float> >()));
-  CALL_SUBTEST_4(test_pastix_T_LU<std::complex<double> >());
+  CALL_SUBTEST_4(test_pastix_T_LU<std::complex<double>>());
+  CALL_SUBTEST_1(test_pastix_reuse<float>());
+  CALL_SUBTEST_2(test_pastix_reuse<double>());
+  CALL_SUBTEST_3(test_pastix_reuse<std::complex<float>>());
+  CALL_SUBTEST_4(test_pastix_reuse<std::complex<double>>());
 }
