@@ -10,7 +10,7 @@
 // SPDX-FileCopyrightText: 1992-2025 The University of Tennessee and The University of Tennessee Research Foundation
 // SPDX-FileCopyrightText: 2000-2025 The University of California Berkeley
 // SPDX-FileCopyrightText: 2006-2025 The University of Colorado Denver
-// SPDX-License-Identifier: MPL-2.0 AND BSD-3-Clause
+// SPDX-License-Identifier: MPL-2.0 AND BSD-3-Clause AND BSD-3-Clause-Open-MPI
 //
 // This file incorporates work covered by the following copyright and
 // permission notices:
