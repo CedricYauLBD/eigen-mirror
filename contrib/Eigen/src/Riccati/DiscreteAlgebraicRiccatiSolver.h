@@ -122,15 +122,6 @@ typename NumTraits<typename Derived::Scalar>::Real riccati_norm1(const MatrixBas
                        : m.cwiseAbs().colwise().sum().maxCoeff();
 }
 
-/** \internal \returns the distance from |\p x| to the next larger representable number, as NumPy's spacing(). */
-template <typename RealScalar>
-RealScalar riccati_spacing(const RealScalar& x) {
-  EIGEN_USING_STD(frexp);
-  int e;
-  frexp(x, &e);
-  return numext::ldexp(NumTraits<RealScalar>::epsilon(), e - 1);
-}
-
 /** \internal
  * Computes the power-of-two scaling of the nonnegative square matrix \p M that balances the 2-norms of its rows and
  * columns, as LAPACK's xGEBAL with JOB='S'. \p M is overwritten by the balanced matrix and the exponents of the
@@ -154,8 +145,8 @@ void riccati_balance_exponents(RealMatrix& M, VectorXi& exponents) {
   while (noconv) {
     noconv = false;
     for (Index i = 0; i < n; ++i) {
-      RealScalar c = M.col(i).norm();
-      RealScalar r = M.row(i).norm();
+      RealScalar c = M.col(i).stableNorm();
+      RealScalar r = M.row(i).stableNorm();
       RealScalar ca = M.col(i).maxCoeff();
       RealScalar ra = M.row(i).maxCoeff();
       if (numext::is_exactly_zero(c) || numext::is_exactly_zero(r)) continue;
@@ -227,6 +218,7 @@ inline int riccati_half_round_even(int d) {
  *
  * The solver follows the generalized eigenvalue approach of [1]: it forms the extended symplectic pencil
  * \f[
+ * H - \lambda J =
  * \begin{bmatrix} A & 0 & B \\ -Q & E^* & -S \\ S^* & 0 & R \end{bmatrix}
  * - \lambda
  * \begin{bmatrix} E & 0 & 0 \\ 0 & A^* & 0 \\ 0 & -B^* & 0 \end{bmatrix},
@@ -239,12 +231,15 @@ inline int riccati_half_round_even(int d) {
  * circle, if \f$ U_1 \f$ is numerically singular, or if \f$ U_1^* U_2 \f$ is far from selfadjoint, which happens
  * when the pencil has eigenvalues too close to the unit circle [2].
  *
- * Balancing usually improves the accuracy for badly scaled data, but it can also cost accuracy, notably when \f$ B \f$
- * is very small compared to the other matrices; compute(..., false) solves without it.
+ * Balancing is essential for some badly scaled problems, but it can cost accuracy for others, notably when \f$ B \f$
+ * is very small compared to the other matrices. With balancing enabled (the default), the solver therefore checks
+ * the backward error of the balanced solution; if it is large, or the balanced computation fails, the unbalanced
+ * pencil is solved as well and the more accurate solution is returned. compute(..., false) never balances.
  *
- * The algorithm follows SciPy's \c scipy.linalg.solve_discrete_are, with two differences: the generalized
- * equation combines the stable subspace with the balanced \f$ E \f$ (SciPy uses the original one, which is wrong when
- * balancing scales the pencil), and the number of stable eigenvalues is checked.
+ * The algorithm follows SciPy's \c scipy.linalg.solve_discrete_are, with these differences: the generalized equation
+ * combines the stable subspace with the balanced \f$ E \f$ (SciPy uses the original one, which is wrong when
+ * balancing scales the pencil), the unbalanced pencil serves as a fallback (see above), and the number of stable
+ * eigenvalues is checked.
  *
  * Example: a discrete-time LQR controller for a sampled double integrator.
  * \include DiscreteAlgebraicRiccatiSolver.cpp
@@ -372,12 +367,20 @@ class DiscreteAlgebraicRiccatiSolver {
 
   static bool isSelfAdjoint(const DynamicMatrix& M) {
     return internal::riccati_norm1(M - M.adjoint()) <=
-           RealScalar(100) * internal::riccati_spacing(internal::riccati_norm1(M));
+           RealScalar(100) * NumTraits<RealScalar>::epsilon() * internal::riccati_norm1(M);
   }
 
   DiscreteAlgebraicRiccatiSolver& computeImpl(const DynamicMatrix& A, const DynamicMatrix& B, const DynamicMatrix& Q,
                                               const DynamicMatrix& R, const DynamicMatrix* E, const DynamicMatrix* S,
                                               bool balance);
+
+  static ComputationInfo solvePencil(const DynamicMatrix& A, const DynamicMatrix& B, const DynamicMatrix& Q,
+                                     const DynamicMatrix& R, const DynamicMatrix* E, const DynamicMatrix* S,
+                                     bool balance, RealScalar rcondThreshold, DynamicMatrix& X);
+
+  static RealScalar backwardErrorRatio(const DynamicMatrix& A, const DynamicMatrix& B, const DynamicMatrix& Q,
+                                       const DynamicMatrix& R, const DynamicMatrix* E, const DynamicMatrix* S,
+                                       const DynamicMatrix& X);
 
   MatrixType m_X;
   ComputationInfo m_info;
@@ -402,9 +405,84 @@ DiscreteAlgebraicRiccatiSolver<MatrixType_>& DiscreteAlgebraicRiccatiSolver<Matr
   if (!A.allFinite() || !B.allFinite() || !Q.allFinite() || !R.allFinite()) return *this;
   if ((E != nullptr && !E->allFinite()) || (S != nullptr && !S->allFinite())) return *this;
   if (!isSelfAdjoint(Q) || !isSelfAdjoint(R)) return *this;
-  if (E != nullptr && m > 0) {
-    if (!(RealScalar(m) * PartialPivLU<DynamicMatrix>(*E).rcond() >= NumTraits<RealScalar>::epsilon())) return *this;
+  if (m == 0) {
+    m_X.resize(0, 0);
+    m_info = Success;
+    return *this;
   }
+  // rcond() bounds 1 / kappa_1(E) from above and kappa_1 <= m kappa_2, so this rejects only kappa_2(E) > 1 / eps.
+  const RealScalar eps = NumTraits<RealScalar>::epsilon();
+  if (E != nullptr && !(RealScalar(m) * PartialPivLU<DynamicMatrix>(*E).rcond() >= eps)) return *this;
+  // U1 is held to the stricter rcond(U1) >= eps: the test above guarantees no false rejection but can accept
+  // kappa_2 > 1 / eps, and for U1 it accepts the non-stabilizable problem of dare_no_stabilizing_solution() with a
+  // meaningless ||X|| ~ 1e16.
+  const RealScalar rcondThreshold = eps;
+
+  DynamicMatrix X;
+  m_info = solvePencil(A, B, Q, R, E, S, balance, rcondThreshold, X);
+  if (balance) {
+    // Balancing is essential for some badly scaled problems (e.g. DAREX 13 and 14), but costs accuracy for others,
+    // notably when B is small. If the balanced solve fails or its backward error ratio exceeds 10, the unbalanced
+    // pencil is solved as well and the solution with the smaller backward error is kept.
+    const RealScalar ratio =
+        m_info == Success ? backwardErrorRatio(A, B, Q, R, E, S, X) : NumTraits<RealScalar>::infinity();
+    if (!(ratio <= RealScalar(10))) {
+      DynamicMatrix Xu;
+      if (solvePencil(A, B, Q, R, E, S, false, rcondThreshold, Xu) == Success &&
+          (m_info != Success || backwardErrorRatio(A, B, Q, R, E, S, Xu) < ratio)) {
+        X.swap(Xu);
+        m_info = Success;
+      }
+    }
+  }
+  if (m_info == Success) m_X = X;
+  return *this;
+}
+
+/** \internal
+ * \returns the backward error ratio of the solution \p X,
+ * \f[ \rho = \frac{\|\mathrm{res}\|_F}{m\,\varepsilon\,(\|A^*XA\|_F + \|E^*XE\|_F + \|Q\|_F)\,\kappa},\qquad
+ *     \kappa = \max(1, \|E^*XE\|_F / \|Q\|_F), \f]
+ * where res is the residual of the equation and \f$ \kappa \f$ accounts for the amplification of rounding errors by a
+ * large solution; \f$ \rho = O(1) \f$ for a backward stable solution. Non-finite ratios are reported as infinity.
+ */
+template <typename MatrixType_>
+typename DiscreteAlgebraicRiccatiSolver<MatrixType_>::RealScalar
+DiscreteAlgebraicRiccatiSolver<MatrixType_>::backwardErrorRatio(const DynamicMatrix& A, const DynamicMatrix& B,
+                                                                const DynamicMatrix& Q, const DynamicMatrix& R,
+                                                                const DynamicMatrix* E, const DynamicMatrix* S,
+                                                                const DynamicMatrix& X) {
+  const Index m = A.rows();
+  const DynamicMatrix XA = X * A;
+  const DynamicMatrix AXA = A.adjoint() * XA;
+  const DynamicMatrix EXE = (E != nullptr) ? DynamicMatrix(E->adjoint() * X * *E) : X;
+  DynamicMatrix res = AXA - EXE + Q;
+  if (B.cols() > 0) {
+    DynamicMatrix AXBS = XA.adjoint() * B;
+    if (S != nullptr) AXBS += *S;
+    res -= AXBS * (R + B.adjoint() * X * B).partialPivLu().solve(AXBS.adjoint());
+  }
+  const RealScalar normQ = Q.norm(), normEXE = EXE.norm();
+  const RealScalar kappa = (normQ > RealScalar(0) && normEXE > normQ) ? normEXE / normQ : RealScalar(1);
+  const RealScalar scale = RealScalar(m) * NumTraits<RealScalar>::epsilon() * (AXA.norm() + normEXE + normQ) * kappa;
+  const RealScalar normRes = res.norm();
+  if (numext::is_exactly_zero(normRes)) return RealScalar(0);
+  const RealScalar ratio = normRes / scale;
+  return (numext::isfinite)(ratio) ? ratio : NumTraits<RealScalar>::infinity();
+}
+
+/** \internal
+ * Solves the equation through the extended symplectic pencil, balanced if \p balance is true; on success, \p X holds
+ * the selfadjoint solution.
+ */
+template <typename MatrixType_>
+ComputationInfo DiscreteAlgebraicRiccatiSolver<MatrixType_>::solvePencil(const DynamicMatrix& A, const DynamicMatrix& B,
+                                                                         const DynamicMatrix& Q, const DynamicMatrix& R,
+                                                                         const DynamicMatrix* E, const DynamicMatrix* S,
+                                                                         bool balance, RealScalar rcondThreshold,
+                                                                         DynamicMatrix& X) {
+  const Index m = B.rows();
+  const Index n = B.cols();
 
   // Form the extended symplectic pencil H - lambda J.
   const Index p = 2 * m + n;
@@ -447,6 +525,9 @@ DiscreteAlgebraicRiccatiSolver<MatrixType_>& DiscreteAlgebraicRiccatiSolver<Matr
         scaling(i) = numext::ldexp(RealScalar(1), d);
         scaling(m + i) = numext::ldexp(RealScalar(1), -d);
       }
+      // As in SciPy, the R block is scaled by D_R = diag(2^e), the inverse of the xGEBAL scaling D^-1 M D. The
+      // xGEBAL-consistent 2^-e loses accuracy: the DAREX 13 and 14 residuals grow from 7.7e-7 and 1.3e-7 to 1.6e-5
+      // and 1.8e-6.
       for (Index i = 2 * m; i < p; ++i) scaling(i) = numext::ldexp(RealScalar(1), exponents(i));
       // H <- D H D^-1, J <- D J D^-1 with D = diag(scaling), exact in floating point.
       H = scaling.asDiagonal() * H * scaling.cwiseInverse().asDiagonal();
@@ -467,14 +548,10 @@ DiscreteAlgebraicRiccatiSolver<MatrixType_>& DiscreteAlgebraicRiccatiSolver<Matr
 
   // Generalized Schur form with the eigenvalues inside the unit circle first.
   typename internal::riccati_qz<DynamicMatrix>::type qz(Hd, Jd, true);
-  if (qz.info() == NoConvergence) {
-    m_info = NoConvergence;
-    return *this;
-  }
+  if (qz.info() == NoConvergence) return NoConvergence;
   DynamicMatrix SS = qz.matrixS();
   DynamicMatrix TT = qz.matrixT();
   DynamicMatrix ZZ = qz.matrixZ().adjoint();
-  m_info = NumericalIssue;
   if (qz.info() != Success) {
     const DynamicMatrix QQ = qz.matrixQ();
     // ComplexQZ reports NumericalIssue when its direct reduction of a 2x2 block leaves a subdiagonal entry of S above
@@ -484,11 +561,12 @@ DiscreteAlgebraicRiccatiSolver<MatrixType_>& DiscreteAlgebraicRiccatiSolver<Matr
     const RealScalar bound = RealScalar(10 * 2 * m) * NumTraits<RealScalar>::epsilon();
     if (!((QQ * SS * ZZ.adjoint() - Hd).norm() <= bound * Hd.norm() &&
           (QQ * TT * ZZ.adjoint() - Jd).norm() <= bound * Jd.norm()))
-      return *this;
+      return NumericalIssue;
   }
   // The eigenvalues of the symplectic pencil come in pairs (lambda, 1 / conj(lambda)), so exactly m of them lie
   // inside the unit circle if a stabilizing solution exists. (SciPy does not check this.)
-  if (internal::reorder_generalized_schur_inside_unit_circle<DynamicMatrix>(SS, TT, nullptr, ZZ) != m) return *this;
+  if (internal::reorder_generalized_schur_inside_unit_circle<DynamicMatrix>(SS, TT, nullptr, ZZ) != m)
+    return NumericalIssue;
 
   // The leading m right Schur vectors span the stable deflating subspace.
   DynamicMatrix U = ZZ.leftCols(m);
@@ -501,26 +579,23 @@ DiscreteAlgebraicRiccatiSolver<MatrixType_>& DiscreteAlgebraicRiccatiSolver<Matr
   const auto U1 = U.topRows(m);
   const auto U2 = U.bottomRows(m);
 
-  // [U1; U2] has orthonormal columns, so ||X||_2 = sqrt(1 - sigma_min(U1)^2) / sigma_min(U1). The test
-  // m rcond(U1) >= eps used for E never rejects kappa_2(U1) <= 1 / eps, but as rcond() bounds 1 / kappa_1 from above
-  // it can accept larger kappa_2: it accepts the non-stabilizable problem of dare_no_stabilizing_solution() with a
-  // meaningless ||X|| ~ 1e16. U1 is therefore held to rcond(U1) >= eps.
+  // [U1; U2] has orthonormal columns, so ||X||_2 = sqrt(1 - sigma_min(U1)^2) / sigma_min(U1).
   const PartialPivLU<DynamicMatrix> lu(U1);
-  if (m > 0 && !(lu.rcond() >= NumTraits<RealScalar>::epsilon())) return *this;
-  // X = U2 U1^-1 is computed as (U1^-* U2^*)^*.
-  DynamicMatrix X = lu.adjoint().solve(U2.adjoint());
-  X.adjointInPlace();
-  if (balanced) X = scaling.head(m).asDiagonal() * X * scaling.head(m).asDiagonal();
+  if (!(lu.rcond() >= rcondThreshold)) return NumericalIssue;
 
   // A large deviation of U1^* U2 from selfadjointness indicates failure, see Theorem 5 in [2].
   const DynamicMatrix uSym = U1.adjoint() * U2;
+  // SciPy's threshold max(spacing(1000), 0.1 ||U1^* U2||_1), with spacing(1000) = 512 eps.
   const RealScalar symThreshold =
-      numext::maxi(internal::riccati_spacing(RealScalar(1000)), RealScalar(0.1) * internal::riccati_norm1(uSym));
-  if (!(internal::riccati_norm1(uSym - uSym.adjoint()) <= symThreshold)) return *this;
+      numext::maxi(RealScalar(512) * NumTraits<RealScalar>::epsilon(), RealScalar(0.1) * internal::riccati_norm1(uSym));
+  if (!(internal::riccati_norm1(uSym - uSym.adjoint()) <= symThreshold)) return NumericalIssue;
 
-  m_X = (X + X.adjoint()) / RealScalar(2);
-  m_info = Success;
-  return *this;
+  // X = U2 U1^-1 is computed as (U1^-* U2^*)^*.
+  X = lu.adjoint().solve(U2.adjoint());
+  X.adjointInPlace();
+  if (balanced) X = scaling.head(m).asDiagonal() * X * scaling.head(m).asDiagonal();
+  X = (X + X.adjoint()).eval() / RealScalar(2);
+  return Success;
 }
 
 }  // namespace Eigen

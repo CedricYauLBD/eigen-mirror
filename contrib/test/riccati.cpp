@@ -101,11 +101,10 @@ void check_real_dare(const MatrixXd& A, const MatrixXd& B, const MatrixXd& Q, co
 }
 
 // Backward error check for a computed solution X:
-//   ||res||_F <= 1000 m eps (||A^* X A||_F + ||E^* X E||_F + ||Q||_F) kappa,  kappa = max(1, ||E^* X E||_F / ||Q||_F),
-// where kappa accounts for the amplification of rounding errors by a large solution. Over 58000 solves of
-// dare_random() problems in all four scalar types, the left-hand side divided by m eps (...) kappa had median 0.39 and
-// p99.9 2.3. Rare outliers up to 300 are 1x1 problems with ||B|| ~ 1e-5, where the symplectic balancing costs accuracy
-// (SciPy loses even more there).
+//   rho = ||res||_F / (m eps (||A^* X A||_F + ||E^* X E||_F + ||Q||_F) kappa) <= 30,
+//   kappa = max(1, ||E^* X E||_F / ||Q||_F),
+// where kappa accounts for the amplification of rounding errors by a large solution. Over 200000 solves of
+// dare_random() problems in all four scalar types, rho had p99.9 <= 4.4 and maximum 9.4.
 template <typename DynMatrix>
 void verify_dare_backward_error(const DynMatrix& A, const DynMatrix& B, const DynMatrix& Q, const DynMatrix& R,
                                 const DynMatrix& E, const DynMatrix& S, const DynMatrix& X) {
@@ -114,7 +113,7 @@ void verify_dare_backward_error(const DynMatrix& A, const DynMatrix& B, const Dy
   const RealScalar normEXE = (E.adjoint() * X * E).norm();
   const RealScalar scale = (A.adjoint() * X * A).norm() + normEXE + Q.norm();
   const RealScalar kappa = numext::maxi(RealScalar(1), normEXE / Q.norm());
-  const RealScalar bound = RealScalar(1000) * RealScalar(A.rows()) * NumTraits<RealScalar>::epsilon() * scale * kappa;
+  const RealScalar bound = RealScalar(30) * RealScalar(A.rows()) * NumTraits<RealScalar>::epsilon() * scale * kappa;
   VERIFY(dare_residual(A, B, Q, R, E, S, X).norm() <= bound);
 }
 
@@ -295,8 +294,8 @@ void dare_scipy_real_cases() {
     Q(3, 3) = 1;
     R << 0.25;
     // ComplexQZ locates the pencil eigenvalue at 1 - 2.24e-8 less accurately than RealQZ and LAPACK's ZGGES, so the
-    // complex solve misses SciPy's bound (residual 7.6e-5 instead of 2.4e-8 with ZGGES).
-    if (!NumTraits<typename MatrixType::Scalar>::IsComplex) check_real_dare<MatrixType>(A, B, Q, R, 1.5e-6);
+    // complex solve misses SciPy's bound: its residual is 7.6e-5, against 2.4e-8 with ZGGES.
+    check_real_dare<MatrixType>(A, B, Q, R, NumTraits<typename MatrixType::Scalar>::IsComplex ? 1.5e-4 : 1.5e-6);
   }
   {  // DAREX 15
     const Index n = 100;
@@ -457,6 +456,33 @@ void dare_no_stabilizing_solution() {
   for (bool balance : {true, false})
     VERIFY_IS_EQUAL(dare.compute(A, B, MatrixXd::Identity(2, 2), MatrixXd::Identity(1, 1), balance).info(),
                     NumericalIssue);
+
+  // A Jordan block at 1 with B = 0 and Q = 0 gives a singular pencil, whose reordering rejects a swap.
+  A << 1, 1, 0, 1;
+  B.setZero();
+  for (bool balance : {true, false})
+    VERIFY_IS_EQUAL(dare.compute(A, B, MatrixXd::Zero(2, 2), MatrixXd::Identity(1, 1), balance).info(), NumericalIssue);
+}
+
+void dare_empty() {
+  // m = 0: the solution is empty.
+  DiscreteAlgebraicRiccatiSolver<MatrixXd> dare(MatrixXd(0, 0), MatrixXd(0, 2), MatrixXd(0, 0),
+                                                MatrixXd::Identity(2, 2));
+  VERIFY_IS_EQUAL(dare.info(), Success);
+  VERIFY_IS_EQUAL(dare.solution().rows(), 0);
+  dare.compute(MatrixXd(0, 0), MatrixXd(0, 2), MatrixXd(0, 0), MatrixXd::Identity(2, 2), MatrixXd(0, 0),
+               MatrixXd(0, 2));
+  VERIFY_IS_EQUAL(dare.info(), Success);
+
+  // n = 0: for stable A the equation reduces to the Stein equation A^* X A - X + Q = 0.
+  const Index m = 4;
+  MatrixXd A = MatrixXd::Random(m, m);
+  A *= 0.5 / A.operatorNorm();
+  const MatrixXd Q = MatrixXd::Identity(m, m);
+  dare.compute(A, MatrixXd(m, 0), Q, MatrixXd(0, 0));
+  VERIFY_IS_EQUAL(dare.info(), Success);
+  const MatrixXd& X = dare.solution();
+  VERIFY((A.adjoint() * X * A - X + Q).norm() <= 100 * NumTraits<double>::epsilon() * X.norm());
 }
 
 #endif
@@ -485,10 +511,12 @@ void dare_random(Index maxM, Index maxN) {
   }
   const DynMatrix U = HouseholderQR<DynMatrix>(DynMatrix::Random(m, m)).householderQ();
   const MatrixType A = U * T * U.adjoint();
-  // B = U Bu with Bu(i, i) = 2 + O(1) for the unstable modes i < unstable <= n keeps them well controllable.
+  // B = U Bu with Bu(i, i) = 2 + O(1) for the unstable modes i < unstable <= n keeps them well controllable. A third
+  // of the problems scale B by 10^-k, for which balancing alone would cost digits.
   DynMatrix Bu = DynMatrix::Random(m, n);
   for (Index i = 0; i < unstable; ++i) Bu(i, i) += Scalar(2);
-  const DynMatrix B = U * Bu;
+  const int k = internal::random<int>(0, 2) == 0 ? internal::random<int>(1, NumTraits<RealScalar>::digits10() / 3) : 0;
+  const DynMatrix B = U * Bu * numext::pow(RealScalar(10), RealScalar(-k));
   const DynMatrix C = DynMatrix::Random(m, m);
   const DynMatrix D = DynMatrix::Random(n, n);
   const MatrixType Q = C.adjoint() * C + DynMatrix::Identity(m, m);
@@ -678,6 +706,7 @@ EIGEN_DECLARE_TEST(riccati) {
   CALL_SUBTEST_1(dare_generalized_balanced());
   CALL_SUBTEST_1(dare_invalid_input());
   CALL_SUBTEST_1(dare_no_stabilizing_solution());
+  CALL_SUBTEST_1(dare_empty());
   CALL_SUBTEST_6(generalized_schur_rejected_swap());
   for (Index n1 = 1; n1 <= 2; ++n1)
     for (Index n2 = 1; n2 <= 2; ++n2) CALL_SUBTEST_6(generalized_schur_swap<MatrixXd>(n1, n2));

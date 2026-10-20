@@ -13,10 +13,8 @@
 #include "../../Eigen/Core"
 #include "../../Eigen/LU"
 #include "../../Eigen/QR"
-#include "../../Eigen/SVD"
 #include "../../Eigen/Eigenvalues"
 
-#include <cmath>
 #include <limits>
 
 namespace Eigen {
