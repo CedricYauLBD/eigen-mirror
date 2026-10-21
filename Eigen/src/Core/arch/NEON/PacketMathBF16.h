@@ -89,15 +89,16 @@ EIGEN_ALWAYS_INLINE void zip_in_place<Packet8bf>(Packet8bf& p1, Packet8bf& p2) {
 }  // namespace detail
 
 // Round to nearest even on the bfloat16 boundary. With lsb the lowest bit kept, the scalar
-// formula is (p + 0x7fff + lsb) >> 16, and RSHRN computes (v + 0x8000) >> 16, so v = p - 1 + lsb,
-// that is p minus one where lsb is clear. The caller guarantees that every NaN lane has a zero low
+// formula is (p + 0x7fff + lsb) >> 16, and RADDHN computes (p + d + 0x8000) >> 16, so d = lsb - 1,
+// that is -1 where lsb is clear. RADDHN folds the add that GCC fuses into RSHRN on AArch64 but
+// clang and ARMv7 GCC emit separately. The caller guarantees that every NaN lane has a zero low
 // half, which the FPU's NaN propagation does for bfloat16 operands: the rounding then leaves the
 // NaN's high half alone. A NaN with a nonzero low half can instead round to +-inf or carry into a
 // zero.
 EIGEN_STRONG_INLINE Packet4bf F32ToBf16KeepNaN(const Packet4f& p) {
   Packet4ui bits = vreinterpretq_u32_f32(p);
   Packet4ui round_down = vceqq_u32(vandq_u32(bits, vdupq_n_u32(0x10000)), vdupq_n_u32(0));
-  return vrshrn_n_u32(vaddq_u32(bits, round_down), 16);
+  return vraddhn_u32(bits, round_down);
 }
 
 // F32ToBf16KeepNaN for any float: NaN lanes become the bfloat16 NaN 0x7fc0, as on AVX. The scalar
@@ -147,7 +148,11 @@ EIGEN_STRONG_INLINE Packet8bf F32ToBf16KeepNaN(const Packet4f& lo, const Packet4
   Packet4ui hi_bits = vreinterpretq_u32_f32(hi);
   Packet4ui lo_round_down = vceqq_u32(vandq_u32(lo_bits, vdupq_n_u32(0x10000)), vdupq_n_u32(0));
   Packet4ui hi_round_down = vceqq_u32(vandq_u32(hi_bits, vdupq_n_u32(0x10000)), vdupq_n_u32(0));
-  return RoundingNarrowBf16(vaddq_u32(lo_bits, lo_round_down), vaddq_u32(hi_bits, hi_round_down));
+#if EIGEN_ARCH_ARM64
+  return vraddhn_high_u32(vraddhn_u32(lo_bits, lo_round_down), hi_bits, hi_round_down);
+#else
+  return vcombine_u16(vraddhn_u32(lo_bits, lo_round_down), vraddhn_u32(hi_bits, hi_round_down));
+#endif
 }
 
 EIGEN_STRONG_INLINE Packet8bf F32ToBf16(const Packet4f& lo, const Packet4f& hi) {
@@ -717,8 +722,9 @@ EIGEN_STRONG_INLINE Packet8bf pcmp_lt<Packet8bf>(const Packet8bf& a, const Packe
 
 template <>
 EIGEN_STRONG_INLINE Packet8bf pcmp_lt_or_nan<Packet8bf>(const Packet8bf& a, const Packet8bf& b) {
-  return F32MaskToBf16Mask(pcmp_lt_or_nan<Packet4f>(Bf16ToF32Low(a), Bf16ToF32Low(b)),
-                           pcmp_lt_or_nan<Packet4f>(Bf16ToF32High(a), Bf16ToF32High(b)));
+  // Negate a >= b once on the narrowed mask rather than on each float half.
+  return vmvnq_u16(F32MaskToBf16Mask(pcmp_le<Packet4f>(Bf16ToF32Low(b), Bf16ToF32Low(a)),
+                                     pcmp_le<Packet4f>(Bf16ToF32High(b), Bf16ToF32High(a))));
 }
 
 template <>
