@@ -44,17 +44,24 @@ void matrixRedux(const MatrixType& m) {
   Scalar sizeAsScalar = internal::cast<Index, Scalar>(rows * cols);
   VERIFY_IS_APPROX(MatrixType::Ones(rows, cols).sum(), sizeAsScalar);
   Scalar s(0), p(1), minc(numext::real(m1.coeff(0))), maxc(numext::real(m1.coeff(0)));
+  RealScalar sum_abs(0);
   for (int j = 0; j < cols; j++)
     for (int i = 0; i < rows; i++) {
       s += m1(i, j);
+      sum_abs += numext::abs(m1(i, j));
       p *= m1_for_prod(i, j);
       minc = (std::min)(numext::real(minc), numext::real(m1(i, j)));
       maxc = (std::max)(numext::real(maxc), numext::real(m1(i, j)));
     }
   const Scalar mean = s / Scalar(RealScalar(rows * cols));
 
-  VERIFY_IS_APPROX(m1.sum(), s);
-  VERIFY_IS_APPROX(m1.mean(), mean);
+  // Two summation orders differ by <= 2*gamma_n*sum(abs(x)). Accounting for
+  // rounding in sum_abs gives 2*n*eps/(1-2*n*eps)*sum_abs; n+1 also covers mean's division.
+  const RealScalar rounding = RealScalar(rows * cols + 1) * NumTraits<RealScalar>::epsilon();
+  VERIFY(RealScalar(2) * rounding < RealScalar(1));
+  const RealScalar sum_error = RealScalar(2) * rounding / (RealScalar(1) - RealScalar(2) * rounding) * sum_abs;
+  VERIFY(numext::abs(m1.sum() - s) <= sum_error);
+  VERIFY(numext::abs(m1.mean() - mean) <= sum_error / RealScalar(rows * cols));
   VERIFY_IS_APPROX(m1_for_prod.prod(), p);
   VERIFY_IS_APPROX(m1.real().minCoeff(), numext::real(minc));
   VERIFY_IS_APPROX(m1.real().maxCoeff(), numext::real(maxc));
