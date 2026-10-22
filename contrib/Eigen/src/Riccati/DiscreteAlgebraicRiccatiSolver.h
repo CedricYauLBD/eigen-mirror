@@ -233,8 +233,9 @@ inline int riccati_half_round_even(int d) {
  *
  * Balancing is essential for some badly scaled problems, but it can cost accuracy for others, notably when \f$ B \f$
  * is very small compared to the other matrices. With balancing enabled (the default), the solver therefore checks
- * the backward error of the balanced solution; if it is large, or the balanced computation fails, the unbalanced
- * pencil is solved as well and the more accurate solution is returned. compute(..., false) never balances.
+ * the backward error of the balanced solution whenever balancing changed the pencil; if it is large, or the balanced
+ * computation fails, the unbalanced pencil is solved as well and the more accurate solution is returned.
+ * compute(..., false) never balances.
  *
  * The algorithm follows SciPy's \c scipy.linalg.solve_discrete_are, with these differences: the generalized equation
  * combines the stable subspace with the balanced \f$ E \f$ (SciPy uses the original one, which is wrong when
@@ -376,7 +377,7 @@ class DiscreteAlgebraicRiccatiSolver {
 
   static ComputationInfo solvePencil(const DynamicMatrix& A, const DynamicMatrix& B, const DynamicMatrix& Q,
                                      const DynamicMatrix& R, const DynamicMatrix* E, const DynamicMatrix* S,
-                                     bool balance, RealScalar rcondThreshold, DynamicMatrix& X);
+                                     bool balance, RealScalar rcondThreshold, DynamicMatrix& X, bool& balanced);
 
   static RealScalar backwardErrorRatio(const DynamicMatrix& A, const DynamicMatrix& B, const DynamicMatrix& Q,
                                        const DynamicMatrix& R, const DynamicMatrix* E, const DynamicMatrix* S,
@@ -420,16 +421,19 @@ DiscreteAlgebraicRiccatiSolver<MatrixType_>& DiscreteAlgebraicRiccatiSolver<Matr
   const RealScalar rcondThreshold = eps;
 
   DynamicMatrix X;
-  m_info = solvePencil(A, B, Q, R, E, S, balance, rcondThreshold, X);
-  if (balance) {
+  bool balanced;
+  m_info = solvePencil(A, B, Q, R, E, S, balance, rcondThreshold, X, balanced);
+  if (balanced) {
     // Balancing is essential for some badly scaled problems (e.g. DAREX 13 and 14), but costs accuracy for others,
     // notably when B is small. If the balanced solve fails or its backward error ratio exceeds 10, the unbalanced
-    // pencil is solved as well and the solution with the smaller backward error is kept.
+    // pencil is solved as well and the solution with the smaller backward error is kept. If balancing left the
+    // pencil unchanged, there is nothing to fall back to.
     const RealScalar ratio =
         m_info == Success ? backwardErrorRatio(A, B, Q, R, E, S, X) : NumTraits<RealScalar>::infinity();
     if (!(ratio <= RealScalar(10))) {
       DynamicMatrix Xu;
-      if (solvePencil(A, B, Q, R, E, S, false, rcondThreshold, Xu) == Success &&
+      bool unused;
+      if (solvePencil(A, B, Q, R, E, S, false, rcondThreshold, Xu, unused) == Success &&
           (m_info != Success || backwardErrorRatio(A, B, Q, R, E, S, Xu) < ratio)) {
         X.swap(Xu);
         m_info = Success;
@@ -481,7 +485,7 @@ ComputationInfo DiscreteAlgebraicRiccatiSolver<MatrixType_>::solvePencil(const D
                                                                          const DynamicMatrix& Q, const DynamicMatrix& R,
                                                                          const DynamicMatrix* E, const DynamicMatrix* S,
                                                                          bool balance, RealScalar rcondThreshold,
-                                                                         DynamicMatrix& X) {
+                                                                         DynamicMatrix& X, bool& balanced) {
   const Index m = B.rows();
   const Index n = B.cols();
 
@@ -512,7 +516,7 @@ ComputationInfo DiscreteAlgebraicRiccatiSolver<MatrixType_>::solvePencil(const D
   // Balance the pencil without destroying its symplectic structure: the scaling is diag(D, D^-1, D_R),
   // with D derived from the xGEBAL scaling of |H| + |J| with zeroed diagonal, see [3].
   Matrix<RealScalar, Dynamic, 1> scaling;
-  bool balanced = false;
+  balanced = false;
   if (balance) {
     RealDynamicMatrix M = H.cwiseAbs() + J.cwiseAbs();
     M.diagonal().setZero();
