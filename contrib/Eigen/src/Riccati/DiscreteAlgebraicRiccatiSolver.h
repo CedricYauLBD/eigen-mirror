@@ -608,6 +608,8 @@ ComputationInfo DiscreteAlgebraicRiccatiSolver<MatrixType_>::solvePencil(const D
   X.adjointInPlace();
   if (balanced) X = scaling.head(m).asDiagonal() * X * scaling.head(m).asDiagonal();
   X = (X + X.adjoint()).eval() / RealScalar(2);
+  // The solve, the unscaling and the symmetrization can overflow.
+  if (!X.allFinite()) return NumericalIssue;
   return Success;
 }
 
