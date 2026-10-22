@@ -229,7 +229,7 @@ inline int riccati_half_round_even(int d) {
  * \f$ X = U_2 U_1^{-1} \f$ (for the generalized equation, \f$ U_1 \f$ is first replaced by \f$ E U_1 \f$).
  * The computation is reported as failed if the pencil does not have exactly \f$ m \f$ eigenvalues inside the unit
  * circle, if \f$ U_1 \f$ is numerically singular or so small that \f$ \|X\| \f$ (of the balanced problem) would
- * exceed about \f$ 1 / \varepsilon \f$, or if \f$ U_1^* U_2 \f$ is far from selfadjoint, which happens when the
+ * exceed about \f$ 0.2 / \varepsilon \f$, or if \f$ U_1^* U_2 \f$ is far from selfadjoint, which happens when the
  * pencil has eigenvalues too close to the unit circle [2]. A stabilizing solution that large cannot be told apart
  * from an unstable mode that \f$ B \f$ does not reach, for which none exists.
  *
@@ -590,11 +590,13 @@ ComputationInfo DiscreteAlgebraicRiccatiSolver<MatrixType_>::solvePencil(const D
   // [U1; U2] has orthonormal columns, so ||X||_2 = sqrt(1 - sigma_min(U1)^2) / sigma_min(U1). rcond(U1) is scale
   // invariant and misses a uniformly small U1, which an unstable mode that B does not reach produces from rounding
   // errors. ||U1||_1 rcond(U1) estimates 1 / ||U1^-1||_1 <= sqrt(m) sigma_min(U1), so the second test bounds the
-  // solution of the (balanced) pencil by about sqrt(m) / rcondThreshold. Stabilizing solutions beyond that are
-  // numerically indistinguishable from the absence of one.
+  // solution of the (balanced) pencil by about sqrt(m) / (5 rcondThreshold). Stabilizing solutions beyond that are
+  // numerically indistinguishable from the absence of one. The factor 5 rejected all of 14400 random problems with
+  // unstable modes that B does not reach; with 1, 10% of them returned a meaningless X.
   const PartialPivLU<DynamicMatrix> lu(U1);
   const RealScalar rcondU1 = lu.rcond();
-  if (!(rcondU1 >= rcondThreshold && internal::riccati_norm1(U1) * rcondU1 >= rcondThreshold)) return NumericalIssue;
+  if (!(rcondU1 >= rcondThreshold && internal::riccati_norm1(U1) * rcondU1 >= RealScalar(5) * rcondThreshold))
+    return NumericalIssue;
 
   // A large deviation of U1^* U2 from selfadjointness indicates failure, see Theorem 5 in [2].
   const DynamicMatrix uSym = U1.adjoint() * U2;
