@@ -375,6 +375,22 @@ void dare_generalized_scipy_cases() {
                                      MatrixType::Identity(8, 8), S2.cast<Scalar>(), 3.5e-16);
 }
 
+// All modes of A are unstable and B = 0, so no stabilizing solution exists. In a rotated basis, rounding errors leave
+// U1 of the order of eps instead of zero, which the scale-invariant rcond(U1) does not detect: the solver returned
+// Success with ||X|| = 2.5e20.
+template <typename MatrixType>
+void dare_unreachable_unstable_modes() {
+  using Scalar = typename MatrixType::Scalar;
+  const Vector3d v(1, 2, 3);
+  const Matrix3d P = Matrix3d::Identity() - 2 * v * v.transpose() / v.squaredNorm();
+  const MatrixType A = (P * Vector3d(150, -200, 250).asDiagonal() * P).template cast<Scalar>();
+  DiscreteAlgebraicRiccatiSolver<MatrixType> dare;
+  for (bool balance : {true, false})
+    VERIFY_IS_EQUAL(
+        dare.compute(A, MatrixType::Zero(3, 1), MatrixType::Identity(3, 3), MatrixType::Identity(1, 1), balance).info(),
+        NumericalIssue);
+}
+
 #if defined(EIGEN_TEST_PART_1) || defined(EIGEN_TEST_PART_ALL)
 // Regression test: with E != I, the stable subspace of the balanced pencil must be combined with the balanced E.
 // Combining it with the original E, as SciPy does, returns a solution with residual 3.9 for this problem.
@@ -708,6 +724,8 @@ EIGEN_DECLARE_TEST(riccati) {
   CALL_SUBTEST_1(dare_generalized_balanced());
   CALL_SUBTEST_1(dare_invalid_input());
   CALL_SUBTEST_1(dare_no_stabilizing_solution());
+  CALL_SUBTEST_1(dare_unreachable_unstable_modes<MatrixXd>());
+  CALL_SUBTEST_7(dare_unreachable_unstable_modes<MatrixXcd>());
   CALL_SUBTEST_1(dare_empty());
   CALL_SUBTEST_6(generalized_schur_rejected_swap());
   for (Index n1 = 1; n1 <= 2; ++n1)
