@@ -393,6 +393,7 @@ DiscreteAlgebraicRiccatiSolver<MatrixType_>& DiscreteAlgebraicRiccatiSolver<Matr
     const DynamicMatrix* E, const DynamicMatrix* S, bool balance) {
   const Index m = B.rows();
   const Index n = B.cols();
+  EIGEN_ONLY_USED_FOR_DEBUG(n);
   eigen_assert(A.rows() == m && A.cols() == m && "A must be square with as many rows as B.");
   eigen_assert(Q.rows() == m && Q.cols() == m && "Q must have the same size as A.");
   eigen_assert(R.rows() == n && R.cols() == n && "R must be square with as many columns as B.");
