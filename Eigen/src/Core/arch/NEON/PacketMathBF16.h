@@ -90,8 +90,8 @@ EIGEN_ALWAYS_INLINE void zip_in_place<Packet8bf>(Packet8bf& p1, Packet8bf& p2) {
 
 // Round to nearest even on the bfloat16 boundary. With lsb the lowest bit kept, the scalar
 // formula is (p + 0x7fff + lsb) >> 16, and RADDHN computes (p + d + 0x8000) >> 16, so d = lsb - 1,
-// that is -1 where lsb is clear. RADDHN folds the add that GCC fuses into RSHRN on AArch64 but
-// clang and ARMv7 GCC emit separately. The caller guarantees that every NaN lane has a zero low
+// that is -1 where lsb is clear. Written as an add and RSHRN, the add stays a separate op in
+// loops with GCC and clang on both targets. The caller guarantees that every NaN lane has a zero low
 // half, which the FPU's NaN propagation does for bfloat16 operands: the rounding then leaves the
 // NaN's high half alone. A NaN with a nonzero low half can instead round to +-inf or carry into a
 // zero.
