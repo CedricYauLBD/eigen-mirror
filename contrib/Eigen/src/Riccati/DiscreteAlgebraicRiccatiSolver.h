@@ -147,9 +147,10 @@ void riccati_balance_exponents(RealMatrix& M, VectorXi& exponents) {
     for (Index i = 0; i < n; ++i) {
       RealScalar c = M.col(i).stableNorm();
       RealScalar r = M.row(i).stableNorm();
+      if (numext::is_exactly_zero(c) || numext::is_exactly_zero(r)) continue;
+
       RealScalar ca = M.col(i).maxCoeff();
       RealScalar ra = M.row(i).maxCoeff();
-      if (numext::is_exactly_zero(c) || numext::is_exactly_zero(r)) continue;
 
       RealScalar g = r / radix;
       RealScalar f(1);
@@ -264,7 +265,7 @@ class DiscreteAlgebraicRiccatiSolver {
   using RealScalar = typename NumTraits<Scalar>::Real;
 
   /** \brief Default constructor; the solver is initialized by calling compute(). */
-  DiscreteAlgebraicRiccatiSolver() : m_info(InvalidInput), m_isInitialized(false) {}
+  DiscreteAlgebraicRiccatiSolver() = default;
 
   /** \brief Constructor; solves the discrete-time algebraic Riccati equation.
    *
@@ -273,8 +274,7 @@ class DiscreteAlgebraicRiccatiSolver {
    */
   template <typename InputTypeA, typename InputTypeB, typename InputTypeQ, typename InputTypeR>
   DiscreteAlgebraicRiccatiSolver(const EigenBase<InputTypeA>& A, const EigenBase<InputTypeB>& B,
-                                 const EigenBase<InputTypeQ>& Q, const EigenBase<InputTypeR>& R, bool balance = true)
-      : m_info(InvalidInput), m_isInitialized(false) {
+                                 const EigenBase<InputTypeQ>& Q, const EigenBase<InputTypeR>& R, bool balance = true) {
     compute(A, B, Q, R, balance);
   }
 
@@ -288,8 +288,7 @@ class DiscreteAlgebraicRiccatiSolver {
             typename InputTypeS>
   DiscreteAlgebraicRiccatiSolver(const EigenBase<InputTypeA>& A, const EigenBase<InputTypeB>& B,
                                  const EigenBase<InputTypeQ>& Q, const EigenBase<InputTypeR>& R,
-                                 const EigenBase<InputTypeE>& E, const EigenBase<InputTypeS>& S, bool balance = true)
-      : m_info(InvalidInput), m_isInitialized(false) {
+                                 const EigenBase<InputTypeE>& E, const EigenBase<InputTypeS>& S, bool balance = true) {
     compute(A, B, Q, R, E, S, balance);
   }
 
@@ -387,8 +386,8 @@ class DiscreteAlgebraicRiccatiSolver {
                                        const DynamicMatrix& X);
 
   MatrixType m_X;
-  ComputationInfo m_info;
-  bool m_isInitialized;
+  ComputationInfo m_info = InvalidInput;
+  bool m_isInitialized = false;
 };
 
 template <typename MatrixType_>
