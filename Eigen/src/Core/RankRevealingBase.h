@@ -31,7 +31,7 @@ class RankRevealingBase {
   using Scalar = typename internal::traits<Derived>::Scalar;
   using RealScalar = typename NumTraits<Scalar>::Real;
 
-  RankRevealingBase()
+  constexpr RankRevealingBase()
       : m_usePrescribedThreshold(false),
         m_prescribedThreshold(RealScalar(0)),
         m_maxpivot(RealScalar(0)),
@@ -54,7 +54,7 @@ class RankRevealingBase {
    *
    * If you want to come back to the default behavior, call setThreshold(Default_t)
    */
-  Derived& setThreshold(const RealScalar& threshold) {
+  constexpr Derived& setThreshold(const RealScalar& threshold) {
     m_usePrescribedThreshold = true;
     m_prescribedThreshold = threshold;
     return self();
@@ -68,7 +68,7 @@ class RankRevealingBase {
    *
    * See the documentation of setThreshold(const RealScalar&).
    */
-  Derived& setThreshold(Default_t) {
+  constexpr Derived& setThreshold(Default_t) {
     m_usePrescribedThreshold = false;
     return self();
   }
@@ -77,7 +77,7 @@ class RankRevealingBase {
    *
    * See the documentation of setThreshold(const RealScalar&).
    */
-  RealScalar threshold() const {
+  constexpr RealScalar threshold() const {
     eigen_assert(self().m_isInitialized || m_usePrescribedThreshold);
     // Higham's backward error bound: ||ΔA||₂ ≤ c·min(m,n)·u·||A||₂.
     // The factor of 4 covers the constant c.
@@ -92,10 +92,9 @@ class RankRevealingBase {
    *       For that, it uses the threshold value that you can control by calling
    *       setThreshold(const RealScalar&).
    */
-  inline Index rank() const {
-    using std::abs;
+  constexpr Index rank() const {
     eigen_assert(self().m_isInitialized && "Decomposition is not initialized.");
-    RealScalar premultiplied_threshold = abs(m_maxpivot) * threshold();
+    RealScalar premultiplied_threshold = numext::abs(m_maxpivot) * threshold();
     Index result = 0;
     for (Index i = 0; i < m_nonzero_pivots; ++i) result += (self().pivotCoeff(i) > premultiplied_threshold);
     return result;
@@ -107,7 +106,7 @@ class RankRevealingBase {
    *       For that, it uses the threshold value that you can control by calling
    *       setThreshold(const RealScalar&).
    */
-  inline Index dimensionOfKernel() const {
+  constexpr Index dimensionOfKernel() const {
     eigen_assert(self().m_isInitialized && "Decomposition is not initialized.");
     return self().cols() - rank();
   }
@@ -119,7 +118,7 @@ class RankRevealingBase {
    *       For that, it uses the threshold value that you can control by calling
    *       setThreshold(const RealScalar&).
    */
-  inline bool isInjective() const {
+  constexpr bool isInjective() const {
     eigen_assert(self().m_isInitialized && "Decomposition is not initialized.");
     return rank() == self().cols();
   }
@@ -131,7 +130,7 @@ class RankRevealingBase {
    *       For that, it uses the threshold value that you can control by calling
    *       setThreshold(const RealScalar&).
    */
-  inline bool isSurjective() const {
+  constexpr bool isSurjective() const {
     eigen_assert(self().m_isInitialized && "Decomposition is not initialized.");
     return rank() == self().rows();
   }
@@ -142,7 +141,7 @@ class RankRevealingBase {
    *       For that, it uses the threshold value that you can control by calling
    *       setThreshold(const RealScalar&).
    */
-  inline bool isInvertible() const {
+  constexpr bool isInvertible() const {
     eigen_assert(self().m_isInitialized && "Decomposition is not initialized.");
     return isInjective() && isSurjective();
   }
@@ -154,7 +153,7 @@ class RankRevealingBase {
    *
    * \sa rank()
    */
-  inline Index nonzeroPivots() const {
+  constexpr Index nonzeroPivots() const {
     eigen_assert(self().m_isInitialized && "Decomposition is not initialized.");
     return m_nonzero_pivots;
   }
@@ -162,7 +161,7 @@ class RankRevealingBase {
   /** \returns the absolute value of the biggest pivot, i.e. the biggest
    *          diagonal coefficient of U (or R).
    */
-  RealScalar maxPivot() const { return m_maxpivot; }
+  constexpr RealScalar maxPivot() const { return m_maxpivot; }
 
  protected:
   bool m_usePrescribedThreshold;
@@ -171,8 +170,8 @@ class RankRevealingBase {
   Index m_nonzero_pivots;
 
  private:
-  Derived& self() { return static_cast<Derived&>(*this); }
-  const Derived& self() const { return static_cast<const Derived&>(*this); }
+  constexpr Derived& self() { return static_cast<Derived&>(*this); }
+  constexpr const Derived& self() const { return static_cast<const Derived&>(*this); }
 };
 
 }  // end namespace Eigen

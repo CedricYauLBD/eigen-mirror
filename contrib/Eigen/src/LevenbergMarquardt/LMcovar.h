@@ -21,13 +21,13 @@ namespace Eigen {
 namespace internal {
 
 template <typename Scalar>
-void covar(Matrix<Scalar, Dynamic, Dynamic>& r, const VectorXi& ipvt,
-           Scalar tol = numext::sqrt(NumTraits<Scalar>::epsilon())) {
+constexpr void covar(Matrix<Scalar, Dynamic, Dynamic>& r, const VectorXi& ipvt,
+                     Scalar tol = numext::sqrt(NumTraits<Scalar>::epsilon())) {
   using std::abs;
   /* Local variables */
-  Index i, j, k, l, ii, jj;
-  bool sing;
-  Scalar temp;
+  Index i = 0, j = 0, k = 0, l = 0, ii = 0, jj = 0;
+  bool sing = false;
+  Scalar temp{};
 
   /* Function Body */
   const Index n = r.cols();

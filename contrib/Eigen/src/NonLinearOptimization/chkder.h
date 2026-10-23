@@ -15,9 +15,9 @@ namespace Eigen {
 namespace internal {
 
 template <typename Scalar>
-void chkder(const Matrix<Scalar, Dynamic, 1> &x, const Matrix<Scalar, Dynamic, 1> &fvec,
-            const Matrix<Scalar, Dynamic, Dynamic> &fjac, Matrix<Scalar, Dynamic, 1> &xp,
-            const Matrix<Scalar, Dynamic, 1> &fvecp, int mode, Matrix<Scalar, Dynamic, 1> &err) {
+constexpr void chkder(const Matrix<Scalar, Dynamic, 1> &x, const Matrix<Scalar, Dynamic, 1> &fvec,
+                      const Matrix<Scalar, Dynamic, Dynamic> &fjac, Matrix<Scalar, Dynamic, 1> &xp,
+                      const Matrix<Scalar, Dynamic, 1> &fvecp, int mode, Matrix<Scalar, Dynamic, 1> &err) {
   using std::abs;
   using std::log;
   using std::sqrt;
@@ -27,7 +27,7 @@ void chkder(const Matrix<Scalar, Dynamic, 1> &x, const Matrix<Scalar, Dynamic, 1
   const Scalar eps = sqrt(NumTraits<Scalar>::epsilon());
   const Scalar epsf = chkder_factor * NumTraits<Scalar>::epsilon();
   const Scalar epslog = chkder_log10e * log(eps);
-  Scalar temp;
+  Scalar temp{};
 
   const Index m = fvec.size(), n = x.size();
 

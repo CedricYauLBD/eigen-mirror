@@ -21,12 +21,12 @@
 namespace Eigen {
 
 template <typename FunctorType>
-LevenbergMarquardtSpace::Status LevenbergMarquardt<FunctorType>::minimizeOneStep(FVectorType &x) {
+constexpr LevenbergMarquardtSpace::Status LevenbergMarquardt<FunctorType>::minimizeOneStep(FVectorType &x) {
   using std::abs;
   using std::sqrt;
-  RealScalar temp, temp1, temp2;
-  RealScalar ratio;
-  RealScalar pnorm, xnorm, fnorm1, actred, dirder, prered;
+  RealScalar temp{}, temp1{}, temp2{};
+  RealScalar ratio{};
+  RealScalar pnorm{}, xnorm{}, fnorm1{}, actred{}, dirder{}, prered{};
   eigen_assert(x.size() == n);  // check the caller is not cheating us
 
   temp = 0.0;

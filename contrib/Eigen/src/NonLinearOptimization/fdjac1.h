@@ -12,20 +12,20 @@ namespace Eigen {
 namespace internal {
 
 template <typename FunctorType, typename Scalar>
-DenseIndex fdjac1(const FunctorType &Functor, Matrix<Scalar, Dynamic, 1> &x, Matrix<Scalar, Dynamic, 1> &fvec,
-                  Matrix<Scalar, Dynamic, Dynamic> &fjac, DenseIndex ml, DenseIndex mu, Scalar epsfcn) {
+constexpr DenseIndex fdjac1(const FunctorType &Functor, Matrix<Scalar, Dynamic, 1> &x, Matrix<Scalar, Dynamic, 1> &fvec,
+                            Matrix<Scalar, Dynamic, Dynamic> &fjac, DenseIndex ml, DenseIndex mu, Scalar epsfcn) {
   using std::abs;
   using std::sqrt;
 
   typedef DenseIndex Index;
 
   /* Local variables */
-  Scalar h;
-  Index j, k;
-  Scalar eps, temp;
-  Index msum;
-  int iflag;
-  Index start, length;
+  Scalar h{};
+  Index j = 0, k = 0;
+  Scalar eps{}, temp{};
+  Index msum = 0;
+  int iflag = 0;
+  Index start = 0, length = 0;
 
   /* Function Body */
   const Scalar epsmch = NumTraits<Scalar>::epsilon();

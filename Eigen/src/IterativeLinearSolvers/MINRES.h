@@ -30,9 +30,8 @@ namespace internal {
  * \param tol_error On input the tolerance error, on output an estimation of the relative error.
  */
 template <typename MatrixType, typename Rhs, typename Dest, typename Preconditioner>
-EIGEN_DONT_INLINE void minres(const MatrixType& mat, const Rhs& rhs, Dest& x, const Preconditioner& precond,
-                              Index& iters, typename Dest::RealScalar& tol_error) {
-  using std::sqrt;
+EIGEN_DONT_INLINE constexpr void minres(const MatrixType& mat, const Rhs& rhs, Dest& x, const Preconditioner& precond,
+                                        Index& iters, typename Dest::RealScalar& tol_error) {
   using RealScalar = typename Dest::RealScalar;
   using Scalar = typename Dest::Scalar;
   using VectorType = Matrix<Scalar, Dynamic, 1>;
@@ -69,7 +68,7 @@ EIGEN_DONT_INLINE void minres(const MatrixType& mat, const Rhs& rhs, Dest& x, co
   VectorType w_new(precond.solve(v_new));  // initialize w_new
   RealScalar beta_new2(v_new.dot(w_new));
   eigen_assert(beta_new2 >= 0.0 && "PRECONDITIONER IS NOT POSITIVE DEFINITE");
-  RealScalar beta_new(sqrt(beta_new2));
+  RealScalar beta_new(numext::sqrt(beta_new2));
   const RealScalar beta_one(beta_new);
   // Initialize other variables
   RealScalar c(1.0);  // the cosine of the Givens rotation
@@ -105,7 +104,7 @@ EIGEN_DONT_INLINE void minres(const MatrixType& mat, const Rhs& rhs, Dest& x, co
     w_new = precond.solve(v_new);  // overwrite w_new
     beta_new2 = v_new.dot(w_new);  // compute beta_new
     eigen_assert(beta_new2 >= 0.0 && "PRECONDITIONER IS NOT POSITIVE DEFINITE");
-    beta_new = sqrt(beta_new2);  // compute beta_new
+    beta_new = numext::sqrt(beta_new2);  // compute beta_new
 
     // Givens rotation
     const RealScalar r2 = s * alpha + c * c_old * beta;  // s, s_old, c and c_old are still from previous iteration
@@ -214,7 +213,7 @@ class MINRES : public IterativeSolverBase<MINRES<MatrixType_, UpLo_, Preconditio
 
  public:
   /** Default constructor. */
-  MINRES() : Base() {}
+  constexpr MINRES() : Base() {}
 
   /** Initialize the solver with matrix \a A for further \c Ax=b solving.
    *
@@ -227,11 +226,11 @@ class MINRES : public IterativeSolverBase<MINRES<MatrixType_, UpLo_, Preconditio
    * matrix A, or modify a copy of A.
    */
   template <typename MatrixDerived>
-  explicit MINRES(const EigenBase<MatrixDerived>& A) : Base(A.derived()) {}
+  constexpr explicit MINRES(const EigenBase<MatrixDerived>& A) : Base(A.derived()) {}
 
   /** \internal */
   template <typename Rhs, typename Dest>
-  void _solve_vector_with_guess_impl(const Rhs& b, Dest& x) const {
+  constexpr void _solve_vector_with_guess_impl(const Rhs& b, Dest& x) const {
     using MatrixWrapper = typename Base::MatrixWrapper;
     using ActualMatrixType = typename Base::ActualMatrixType;
     enum {
