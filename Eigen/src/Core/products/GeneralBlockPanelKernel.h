@@ -1315,7 +1315,7 @@ struct gebp_micro_step {
   }
 };
 // Compiler register allocation workarounds for the GEBP micro-kernel.
-// GCC can fail to keep array-based SIMD values in vector registers, causing
+// GCC and clang can fail to keep array-based SIMD values in vector registers, causing
 // excessive spilling. These helpers use inline asm constraints to pin values.
 // Only applied when the scalar type is actually vectorizable (not custom types).
 // See Eigen bugs 935, 1637, and 3059.
@@ -1365,6 +1365,25 @@ EIGEN_ALWAYS_INLINE void gebp_sse_spilling_workaround(LhsArray_& A, AccArray_& A
 #endif
 }
 
+// Clang AVX/AVX2: the 3pX4 tile needs all 16 ymm registers (12 accumulators, 3 LHS packets, 1 RHS broadcast), and
+// clang keeps one or more accumulators on the stack, reloading and storing them on every depth step: a dependency
+// chain through store forwarding that roughly halves the kernel's throughput. With the accumulators pinned, clang
+// spills LHS packets instead, which are off those chains. Only Packet8f and Packet4d: the barrier keeps raw vector
+// types in registers but puts wrapper and complex packets (Packet8i, Packet4cf, ...) in memory.
+template <int MrPackets, int NrCols, typename GEBPTraits_, typename FullLhsPacket_, typename AccArray_>
+EIGEN_ALWAYS_INLINE void gebp_avx_clang_spilling_workaround(AccArray_& ACC) {
+  EIGEN_UNUSED_VARIABLE(ACC);
+#if EIGEN_COMP_CLANG && defined(EIGEN_VECTORIZE_AVX) && !defined(EIGEN_VECTORIZE_AVX512)
+  using AccElement = std::decay_t<decltype(ACC[0])>;
+  constexpr bool kRealPacket = std::is_same<AccElement, Packet8f>::value || std::is_same<AccElement, Packet4d>::value;
+  constexpr bool apply = GEBPTraits_::Vectorizable && MrPackets == 3 && NrCols == 4 && kRealPacket &&
+                         std::is_same<AccElement, FullLhsPacket_>::value;
+  EIGEN_IF_CONSTEXPR (apply) {
+    for (int n = 0; n < MrPackets * NrCols; ++n) EIGEN_OPTIMIZATION_BARRIER(ACC[n]);
+  }
+#endif
+}
+
 // Double-accumulation trick for 1pX4 path to break FMA dependency chains. A DoublePacket
 // accumulator already holds two chains, and with 16 registers doubling it would spill.
 template <typename AccPacket, int MrPackets, int NrCols>
@@ -1397,6 +1416,7 @@ struct gebp_peeled_loop {
     gebp_micro_step<KVAL, MrPackets, NrCols>::run(traits, blA, blB, A, rhs_panel, T0, ACC); \
     gebp_neon_3p_workaround<MrPackets, GEBPTraits, FullLhsPacket>(A);                       \
     gebp_sse_spilling_workaround<MrPackets, NrCols, GEBPTraits, FullLhsPacket>(A, ACC);     \
+    gebp_avx_clang_spilling_workaround<MrPackets, NrCols, GEBPTraits, FullLhsPacket>(ACC);  \
     /* LHS prefetch for 2pX4 and 3pX4 */                                                    \
     EIGEN_IF_CONSTEXPR ((MrPackets == 2 || MrPackets == 3) && NrCols == 4) {                \
       internal::prefetch(blA + (MrPackets * KVAL + 16) * GEBPTraits::LhsProgress);          \
