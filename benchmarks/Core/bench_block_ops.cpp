@@ -93,8 +93,22 @@ static void BM_FixedFullColumnsSum(benchmark::State& state) {
   }
 }
 
+// Copy a block of a product, which forwards packets to the product's temporary.
+static void BM_ProductBlockCopy(benchmark::State& state) {
+  Matrix<float, 8, 8> a = Matrix<float, 8, 8>::Random(), b = Matrix<float, 8, 8>::Random();
+  Matrix<float, 8, 4> dst;
+  Index j = 1;
+  for (auto _ : state) {
+    benchmark::DoNotOptimize(j);
+    benchmark::DoNotOptimize(a.data());
+    dst = (a * b).block<8, 4>(0, j);
+    benchmark::DoNotOptimize(dst.data());
+  }
+}
+
 BENCHMARK(BM_FixedFullColumnsCopy);
 BENCHMARK(BM_FixedFullColumnsSum);
+BENCHMARK(BM_ProductBlockCopy);
 
 // (matrix_size, block_size)
 // clang-format off

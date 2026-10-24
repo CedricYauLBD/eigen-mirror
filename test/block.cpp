@@ -474,6 +474,19 @@ void empty_block_data_test() {
   VERIFY(no_cols.block(2, 0, 1, 0).data() == nullptr);
 }
 
+// A product evaluates into a temporary with direct access, but the product
+// expression itself has none, so its blocks forward packets to that temporary.
+void product_block_packet_access_test() {
+  using Matrix8 = Matrix<float, 8, 8>;
+  Matrix8 a = Matrix8::Random(), b = Matrix8::Random();
+  Matrix8 ab = a * b;
+  Index j = internal::random<Index>(0, 4);
+  VERIFY(internal::evaluator<decltype((a * b).block<8, 4>(0, j))>::Flags & PacketAccessBit);
+  VERIFY(!(internal::evaluator<decltype((a * b).block<8, 4>(0, j))>::Flags & DirectAccessBit));
+  VERIFY_IS_APPROX((Matrix<float, 8, 4>((a * b).block<8, 4>(0, j))), (ab.block<8, 4>(0, j)));
+  VERIFY_IS_APPROX(MatrixXf((a * b).block(1, j, 6, 3)), MatrixXf(ab.block(1, j, 6, 3)));
+}
+
 EIGEN_DECLARE_TEST(block) {
   for (int i = 0; i < g_repeat; i++) {
     CALL_SUBTEST_1(block(Matrix<float, 1, 1>()));
@@ -492,6 +505,7 @@ EIGEN_DECLARE_TEST(block) {
     CALL_SUBTEST_9(unwind_inner_panel_test(Matrix<float, Dynamic, Dynamic, RowMajor>()));
     CALL_SUBTEST_12(inner_panel_inference_test());
     CALL_SUBTEST_12(empty_block_data_test());
+    CALL_SUBTEST_12(product_block_packet_access_test());
 
 #ifndef EIGEN_DEFAULT_TO_ROW_MAJOR
     CALL_SUBTEST_6(data_and_stride(MatrixXf(internal::random(5, 50), internal::random(5, 50))));
