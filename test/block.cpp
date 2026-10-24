@@ -437,6 +437,31 @@ void unwind_inner_panel_test(const BaseXpr&) {
   VERIFY_IS_CWISE_EQUAL(inner_rows_ref, inner_rows_unwound);
 }
 
+template <typename Xpr, typename Reference>
+void check_inner_panel_like(const Xpr& xpr, const Reference& reference) {
+  VERIFY_IS_EQUAL(int(internal::evaluator<Xpr>::Flags), int(internal::evaluator<Reference>::Flags));
+  VERIFY_IS_EQUAL(int(internal::evaluator<Xpr>::Alignment), int(internal::evaluator<Reference>::Alignment));
+  VERIFY_IS_EQUAL(xpr.eval(), reference.eval());
+  VERIFY_IS_EQUAL(xpr.sum(), reference.sum());
+}
+
+// A fixed-size block spanning the whole fixed inner size of its parent is an inner
+// panel even when it is not built with InnerPanel = true.
+void inner_panel_inference_test() {
+  using ColMajor8 = Matrix<float, 8, 8>;
+  using RowMajor8 = Matrix<float, 8, 8, RowMajor>;
+  ColMajor8 a = ColMajor8::Random();
+  RowMajor8 b = RowMajor8::Random();
+  Index j = internal::random<Index>(0, 4);
+  VERIFY(internal::evaluator<decltype(a.block<8, 4>(0, j))>::Flags & LinearAccessBit);
+  check_inner_panel_like(a.block<8, 4>(0, j), a.middleCols<4>(j));
+  check_inner_panel_like(b.block<4, 8>(j, 0), b.middleRows<4>(j));
+  check_inner_panel_like((a + a).block<8, 4>(0, j), (a + a).middleCols<4>(j));
+  // Not spanning the inner size, or spanning the outer one, is not an inner panel.
+  VERIFY(!(internal::evaluator<decltype(a.block<7, 4>(0, 0))>::Flags & LinearAccessBit));
+  VERIFY(!(internal::evaluator<decltype(a.block<4, 8>(0, 0))>::Flags & LinearAccessBit));
+}
+
 EIGEN_DECLARE_TEST(block) {
   for (int i = 0; i < g_repeat; i++) {
     CALL_SUBTEST_1(block(Matrix<float, 1, 1>()));
@@ -453,6 +478,7 @@ EIGEN_DECLARE_TEST(block) {
     CALL_SUBTEST_9(unwind_test(MatrixXf()));
     CALL_SUBTEST_9(unwind_inner_panel_test(MatrixXf()));
     CALL_SUBTEST_9(unwind_inner_panel_test(Matrix<float, Dynamic, Dynamic, RowMajor>()));
+    CALL_SUBTEST_12(inner_panel_inference_test());
 
 #ifndef EIGEN_DEFAULT_TO_ROW_MAJOR
     CALL_SUBTEST_6(data_and_stride(MatrixXf(internal::random(5, 50), internal::random(5, 50))));

@@ -72,6 +72,30 @@ static void BM_LeftCols(benchmark::State& state) {
   state.SetBytesProcessed(state.iterations() * n * k * sizeof(Scalar));
 }
 
+// Copy and sum a fixed block spanning whole columns, which is contiguous like middleCols<4>.
+static void BM_FixedFullColumnsCopy(benchmark::State& state) {
+  Matrix<float, 6, 6> src = Matrix<float, 6, 6>::Random();
+  Matrix<float, 6, 4> dst;
+  Index j = 1;
+  for (auto _ : state) {
+    benchmark::DoNotOptimize(j);
+    dst = src.block<6, 4>(0, j);
+    benchmark::DoNotOptimize(dst.data());
+  }
+}
+
+static void BM_FixedFullColumnsSum(benchmark::State& state) {
+  Matrix<float, 6, 6> src = Matrix<float, 6, 6>::Random();
+  Index j = 1;
+  for (auto _ : state) {
+    benchmark::DoNotOptimize(j);
+    benchmark::DoNotOptimize(src.block<6, 4>(0, j).sum());
+  }
+}
+
+BENCHMARK(BM_FixedFullColumnsCopy);
+BENCHMARK(BM_FixedFullColumnsSum);
+
 // (matrix_size, block_size)
 // clang-format off
 #define BLOCK_SIZES ->ArgsProduct({{256, 512, 1024}, {16, 64, 128}})

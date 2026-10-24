@@ -1456,8 +1456,12 @@ struct evaluator<Block<ArgType, BlockRows, BlockCols, InnerPanel>>
                               ? PacketAccessBit
                               : 0,
 
+    ArgInnerSize = ArgTypeIsRowMajor ? int(ArgType::ColsAtCompileTime) : int(ArgType::RowsAtCompileTime),
+    // InnerPanel is deduced from the parent's traits, so it only holds in the parent evaluator's storage order. A block
+    // spanning its parent's fixed inner size is an inner panel too, e.g. block<6, 4>(0, j) of a 6x6 matrix.
+    IsInnerPanel = HasSameStorageOrderAsArgType && (InnerPanel || (InnerSize != Dynamic && InnerSize == ArgInnerSize)),
     FlagsLinearAccessBit = (RowsAtCompileTime == 1 || ColsAtCompileTime == 1 ||
-                            (InnerPanel && (evaluator<ArgType>::Flags & LinearAccessBit)))
+                            (IsInnerPanel && (evaluator<ArgType>::Flags & LinearAccessBit)))
                                ? LinearAccessBit
                                : 0,
     FlagsRowMajorBit = XprType::Flags & RowMajorBit,
@@ -1465,7 +1469,7 @@ struct evaluator<Block<ArgType, BlockRows, BlockCols, InnerPanel>>
     Flags = Flags0 | FlagsLinearAccessBit | FlagsRowMajorBit,
 
     PacketAlignment = unpacket_traits<PacketScalar>::alignment,
-    Alignment0 = (InnerPanel && (OuterStrideAtCompileTime != Dynamic) && (OuterStrideAtCompileTime != 0) &&
+    Alignment0 = (IsInnerPanel && (OuterStrideAtCompileTime != Dynamic) && (OuterStrideAtCompileTime != 0) &&
                   (((OuterStrideAtCompileTime * int(sizeof(Scalar))) % int(PacketAlignment)) == 0))
                      ? int(PacketAlignment)
                      : 0,
