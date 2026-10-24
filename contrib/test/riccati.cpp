@@ -539,41 +539,40 @@ void dare_random(Index maxM, Index maxN) {
   const DynMatrix D = DynMatrix::Random(n, n);
   const MatrixType Q = C.adjoint() * C + DynMatrix::Identity(m, m);
   const DynMatrix R = D.adjoint() * D + DynMatrix::Identity(n, n);
-  const DynMatrix Ad = A, Qd = Q, Id = DynMatrix::Identity(m, m), Z = DynMatrix::Zero(m, n);
+  const DynMatrix Id = DynMatrix::Identity(m, m), Z = DynMatrix::Zero(m, n);
 
   DiscreteAlgebraicRiccatiSolver<MatrixType> dare(A, B, Q, R);
   VERIFY_IS_EQUAL(dare.info(), Success);
-  const MatrixType X = dare.solution();
+  const MatrixType& X = dare.solution();
   VERIFY_IS_EQUAL(X, X.adjoint());
-  const DynMatrix Xd = X;
-  verify_dare_backward_error(Ad, B, Qd, R, Id, Z, Xd);
-  verify_stabilizing(Ad, B, R, Id, Z, Xd);
+  verify_dare_backward_error<DynMatrix>(A, B, Q, R, Id, Z, X);
+  verify_stabilizing<DynMatrix>(A, B, R, Id, Z, X);
   // X >= Q > 0, since X = Q + A^* (X - X B (R + B^* X B)^-1 B^* X) A.
-  VERIFY(SelfAdjointEigenSolver<DynMatrix>(Xd).eigenvalues().minCoeff() > RealScalar(0));
+  VERIFY(SelfAdjointEigenSolver<DynMatrix>(X).eigenvalues().minCoeff() > RealScalar(0));
 
   DiscreteAlgebraicRiccatiSolver<MatrixType> unbalanced(A, B, Q, R, /*balance=*/false);
   VERIFY_IS_EQUAL(unbalanced.info(), Success);
-  verify_dare_backward_error(Ad, B, Qd, R, Id, Z, DynMatrix(unbalanced.solution()));
+  verify_dare_backward_error<DynMatrix>(A, B, Q, R, Id, Z, unbalanced.solution());
 
   // The generalized equation with E = I and S = 0 is the standard one.
   DiscreteAlgebraicRiccatiSolver<MatrixType> generalized;
   generalized.compute(A, B, Q, R, MatrixType::Identity(m, m), Z);
   VERIFY_IS_EQUAL(generalized.info(), Success);
-  verify_dare_backward_error(Ad, B, Qd, R, Id, Z, DynMatrix(generalized.solution()));
+  verify_dare_backward_error<DynMatrix>(A, B, Q, R, Id, Z, generalized.solution());
 
   // The generalized problem (E A, E B, Q, R, E, S) has the closed-loop dynamics of (A, B), and E^* X E is the solution
   // of the standard problem with the cross term S.
   const MatrixType E =
       MatrixType::Identity(m, m) + MatrixType::Random(m, m) * (RealScalar(0.5) / numext::sqrt(RealScalar(m)));
   const DynMatrix S = DynMatrix::Random(m, n) * (RealScalar(0.5) / numext::sqrt(RealScalar(m * n)));
-  const DynMatrix Ed = E, EA = Ed * Ad, EB = Ed * B;
+  const DynMatrix EA = E * A, EB = E * B;
   for (bool balance : {true, false}) {
     generalized.compute(EA, EB, Q, R, E, S, balance);
     VERIFY_IS_EQUAL(generalized.info(), Success);
     const DynMatrix Xg = generalized.solution();
     VERIFY_IS_EQUAL(Xg, Xg.adjoint());
-    verify_dare_backward_error(EA, EB, Qd, R, Ed, S, Xg);
-    verify_stabilizing(EA, EB, R, Ed, S, Xg);
+    verify_dare_backward_error<DynMatrix>(EA, EB, Q, R, E, S, Xg);
+    verify_stabilizing<DynMatrix>(EA, EB, R, E, S, Xg);
   }
 }
 
