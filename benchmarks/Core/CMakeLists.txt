@@ -16,6 +16,9 @@ eigen_add_benchmark(bench_gemm_o2 bench_gemm.cpp)
 eigen_add_benchmark(bench_gemm_double_o2 bench_gemm.cpp DEFINITIONS SCALAR=double)
 target_compile_options(bench_gemm_o2 PRIVATE $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-O2>)
 target_compile_options(bench_gemm_double_o2 PRIVATE $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-O2>)
+# half and bfloat16 GEMM accumulates in float (#3158); the float targets above are its ceiling.
+eigen_add_benchmark(bench_gemm_half bench_gemm.cpp DEFINITIONS SCALAR=Eigen::half)
+eigen_add_benchmark(bench_gemm_bfloat16 bench_gemm.cpp DEFINITIONS SCALAR=Eigen::bfloat16)
 eigen_add_benchmark(bench_gemm_complex bench_gemm.cpp
     DEFINITIONS "SCALAR=std::complex<float>" EIGEN_BENCH_COMPLEX_SCALAR)
 eigen_add_benchmark(bench_gemm_complex_double bench_gemm.cpp

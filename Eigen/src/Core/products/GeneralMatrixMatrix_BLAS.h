@@ -142,12 +142,12 @@ void EIGEN_BLAS_SYM(sbgemm)(const char* trans_a, const char* trans_b, const EIGE
 template <typename Index, int LhsStorageOrder, bool ConjugateLhs, int RhsStorageOrder, bool ConjugateRhs>
 struct general_matrix_matrix_product<Index, Eigen::bfloat16, LhsStorageOrder, ConjugateLhs, Eigen::bfloat16,
                                      RhsStorageOrder, ConjugateRhs, ColMajor, 1> {
-  typedef gebp_traits<Eigen::bfloat16, Eigen::bfloat16> Traits;
+  // A bfloat16 product accumulates in float (product_accumulator), so its blocking and alpha are float.
+  using Traits = gebp_traits<float, float>;
 
   static void run(Index rows, Index cols, Index depth, const Eigen::bfloat16* lhs_, Index lhsStride,
                   const Eigen::bfloat16* rhs_, Index rhsStride, Eigen::bfloat16* res, Index resIncr, Index resStride,
-                  Eigen::bfloat16 alpha, level3_blocking<Eigen::bfloat16, Eigen::bfloat16>& blocking,
-                  GemmParallelInfo<Index>* info) {
+                  float alpha, level3_blocking<float, float>& blocking, GemmParallelInfo<Index>* info) {
     using std::conj;
     if (rows == 0 || cols == 0 || depth == 0 || numext::is_exactly_zero(alpha)) return;
     if (!blas_compatible_stride<LhsStorageOrder>(rows, depth, lhsStride) ||
@@ -165,12 +165,12 @@ struct general_matrix_matrix_product<Index, Eigen::bfloat16, LhsStorageOrder, Co
     BlasIndex m, n, k, lda, ldb, ldc;
     const Eigen::bfloat16 *a, *b;
 
-    float falpha = static_cast<float>(alpha);
+    float falpha = alpha;
     float fbeta = float(1.0);
 
-    using MatrixXbf16 = Matrix<Eigen::bfloat16, Dynamic, Dynamic>;
+    using MatrixXbf16 = Matrix<Eigen::bfloat16, Dynamic, Dynamic, ColMajor>;
     MatrixXbf16 a_tmp, b_tmp;
-    MatrixXf r_tmp;
+    Matrix<float, Dynamic, Dynamic, ColMajor> r_tmp;
 
     /* Set transpose options */
     transa = (LhsStorageOrder == RowMajor) ? ((ConjugateLhs) ? 'C' : 'T') : 'N';
@@ -205,15 +205,15 @@ struct general_matrix_matrix_product<Index, Eigen::bfloat16, LhsStorageOrder, Co
       b = rhs_;
     }
 
-    // Evaluate to a temporary intermediate array.
-    r_tmp.resize(m, n);
+    // sbgemm forms beta * C + alpha * A * B in float. C starts as the widened result and beta = 1, so that
+    // res += alpha * A * B rounds once.
+    Map<MatrixXbf16, 0, OuterStride<> > result(res, m, n, OuterStride<>(resStride));
+    r_tmp = result.cast<float>();
 
     EIGEN_BLAS_SYM(sbgemm)
     (&transa, &transb, &m, &n, &k, (const float*)&numext::real_ref(falpha), a, &lda, b, &ldb,
      (const float*)&numext::real_ref(fbeta), r_tmp.data(), &ldc);
 
-    // Cast to the output.
-    Map<MatrixXbf16, 0, OuterStride<> > result(res, m, n, OuterStride<>(resStride));
     result = r_tmp.cast<Eigen::bfloat16>();
   }
 };

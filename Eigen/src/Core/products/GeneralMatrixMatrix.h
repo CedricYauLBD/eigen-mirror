@@ -123,11 +123,12 @@ struct gemm_pack_lhs_first_loop_policy {
 // source instead of a packed panel.
 template <typename Scalar, typename Index>
 bool sme_direct_lhs_ok(Index lhsStride, Index rows, Index depth, Index cols);
-// True for the unit-stride ColMajor mapper the GEMM driver hands the packers.
-template <typename Mapper>
+// True for the unit-stride ColMajor mapper the GEMM driver hands the packers, when it reads the kernel's own scalar:
+// a source the packers convert has no LHS the kernel could read in place.
+template <typename Mapper, typename KernelScalar>
 struct sme_direct_lhs_mapper : std::false_type {};
 template <typename Scalar, typename Index>
-struct sme_direct_lhs_mapper<const_blas_data_mapper<Scalar, Index, ColMajor>>
+struct sme_direct_lhs_mapper<const_blas_data_mapper<Scalar, Index, ColMajor>, Scalar>
     : bool_constant<!NumTraits<Scalar>::IsComplex> {};
 // Runs the block on the in-place LHS when the kernel can take it; the false
 // overload keeps the call out of every other instantiation.
@@ -237,7 +238,7 @@ struct gemm_pack_rhs_first_loop_policy {
         for (Index i2 = 0; i2 < rows; i2 += mc) {
           const Index actual_mc = (std::min)(i2 + mc, rows) - i2;
 #ifdef EIGEN_VECTORIZE_SME
-          if (sme_run_direct_lhs(bool_constant<sme_direct_lhs_mapper<LhsMapper>::value>(), gebp,
+          if (sme_run_direct_lhs(bool_constant<sme_direct_lhs_mapper<LhsMapper, LhsScalar>::value>(), gebp,
                                  res.getSubMapper(i2, j2), lhs, i2, k2, blockB, actual_mc, actual_kc, actual_nc, alpha))
             continue;
 #endif
@@ -252,40 +253,209 @@ struct gemm_pack_rhs_first_loop_policy {
   }
 };
 
+// Goto's blocked GEMM on packed panels of the kernel's scalars: the cache blocking, the packed LHS that a parallel
+// product's threads share, and the sequential loop order. The pack functors read from the source mappers, whose
+// scalars need not be the packed ones.
+template <typename Index, typename LhsScalar, typename RhsScalar, typename ResScalar, typename LhsMapper,
+          typename RhsMapper, typename ResMapper, typename PackLhs, typename PackRhs, typename Gebp>
+EIGEN_STRONG_INLINE void gemm_blocked_product(Index rows, Index cols, Index depth, const LhsMapper& lhs,
+                                              const RhsMapper& rhs, ResMapper& res, PackLhs& pack_lhs,
+                                              PackRhs& pack_rhs, Gebp& gebp, ResScalar alpha,
+                                              level3_blocking<LhsScalar, RhsScalar>& blocking,
+                                              GemmParallelInfo<Index>* info) {
+  Index kc = blocking.kc();                    // cache block size along the K direction
+  Index mc = (std::min)(rows, blocking.mc());  // cache block size along the M direction
+  Index nc = (std::min)(cols, blocking.nc());  // cache block size along the N direction
+
+#if !defined(EIGEN_USE_BLAS) && (defined(EIGEN_HAS_OPENMP) || defined(EIGEN_GEMM_THREADPOOL))
+  if (info) {
+    // this is the parallel version!
+    int tid = info->logical_thread_id;
+    int threads = info->num_threads;
+
+    LhsScalar* blockA = blocking.blockA();
+    eigen_internal_assert(blockA != 0);
+
+    std::size_t sizeB = kc * nc;
+    ei_declare_aligned_stack_constructed_variable(RhsScalar, blockB, sizeB, 0);
+
+    // For each horizontal panel of the rhs, and corresponding vertical panel of the lhs...
+    for (Index k = 0; k < depth; k += kc) {
+      const Index actual_kc = (std::min)(k + kc, depth) - k;  // => rows of B', and cols of the A'
+
+      // In order to reduce the chance that a thread has to wait for the other,
+      // let's start by packing B'.
+      pack_rhs(blockB, rhs.getSubMapper(k, 0), actual_kc, nc);
+
+      // Pack A_k to A' in a parallel fashion:
+      // each thread packs the sub block A_k,i to A'_i where i is the thread id.
+
+      // However, before copying to A'_i, we have to make sure that no other thread is still using it,
+      // i.e., we test that info->task_info[tid].users equals 0.
+      // Then, we set info->task_info[tid].users to the number of threads to mark that all other threads are going to
+      // use it.
+      while (info->task_info[tid].users != 0) {
+        std::this_thread::yield();
+      }
+      info->task_info[tid].users = threads;
+
+      pack_lhs(blockA + info->task_info[tid].lhs_start * actual_kc, lhs.getSubMapper(info->task_info[tid].lhs_start, k),
+               actual_kc, info->task_info[tid].lhs_length);
+
+      // Notify the other threads that the part A'_i is ready to go.
+      info->task_info[tid].sync = k;
+
+      // Computes C_i += A' * B' per A'_i
+      for (int shift = 0; shift < threads; ++shift) {
+        int i = (tid + shift) % threads;
+
+        // At this point we have to make sure that A'_i has been updated by the thread i,
+        // we use testAndSetOrdered to mimic a volatile access.
+        // However, no need to wait for the B' part which has been updated by the current thread!
+        if (shift > 0) {
+          while (info->task_info[i].sync != k) {
+            std::this_thread::yield();
+          }
+        }
+
+        gebp(res.getSubMapper(info->task_info[i].lhs_start, 0), blockA + info->task_info[i].lhs_start * actual_kc,
+             blockB, info->task_info[i].lhs_length, actual_kc, nc, alpha);
+      }
+
+      // Then keep going as usual with the remaining B'
+      for (Index j = nc; j < cols; j += nc) {
+        const Index actual_nc = (std::min)(j + nc, cols) - j;
+
+        // pack B_k,j to B'
+        pack_rhs(blockB, rhs.getSubMapper(k, j), actual_kc, actual_nc);
+
+        // C_j += A' * B'
+        gebp(res.getSubMapper(0, j), blockA, blockB, rows, actual_kc, actual_nc, alpha);
+      }
+
+      // Release all the sub blocks A'_i of A' for the current thread,
+      // i.e., we simply decrement the number of users by 1
+      for (Index i = 0; i < threads; ++i) info->task_info[i].users -= 1;
+    }
+  } else
+#endif  // !defined(EIGEN_USE_BLAS) && (defined(EIGEN_HAS_OPENMP) || defined(EIGEN_GEMM_THREADPOOL))
+  {
+    EIGEN_UNUSED_VARIABLE(info);
+
+    // this is the sequential version!
+    std::size_t sizeA = kc * mc;
+    std::size_t sizeB = kc * nc;
+
+    gemm_packing_space<LhsScalar, RhsScalar> packing(sizeA, sizeB, blocking.blockA(), blocking.blockB());
+    ei_declare_aligned_stack_constructed_variable(LhsScalar, blockA, sizeA, packing.blockA());
+    ei_declare_aligned_stack_constructed_variable(RhsScalar, blockB, sizeB, packing.blockB());
+
+    // The SME kernel uses RHS-first order so consecutive gebp calls stream
+    // through adjacent row panels of a ColMajor result. Other kernels --
+    // including the scalar pairs SME does not specialize -- keep Eigen's
+    // default LHS-first order.
+#ifdef EIGEN_VECTORIZE_SME
+    using SequentialGemmLoop = std::conditional_t<sme_has_gebp_kernel<LhsScalar, RhsScalar>::value,
+                                                  gemm_pack_rhs_first_loop_policy, gemm_pack_lhs_first_loop_policy>;
+#else
+    using SequentialGemmLoop = gemm_pack_lhs_first_loop_policy;
+#endif
+
+    SequentialGemmLoop::run(rows, cols, depth, kc, mc, nc, lhs, rhs, res, pack_lhs, pack_rhs, gebp, blockA, blockB,
+                            alpha);
+  }
+}
+
+// A widened product packs its operands in its accumulator, so that the accumulator's packers and kernel serve it.
+template <typename Scalar, typename LhsScalar, typename RhsScalar>
+using gemm_packed_scalar = std::conditional_t<product_widens<LhsScalar, RhsScalar>::value,
+                                              typename product_accumulator<LhsScalar, RhsScalar>::type, Scalar>;
+
+// Packs a block of SourceScalar coefficients as Pack packs the same block converted to PackedScalar, converting one
+// chunk at a time into a contiguous buffer. Pack places the panel that starts at row (LHS) or column (RHS) r of the
+// block at r * depth, so chunks whose extents are multiples of the widest panel pack to the layout of the whole block.
+// The parallel GEMM relies on the same property for the mr-aligned parts of the packed LHS that its threads pack.
+template <typename Index, typename SourceScalar, typename PackedScalar, int StorageOrder, bool IsLhs, typename Pack>
+class gemm_converting_pack {
+ public:
+  gemm_converting_pack(PackedScalar* buffer, Index chunk) : m_buffer(buffer), m_chunk(chunk) {}
+
+  template <typename SourceMapper>
+  void operator()(PackedScalar* block, const SourceMapper& source, Index depth, Index extent) const {
+    using SourceMatrix = Matrix<SourceScalar, Dynamic, Dynamic, StorageOrder>;
+    using PackedMatrix = Matrix<PackedScalar, Dynamic, Dynamic, StorageOrder>;
+    using PackedMapper = const_blas_data_mapper<PackedScalar, Index, StorageOrder>;
+    for (Index start = 0; start < extent; start += m_chunk) {
+      const Index size = numext::mini(m_chunk, extent - start);
+      const Index rows = IsLhs ? size : depth;
+      const Index cols = IsLhs ? depth : size;
+      const auto chunk = source.getSubMapper(IsLhs ? start : 0, IsLhs ? 0 : start);
+      Map<PackedMatrix>(m_buffer, rows, cols) =
+          Map<const SourceMatrix, 0, OuterStride<>>(chunk.data(), rows, cols, OuterStride<>(chunk.stride()))
+              .template cast<PackedScalar>();
+      Pack()(block + start * depth, PackedMapper(m_buffer, StorageOrder == ColMajor ? rows : cols), depth, size);
+    }
+  }
+
+ private:
+  PackedScalar* m_buffer;
+  Index m_chunk;
+};
+
 /* Specialization for a row-major destination matrix => simple transposition of the product */
 template <typename Index, typename LhsScalar, int LhsStorageOrder, bool ConjugateLhs, typename RhsScalar,
-          int RhsStorageOrder, bool ConjugateRhs, int ResInnerStride>
+          int RhsStorageOrder, bool ConjugateRhs, int ResInnerStride, typename ResScalar>
 struct general_matrix_matrix_product<Index, LhsScalar, LhsStorageOrder, ConjugateLhs, RhsScalar, RhsStorageOrder,
-                                     ConjugateRhs, RowMajor, ResInnerStride> {
-  using Traits = gebp_traits<RhsScalar, LhsScalar>;
+                                     ConjugateRhs, RowMajor, ResInnerStride, ResScalar> {
+  using AccScalar = typename product_accumulator<LhsScalar, RhsScalar>::type;
+  using PackedLhsScalar = gemm_packed_scalar<LhsScalar, LhsScalar, RhsScalar>;
+  using PackedRhsScalar = gemm_packed_scalar<RhsScalar, LhsScalar, RhsScalar>;
+  using Traits = gebp_traits<PackedRhsScalar, PackedLhsScalar>;
 
-  using ResScalar = typename ScalarBinaryOpTraits<LhsScalar, RhsScalar>::ReturnType;
   static EIGEN_STRONG_INLINE void run(Index rows, Index cols, Index depth, const LhsScalar* lhs, Index lhsStride,
                                       const RhsScalar* rhs, Index rhsStride, ResScalar* res, Index resIncr,
-                                      Index resStride, ResScalar alpha, level3_blocking<RhsScalar, LhsScalar>& blocking,
+                                      Index resStride, AccScalar alpha,
+                                      level3_blocking<PackedRhsScalar, PackedLhsScalar>& blocking,
                                       GemmParallelInfo<Index>* info = 0) {
     // transpose the product such that the result is column major
     general_matrix_matrix_product<Index, RhsScalar, RhsStorageOrder == RowMajor ? ColMajor : RowMajor, ConjugateRhs,
                                   LhsScalar, LhsStorageOrder == RowMajor ? ColMajor : RowMajor, ConjugateLhs, ColMajor,
-                                  ResInnerStride>::run(cols, rows, depth, rhs, rhsStride, lhs, lhsStride, res, resIncr,
-                                                       resStride, alpha, blocking, info);
+                                  ResInnerStride, ResScalar>::run(cols, rows, depth, rhs, rhsStride, lhs, lhsStride,
+                                                                  res, resIncr, resStride, alpha, blocking, info);
   }
 };
 
 /*  Specialization for a col-major destination matrix
  *    => Blocking algorithm following Goto's paper */
 template <typename Index, typename LhsScalar, int LhsStorageOrder, bool ConjugateLhs, typename RhsScalar,
-          int RhsStorageOrder, bool ConjugateRhs, int ResInnerStride>
+          int RhsStorageOrder, bool ConjugateRhs, int ResInnerStride, typename ResScalar>
 struct general_matrix_matrix_product<Index, LhsScalar, LhsStorageOrder, ConjugateLhs, RhsScalar, RhsStorageOrder,
-                                     ConjugateRhs, ColMajor, ResInnerStride> {
-  using Traits = gebp_traits<LhsScalar, RhsScalar>;
+                                     ConjugateRhs, ColMajor, ResInnerStride, ResScalar> {
+  using AccScalar = typename product_accumulator<LhsScalar, RhsScalar>::type;
+  using PackedLhsScalar = gemm_packed_scalar<LhsScalar, LhsScalar, RhsScalar>;
+  using PackedRhsScalar = gemm_packed_scalar<RhsScalar, LhsScalar, RhsScalar>;
+  using Traits = gebp_traits<PackedLhsScalar, PackedRhsScalar>;
+  static_assert(std::is_same<ResScalar, typename ScalarBinaryOpTraits<LhsScalar, RhsScalar>::ReturnType>::value ||
+                    (product_widens<LhsScalar, RhsScalar>::value && std::is_same<ResScalar, AccScalar>::value),
+                "A GEMM writes its result type, or the accumulator of a widened product.");
 
-  using ResScalar = typename ScalarBinaryOpTraits<LhsScalar, RhsScalar>::ReturnType;
   static void run(Index rows, Index cols, Index depth, const LhsScalar* lhs_, Index lhsStride, const RhsScalar* rhs_,
-                  Index rhsStride, ResScalar* res_, Index resIncr, Index resStride, ResScalar alpha,
-                  level3_blocking<LhsScalar, RhsScalar>& blocking, GemmParallelInfo<Index>* info = 0) {
+                  Index rhsStride, ResScalar* res_, Index resIncr, Index resStride, AccScalar alpha,
+                  level3_blocking<PackedLhsScalar, PackedRhsScalar>& blocking, GemmParallelInfo<Index>* info = 0) {
     // BLAS contract: if alpha == 0, the result is unchanged (and lhs/rhs need not be read).
     if (numext::is_exactly_zero(alpha)) return;
+    run_impl(product_widens<LhsScalar, RhsScalar>(), rows, cols, depth, lhs_, lhsStride, rhs_, rhsStride, res_, resIncr,
+             resStride, alpha, blocking, info);
+  }
+
+ private:
+  using LhsMapper = const_blas_data_mapper<LhsScalar, Index, LhsStorageOrder>;
+  using RhsMapper = const_blas_data_mapper<RhsScalar, Index, RhsStorageOrder>;
+
+  static void run_impl(std::false_type, Index rows, Index cols, Index depth, const LhsScalar* lhs_, Index lhsStride,
+                       const RhsScalar* rhs_, Index rhsStride, ResScalar* res_, Index resIncr, Index resStride,
+                       ResScalar alpha, level3_blocking<LhsScalar, RhsScalar>& blocking,
+                       GemmParallelInfo<Index>* info) {
 #ifdef EIGEN_VECTORIZE_SME
     // A parallel session needs every thread to take the packed path; scaleAndAddTo runs tiny results on one thread.
     if (info == nullptr &&
@@ -298,16 +468,10 @@ struct general_matrix_matrix_product<Index, LhsScalar, LhsStorageOrder, Conjugat
       return;
 #endif
 
-    using LhsMapper = const_blas_data_mapper<LhsScalar, Index, LhsStorageOrder>;
-    using RhsMapper = const_blas_data_mapper<RhsScalar, Index, RhsStorageOrder>;
     using ResMapper = blas_data_mapper<typename Traits::ResScalar, Index, ColMajor, Unaligned, ResInnerStride>;
     LhsMapper lhs(lhs_, lhsStride);
     RhsMapper rhs(rhs_, rhsStride);
     ResMapper res(res_, resStride, resIncr);
-
-    Index kc = blocking.kc();                    // cache block size along the K direction
-    Index mc = (std::min)(rows, blocking.mc());  // cache block size along the M direction
-    Index nc = (std::min)(cols, blocking.nc());  // cache block size along the N direction
 
     gemm_pack_lhs<LhsScalar, Index, LhsMapper, Traits::mr, Traits::LhsProgress, typename Traits::LhsPacket4Packing,
                   LhsStorageOrder>
@@ -315,103 +479,72 @@ struct general_matrix_matrix_product<Index, LhsScalar, LhsStorageOrder, Conjugat
     gemm_pack_rhs<RhsScalar, Index, RhsMapper, Traits::nr, RhsStorageOrder> pack_rhs;
     gebp_kernel<LhsScalar, RhsScalar, Index, ResMapper, Traits::mr, Traits::nr, ConjugateLhs, ConjugateRhs> gebp;
 
-#if !defined(EIGEN_USE_BLAS) && (defined(EIGEN_HAS_OPENMP) || defined(EIGEN_GEMM_THREADPOOL))
-    if (info) {
-      // this is the parallel version!
-      int tid = info->logical_thread_id;
-      int threads = info->num_threads;
+    gemm_blocked_product(rows, cols, depth, lhs, rhs, res, pack_lhs, pack_rhs, gebp, alpha, blocking, info);
+  }
 
-      LhsScalar* blockA = blocking.blockA();
-      eigen_internal_assert(blockA != 0);
+  // A widened product accumulates every coefficient in AccScalar over the whole depth, in a workspace W that is the
+  // result itself when ResScalar is AccScalar, and rounds W to ResScalar once; rounding the result after each kc block
+  // would round ceil(depth / kc) times. Each operand block is converted while it is packed, so the accumulator's
+  // packers and kernel serve the product unchanged.
+  static void run_impl(std::true_type, Index rows, Index cols, Index depth, const LhsScalar* lhs_, Index lhsStride,
+                       const RhsScalar* rhs_, Index rhsStride, ResScalar* res_, Index resIncr, Index resStride,
+                       AccScalar alpha, level3_blocking<AccScalar, AccScalar>& blocking,
+                       GemmParallelInfo<Index>* info) {
+    constexpr bool kResultIsWorkspace = std::is_same<ResScalar, AccScalar>::value;
+    const Index kc = blocking.kc();
+    const Index nc = (std::min)(cols, blocking.nc());
+    // The LHS converts in chunks of whole mr-row panels sized to half of L1, the RHS a kc x nc block at a time.
+    const Index mr = Traits::mr;
+    const Index lhs_panels = numext::maxi<Index>(1, Index(l1CacheSize()) / (2 * mr * kc * Index(sizeof(AccScalar))));
+    const Index lhs_chunk = numext::mini<Index>(rows, lhs_panels * mr);
+    // Each buffer starts on a 64-byte boundary of the aligned allocation.
+    const std::size_t line = numext::maxi<std::size_t>(1, 64 / sizeof(AccScalar));
+    const std::size_t res_size =
+        kResultIsWorkspace ? 0 : first_multiple<std::size_t>(std::size_t(rows) * std::size_t(cols), line);
+    const std::size_t rhs_size = first_multiple<std::size_t>(std::size_t(kc) * std::size_t(nc), line);
+    const std::size_t lhs_size = std::size_t(lhs_chunk) * std::size_t(kc);
+    ei_declare_aligned_stack_constructed_variable(AccScalar, workspace, res_size + rhs_size + lhs_size, 0);
+    AccScalar* const rhs_buffer = workspace + res_size;
+    AccScalar* const lhs_buffer = rhs_buffer + rhs_size;
 
-      std::size_t sizeB = kc * nc;
-      ei_declare_aligned_stack_constructed_variable(RhsScalar, blockB, sizeB, 0);
+    LhsMapper lhs(lhs_, lhsStride);
+    RhsMapper rhs(rhs_, rhsStride);
+    using LhsPack = gemm_pack_lhs<AccScalar, Index, const_blas_data_mapper<AccScalar, Index, LhsStorageOrder>,
+                                  Traits::mr, Traits::LhsProgress, typename Traits::LhsPacket4Packing, LhsStorageOrder>;
+    using RhsPack = gemm_pack_rhs<AccScalar, Index, const_blas_data_mapper<AccScalar, Index, RhsStorageOrder>,
+                                  Traits::nr, RhsStorageOrder>;
+    gemm_converting_pack<Index, LhsScalar, AccScalar, LhsStorageOrder, true, LhsPack> pack_lhs(lhs_buffer, lhs_chunk);
+    gemm_converting_pack<Index, RhsScalar, AccScalar, RhsStorageOrder, false, RhsPack> pack_rhs(rhs_buffer, nc);
+    accumulate(bool_constant<kResultIsWorkspace>(), rows, cols, depth, lhs, rhs, res_, resIncr, resStride, workspace,
+               pack_lhs, pack_rhs, alpha, blocking, info);
+  }
 
-      // For each horizontal panel of the rhs, and corresponding vertical panel of the lhs...
-      for (Index k = 0; k < depth; k += kc) {
-        const Index actual_kc = (std::min)(k + kc, depth) - k;  // => rows of B', and cols of the A'
+  template <typename PackLhs, typename PackRhs>
+  static void accumulate(std::true_type, Index rows, Index cols, Index depth, const LhsMapper& lhs,
+                         const RhsMapper& rhs, ResScalar* res_, Index resIncr, Index resStride, AccScalar*,
+                         PackLhs& pack_lhs, PackRhs& pack_rhs, AccScalar alpha,
+                         level3_blocking<AccScalar, AccScalar>& blocking, GemmParallelInfo<Index>* info) {
+    using ResMapper = blas_data_mapper<AccScalar, Index, ColMajor, Unaligned, ResInnerStride>;
+    ResMapper res(res_, resStride, resIncr);
+    gebp_kernel<AccScalar, AccScalar, Index, ResMapper, Traits::mr, Traits::nr, ConjugateLhs, ConjugateRhs> gebp;
+    gemm_blocked_product(rows, cols, depth, lhs, rhs, res, pack_lhs, pack_rhs, gebp, alpha, blocking, info);
+  }
 
-        // In order to reduce the chance that a thread has to wait for the other,
-        // let's start by packing B'.
-        pack_rhs(blockB, rhs.getSubMapper(k, 0), actual_kc, nc);
-
-        // Pack A_k to A' in a parallel fashion:
-        // each thread packs the sub block A_k,i to A'_i where i is the thread id.
-
-        // However, before copying to A'_i, we have to make sure that no other thread is still using it,
-        // i.e., we test that info->task_info[tid].users equals 0.
-        // Then, we set info->task_info[tid].users to the number of threads to mark that all other threads are going to
-        // use it.
-        while (info->task_info[tid].users != 0) {
-          std::this_thread::yield();
-        }
-        info->task_info[tid].users = threads;
-
-        pack_lhs(blockA + info->task_info[tid].lhs_start * actual_kc,
-                 lhs.getSubMapper(info->task_info[tid].lhs_start, k), actual_kc, info->task_info[tid].lhs_length);
-
-        // Notify the other threads that the part A'_i is ready to go.
-        info->task_info[tid].sync = k;
-
-        // Computes C_i += A' * B' per A'_i
-        for (int shift = 0; shift < threads; ++shift) {
-          int i = (tid + shift) % threads;
-
-          // At this point we have to make sure that A'_i has been updated by the thread i,
-          // we use testAndSetOrdered to mimic a volatile access.
-          // However, no need to wait for the B' part which has been updated by the current thread!
-          if (shift > 0) {
-            while (info->task_info[i].sync != k) {
-              std::this_thread::yield();
-            }
-          }
-
-          gebp(res.getSubMapper(info->task_info[i].lhs_start, 0), blockA + info->task_info[i].lhs_start * actual_kc,
-               blockB, info->task_info[i].lhs_length, actual_kc, nc, alpha);
-        }
-
-        // Then keep going as usual with the remaining B'
-        for (Index j = nc; j < cols; j += nc) {
-          const Index actual_nc = (std::min)(j + nc, cols) - j;
-
-          // pack B_k,j to B'
-          pack_rhs(blockB, rhs.getSubMapper(k, j), actual_kc, actual_nc);
-
-          // C_j += A' * B'
-          gebp(res.getSubMapper(0, j), blockA, blockB, rows, actual_kc, actual_nc, alpha);
-        }
-
-        // Release all the sub blocks A'_i of A' for the current thread,
-        // i.e., we simply decrement the number of users by 1
-        for (Index i = 0; i < threads; ++i) info->task_info[i].users -= 1;
-      }
-    } else
-#endif  // !defined(EIGEN_USE_BLAS) && (defined(EIGEN_HAS_OPENMP) || defined(EIGEN_GEMM_THREADPOOL))
-    {
-      EIGEN_UNUSED_VARIABLE(info);
-
-      // this is the sequential version!
-      std::size_t sizeA = kc * mc;
-      std::size_t sizeB = kc * nc;
-
-      gemm_packing_space<LhsScalar, RhsScalar> packing(sizeA, sizeB, blocking.blockA(), blocking.blockB());
-      ei_declare_aligned_stack_constructed_variable(LhsScalar, blockA, sizeA, packing.blockA());
-      ei_declare_aligned_stack_constructed_variable(RhsScalar, blockB, sizeB, packing.blockB());
-
-      // The SME kernel uses RHS-first order so consecutive gebp calls stream
-      // through adjacent row panels of a ColMajor result. Other kernels --
-      // including the scalar pairs SME does not specialize -- keep Eigen's
-      // default LHS-first order.
-#ifdef EIGEN_VECTORIZE_SME
-      using SequentialGemmLoop = std::conditional_t<sme_has_gebp_kernel<LhsScalar, RhsScalar>::value,
-                                                    gemm_pack_rhs_first_loop_policy, gemm_pack_lhs_first_loop_policy>;
-#else
-      using SequentialGemmLoop = gemm_pack_lhs_first_loop_policy;
-#endif
-
-      SequentialGemmLoop::run(rows, cols, depth, kc, mc, nc, lhs, rhs, res, pack_lhs, pack_rhs, gebp, blockA, blockB,
-                              alpha);
-    }
+  template <typename PackLhs, typename PackRhs>
+  static void accumulate(std::false_type, Index rows, Index cols, Index depth, const LhsMapper& lhs,
+                         const RhsMapper& rhs, ResScalar* res_, Index resIncr, Index resStride, AccScalar* workspace,
+                         PackLhs& pack_lhs, PackRhs& pack_rhs, AccScalar alpha,
+                         level3_blocking<AccScalar, AccScalar>& blocking, GemmParallelInfo<Index>* info) {
+    using ResStride = Stride<Dynamic, ResInnerStride>;
+    Map<Matrix<ResScalar, Dynamic, Dynamic, ColMajor>, 0, ResStride> result(res_, rows, cols,
+                                                                            ResStride(resStride, resIncr));
+    Map<Matrix<AccScalar, Dynamic, Dynamic, ColMajor>> sums(workspace, rows, cols);
+    sums = result.template cast<AccScalar>();
+    using ResMapper = blas_data_mapper<AccScalar, Index, ColMajor, Unaligned, 1>;
+    ResMapper res(workspace, rows);
+    gebp_kernel<AccScalar, AccScalar, Index, ResMapper, Traits::mr, Traits::nr, ConjugateLhs, ConjugateRhs> gebp;
+    gemm_blocked_product(rows, cols, depth, lhs, rhs, res, pack_lhs, pack_rhs, gebp, alpha, blocking, info);
+    result = sums.template cast<ResScalar>();
   }
 };
 
@@ -420,10 +553,10 @@ struct general_matrix_matrix_product<Index, LhsScalar, LhsStorageOrder, Conjugat
  *  implementation of the high level wrapper to general_matrix_matrix_product
  **********************************************************************************/
 
-template <typename Scalar, typename Index, typename Gemm, typename Lhs, typename Rhs, typename Dest,
+template <typename AlphaScalar, typename Index, typename Gemm, typename Lhs, typename Rhs, typename Dest,
           typename BlockingType>
 struct gemm_functor {
-  gemm_functor(const Lhs& lhs, const Rhs& rhs, Dest& dest, const Scalar& actualAlpha, BlockingType& blocking)
+  gemm_functor(const Lhs& lhs, const Rhs& rhs, Dest& dest, const AlphaScalar& actualAlpha, BlockingType& blocking)
       : m_lhs(lhs), m_rhs(rhs), m_dest(dest), m_actualAlpha(actualAlpha), m_blocking(blocking) {}
 
   void initParallelSession(Index num_threads) const {
@@ -438,8 +571,8 @@ struct gemm_functor {
     if (cols == -1) cols = m_rhs.cols();
 
     Gemm::run(rows, cols, m_lhs.cols(), &m_lhs.coeffRef(row, 0), m_lhs.outerStride(), &m_rhs.coeffRef(0, col),
-              m_rhs.outerStride(), (Scalar*)&(m_dest.coeffRef(row, col)), m_dest.innerStride(), m_dest.outerStride(),
-              m_actualAlpha, m_blocking, info);
+              m_rhs.outerStride(), (typename Dest::Scalar*)&(m_dest.coeffRef(row, col)), m_dest.innerStride(),
+              m_dest.outerStride(), m_actualAlpha, m_blocking, info);
   }
 
   using Traits = typename Gemm::Traits;
@@ -448,7 +581,7 @@ struct gemm_functor {
   const Lhs& m_lhs;
   const Rhs& m_rhs;
   Dest& m_dest;
-  Scalar m_actualAlpha;
+  AlphaScalar m_actualAlpha;
   BlockingType& m_blocking;
 };
 
@@ -602,6 +735,7 @@ struct generic_product_impl<Lhs, Rhs, DenseShape, DenseShape, GemmProduct>
   using Scalar = typename Product<Lhs, Rhs>::Scalar;
   using LhsScalar = typename Lhs::Scalar;
   using RhsScalar = typename Rhs::Scalar;
+  using AccScalar = typename product_accumulator<LhsScalar, RhsScalar>::type;
 
   using LhsBlasTraits = internal::blas_traits<Lhs>;
   using ActualLhsType = typename LhsBlasTraits::DirectLinearAccessType;
@@ -676,7 +810,26 @@ struct generic_product_impl<Lhs, Rhs, DenseShape, DenseShape, GemmProduct>
   // would evaluate the product, so the factor is tested before the dispatch
   // rather than inside either kernel.
   static EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE bool scalarFactorIsZero(const Lhs& lhs, const Rhs& rhs) {
+    return scalarFactorIsZero(lhs, rhs, product_widens<LhsScalar, RhsScalar>());
+  }
+  static EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE bool scalarFactorIsZero(const Lhs& lhs, const Rhs& rhs,
+                                                                       std::false_type) {
     return numext::is_exactly_zero(combine_scalar_factors<Scalar>(lhs, rhs));
+  }
+  static EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE bool scalarFactorIsZero(const Lhs& lhs, const Rhs& rhs, std::true_type) {
+    return numext::is_exactly_zero(combinedScalarFactors(Scalar(1), lhs, rhs, std::true_type()));
+  }
+
+  // A widened product combines its scalar factors in its accumulator, so that s * t neither rounds nor underflows in
+  // the operand type.
+  static EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE AccScalar combinedScalarFactors(const Scalar& alpha, const Lhs& lhs,
+                                                                               const Rhs& rhs, std::false_type) {
+    return combine_scalar_factors(alpha, lhs, rhs);
+  }
+  static EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE AccScalar combinedScalarFactors(const Scalar& alpha, const Lhs& lhs,
+                                                                               const Rhs& rhs, std::true_type) {
+    return AccScalar(alpha) * AccScalar(LhsBlasTraits::extractScalarFactor(lhs)) *
+           AccScalar(RhsBlasTraits::extractScalarFactor(rhs));
   }
 
   template <typename Dst>
@@ -732,14 +885,16 @@ struct generic_product_impl<Lhs, Rhs, DenseShape, DenseShape, GemmProduct>
     add_const_on_value_type_t<ActualLhsType> lhs = LhsBlasTraits::extract(a_lhs);
     add_const_on_value_type_t<ActualRhsType> rhs = RhsBlasTraits::extract(a_rhs);
 
-    Scalar actualAlpha = combine_scalar_factors(alpha, a_lhs, a_rhs);
+    const AccScalar actualAlpha = combinedScalarFactors(alpha, a_lhs, a_rhs, product_widens<LhsScalar, RhsScalar>());
 
     using BlockingType =
-        internal::gemm_blocking_space<(Dest::Flags & RowMajorBit) ? RowMajor : ColMajor, LhsScalar, RhsScalar,
-                                      Dest::MaxRowsAtCompileTime, Dest::MaxColsAtCompileTime, MaxDepthAtCompileTime>;
+        internal::gemm_blocking_space<(Dest::Flags & RowMajorBit) ? RowMajor : ColMajor,
+                                      gemm_packed_scalar<LhsScalar, LhsScalar, RhsScalar>,
+                                      gemm_packed_scalar<RhsScalar, LhsScalar, RhsScalar>, Dest::MaxRowsAtCompileTime,
+                                      Dest::MaxColsAtCompileTime, MaxDepthAtCompileTime>;
 
     using GemmFunctor = internal::gemm_functor<
-        Scalar, Index,
+        AccScalar, Index,
         internal::general_matrix_matrix_product<
             Index, LhsScalar, (ActualLhsTypeCleaned::Flags & RowMajorBit) ? RowMajor : ColMajor,
             bool(LhsBlasTraits::NeedToConjugate), RhsScalar,
