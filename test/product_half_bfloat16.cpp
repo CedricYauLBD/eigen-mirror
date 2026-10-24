@@ -37,8 +37,9 @@ void fill_small_integers(MatrixType& m, int salt) {
   using T = typename MatrixType::Scalar;
   for (Index j = 0; j < m.cols(); ++j)
     for (Index i = 0; i < m.rows(); ++i) {
+      // Unsigned, so that the products wrap where Index has 32 bits.
       const std::uint32_t h =
-          std::uint32_t(i * 73856093) ^ std::uint32_t(j * 19349663) ^ std::uint32_t(salt * 83492791);
+          std::uint32_t(i) * 73856093u ^ std::uint32_t(j) * 19349663u ^ std::uint32_t(salt) * 83492791u;
       m(i, j) = T(float((h >> 7) % 4));
     }
 }
