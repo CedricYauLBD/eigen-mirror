@@ -41,12 +41,15 @@ limitations under the License.
 
 // BF16_PACKET_FUNCTION for a bfloat16 packet that spans two PACKET_F, through the backend's
 // Bf16ToF32Low, Bf16ToF32High and two-argument F32ToBf16.
+// METHOD is a template name, which cannot be parenthesized.
+// NOLINTBEGIN(bugprone-macro-parentheses)
 #define BF16_PACKET_FUNCTION_HALVES(PACKET_F, PACKET_BF16, METHOD)                                  \
   template <>                                                                                       \
   EIGEN_DEFINE_FUNCTION_ALLOWING_MULTIPLE_DEFINITIONS EIGEN_UNUSED PACKET_BF16 METHOD<PACKET_BF16>( \
       const PACKET_BF16& _x) {                                                                      \
     return F32ToBf16(METHOD<PACKET_F>(Bf16ToF32Low(_x)), METHOD<PACKET_F>(Bf16ToF32High(_x)));      \
   }
+// NOLINTEND(bugprone-macro-parentheses)
 
 // The _WITH forms take the macro that defines each function, BF16_PACKET_FUNCTION or
 // BF16_PACKET_FUNCTION_HALVES, so that every backend instantiates the same list.
