@@ -62,15 +62,16 @@ MatrixXd exact_integer_product(const MatrixA& a, const MatrixB& b) {
 // final narrowing other than round-to-nearest-even gets wrong.
 template <typename T, int LhsOrder, int RhsOrder, int ResOrder>
 void bit_exact_case(Index rows, Index depth, Index cols) {
+  using ResMatrix = Matrix<T, Dynamic, Dynamic, ResOrder>;
   Matrix<T, Dynamic, Dynamic, LhsOrder> a(rows, depth);
   Matrix<T, Dynamic, Dynamic, RhsOrder> b(depth, cols);
-  Matrix<T, Dynamic, Dynamic, ResOrder> c0(rows, cols);
+  ResMatrix c0(rows, cols);
   fill_small_integers(a, 1);
   fill_small_integers(b, 2);
   fill_small_integers(c0, 3);
   const MatrixXd ab = exact_integer_product(a, b);
 
-  const auto verify = [&](const Matrix<T, Dynamic, Dynamic, ResOrder>& c, double alpha, bool add) {
+  const auto verify = [&](const ResMatrix& c, double alpha, bool add) {
     for (Index j = 0; j < cols; ++j)
       for (Index i = 0; i < rows; ++i) {
         const double exact = (add ? static_cast<double>(c0(i, j)) : 0.0) + alpha * ab(i, j);
@@ -86,7 +87,7 @@ void bit_exact_case(Index rows, Index depth, Index cols) {
     return true;
   };
 
-  Matrix<T, Dynamic, Dynamic, ResOrder> c(rows, cols);
+  ResMatrix c(rows, cols);
   c.noalias() = a * b;
   VERIFY(verify(c, 1.0, false));
   c = a * b;
@@ -148,12 +149,13 @@ void strided_destination() {
   fill_small_integers(b, 5);
   fill_small_integers(c0, 13);
   const MatrixXd ab = exact_integer_product(a, b);
-  const Index outer = 2 * (ResOrder == ColMajor ? rows : cols) + 1;
+  const Index inner_size = ResOrder == ColMajor ? rows : cols;
+  const Index outer_size = ResOrder == ColMajor ? cols : rows;
+  const Index outer_stride = 2 * inner_size + 1;
   const T sentinel = T(-7.0f);
-  Matrix<T, Dynamic, 1> storage =
-      Matrix<T, Dynamic, 1>::Constant(outer * (ResOrder == ColMajor ? cols : rows), sentinel);
+  Matrix<T, Dynamic, 1> storage = Matrix<T, Dynamic, 1>::Constant(outer_stride * outer_size, sentinel);
   using Strided = Map<Matrix<T, Dynamic, Dynamic, ResOrder>, 0, Stride<Dynamic, Dynamic>>;
-  Strided c(storage.data(), rows, cols, Stride<Dynamic, Dynamic>(outer, 2));
+  Strided c(storage.data(), rows, cols, Stride<Dynamic, Dynamic>(outer_stride, 2));
   c = c0;
   c.noalias() += a * b;
   for (Index j = 0; j < cols; ++j)
@@ -161,8 +163,8 @@ void strided_destination() {
       VERIFY_IS_EQUAL(bits(c(i, j)), bits(T(static_cast<float>(static_cast<double>(c0(i, j)) + ab(i, j)))));
   Index untouched = 0;
   for (Index p = 0; p < storage.size(); ++p) {
-    const Index inner = p % outer;
-    if (inner % 2 == 1 || inner / 2 >= (ResOrder == ColMajor ? rows : cols)) {
+    const Index inner = p % outer_stride;
+    if (inner % 2 == 1 || inner / 2 >= inner_size) {
       VERIFY_IS_EQUAL(bits(storage(p)), bits(sentinel));
       ++untouched;
     }
