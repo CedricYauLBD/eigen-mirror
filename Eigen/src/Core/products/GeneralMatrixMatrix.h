@@ -77,9 +77,9 @@ class gemm_packing_space {
 };
 
 // Runs one gebp call, as C = alpha * A' * B' when `overwrite` holds and the kernel can (gebp_kernel_overwrites), and
-// as C += alpha * A' * B' otherwise. It and the loop policies are forced inline into the driver: GCC 13 otherwise
-// clones a policy (IPA-SRA) with the kernel call still in it, and emits kernels that only that call's dead branches
-// reach (the AVX-512 kernel's non-unit-increment ones).
+// as C += alpha * A' * B' otherwise. It, the loop policies and gemm_blocked_product are forced inline into the driver:
+// GCC 13 otherwise clones a policy (IPA-SRA) with the kernel call still in it, and emits kernels that only that call's
+// dead branches reach (the AVX-512 kernel's non-unit-increment ones).
 template <typename Gebp, typename... Args>
 EIGEN_ALWAYS_INLINE void gebp_run(std::true_type, Gebp& gebp, bool overwrite, const Args&... args) {
   if (overwrite)
@@ -152,11 +152,12 @@ struct gemm_pack_lhs_first_loop_policy {
 // source instead of a packed panel.
 template <typename Scalar, typename Index>
 bool sme_direct_lhs_ok(Index lhsStride, Index rows, Index depth, Index cols);
-// True for the unit-stride ColMajor mapper the GEMM driver hands the packers.
-template <typename Mapper>
+// True for the unit-stride ColMajor mapper the GEMM driver hands the packers, when it reads the kernel's own scalar:
+// a source the packers convert has no LHS the kernel could read in place.
+template <typename Mapper, typename KernelScalar>
 struct sme_direct_lhs_mapper : std::false_type {};
 template <typename Scalar, typename Index>
-struct sme_direct_lhs_mapper<const_blas_data_mapper<Scalar, Index, ColMajor>>
+struct sme_direct_lhs_mapper<const_blas_data_mapper<Scalar, Index, ColMajor>, Scalar>
     : bool_constant<!NumTraits<Scalar>::IsComplex> {};
 // Runs the block on the in-place LHS when the kernel can take it; the false
 // overload keeps the call out of every other instantiation.
@@ -281,7 +282,7 @@ struct gemm_pack_rhs_first_loop_policy {
         for (Index i2 = 0; i2 < rows; i2 += mc) {
           const Index actual_mc = (std::min)(i2 + mc, rows) - i2;
 #ifdef EIGEN_VECTORIZE_SME
-          if (sme_run_direct_lhs(bool_constant<sme_direct_lhs_mapper<LhsMapper>::value>(), gebp,
+          if (sme_run_direct_lhs(bool_constant<sme_direct_lhs_mapper<LhsMapper, LhsScalar>::value>(), gebp,
                                  res.getSubMapper(i2, j2), lhs, i2, k2, blockB, actual_mc, actual_kc, actual_nc, alpha,
                                  overwrite && k2 == 0))
             continue;
@@ -297,6 +298,122 @@ struct gemm_pack_rhs_first_loop_policy {
     }
   }
 };
+
+// Goto's blocked GEMM on packed panels of the kernel's scalars: the cache blocking, the packed LHS that a parallel
+// product's threads share, and the sequential loop order. The pack functors read from the source mappers, whose
+// scalars need not be the packed ones.
+template <typename Index, typename LhsScalar, typename RhsScalar, typename ResScalar, typename LhsMapper,
+          typename RhsMapper, typename ResMapper, typename PackLhs, typename PackRhs, typename Gebp>
+EIGEN_ALWAYS_INLINE void gemm_blocked_product(Index rows, Index cols, Index depth, const LhsMapper& lhs,
+                                              const RhsMapper& rhs, ResMapper& res, PackLhs& pack_lhs,
+                                              PackRhs& pack_rhs, Gebp& gebp, ResScalar alpha, bool overwrite,
+                                              level3_blocking<LhsScalar, RhsScalar>& blocking,
+                                              GemmParallelInfo<Index>* info) {
+  Index kc = blocking.kc();                    // cache block size along the K direction
+  Index mc = (std::min)(rows, blocking.mc());  // cache block size along the M direction
+  Index nc = (std::min)(cols, blocking.nc());  // cache block size along the N direction
+
+#if !defined(EIGEN_USE_BLAS) && (defined(EIGEN_HAS_OPENMP) || defined(EIGEN_GEMM_THREADPOOL))
+  constexpr bool kOverwrites = gebp_kernel_overwrites<Gebp>::value;
+  if (info) {
+    // this is the parallel version!
+    int tid = info->logical_thread_id;
+    int threads = info->num_threads;
+
+    LhsScalar* blockA = blocking.blockA();
+    eigen_internal_assert(blockA != 0);
+
+    std::size_t sizeB = kc * nc;
+    ei_declare_aligned_stack_constructed_variable(RhsScalar, blockB, sizeB, 0);
+
+    // For each horizontal panel of the rhs, and corresponding vertical panel of the lhs...
+    for (Index k = 0; k < depth; k += kc) {
+      const Index actual_kc = (std::min)(k + kc, depth) - k;  // => rows of B', and cols of the A'
+
+      // In order to reduce the chance that a thread has to wait for the other,
+      // let's start by packing B'.
+      pack_rhs(blockB, rhs.getSubMapper(k, 0), actual_kc, nc);
+
+      // Pack A_k to A' in a parallel fashion:
+      // each thread packs the sub block A_k,i to A'_i where i is the thread id.
+
+      // However, before copying to A'_i, we have to make sure that no other thread is still using it,
+      // i.e., we test that info->task_info[tid].users equals 0.
+      // Then, we set info->task_info[tid].users to the number of threads to mark that all other threads are going to
+      // use it.
+      while (info->task_info[tid].users != 0) {
+        std::this_thread::yield();
+      }
+      info->task_info[tid].users = threads;
+
+      pack_lhs(blockA + info->task_info[tid].lhs_start * actual_kc, lhs.getSubMapper(info->task_info[tid].lhs_start, k),
+               actual_kc, info->task_info[tid].lhs_length);
+
+      // Notify the other threads that the part A'_i is ready to go.
+      info->task_info[tid].sync = k;
+
+      // Computes C_i += A' * B' per A'_i
+      for (int shift = 0; shift < threads; ++shift) {
+        int i = (tid + shift) % threads;
+
+        // At this point we have to make sure that A'_i has been updated by the thread i,
+        // we use testAndSetOrdered to mimic a volatile access.
+        // However, no need to wait for the B' part which has been updated by the current thread!
+        if (shift > 0) {
+          while (info->task_info[i].sync != k) {
+            std::this_thread::yield();
+          }
+        }
+
+        gebp_run(bool_constant<kOverwrites>(), gebp, overwrite && k == 0,
+                 res.getSubMapper(info->task_info[i].lhs_start, 0), blockA + info->task_info[i].lhs_start * actual_kc,
+                 blockB, info->task_info[i].lhs_length, actual_kc, nc, alpha);
+      }
+
+      // Then keep going as usual with the remaining B'
+      for (Index j = nc; j < cols; j += nc) {
+        const Index actual_nc = (std::min)(j + nc, cols) - j;
+
+        // pack B_k,j to B'
+        pack_rhs(blockB, rhs.getSubMapper(k, j), actual_kc, actual_nc);
+
+        // C_j += A' * B'
+        gebp_run(bool_constant<kOverwrites>(), gebp, overwrite && k == 0, res.getSubMapper(0, j), blockA, blockB, rows,
+                 actual_kc, actual_nc, alpha);
+      }
+
+      // Release all the sub blocks A'_i of A' for the current thread,
+      // i.e., we simply decrement the number of users by 1
+      for (Index i = 0; i < threads; ++i) info->task_info[i].users -= 1;
+    }
+  } else
+#endif  // !defined(EIGEN_USE_BLAS) && (defined(EIGEN_HAS_OPENMP) || defined(EIGEN_GEMM_THREADPOOL))
+  {
+    EIGEN_UNUSED_VARIABLE(info);
+
+    // this is the sequential version!
+    std::size_t sizeA = kc * mc;
+    std::size_t sizeB = kc * nc;
+
+    gemm_packing_space<LhsScalar, RhsScalar> packing(sizeA, sizeB, blocking.blockA(), blocking.blockB());
+    ei_declare_aligned_stack_constructed_variable(LhsScalar, blockA, sizeA, packing.blockA());
+    ei_declare_aligned_stack_constructed_variable(RhsScalar, blockB, sizeB, packing.blockB());
+
+    // The SME kernel uses RHS-first order so consecutive gebp calls stream
+    // through adjacent row panels of a ColMajor result. Other kernels --
+    // including the scalar pairs SME does not specialize -- keep Eigen's
+    // default LHS-first order.
+#ifdef EIGEN_VECTORIZE_SME
+    using SequentialGemmLoop = std::conditional_t<sme_has_gebp_kernel<LhsScalar, RhsScalar>::value,
+                                                  gemm_pack_rhs_first_loop_policy, gemm_pack_lhs_first_loop_policy>;
+#else
+    using SequentialGemmLoop = gemm_pack_lhs_first_loop_policy;
+#endif
+
+    SequentialGemmLoop::run(rows, cols, depth, kc, mc, nc, lhs, rhs, res, pack_lhs, pack_rhs, gebp, blockA, blockB,
+                            alpha, overwrite);
+  }
+}
 
 // Whether Gemm::run_overwrite writes the result without zeroing it first (Gemm::CanOverwrite), so that assignment
 // should take it instead of zeroing the destination and accumulating.
@@ -448,116 +565,13 @@ struct general_matrix_matrix_product<Index, LhsScalar, LhsStorageOrder, Conjugat
     RhsMapper rhs(rhs_, rhsStride);
     ResMapper res(res_, resStride, resIncr);
 
-    Index kc = blocking.kc();                    // cache block size along the K direction
-    Index mc = (std::min)(rows, blocking.mc());  // cache block size along the M direction
-    Index nc = (std::min)(cols, blocking.nc());  // cache block size along the N direction
-
     gemm_pack_lhs<LhsScalar, Index, LhsMapper, Traits::mr, Traits::LhsProgress, typename Traits::LhsPacket4Packing,
                   LhsStorageOrder>
         pack_lhs;
     gemm_pack_rhs<RhsScalar, Index, RhsMapper, Traits::nr, RhsStorageOrder> pack_rhs;
     Gebp gebp;
 
-#if !defined(EIGEN_USE_BLAS) && (defined(EIGEN_HAS_OPENMP) || defined(EIGEN_GEMM_THREADPOOL))
-    constexpr bool kOverwrites = gebp_kernel_overwrites<Gebp>::value;
-    if (info) {
-      // this is the parallel version!
-      int tid = info->logical_thread_id;
-      int threads = info->num_threads;
-
-      LhsScalar* blockA = blocking.blockA();
-      eigen_internal_assert(blockA != 0);
-
-      std::size_t sizeB = kc * nc;
-      ei_declare_aligned_stack_constructed_variable(RhsScalar, blockB, sizeB, 0);
-
-      // For each horizontal panel of the rhs, and corresponding vertical panel of the lhs...
-      for (Index k = 0; k < depth; k += kc) {
-        const Index actual_kc = (std::min)(k + kc, depth) - k;  // => rows of B', and cols of the A'
-
-        // In order to reduce the chance that a thread has to wait for the other,
-        // let's start by packing B'.
-        pack_rhs(blockB, rhs.getSubMapper(k, 0), actual_kc, nc);
-
-        // Pack A_k to A' in a parallel fashion:
-        // each thread packs the sub block A_k,i to A'_i where i is the thread id.
-
-        // However, before copying to A'_i, we have to make sure that no other thread is still using it,
-        // i.e., we test that info->task_info[tid].users equals 0.
-        // Then, we set info->task_info[tid].users to the number of threads to mark that all other threads are going to
-        // use it.
-        while (info->task_info[tid].users != 0) {
-          std::this_thread::yield();
-        }
-        info->task_info[tid].users = threads;
-
-        pack_lhs(blockA + info->task_info[tid].lhs_start * actual_kc,
-                 lhs.getSubMapper(info->task_info[tid].lhs_start, k), actual_kc, info->task_info[tid].lhs_length);
-
-        // Notify the other threads that the part A'_i is ready to go.
-        info->task_info[tid].sync = k;
-
-        // Computes C_i += A' * B' per A'_i
-        for (int shift = 0; shift < threads; ++shift) {
-          int i = (tid + shift) % threads;
-
-          // At this point we have to make sure that A'_i has been updated by the thread i,
-          // we use testAndSetOrdered to mimic a volatile access.
-          // However, no need to wait for the B' part which has been updated by the current thread!
-          if (shift > 0) {
-            while (info->task_info[i].sync != k) {
-              std::this_thread::yield();
-            }
-          }
-
-          gebp_run(bool_constant<kOverwrites>(), gebp, overwrite && k == 0,
-                   res.getSubMapper(info->task_info[i].lhs_start, 0), blockA + info->task_info[i].lhs_start * actual_kc,
-                   blockB, info->task_info[i].lhs_length, actual_kc, nc, alpha);
-        }
-
-        // Then keep going as usual with the remaining B'
-        for (Index j = nc; j < cols; j += nc) {
-          const Index actual_nc = (std::min)(j + nc, cols) - j;
-
-          // pack B_k,j to B'
-          pack_rhs(blockB, rhs.getSubMapper(k, j), actual_kc, actual_nc);
-
-          // C_j += A' * B'
-          gebp_run(bool_constant<kOverwrites>(), gebp, overwrite && k == 0, res.getSubMapper(0, j), blockA, blockB,
-                   rows, actual_kc, actual_nc, alpha);
-        }
-
-        // Release all the sub blocks A'_i of A' for the current thread,
-        // i.e., we simply decrement the number of users by 1
-        for (Index i = 0; i < threads; ++i) info->task_info[i].users -= 1;
-      }
-    } else
-#endif  // !defined(EIGEN_USE_BLAS) && (defined(EIGEN_HAS_OPENMP) || defined(EIGEN_GEMM_THREADPOOL))
-    {
-      EIGEN_UNUSED_VARIABLE(info);
-
-      // this is the sequential version!
-      std::size_t sizeA = kc * mc;
-      std::size_t sizeB = kc * nc;
-
-      gemm_packing_space<LhsScalar, RhsScalar> packing(sizeA, sizeB, blocking.blockA(), blocking.blockB());
-      ei_declare_aligned_stack_constructed_variable(LhsScalar, blockA, sizeA, packing.blockA());
-      ei_declare_aligned_stack_constructed_variable(RhsScalar, blockB, sizeB, packing.blockB());
-
-      // The SME kernel uses RHS-first order so consecutive gebp calls stream
-      // through adjacent row panels of a ColMajor result. Other kernels --
-      // including the scalar pairs SME does not specialize -- keep Eigen's
-      // default LHS-first order.
-#ifdef EIGEN_VECTORIZE_SME
-      using SequentialGemmLoop = std::conditional_t<sme_has_gebp_kernel<LhsScalar, RhsScalar>::value,
-                                                    gemm_pack_rhs_first_loop_policy, gemm_pack_lhs_first_loop_policy>;
-#else
-      using SequentialGemmLoop = gemm_pack_lhs_first_loop_policy;
-#endif
-
-      SequentialGemmLoop::run(rows, cols, depth, kc, mc, nc, lhs, rhs, res, pack_lhs, pack_rhs, gebp, blockA, blockB,
-                              alpha, overwrite);
-    }
+    gemm_blocked_product(rows, cols, depth, lhs, rhs, res, pack_lhs, pack_rhs, gebp, alpha, overwrite, blocking, info);
   }
 };
 
