@@ -462,6 +462,18 @@ void inner_panel_inference_test() {
   VERIFY(!(internal::evaluator<decltype(a.block<4, 8>(0, 0))>::Flags & LinearAccessBit));
 }
 
+// An empty block has a null data pointer whichever constructor built it: its start can
+// lie past the end of the parent's storage.
+void empty_block_data_test() {
+  float buffer[16] = {};
+  Map<MatrixXf, 0, OuterStride<>> no_rows(buffer, 0, 3, OuterStride<>(100));
+  VERIFY(no_rows.col(2).data() == nullptr);
+  VERIFY(no_rows.block(0, 2, 0, 1).data() == nullptr);
+  Map<Matrix<float, Dynamic, Dynamic, RowMajor>, 0, OuterStride<>> no_cols(buffer, 3, 0, OuterStride<>(100));
+  VERIFY(no_cols.row(2).data() == nullptr);
+  VERIFY(no_cols.block(2, 0, 1, 0).data() == nullptr);
+}
+
 EIGEN_DECLARE_TEST(block) {
   for (int i = 0; i < g_repeat; i++) {
     CALL_SUBTEST_1(block(Matrix<float, 1, 1>()));
@@ -479,6 +491,7 @@ EIGEN_DECLARE_TEST(block) {
     CALL_SUBTEST_9(unwind_inner_panel_test(MatrixXf()));
     CALL_SUBTEST_9(unwind_inner_panel_test(Matrix<float, Dynamic, Dynamic, RowMajor>()));
     CALL_SUBTEST_12(inner_panel_inference_test());
+    CALL_SUBTEST_12(empty_block_data_test());
 
 #ifndef EIGEN_DEFAULT_TO_ROW_MAJOR
     CALL_SUBTEST_6(data_and_stride(MatrixXf(internal::random(5, 50), internal::random(5, 50))));
