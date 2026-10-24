@@ -56,8 +56,32 @@ template <typename Scalar, typename Index, typename DataMapper, int Pack1, int P
           bool Conjugate = false, bool PanelMode = false>
 struct gemm_pack_lhs;
 
+// The scalar a product of LhsScalar and RhsScalar coefficients accumulates in. A half or bfloat16 product sums in float
+// over its whole depth and rounds each result coefficient once; every other pair accumulates in its result type. The
+// list follows the widening multiply-accumulate instructions that hardware provides (#3158).
+template <typename LhsScalar, typename RhsScalar>
+struct product_accumulator {
+  using type = typename ScalarBinaryOpTraits<LhsScalar, RhsScalar>::ReturnType;
+};
+template <>
+struct product_accumulator<half, half> {
+  using type = float;
+};
+template <>
+struct product_accumulator<bfloat16, bfloat16> {
+  using type = float;
+};
+
+template <typename LhsScalar, typename RhsScalar>
+struct product_widens
+    : bool_constant<!std::is_same<typename product_accumulator<LhsScalar, RhsScalar>::type,
+                                  typename ScalarBinaryOpTraits<LhsScalar, RhsScalar>::ReturnType>::value> {};
+
+// ResScalar is the product's result type, or the accumulator of a widened product, which then writes the unrounded
+// sums.
 template <typename Index, typename LhsScalar, int LhsStorageOrder, bool ConjugateLhs, typename RhsScalar,
-          int RhsStorageOrder, bool ConjugateRhs, int ResStorageOrder, int ResInnerStride>
+          int RhsStorageOrder, bool ConjugateRhs, int ResStorageOrder, int ResInnerStride,
+          typename ResScalar = typename ScalarBinaryOpTraits<LhsScalar, RhsScalar>::ReturnType>
 struct general_matrix_matrix_product;
 
 template <typename Index, typename LhsScalar, typename LhsMapper, int LhsStorageOrder, bool ConjugateLhs,
