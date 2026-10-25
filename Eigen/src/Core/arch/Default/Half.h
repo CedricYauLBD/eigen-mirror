@@ -960,9 +960,7 @@ EIGEN_STRONG_INLINE EIGEN_DEVICE_FUNC half sqrt(const half& a) {
 #if defined(EIGEN_CUDA_ARCH) || defined(EIGEN_HIP_DEVICE_COMPILE)
   return half(hsqrt(::__half(a)));
 #else
-  // numext::sqrt<float> would be instantiated here, before the SSE specialization is declared.
-  EIGEN_USING_STD(sqrt);
-  return half(sqrt(float(a)));
+  return half(numext::sqrt(float(a)));
 #endif
 }
 EIGEN_STRONG_INLINE EIGEN_DEVICE_FUNC half pow(const half& a, const half& b) {
@@ -975,9 +973,8 @@ EIGEN_STRONG_INLINE EIGEN_DEVICE_FUNC half sin(const half& a) { return half(nume
 EIGEN_STRONG_INLINE EIGEN_DEVICE_FUNC half cos(const half& a) { return half(numext::cos(float(a))); }
 EIGEN_STRONG_INLINE EIGEN_DEVICE_FUNC half tan(const half& a) { return half(numext::tan(float(a))); }
 EIGEN_STRONG_INLINE EIGEN_DEVICE_FUNC half tanh(const half& a) {
-  // numext::tanh(float) can select an approximation that changes half rounding.
-  EIGEN_USING_STD(tanh);
-  return half(tanh(float(a)));
+  // Select the scalar template, not the host fast-math overload, to preserve half rounding.
+  return half(numext::tanh<float>(float(a)));
 }
 EIGEN_STRONG_INLINE EIGEN_DEVICE_FUNC half asin(const half& a) { return half(numext::asin(float(a))); }
 EIGEN_STRONG_INLINE EIGEN_DEVICE_FUNC half acos(const half& a) { return half(numext::acos(float(a))); }

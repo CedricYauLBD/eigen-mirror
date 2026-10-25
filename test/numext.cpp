@@ -1158,7 +1158,26 @@ void check_shift() {
   }
 }
 
+template <typename Scalar>
+void check_low_precision_math_rounding() {
+  for (unsigned int bits = 0; bits < 65536; ++bits) {
+    const Scalar x = numext::bit_cast<Scalar>(numext::uint16_t(bits));
+    const Scalar actual[] = {numext::tanh(x), numext::sqrt(x)};
+    const Scalar expected[] = {Scalar(std::tanh(float(x))), Scalar(std::sqrt(float(x)))};
+    for (int operation = 0; operation < 2; ++operation) {
+      if ((numext::isnan)(expected[operation])) {
+        VERIFY((numext::isnan)(actual[operation]));
+      } else {
+        VERIFY_IS_EQUAL(numext::bit_cast<numext::uint16_t>(actual[operation]),
+                        numext::bit_cast<numext::uint16_t>(expected[operation]));
+      }
+    }
+  }
+}
+
 void check_scalar_tanh_saturation() {
+  check_low_precision_math_rounding<half>();
+  check_low_precision_math_rounding<bfloat16>();
   VERIFY_IS_EQUAL(internal::ptanh_float(20.0f), 1.0f);
   VERIFY_IS_EQUAL(internal::ptanh_float(-20.0f), -1.0f);
   VERIFY_IS_EQUAL(internal::ptanh_double(20.0), 1.0);

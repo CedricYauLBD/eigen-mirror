@@ -1632,6 +1632,14 @@ EIGEN_DEFINE_FUNCTION_ALLOWING_MULTIPLE_DEFINITIONS EIGEN_DEVICE_FUNC bool sqrt<
 SYCL_SPECIALIZE_FLOATING_TYPES_UNARY(sqrt, sqrt)
 #endif
 
+#if defined(EIGEN_VECTORIZE_SSE)
+// Half/BFloat16 scalar wrappers precede the SSE definitions and must not instantiate the primary template.
+template <>
+EIGEN_DEVICE_FUNC EIGEN_ALWAYS_INLINE float sqrt(const float& x);
+template <>
+EIGEN_DEVICE_FUNC EIGEN_ALWAYS_INLINE double sqrt(const double& x);
+#endif
+
 /** \returns the cube root of \a x. **/
 template <typename T>
 EIGEN_DEVICE_FUNC EIGEN_ALWAYS_INLINE std::enable_if_t<!NumTraits<T>::IsComplex, T> cbrt(const T& x) {

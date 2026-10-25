@@ -8,7 +8,7 @@
 
 template <typename Scalar>
 void sycl_scalar_math(sycl::queue& queue) {
-  constexpr int kOutputs = 32;
+  constexpr int kOutputs = 36;
   std::vector<Scalar> result(4 * kOutputs);
   {
     sycl::buffer<Scalar, 1> buffer(result.data(), sycl::range<1>(result.size()));
@@ -54,6 +54,10 @@ void sycl_scalar_math(sycl::queue& queue) {
         output[offset + 29] = Rotation2D<Scalar>(Rotation2D<Scalar>(x).toRotationMatrix()).angle();
         output[offset + 30] = numext::copysign(Scalar(0), Scalar(-1));
         output[offset + 31] = numext::atan2(Scalar(-0.0), Scalar(-1));
+        output[offset + 32] = Scalar(float(numext::tanh(half(float(x)))));
+        output[offset + 33] = Scalar(float(numext::tanh(bfloat16(float(x)))));
+        output[offset + 34] = Scalar(float(numext::sqrt(half(float(x)))));
+        output[offset + 35] = Scalar(float(numext::sqrt(bfloat16(float(x)))));
       });
     });
     queue.wait_and_throw();
@@ -100,6 +104,10 @@ void sycl_scalar_math(sycl::queue& queue) {
     VERIFY((numext::signbit)(result[i * kOutputs + 30]));
     VERIFY(result[i * kOutputs + 31] < Scalar(0));
     VERIFY(std::abs(result[i * kOutputs + 31] + Scalar(EIGEN_PI)) <= Scalar(4) * NumTraits<Scalar>::epsilon());
+    VERIFY_IS_EQUAL(result[i * kOutputs + 32], Scalar(float(half(std::tanh(float(x))))));
+    VERIFY_IS_EQUAL(result[i * kOutputs + 33], Scalar(float(bfloat16(std::tanh(float(x))))));
+    VERIFY_IS_EQUAL(result[i * kOutputs + 34], Scalar(float(half(std::sqrt(float(x))))));
+    VERIFY_IS_EQUAL(result[i * kOutputs + 35], Scalar(float(bfloat16(std::sqrt(float(x))))));
   }
 }
 
