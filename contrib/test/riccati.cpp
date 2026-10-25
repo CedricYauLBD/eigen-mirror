@@ -296,11 +296,10 @@ void dare_scipy_real_cases() {
     B(0, 0) = 1e-8;
     Q(3, 3) = 1;
     R << 0.25;
-    // In complex arithmetic the tolerance is raised: where ComplexQZ converges on the balanced pencil (GCC with SSE2),
-    // the residual is 7.6e-5, against 2.4e-8 with LAPACK's ZGGES. With AVX2 and FMA, or with Clang, ComplexQZ stalls
-    // on it, and the solver falls back to the unbalanced pencil, whose residual is close to this tolerance for any QZ
-    // (0.11 here, 5.0e-2 with ZGGES). To be tightened once ComplexQZ converges on this pencil (!3430).
-    check_real_dare<MatrixType>(A, B, Q, R, NumTraits<typename MatrixType::Scalar>::IsComplex ? 5e-2 : 1.5e-6);
+    // ComplexQZ is less accurate than LAPACK's ZGGES on the balanced pencil: the residual is 4.9e-7 to 3.1e-5 over GCC
+    // and Clang builds with and without AVX2 and FMA, against 2.4e-8 with ZGGES. The unbalanced pencil leaves 3e-2 to
+    // 0.17 (5.0e-2 with ZGGES), so the tolerance also catches a fallback to it.
+    check_real_dare<MatrixType>(A, B, Q, R, NumTraits<typename MatrixType::Scalar>::IsComplex ? 5.0e-4 : 1.5e-6);
   }
   {  // DAREX 15
     const Index n = 100;
