@@ -223,15 +223,49 @@ void jacobi_makegivens_subnormal() {
          Scalar(8) * NumTraits<Scalar>::epsilon());
 }
 
+// Checks that makeGivens(p, q) is unitary and maps (p, q) to (r, 0), in long double with (P, Q) = (p, q) / scale exact.
+template <typename Scalar>
+void check_complex_givens(const Scalar& p, const Scalar& q, typename NumTraits<Scalar>::Real scale,
+                          bool checkR = true) {
+  using RealScalar = typename NumTraits<Scalar>::Real;
+  using Wide = std::complex<long double>;
+  const long double tolerance = 16 * static_cast<long double>(NumTraits<RealScalar>::epsilon());
+  const auto widen = [](const Scalar& x) {
+    return Wide(static_cast<long double>(numext::real(x)), static_cast<long double>(numext::imag(x)));
+  };
+  JacobiRotation<Scalar> rotation, withoutR;
+  Scalar r;
+  rotation.makeGivens(p, q, &r);
+  withoutR.makeGivens(p, q);
+  VERIFY_IS_EQUAL(rotation.c(), withoutR.c());
+  VERIFY_IS_EQUAL(rotation.s(), withoutR.s());
+  VERIFY_IS_EQUAL(numext::imag(rotation.c()), RealScalar(0));
+
+  // J^* (P, Q) = (c P - conj(s) Q, s P + c Q) = (r / scale, 0).
+  const long double c = static_cast<long double>(numext::real(rotation.c()));
+  const Wide s = widen(rotation.s());
+  const Wide P = widen(p) / static_cast<long double>(scale), Q = widen(q) / static_cast<long double>(scale);
+  const long double expected = std::sqrt(std::norm(P) + std::norm(Q));
+  VERIFY(numext::abs(c * c + std::norm(s) - 1) <= tolerance);
+  VERIFY(std::abs(s * P + c * Q) <= tolerance * expected);
+  const Wide rotated = c * P - std::conj(s) * Q;
+  VERIFY(numext::abs(std::abs(rotated) - expected) <= tolerance * expected);
+  if (checkR) {
+    // r = phase * (q1 * u) is rounded twice, so allow two steps of the subnormal grid.
+    const long double quantum =
+        static_cast<long double>(std::numeric_limits<RealScalar>::denorm_min()) / static_cast<long double>(scale);
+    VERIFY(std::abs(widen(r) / static_cast<long double>(scale) - rotated) <= tolerance * expected + 2 * quantum);
+  }
+}
+
 // Complex inputs whose components are small integers times a subnormal scale, e.g. p = -4.9e-324i, q = 2e-323i. The
 // rotation must stay unitary and annihilate q although |p| and |q| carry only a few bits.
 template <typename Scalar>
 void jacobi_makegivens_complex_subnormal() {
   using RealScalar = typename NumTraits<Scalar>::Real;
-  using Wide = std::complex<long double>;
   const RealScalar minimum = (std::numeric_limits<RealScalar>::min)();
+  const RealScalar maximum = (std::numeric_limits<RealScalar>::max)();
   const RealScalar tiny = std::numeric_limits<RealScalar>::denorm_min();
-  const long double tolerance = 16 * static_cast<long double>(NumTraits<RealScalar>::epsilon());
   const int qValues[] = {-4, -1, 0, 1, 4};
   for (RealScalar scale : {minimum, RealScalar(minimum / RealScalar(16)), tiny}) {
     for (int pr = -2; pr <= 2; ++pr) {
@@ -239,36 +273,29 @@ void jacobi_makegivens_complex_subnormal() {
         for (int qr : qValues) {
           for (int qi : qValues) {
             if (pr == 0 && pi == 0 && qr == 0 && qi == 0) continue;
-            const Scalar p(RealScalar(pr) * scale, RealScalar(pi) * scale);
-            const Scalar q(RealScalar(qr) * scale, RealScalar(qi) * scale);
-            JacobiRotation<Scalar> rotation, withoutR;
-            Scalar r;
-            rotation.makeGivens(p, q, &r);
-            withoutR.makeGivens(p, q);
-            VERIFY_IS_EQUAL(rotation.c(), withoutR.c());
-            VERIFY_IS_EQUAL(rotation.s(), withoutR.s());
-            VERIFY_IS_EQUAL(numext::imag(rotation.c()), RealScalar(0));
-
-            // With (P, Q) = (p, q) / scale exact: J^* (P, Q) = (c P - conj(s) Q, s P + c Q) = (r / scale, 0).
-            const long double c = static_cast<long double>(numext::real(rotation.c()));
-            const Wide s(static_cast<long double>(numext::real(rotation.s())),
-                         static_cast<long double>(numext::imag(rotation.s())));
-            const Wide P(pr, pi), Q(qr, qi);
-            const long double expected = std::sqrt(std::norm(P) + std::norm(Q));
-            VERIFY(numext::abs(c * c + std::norm(s) - 1) <= tolerance);
-            VERIFY(std::abs(s * P + c * Q) <= tolerance * expected);
-            const Wide rotated = c * P - std::conj(s) * Q;
-            VERIFY(numext::abs(std::abs(rotated) - expected) <= tolerance * expected);
-            const Wide normalizedR =
-                Wide(static_cast<long double>(numext::real(r)), static_cast<long double>(numext::imag(r))) /
-                static_cast<long double>(scale);
-            const long double quantum = static_cast<long double>(tiny) / static_cast<long double>(scale);
-            VERIFY(std::abs(normalizedR - rotated) <= tolerance * expected + quantum);
+            check_complex_givens(Scalar(RealScalar(pr) * scale, RealScalar(pi) * scale),
+                                 Scalar(RealScalar(qr) * scale, RealScalar(qi) * scale), scale);
           }
         }
       }
     }
   }
+
+  // Mixed scales: a subnormal p with a normal q, and |p| < |q| with |r| > max, where r overflows.
+  const int units[][2] = {{1, 0}, {0, 1}, {-1, 0}, {0, -1}};
+  for (const auto& up : units) {
+    for (const auto& uq : units) {
+      const Scalar q = Scalar(RealScalar(uq[0]), RealScalar(uq[1]));
+      check_complex_givens(Scalar(RealScalar(up[0] - up[1]) * tiny, RealScalar(up[0] + up[1]) * tiny), q,
+                           RealScalar(1));
+      check_complex_givens(Scalar(RealScalar(up[0]) * (maximum / 2), RealScalar(up[1]) * (maximum / 2)), q * maximum,
+                           maximum, false);
+    }
+  }
+
+  // p = 0 where |Re q| + |Im q| overflows although |q| is finite.
+  const RealScalar big = maximum / RealScalar(1.5);
+  for (const Scalar q : {Scalar(big, big), Scalar(-big, big)}) check_complex_givens(Scalar(0), q, big);
 }
 
 template <typename Scalar>

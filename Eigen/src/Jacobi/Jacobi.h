@@ -178,8 +178,9 @@ EIGEN_DEVICE_FUNC void JacobiRotation<Scalar>::makeGivens(const Scalar& p, const
     m_s = 0;
     if (r) *r = m_c * p;
   } else if (p == Scalar(0)) {
-    // Normalize q / |q|_1 first: for a subnormal q, abs(q) has only a few bits and q / abs(q) is not unimodular.
-    const Scalar qn = q / numext::norm1(q);
+    // Scale by max(|Re q|, |Im q|) first: for a subnormal q, abs(q) has only a few bits and q / abs(q) is not
+    // unimodular. Unlike |q|_1, the max norm cannot overflow.
+    const Scalar qn = q / numext::maxi(abs(numext::real(q)), abs(numext::imag(q)));
     m_c = 0;
     m_s = -qn / abs(qn);
     if (r) *r = abs(q);
