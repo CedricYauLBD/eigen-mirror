@@ -952,9 +952,7 @@ EIGEN_STRONG_INLINE EIGEN_DEVICE_FUNC half log(const half& a) {
 }
 EIGEN_STRONG_INLINE EIGEN_DEVICE_FUNC half log1p(const half& a) { return half(numext::log1p(float(a))); }
 EIGEN_STRONG_INLINE EIGEN_DEVICE_FUNC half log10(const half& a) { return half(numext::log10(float(a))); }
-EIGEN_STRONG_INLINE EIGEN_DEVICE_FUNC half log2(const half& a) {
-  return half(static_cast<float>(EIGEN_LOG2E) * numext::log(float(a)));
-}
+EIGEN_STRONG_INLINE EIGEN_DEVICE_FUNC half log2(const half& a) { return half(numext::log2(float(a))); }
 
 EIGEN_STRONG_INLINE EIGEN_DEVICE_FUNC half sqrt(const half& a) {
 #if defined(EIGEN_CUDA_ARCH) || defined(EIGEN_HIP_DEVICE_COMPILE)

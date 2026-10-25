@@ -1162,9 +1162,9 @@ template <typename Scalar>
 void check_low_precision_math_rounding() {
   for (unsigned int bits = 0; bits < 65536; ++bits) {
     const Scalar x = numext::bit_cast<Scalar>(numext::uint16_t(bits));
-    const Scalar actual[] = {numext::tanh(x), numext::sqrt(x)};
-    const Scalar expected[] = {Scalar(std::tanh(float(x))), Scalar(std::sqrt(float(x)))};
-    for (int operation = 0; operation < 2; ++operation) {
+    const Scalar actual[] = {numext::tanh(x), numext::sqrt(x), numext::log2(x)};
+    const Scalar expected[] = {Scalar(std::tanh(float(x))), Scalar(std::sqrt(float(x))), Scalar(std::log2(float(x)))};
+    for (int operation = 0; operation < 3; ++operation) {
       if ((numext::isnan)(expected[operation])) {
         VERIFY((numext::isnan)(actual[operation]));
       } else {

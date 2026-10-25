@@ -733,9 +733,7 @@ EIGEN_STRONG_INLINE EIGEN_DEVICE_FUNC bfloat16 ldexp(const bfloat16& a, int expo
 EIGEN_STRONG_INLINE EIGEN_DEVICE_FUNC bfloat16 log(const bfloat16& a) { return bfloat16(numext::log(float(a))); }
 EIGEN_STRONG_INLINE EIGEN_DEVICE_FUNC bfloat16 log1p(const bfloat16& a) { return bfloat16(numext::log1p(float(a))); }
 EIGEN_STRONG_INLINE EIGEN_DEVICE_FUNC bfloat16 log10(const bfloat16& a) { return bfloat16(numext::log10(float(a))); }
-EIGEN_STRONG_INLINE EIGEN_DEVICE_FUNC bfloat16 log2(const bfloat16& a) {
-  return bfloat16(static_cast<float>(EIGEN_LOG2E) * numext::log(float(a)));
-}
+EIGEN_STRONG_INLINE EIGEN_DEVICE_FUNC bfloat16 log2(const bfloat16& a) { return bfloat16(numext::log2(float(a))); }
 EIGEN_STRONG_INLINE EIGEN_DEVICE_FUNC bfloat16 sqrt(const bfloat16& a) { return bfloat16(numext::sqrt(float(a))); }
 EIGEN_STRONG_INLINE EIGEN_DEVICE_FUNC bfloat16 cbrt(const bfloat16& a) { return bfloat16(numext::cbrt(float(a))); }
 EIGEN_STRONG_INLINE EIGEN_DEVICE_FUNC bfloat16 pow(const bfloat16& a, const bfloat16& b) {

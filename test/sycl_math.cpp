@@ -8,7 +8,7 @@
 
 template <typename Scalar>
 void sycl_scalar_math(sycl::queue& queue) {
-  constexpr int kOutputs = 36;
+  constexpr int kOutputs = 38;
   std::vector<Scalar> result(4 * kOutputs);
   {
     sycl::buffer<Scalar, 1> buffer(result.data(), sycl::range<1>(result.size()));
@@ -58,6 +58,8 @@ void sycl_scalar_math(sycl::queue& queue) {
         output[offset + 33] = Scalar(float(numext::tanh(bfloat16(float(x)))));
         output[offset + 34] = Scalar(float(numext::sqrt(half(float(x)))));
         output[offset + 35] = Scalar(float(numext::sqrt(bfloat16(float(x)))));
+        output[offset + 36] = Scalar(float(numext::log2(half(float(x)))));
+        output[offset + 37] = Scalar(float(numext::log2(bfloat16(float(x)))));
       });
     });
     queue.wait_and_throw();
@@ -108,6 +110,8 @@ void sycl_scalar_math(sycl::queue& queue) {
     VERIFY_IS_EQUAL(result[i * kOutputs + 33], Scalar(float(bfloat16(std::tanh(float(x))))));
     VERIFY_IS_EQUAL(result[i * kOutputs + 34], Scalar(float(half(std::sqrt(float(x))))));
     VERIFY_IS_EQUAL(result[i * kOutputs + 35], Scalar(float(bfloat16(std::sqrt(float(x))))));
+    VERIFY_IS_EQUAL(result[i * kOutputs + 36], Scalar(float(half(std::log2(float(x))))));
+    VERIFY_IS_EQUAL(result[i * kOutputs + 37], Scalar(float(bfloat16(std::log2(float(x))))));
   }
 }
 
