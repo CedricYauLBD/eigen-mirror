@@ -374,18 +374,23 @@ void scalar_factors_in_float() {
   VERIFY_IS_EQUAL(bits(c(29, 29)), bits(T(std::ldexp(1.0f, -10))));
 }
 
-// A fixed-size product stays off the heap where Eigen allocates on the stack: its f32 workspace fits
+// A fixed-size product stays off the heap where Eigen allocates on the stack and its f32 workspace fits
 // EIGEN_STACK_ALLOCATION_LIMIT.
 template <typename T>
 void fixed_size_no_malloc() {
-  Matrix<T, 24, 32> a;
-  Matrix<T, 32, 20> b;
+  constexpr int kRows = 24, kDepth = 32, kCols = 20;
+  Matrix<T, kRows, kDepth> a;
+  Matrix<T, kDepth, kCols> b;
   fill_small_integers(a, 6);
   fill_small_integers(b, 7);
   const MatrixXd ab = exact_integer_product(a, b);
-  Matrix<T, 24, 20> c;
-#if defined(EIGEN_ALLOCA)
-  internal::set_is_malloc_allowed(false);
+  Matrix<T, kRows, kCols> c;
+#if defined(EIGEN_ALLOCA) && !defined(EIGEN_NO_ALLOCA)
+  // The workspace holds the f32 m x n result, a kc x nc RHS block and a chunk of at most m LHS rows by kc, with
+  // kc <= depth and nc <= n. The bound is symmetric in m and n, so it holds for a row-major result too, and each of
+  // its terms is a multiple of the 16 floats the driver aligns its buffers to.
+  constexpr std::size_t kMaxWorkspaceBytes = sizeof(float) * (kRows * kCols + kDepth * kCols + kRows * kDepth);
+  internal::set_is_malloc_allowed(kMaxWorkspaceBytes > EIGEN_STACK_ALLOCATION_LIMIT);
 #endif
   c.noalias() = a * b;
   internal::set_is_malloc_allowed(true);
