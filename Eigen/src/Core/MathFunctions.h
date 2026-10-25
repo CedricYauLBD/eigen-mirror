@@ -1375,6 +1375,10 @@ EIGEN_DEVICE_FUNC inline Scalar copysign(const Scalar& x, const Scalar& y) {
   return EIGEN_MATHFUNC_IMPL(copysign, Scalar)::run(x, y);
 }
 
+#if defined(EIGEN_SYCL_DEVICE_ONLY)
+SYCL_SPECIALIZE_FLOATING_TYPES_BINARY(copysign, copysign)
+#endif
+
 template <typename Scalar>
 EIGEN_DEVICE_FUNC inline Scalar negate(const Scalar& x) {
   return EIGEN_MATHFUNC_IMPL(negate, Scalar)::run(x);
@@ -1498,6 +1502,7 @@ EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE Scalar(trunc)(const Scalar& x) {
 }
 
 #if defined(EIGEN_SYCL_DEVICE_ONLY)
+SYCL_SPECIALIZE_FLOATING_TYPES_UNARY(rint, rint)
 SYCL_SPECIALIZE_FLOATING_TYPES_UNARY(round, round)
 SYCL_SPECIALIZE_FLOATING_TYPES_UNARY(floor, floor)
 SYCL_SPECIALIZE_FLOATING_TYPES_UNARY(ceil, ceil)
@@ -1570,6 +1575,25 @@ EIGEN_DEVICE_FUNC EIGEN_ALWAYS_INLINE T log2(T x) {
   return log2(x);
 }
 
+#if defined(EIGEN_SYCL_DEVICE_ONLY)
+template <>
+EIGEN_DEVICE_FUNC EIGEN_ALWAYS_INLINE float log10(float x) {
+  return cl::sycl::log10(x);
+}
+template <>
+EIGEN_DEVICE_FUNC EIGEN_ALWAYS_INLINE double log10(double x) {
+  return cl::sycl::log10(x);
+}
+template <>
+EIGEN_DEVICE_FUNC EIGEN_ALWAYS_INLINE float log2(float x) {
+  return cl::sycl::log2(x);
+}
+template <>
+EIGEN_DEVICE_FUNC EIGEN_ALWAYS_INLINE double log2(double x) {
+  return cl::sycl::log2(x);
+}
+#endif
+
 /** Log base 2 for 32 bits positive integers.
  * Conveniently returns 0 for x==0. */
 constexpr int log2(int x) {
@@ -1620,6 +1644,10 @@ EIGEN_DEVICE_FUNC EIGEN_ALWAYS_INLINE std::enable_if_t<NumTraits<T>::IsComplex, 
   EIGEN_USING_STD(pow);
   return pow(x, typename NumTraits<T>::Real(1.0 / 3.0));
 }
+
+#if defined(EIGEN_SYCL_DEVICE_ONLY)
+SYCL_SPECIALIZE_FLOATING_TYPES_UNARY(cbrt, cbrt)
+#endif
 
 /** \returns the reciprocal square root of \a x. **/
 template <typename T>
@@ -2011,6 +2039,7 @@ EIGEN_DEVICE_FUNC EIGEN_ALWAYS_INLINE T atanh(const T& x) {
 }
 
 #if defined(EIGEN_SYCL_DEVICE_ONLY)
+SYCL_SPECIALIZE_FLOATING_TYPES_BINARY(atan2, atan2)
 SYCL_SPECIALIZE_FLOATING_TYPES_UNARY(atan, atan)
 SYCL_SPECIALIZE_FLOATING_TYPES_UNARY(atanh, atanh)
 #endif
