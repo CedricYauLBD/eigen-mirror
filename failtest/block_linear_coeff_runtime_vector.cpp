@@ -3,8 +3,8 @@
 
 #include "../Eigen/Core"
 
-// A block of an expression without direct access has linear coefficient access only if it is a vector at compile
-// time, not merely at runtime.
+// A block of an expression without direct access has linear coefficient access only if it is a vector or an inner
+// panel at compile time, not merely a vector at runtime.
 #ifdef EIGEN_SHOULD_FAIL_TO_BUILD
 #define BLOCK_ROWS Dynamic
 #else

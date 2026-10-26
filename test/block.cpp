@@ -457,6 +457,14 @@ void inner_panel_inference_test() {
   check_inner_panel_like(a.block<8, 4>(0, j), a.middleCols<4>(j));
   check_inner_panel_like(b.block<4, 8>(j, 0), b.middleRows<4>(j));
   check_inner_panel_like((a + a).block<8, 4>(0, j), (a + a).middleCols<4>(j));
+  // The inferred alignment follows the parent's outer stride: 48-byte columns keep 16-byte
+  // alignment, 40-byte columns do not.
+  alignas(16) float buffer[8 * 12];
+  Map<ColMajor8, Aligned16, OuterStride<12>> stride12(buffer);
+  Map<ColMajor8, Aligned16, OuterStride<10>> stride10(buffer);
+  stride12.setRandom();
+  check_inner_panel_like(stride12.block<8, 3>(0, j), stride12.middleCols<3>(j));
+  check_inner_panel_like(stride10.block<8, 3>(0, j), stride10.middleCols<3>(j));
   // Not spanning the inner size, or spanning the outer one, is not an inner panel.
   VERIFY(!(internal::evaluator<decltype(a.block<7, 4>(0, 0))>::Flags & LinearAccessBit));
   VERIFY(!(internal::evaluator<decltype(a.block<4, 8>(0, 0))>::Flags & LinearAccessBit));
