@@ -630,10 +630,17 @@ EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE void product_run_packet_cascade(const Func
 // a plain `if`) so the cascade is only *instantiated* for the vectorizable
 // fixed-size case -- a runtime branch would instantiate it for every product,
 // including scalar types with no packet support.
+template <typename Lhs, typename Rhs, bool EvalToRowMajor>
+struct coeff_based_product_evaluator;
+
+// The coefficient-based evaluator of lhs * rhs with packets along dst's storage order.
+template <typename Lhs, typename Rhs, typename Dst>
+using dst_ordered_product_evaluator = coeff_based_product_evaluator<Lhs, Rhs, bool(Dst::IsRowMajor)>;
+
 template <typename Func, typename Dst, typename Lhs, typename Rhs>
 EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE void product_packet_assign(std::true_type, const Func& func, Dst& dst,
                                                                  const Lhs& lhs, const Rhs& rhs) {
-  using ProdEval = product_evaluator<Product<Lhs, Rhs, LazyProduct>, CoeffBasedProductMode, DenseShape, DenseShape>;
+  using ProdEval = dst_ordered_product_evaluator<Lhs, Rhs, Dst>;
   using Traits = product_packet_cascade_traits<ProdEval, Dst, Func>;
   const ProdEval prodEval(lhs, rhs);
   product_run_packet_cascade<Traits>(func, dst, prodEval);
@@ -664,7 +671,7 @@ struct generic_product_impl<Lhs, Rhs, DenseShape, DenseShape, CoeffBasedProductM
   template <typename Dst>
   static EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE void addTo(Dst& dst, const Lhs& lhs, const Rhs& rhs) {
     // dst.noalias() += lhs.lazyProduct(rhs);
-    using ProdEval = product_evaluator<Product<Lhs, Rhs, LazyProduct>, CoeffBasedProductMode, DenseShape, DenseShape>;
+    using ProdEval = dst_ordered_product_evaluator<Lhs, Rhs, Dst>;
     using Func = internal::add_assign_op<typename Dst::Scalar, Scalar>;
     using Traits = product_packet_cascade_traits<ProdEval, Dst, Func>;
     product_packet_assign(bool_constant<Traits::Enable>(), Func(), dst, lhs, rhs);
@@ -673,7 +680,7 @@ struct generic_product_impl<Lhs, Rhs, DenseShape, DenseShape, CoeffBasedProductM
   template <typename Dst>
   static EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE void subTo(Dst& dst, const Lhs& lhs, const Rhs& rhs) {
     // dst.noalias() -= lhs.lazyProduct(rhs);
-    using ProdEval = product_evaluator<Product<Lhs, Rhs, LazyProduct>, CoeffBasedProductMode, DenseShape, DenseShape>;
+    using ProdEval = dst_ordered_product_evaluator<Lhs, Rhs, Dst>;
     using Func = internal::sub_assign_op<typename Dst::Scalar, Scalar>;
     using Traits = product_packet_cascade_traits<ProdEval, Dst, Func>;
     product_packet_assign(bool_constant<Traits::Enable>(), Func(), dst, lhs, rhs);
@@ -741,19 +748,19 @@ struct product_empty_packet_evaluator {
   EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE explicit product_empty_packet_evaluator(const Xpr&) {}
 };
 
-template <typename Lhs, typename Rhs, int ProductTag>
-struct product_evaluator<Product<Lhs, Rhs, LazyProduct>, ProductTag, DenseShape, DenseShape>
-    : evaluator_base<Product<Lhs, Rhs, LazyProduct>> {
+// Coefficient-based evaluator of lhs * rhs whose packets run along rows if EvalToRowMajor_, else along columns.
+template <typename Lhs, typename Rhs, bool EvalToRowMajor_>
+struct coeff_based_product_evaluator : evaluator_base<Product<Lhs, Rhs, LazyProduct>> {
   using XprType = Product<Lhs, Rhs, LazyProduct>;
   using Scalar = typename XprType::Scalar;
   using CoeffReturnType = typename XprType::CoeffReturnType;
 
-  EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE explicit product_evaluator(const XprType& xpr)
-      : product_evaluator(xpr.lhs(), xpr.rhs()) {}
+  EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE explicit coeff_based_product_evaluator(const XprType& xpr)
+      : coeff_based_product_evaluator(xpr.lhs(), xpr.rhs()) {}
 
   // Also construct directly from the product operands so packet-cascade callers
   // do not have to materialize a temporary Product expression first.
-  EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE product_evaluator(const Lhs& lhs, const Rhs& rhs)
+  EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE coeff_based_product_evaluator(const Lhs& lhs, const Rhs& rhs)
       : m_lhs(lhs),
         m_rhs(rhs),
         m_lhsImpl(m_lhs),  // Real evaluator objects for packet products; empty placeholders for scalar-only products.
@@ -821,9 +828,8 @@ struct product_evaluator<Product<Lhs, Rhs, LazyProduct>, ProductTag, DenseShape,
   static constexpr bool CanVectorizeRhs = bool(RhsRowMajor) && (RhsFlags & PacketAccessBit) && (ColsAtCompileTime != 1);
   static constexpr bool CanVectorizeLhs = (!LhsRowMajor) && (LhsFlags & PacketAccessBit) && (RowsAtCompileTime != 1);
 
-  // Evaluate in the storage order the expression reports, which consumers use to index packets and size their loops.
-  // Packets run along it, so only the operand that is contiguous along that axis can vectorize the product.
-  static constexpr bool EvalToRowMajor = (int(traits<XprType>::Flags) & RowMajorBit) != 0;
+  // Only the operand that is contiguous along the packets' axis can vectorize the product.
+  static constexpr bool EvalToRowMajor = EvalToRowMajor_;
   // TODO: enable vectorization for mixed types
   static constexpr bool Vectorize = SameType && (EvalToRowMajor ? CanVectorizeRhs : CanVectorizeLhs);
 
@@ -921,6 +927,31 @@ struct product_evaluator<Product<Lhs, Rhs, LazyProduct>, ProductTag, DenseShape,
   RhsPacketEtorType m_rhsImpl;
 
   variable_if_dynamic<Index, InnerSize> m_innerDim;
+};
+
+// Evaluate in the storage order the expression reports, which consumers such as Reverse, Redux, Block and FindCoeff
+// use to index packets and size their loops.
+template <typename Lhs, typename Rhs, int ProductTag>
+struct product_evaluator<Product<Lhs, Rhs, LazyProduct>, ProductTag, DenseShape, DenseShape>
+    : coeff_based_product_evaluator<Lhs, Rhs, (int(traits<Product<Lhs, Rhs, LazyProduct>>::Flags) & RowMajorBit) != 0> {
+  using XprType = Product<Lhs, Rhs, LazyProduct>;
+  using Base =
+      coeff_based_product_evaluator<Lhs, Rhs, (int(traits<Product<Lhs, Rhs, LazyProduct>>::Flags) & RowMajorBit) != 0>;
+
+  EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE explicit product_evaluator(const XprType& xpr) : Base(xpr) {}
+  EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE product_evaluator(const Lhs& lhs, const Rhs& rhs) : Base(lhs, rhs) {}
+};
+
+// A dense assignment reads its source only through the evaluator, so it may evaluate a coefficient-based product
+// along the destination's storage order, which the destination's packets need. It does so only where that order
+// vectorizes; otherwise the assignment is scalar in either order, and the expression's evaluator is kept.
+template <typename DstEvaluatorType, typename Lhs, typename Rhs>
+struct dense_assignment_source_evaluator<
+    DstEvaluatorType, Product<Lhs, Rhs, LazyProduct>,
+    std::enable_if_t<std::is_same<typename evaluator_traits<Lhs>::Shape, DenseShape>::value &&
+                     std::is_same<typename evaluator_traits<Rhs>::Shape, DenseShape>::value>> {
+  using DstOrdered = coeff_based_product_evaluator<Lhs, Rhs, (int(DstEvaluatorType::Flags) & RowMajorBit) != 0>;
+  using type = std::conditional_t<DstOrdered::Vectorize, DstOrdered, evaluator<Product<Lhs, Rhs, LazyProduct>>>;
 };
 
 template <typename Lhs, typename Rhs>
