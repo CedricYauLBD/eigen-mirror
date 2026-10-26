@@ -65,8 +65,11 @@ class BDCSVD_LAPACKE : public BDCSVD<MatrixType_, Options> {
 
     SVD::m_nonzeroSingularValues = SVD::m_diagSize;
 
-    // prepare arguments to ?gesdd
-    const lapack_int matrix_order = lapack_storage_of(matrix);
+    // prepare arguments to ?gesdd. A, U and VT all have MatrixType's layout, which the input
+    // expression need not share.
+    MatrixType temp;
+    temp = matrix;
+    const lapack_int matrix_order = lapack_storage_of(temp);
     const char jobz = (SVD::m_computeFullU || SVD::m_computeFullV)   ? 'A'
                       : (SVD::m_computeThinU || SVD::m_computeThinV) ? 'S'
                                                                      : 'N';
@@ -95,8 +98,6 @@ class BDCSVD_LAPACKE : public BDCSVD<MatrixType_, Options> {
       ldvt = 1;
       vt = &dummy;
     }
-    MatrixType temp;
-    temp = matrix;
 
     // actual call to ?gesdd
     lapack_int info = gesdd(matrix_order, jobz, to_lapack(SVD::rows()), to_lapack(SVD::cols()), to_lapack(temp.data()),
