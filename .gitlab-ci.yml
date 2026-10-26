@@ -104,6 +104,11 @@ variables:
   # settings; every non-GPU rule set that fires on "schedule" opens with
   # .rules:libeigen:gpu-schedule-guard.
   EIGEN_CI_SCHEDULE_SCOPE: ""
+  # Every job checks out the pipeline commit alone: none reads history, and the
+  # jobs that diff against the merge request base fetch that one commit through
+  # .fetch:diff-base (ci/common.gitlab-ci.yml).  This overrides the project's
+  # default depth of 50.
+  GIT_DEPTH: 1
 
 include:
   - "/ci/checkformat.gitlab-ci.yml"

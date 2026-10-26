@@ -469,9 +469,12 @@ def select(graph, changed_files, max_fraction=DEFAULT_MAX_FRACTION):
 
 
 def changed_files_from_git(source_dir, base_sha, head="HEAD"):
-    """Paths changed between ``base_sha`` and ``head``."""
+    """Paths changed between ``base_sha`` and ``head``.
+
+    A two-dot diff, so ``base_sha`` must be the merge-base: CI fetches only it
+    and ``head``, without the history a three-dot diff walks."""
     result = subprocess.run(
-        ["git", "diff", "--no-renames", "--name-only", "%s...%s" % (base_sha, head)],
+        ["git", "diff", "--no-renames", "--name-only", base_sha, head],
         cwd=source_dir,
         capture_output=True,
         text=True,
@@ -488,7 +491,7 @@ def parse_args(argv):
     parser.add_argument("--source-dir", default=default_source,
                         help="Eigen source tree (default: the tree containing this script)")
     parser.add_argument("--base-sha",
-                        help="compute changed files from 'git diff BASE...HEAD'")
+                        help="compute changed files from 'git diff BASE HEAD'; BASE must be the merge-base")
     parser.add_argument("--head", default="HEAD", help="head revision for --base-sha")
     parser.add_argument("--changed-files",
                         help="read newline-separated changed paths from this file ('-' for stdin)")

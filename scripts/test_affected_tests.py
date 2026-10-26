@@ -451,6 +451,32 @@ def test_git_rename_paths():
         shutil.rmtree(root, ignore_errors=True)
 
 
+def test_git_shallow_base():
+    """The diff works in a depth-1 clone that fetched only the base, as CI does."""
+    root = tempfile.mkdtemp(prefix="eigen-affected-shallow-")
+    try:
+        source = os.path.join(root, "source")
+        os.makedirs(source)
+        git = ["git", "-c", "user.name=Eigen Tests", "-c", "user.email=eigen@example.com"]
+        subprocess.run(["git", "init", "-q"], cwd=source, check=True)
+        for name in ("Base.h", "Middle.h", "Head.h"):
+            with open(os.path.join(source, name), "w") as handle:
+                handle.write("// test\n")
+            subprocess.run(["git", "add", name], cwd=source, check=True)
+            subprocess.run(git + ["commit", "-qm", name], cwd=source, check=True)
+        base = subprocess.run(
+            ["git", "rev-parse", "HEAD~2"], cwd=source, check=True, capture_output=True, text=True
+        ).stdout.strip()
+        clone = os.path.join(root, "clone")
+        subprocess.run(["git", "clone", "-q", "--depth=1", "file://" + source, clone], check=True)
+        subprocess.run(["git", "fetch", "-q", "--depth=1", "origin", base], cwd=clone, check=True)
+        changed = changed_files_from_git(clone, base)
+        check(changed == ["Head.h", "Middle.h"],
+              "a shallow clone with only the base diffs against it, got %s" % changed)
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
 def test_real_tree():
     """Properties that must hold against the checked-out tree."""
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -572,6 +598,7 @@ def main():
     test_foreach_registrations()
     test_output_encoding()
     test_git_rename_paths()
+    test_git_shallow_base()
     test_real_tree()
 
     if FAILURES:
