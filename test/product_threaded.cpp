@@ -159,8 +159,8 @@ void test_parallelize_gemm_indivisible() {
 }
 
 // A half or bfloat16 product accumulates in float over its whole depth in every thread's part of the result, which
-// rounds C0 + A * B once: with entries in [0, 3] every float partial sum is an exact integer, so the result is
-// fl_T(exact).
+// rounds C0 + A * B, or A * B, once: with entries in [0, 3] every float partial sum is an exact integer, so the result
+// is fl_T(exact).
 template <typename T, int ResOrder>
 void verify_threaded_narrow_product(ThreadPool& pool, Index rows, Index depth, Index cols) {
   using MatrixT = Matrix<T, Dynamic, Dynamic>;
@@ -179,6 +179,13 @@ void verify_threaded_narrow_product(ThreadPool& pool, Index rows, Index depth, I
     for (Index i = 0; i < rows; ++i)
       VERIFY_IS_EQUAL(numext::bit_cast<std::uint16_t>(c(i, j)),
                       numext::bit_cast<std::uint16_t>(T(static_cast<float>(exact(i, j)))));
+  // Assignment overwrites every thread's part of C without reading it.
+  c.setConstant(NumTraits<T>::quiet_NaN());
+  c.noalias() = a * b;
+  for (Index j = 0; j < cols; ++j)
+    for (Index i = 0; i < rows; ++i)
+      VERIFY_IS_EQUAL(numext::bit_cast<std::uint16_t>(c(i, j)),
+                      numext::bit_cast<std::uint16_t>(T(static_cast<float>(exact(i, j) - double(c0(i, j))))));
 }
 
 template <typename T>

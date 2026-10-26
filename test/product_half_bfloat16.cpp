@@ -88,7 +88,8 @@ void bit_exact_case(Index rows, Index depth, Index cols) {
     return true;
   };
 
-  ResMatrix c(rows, cols);
+  // Assignment overwrites C without reading it.
+  ResMatrix c = ResMatrix::Constant(rows, cols, NumTraits<T>::quiet_NaN());
   c.noalias() = a * b;
   VERIFY(verify(c, 1.0, false));
   c = a * b;
@@ -414,6 +415,12 @@ void float_result() {
             blocking);
   for (Index j = 0; j < cols; ++j)
     for (Index i = 0; i < rows; ++i) VERIFY_IS_EQUAL(c(i, j), static_cast<float>(0.25 + 2.0 * ab(i, j)));
+  // run_overwrite writes the sums without reading the result.
+  c.setConstant(std::numeric_limits<float>::quiet_NaN());
+  Gemm::run_overwrite(rows, cols, depth, a.data(), a.outerStride(), b.data(), b.outerStride(), c.data(), 1,
+                      c.outerStride(), 2.0f, blocking);
+  for (Index j = 0; j < cols; ++j)
+    for (Index i = 0; i < rows; ++i) VERIFY_IS_EQUAL(c(i, j), static_cast<float>(2.0 * ab(i, j)));
 }
 
 template <typename = void>
