@@ -53,6 +53,14 @@ namespace Eigen {
                                                                                                                     \
     /*const RealScalar precision = RealScalar(2) * NumTraits<Scalar>::epsilon();*/                                  \
     m_nonzeroSingularValues = diagSize();                                                                           \
+    /* LAPACK rejects the zero leading dimensions of an empty input, and given valid ones it returns without */     \
+    /* writing U or VT. Set the identities the native path returns. */                                              \
+    if (diagSize() == 0) {                                                                                          \
+      if (computeU()) m_matrixU.setIdentity();                                                                      \
+      if (computeV()) m_matrixV.setIdentity();                                                                      \
+      m_isInitialized = true;                                                                                       \
+      return *this;                                                                                                 \
+    }                                                                                                               \
                                                                                                                     \
     lapack_int ldu, ldvt;                                                                                           \
     lapack_int matrix_order = LAPACKE_COLROW;                                                                       \

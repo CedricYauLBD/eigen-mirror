@@ -64,6 +64,14 @@ class BDCSVD_LAPACKE : public BDCSVD<MatrixType_, Options> {
     SVD::allocate(matrix.rows(), matrix.cols(), computationOptions);
 
     SVD::m_nonzeroSingularValues = SVD::m_diagSize;
+    // LAPACK rejects the zero leading dimensions of an empty input, and given valid ones it returns without writing
+    // U or VT. Set the identities the native path returns.
+    if (SVD::diagSize() == 0) {
+      if (SVD::computeU()) SVD::m_matrixU.setIdentity();
+      if (SVD::computeV()) SVD::m_matrixV.setIdentity();
+      SVD::m_isInitialized = true;
+      return;
+    }
 
     // prepare arguments to ?gesdd. A, U and VT all have MatrixType's layout, which the input
     // expression need not share.

@@ -48,7 +48,7 @@ template <typename Scalar, typename RealScalar>
 lapack_int svd_probe(int layout, char jobu, char jobvt, lapack_int m, lapack_int n, const Scalar* a, lapack_int lda,
                      RealScalar* s, lapack_int ldu, lapack_int ldvt) {
   ++svd_calls;
-  args_match = matches_expected(layout, jobu, jobvt, m, n, a, lda, ldu, ldvt);
+  args_match = expected_a != nullptr && matches_expected(layout, jobu, jobvt, m, n, a, lda, ldu, ldvt);
   std::fill_n(s, numext::mini(m, n), RealScalar(0));
   return 1;
 }
@@ -82,9 +82,24 @@ void check_lapacke_input(const Input& input) {
   args_match = false;
   const int calls_before = svd_calls;
   SVD svd(input);
+  expected_a = nullptr;
   VERIFY_IS_EQUAL(svd_calls, calls_before + 1);
   VERIFY(args_match);
   VERIFY_IS_EQUAL(svd.info(), NoConvergence);
+}
+
+// LAPACK rejects the zero leading dimensions of an empty input, and given valid ones it leaves U and VT unwritten. The
+// bindings must not call it, and must return the native path's identity unitaries.
+template <typename SVD>
+void check_lapacke_empty(Index rows, Index cols) {
+  using MatrixType = typename SVD::MatrixType;
+  const int calls_before = svd_calls;
+  SVD svd(MatrixType(rows, cols));
+  VERIFY_IS_EQUAL(svd_calls, calls_before);
+  VERIFY_IS_EQUAL(svd.info(), Success);
+  VERIFY_IS_EQUAL(svd.singularValues().size(), 0);
+  if (svd.computeU()) VERIFY_IS_EQUAL(svd.matrixU(), MatrixType::Identity(rows, svd.matrixU().cols()));
+  if (svd.computeV()) VERIFY_IS_EQUAL(svd.matrixV(), MatrixType::Identity(cols, svd.matrixV().cols()));
 }
 
 // The bindings hand LAPACK a copy in MatrixType's layout (#3217): an input whose own layout or outer stride differs
@@ -107,6 +122,9 @@ void svd_lapacke_input_layout() {
   check_lapacke_input<SVD>(big.block(1, 2, n, m).transpose());
   check_lapacke_input<SVD>(big_row_major.block(1, 2, m, n));
   check_lapacke_input<SVD>(Scalar(2) * tall);
+  check_lapacke_empty<SVD>(0, 0);
+  check_lapacke_empty<SVD>(0, n);
+  check_lapacke_empty<SVD>(m, 0);
 }
 
 template <typename Scalar, int Options>
