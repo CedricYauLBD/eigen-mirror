@@ -137,14 +137,6 @@ endforeach()
 get_filename_component(eigen_full_path_to_testing_lapack "./testing/" ABSOLUTE)
 if(EIGEN_ENABLE_LAPACK_TESTS AND EXISTS ${eigen_full_path_to_testing_lapack})
 
-  # The following comes from lapack/TESTING/CMakeLists.txt
-  # Get Python
-  find_package(PythonInterp)
-  message(STATUS "Looking for Python found - ${PYTHONINTERP_FOUND}")
-  if (PYTHONINTERP_FOUND)
-    message(STATUS "Using Python version ${PYTHON_VERSION_STRING}")
-  endif()
-
   set(LAPACK_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR})
   set(LAPACK_BINARY_DIR ${CMAKE_CURRENT_BINARY_DIR})
   set(BUILD_SINGLE      true)
@@ -162,6 +154,8 @@ if(EIGEN_ENABLE_LAPACK_TESTS AND EXISTS ${eigen_full_path_to_testing_lapack})
   add_subdirectory(testing/MATGEN)
   add_subdirectory(testing/LIN)
   add_subdirectory(testing/EIG)
+  set(EIGEN_LAPACK_TEST_NAMES "")
+  set(EIGEN_LAPACK_TEST_OUTPUTS "")
   macro(add_lapack_test output input target)
     set(TEST_INPUT "${LAPACK_SOURCE_DIR}/testing/${input}")
     set(TEST_OUTPUT "${LAPACK_BINARY_DIR}/TESTING/${output}")
@@ -169,6 +163,8 @@ if(EIGEN_ENABLE_LAPACK_TESTS AND EXISTS ${eigen_full_path_to_testing_lapack})
     set(testName "${target}_${input_name}")
     if(EXISTS "${TEST_INPUT}")
       add_dependencies(buildtests ${target})
+      list(APPEND EIGEN_LAPACK_TEST_NAMES "LAPACK-${testName}")
+      list(APPEND EIGEN_LAPACK_TEST_OUTPUTS "${TEST_OUTPUT}")
       add_test(NAME LAPACK-${testName}
         COMMAND "${CMAKE_COMMAND}"
         -DTEST=$<TARGET_FILE:${target}>
@@ -465,16 +461,19 @@ if(EIGEN_ENABLE_LAPACK_TESTS AND EXISTS ${eigen_full_path_to_testing_lapack})
 
   # ==============================================================================
 
-  if(EXISTS "${LAPACK_SOURCE_DIR}/lapack_testing.py")
-    execute_process(COMMAND ${CMAKE_COMMAND} -E copy ${LAPACK_SOURCE_DIR}/lapack_testing.py ${LAPACK_BINARY_DIR})
-  else()
-    execute_process(COMMAND ${CMAKE_COMMAND} -E copy ${LAPACK_SOURCE_DIR}/testing/lapack_testing.py ${LAPACK_BINARY_DIR})
+  if(EIGEN_LAPACK_TEST_NAMES)
+    string(REPLACE ";" "\n" lapack_outputs "${EIGEN_LAPACK_TEST_OUTPUTS}")
+    file(WRITE "${LAPACK_BINARY_DIR}/lapack_test_outputs.txt" "${lapack_outputs}\n")
+    add_test(
+      NAME LAPACK_Test_Summary
+      WORKING_DIRECTORY ${LAPACK_BINARY_DIR}
+      COMMAND "${CMAKE_COMMAND}"
+              "-DOUTPUT_MANIFEST=${LAPACK_BINARY_DIR}/lapack_test_outputs.txt"
+              "-DREPORT_FILE=${LAPACK_BINARY_DIR}/TESTING/testing_results.txt"
+              -P "${LAPACK_SOURCE_DIR}/testing_summary.cmake"
+    )
+    set_tests_properties(LAPACK_Test_Summary PROPERTIES DEPENDS "${EIGEN_LAPACK_TEST_NAMES}")
   endif()
-  add_test(
-    NAME LAPACK_Test_Summary
-    WORKING_DIRECTORY ${LAPACK_BINARY_DIR}
-    COMMAND ${PYTHON_EXECUTABLE} "lapack_testing.py"
-  )
 
 endif()
 
