@@ -448,7 +448,7 @@ void check_inner_panel_like(const Xpr& xpr, const Reference& reference) {
 // A fixed-size block spanning the whole fixed inner size of its parent is an inner
 // panel even when it is not built with InnerPanel = true.
 void inner_panel_inference_test() {
-  using ColMajor8 = Matrix<float, 8, 8>;
+  using ColMajor8 = Matrix<float, 8, 8, ColMajor>;
   using RowMajor8 = Matrix<float, 8, 8, RowMajor>;
   ColMajor8 a = ColMajor8::Random();
   RowMajor8 b = RowMajor8::Random();
@@ -489,7 +489,8 @@ void product_block_packet_access_test() {
   Matrix8 a = Matrix8::Random(), b = Matrix8::Random();
   Matrix8 ab = a * b;
   Index j = internal::random<Index>(0, 4);
-  VERIFY(internal::evaluator<decltype((a * b).block<8, 4>(0, j))>::Flags & PacketAccessBit);
+  VERIFY_IS_EQUAL(int(internal::evaluator<decltype((a * b).block<8, 4>(0, j))>::Flags & PacketAccessBit),
+                  int(internal::evaluator<Matrix8>::Flags & PacketAccessBit));
   VERIFY(!(internal::evaluator<decltype((a * b).block<8, 4>(0, j))>::Flags & DirectAccessBit));
   VERIFY_IS_APPROX((Matrix<float, 8, 4>((a * b).block<8, 4>(0, j))), (ab.block<8, 4>(0, j)));
   VERIFY_IS_APPROX(MatrixXf((a * b).block(1, j, 6, 3)), MatrixXf(ab.block(1, j, 6, 3)));
