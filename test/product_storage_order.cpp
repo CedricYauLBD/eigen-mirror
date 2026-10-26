@@ -38,8 +38,10 @@ void check_min_max(const Prod& prod, const Matrix<typename Prod::Scalar, Dynamic
 template <typename Prod>
 void check_consumers(const Prod& prod) {
   using Scalar = typename Prod::Scalar;
+  using RealScalar = typename NumTraits<Scalar>::Real;
   using Plain = Matrix<Scalar, Dynamic, Dynamic>;
-  const Plain ref = Plain(prod.lhs()) * Plain(prod.rhs());
+  const Plain lhs = prod.lhs(), rhs = prod.rhs();
+  const Plain ref = lhs * rhs;
 
   VERIFY_IS_EQUAL(bool(Prod::IsRowMajor), bool(int(internal::evaluator<Prod>::Flags) & RowMajorBit));
   VERIFY_IS_APPROX(Plain(prod), ref);
@@ -48,7 +50,16 @@ void check_consumers(const Prod& prod) {
   VERIFY_IS_APPROX(Plain(prod.rowwise().reverse()), Plain(ref.rowwise().reverse()));
   VERIFY_IS_APPROX(Plain(prod.colwise().sum()), Plain(ref.colwise().sum()));
   VERIFY_IS_APPROX(Plain(prod.rowwise().sum()), Plain(ref.rowwise().sum()));
-  VERIFY_IS_APPROX(prod.sum(), ref.sum());
+  double magnitude = 0;
+  for (Index j = 0; j < rhs.cols(); ++j)
+    for (Index i = 0; i < lhs.rows(); ++i)
+      for (Index k = 0; k < lhs.cols(); ++k)
+        magnitude += static_cast<double>(numext::abs(lhs(i, k))) * static_cast<double>(numext::abs(rhs(k, j)));
+  // Two k-term products and mn-term reductions; the factor 4 also covers complex arithmetic.
+  const double sum_bound =
+      4 * (double(lhs.cols()) + double(ref.size())) * double(NumTraits<RealScalar>::epsilon()) * magnitude;
+  VERIFY((numext::isfinite)(sum_bound));
+  VERIFY(static_cast<double>(numext::abs(prod.sum() - ref.sum())) <= sum_bound);
   VERIFY_IS_APPROX(prod.squaredNorm(), ref.squaredNorm());
   VERIFY_IS_APPROX(prod.cwiseAbs().sum(), ref.cwiseAbs().sum());
   check_min_max(prod, ref, internal::bool_constant<NumTraits<Scalar>::IsComplex>());
