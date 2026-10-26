@@ -590,16 +590,15 @@ struct product_packet_cascade_traits {
   static constexpr bool DstRowMajor = bool(Dst::IsRowMajor);
   static constexpr bool DstContiguous =
       (int(DstEval::Flags) & DirectAccessBit) != 0 && int(Dst::InnerStrideAtCompileTime) == 1;
-  // Orientation of the packets the product evaluator natively produces. When a
-  // product can vectorize *both* the lhs (columns) and the rhs (rows), its
-  // packet() returns column packets (EvalToRowMajor == 0). The cascade axis must
-  // match this orientation -- and the destination's storage order must match it
-  // too, so the contiguous packet store lands on contiguous coefficients.
+  // The product's packets run along its storage order. The cascade axis must match
+  // it -- and so must the destination's storage order, so the contiguous packet
+  // store lands on contiguous coefficients. ProdEval::Vectorize is false for
+  // mixed-scalar products, which keep the generic (scalar) path.
   static constexpr bool ProdRowMajor = (int(ProdEval::Flags) & RowMajorBit) != 0;
   static constexpr bool VecLhs =  // column-major product & dst: vectorize down each column
-      bool(ProdEval::CanVectorizeLhs) && !ProdRowMajor && !DstRowMajor && Rows != Dynamic;
+      bool(ProdEval::Vectorize) && !ProdRowMajor && !DstRowMajor && Rows != Dynamic;
   static constexpr bool VecRhs =  // row-major product & dst: vectorize along each row
-      bool(ProdEval::CanVectorizeRhs) && ProdRowMajor && DstRowMajor && Cols != Dynamic;
+      bool(ProdEval::Vectorize) && ProdRowMajor && DstRowMajor && Cols != Dynamic;
   static constexpr int Extent = VecLhs ? Rows : VecRhs ? Cols : 1;
   using Packet = typename find_largest_packet<Scalar, Extent>::type;
   static constexpr int LargestSize = unpacket_traits<Packet>::size;
@@ -608,12 +607,8 @@ struct product_packet_cascade_traits {
       bool(EIGEN_UNALIGNED_VECTORIZE) &&
       (int(DstEval::Flags) & int(ProdEval::Flags) & int(ActualPacketAccessBit)) != 0 &&
       bool(functor_traits<Func>::PacketAccess);
-  // SameType mirrors the product's own PacketAccessBit (SameType && (CanVectorizeLhs ||
-  // CanVectorizeRhs)): CanVectorizeLhs/Rhs alone test only the operand's packet access, so a
-  // mixed-scalar product (e.g. double * complex) would otherwise enable the cascade and try to
-  // read the wrong-width packet out of an operand. Mixed types keep the generic (scalar) path.
-  static constexpr bool Enable = bool(ProdEval::SameType) && (VecLhs || VecRhs) && DstContiguous && MightVectorize &&
-                                 (LargestSize <= Extent) && (LargestSize > GenericSize);
+  static constexpr bool Enable =
+      (VecLhs || VecRhs) && DstContiguous && MightVectorize && (LargestSize <= Extent) && (LargestSize > GenericSize);
 };
 
 // Run the cascade over every outer index of dst. Traits::VecLhs is a compile-time
@@ -826,15 +821,14 @@ struct product_evaluator<Product<Lhs, Rhs, LazyProduct>, ProductTag, DenseShape,
   static constexpr bool CanVectorizeRhs = bool(RhsRowMajor) && (RhsFlags & PacketAccessBit) && (ColsAtCompileTime != 1);
   static constexpr bool CanVectorizeLhs = (!LhsRowMajor) && (LhsFlags & PacketAccessBit) && (RowsAtCompileTime != 1);
 
-  static constexpr int EvalToRowMajor = (MaxRowsAtCompileTime == 1 && MaxColsAtCompileTime != 1) ? 1
-                                        : (MaxColsAtCompileTime == 1 && MaxRowsAtCompileTime != 1)
-                                            ? 0
-                                            : (bool(RhsRowMajor) && !CanVectorizeLhs);
+  // Evaluate in the storage order the expression reports, which consumers use to index packets and size their loops.
+  // Packets run along it, so only the operand that is contiguous along that axis can vectorize the product.
+  static constexpr bool EvalToRowMajor = (int(traits<XprType>::Flags) & RowMajorBit) != 0;
+  // TODO: enable vectorization for mixed types
+  static constexpr bool Vectorize = SameType && (EvalToRowMajor ? CanVectorizeRhs : CanVectorizeLhs);
 
   static constexpr int Flags = ((int(LhsFlags) | int(RhsFlags)) & HereditaryBits & ~RowMajorBit) |
-                               (EvalToRowMajor ? RowMajorBit : 0)
-                               // TODO: enable vectorization for mixed types
-                               | (SameType && (CanVectorizeLhs || CanVectorizeRhs) ? PacketAccessBit : 0) |
+                               (EvalToRowMajor ? RowMajorBit : 0) | (Vectorize ? PacketAccessBit : 0) |
                                (XprType::IsVectorAtCompileTime ? LinearAccessBit : 0);
   using LhsPacketEtorType =
       std::conditional_t<bool(int(Flags) & PacketAccessBit), LhsEtorType, product_empty_packet_evaluator>;
@@ -849,15 +843,12 @@ struct product_evaluator<Product<Lhs, Rhs, LazyProduct>, ProductTag, DenseShape,
   static constexpr int RhsOuterStrideBytes =
       int(RhsNestedCleaned::OuterStrideAtCompileTime) * int(sizeof(typename RhsNestedCleaned::Scalar));
 
+  // Packets come from the operand that vectorizes the product, at its outer index k.
+  static constexpr int VecOuterStrideBytes = EvalToRowMajor ? RhsOuterStrideBytes : LhsOuterStrideBytes;
+  static constexpr int VecAlignment = EvalToRowMajor ? RhsAlignment : LhsAlignment;
   static constexpr int Alignment =
-      bool(CanVectorizeLhs)
-          ? (LhsOuterStrideBytes <= 0 || (int(LhsOuterStrideBytes) % plain_enum_max(1, LhsAlignment)) != 0
-                 ? 0
-                 : LhsAlignment)
-      : bool(CanVectorizeRhs)
-          ? (RhsOuterStrideBytes <= 0 || (int(RhsOuterStrideBytes) % plain_enum_max(1, RhsAlignment)) != 0
-                 ? 0
-                 : RhsAlignment)
+      (Vectorize && VecOuterStrideBytes > 0 && VecOuterStrideBytes % plain_enum_max(1, VecAlignment) == 0)
+          ? VecAlignment
           : 0;
 
   EIGEN_DEVICE_FUNC constexpr EIGEN_STRONG_INLINE const CoeffReturnType coeff(Index row, Index col) const {
@@ -938,6 +929,8 @@ struct product_evaluator<Product<Lhs, Rhs, DefaultProduct>, LazyCoeffBasedProduc
   using XprType = Product<Lhs, Rhs, DefaultProduct>;
   using BaseProduct = Product<Lhs, Rhs, LazyProduct>;
   using Base = product_evaluator<BaseProduct, CoeffBasedProductMode, DenseShape, DenseShape>;
+  static_assert((int(traits<XprType>::Flags) & RowMajorBit) == (int(Base::Flags) & RowMajorBit),
+                "the evaluator must use the storage order its expression reports");
   enum { Flags = Base::Flags | EvalBeforeNestingBit };
   EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE explicit product_evaluator(const XprType& xpr)
       : Base(BaseProduct(xpr.lhs(), xpr.rhs())) {}
