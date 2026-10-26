@@ -635,6 +635,17 @@ struct product_packet_cascade {
     constexpr int PacketSize = unpacket_traits<Packet>::size;
     Index pktEnd = begin + numext::round_down(end - begin, PacketSize);
     Index i = begin;
+    EIGEN_IF_CONSTEXPR (ProdEval::MixedRealComplex) {
+      if (pktEnd - begin == PacketSize && pktEnd < end) {
+        // Read the tail before storing the full packet so their real-factor broadcasts can be shared.
+        Index r = ColMajor ? begin : outer, c = ColMajor ? outer : begin;
+        const Packet result = prod.template packet<Unaligned, Packet>(r, c);
+        product_packet_cascade<typename unpacket_traits<Packet>::half, ColMajor>::run(func, dst, prod, outer, pktEnd,
+                                                                                      end);
+        func.template assignPacket<Unaligned, Packet>(&dst.coeffRef(r, c), result);
+        return;
+      }
+    }
     for (; i < pktEnd; i += PacketSize) {
       Index r = ColMajor ? i : outer, c = ColMajor ? outer : i;
       func.template assignPacket<Unaligned, Packet>(&dst.coeffRef(r, c), prod.template packet<Unaligned, Packet>(r, c));
@@ -656,6 +667,19 @@ struct product_packet_cascade<Packet, ColMajor, /*Terminal=*/true> {
     for (; i < pktEnd; i += PacketSize) {
       Index r = ColMajor ? i : outer, c = ColMajor ? outer : i;
       func.template assignPacket<Unaligned, Packet>(&dst.coeffRef(r, c), prod.template packet<Unaligned, Packet>(r, c));
+    }
+    EIGEN_IF_CONSTEXPR (ProdEval::MixedRealComplex &&
+                        (ColMajor ? bool(NumTraits<typename ProdEval::LhsScalar>::IsComplex)
+                                  : bool(NumTraits<typename ProdEval::RhsScalar>::IsComplex))) {
+      if (i > begin && i < end) {
+        // Overlap complex loads to avoid scalar tail reductions; duplicating real lanes again is more expensive.
+        // Store only new lanes so compound assignments visit each coefficient once.
+        const Index start = end - PacketSize;
+        const Index r = ColMajor ? start : outer, c = ColMajor ? outer : start;
+        const Packet result = prod.template packet<Unaligned, Packet>(r, c);
+        func.template assignPacketSegment<Unaligned, Packet>(&dst.coeffRef(r, c), result, i - start, end - i);
+        return;
+      }
     }
     for (; i < end; ++i) {
       Index r = ColMajor ? i : outer, c = ColMajor ? outer : i;
@@ -726,8 +750,10 @@ struct product_packet_cascade_traits {
       bool(EIGEN_UNALIGNED_VECTORIZE) &&
       (int(DstEval::Flags) & int(ProdEval::Flags) & int(ActualPacketAccessBit)) != 0 &&
       bool(functor_traits<Func>::PacketAccess);
-  static constexpr bool Enable =
-      (VecLhs || VecRhs) && DstContiguous && MightVectorize && (LargestSize <= Extent) && (LargestSize > GenericSize);
+  // Mixed packets are supported only when the complex operand supplies the packet and the real operand a scalar.
+  static constexpr bool Enable = (ProdEval::SameType || ProdEval::MixedRealComplex) && (VecLhs || VecRhs) &&
+                                 DstContiguous && MightVectorize && (LargestSize <= Extent) &&
+                                 (LargestSize > GenericSize);
 };
 
 // Run the cascade over every outer index of dst. Traits::VecLhs is a compile-time
@@ -744,7 +770,7 @@ EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE void product_run_packet_cascade(const Func
     product_packet_cascade<Packet, Traits::VecLhs>::run(func, dst, prod, outer, 0, innerEnd);
 }
 
-// Compound product assignment: take the packet cascade when the traits enable
+// Product assignment: take the packet cascade when the traits enable
 // it, otherwise the generic assignment path. Dispatch on a bool tag (rather than
 // a plain `if`) so the cascade is only *instantiated* for the vectorizable
 // fixed-size case -- a runtime branch would instantiate it for every product,
@@ -778,13 +804,16 @@ struct generic_product_impl<Lhs, Rhs, DenseShape, DenseShape, CoeffBasedProductM
   static EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE void evalTo(Dst& dst, const Lhs& lhs, const Rhs& rhs) {
     // Same as: dst.noalias() = lhs.lazyProduct(rhs);
     // but easier on the compiler side.
-    // NB: unlike addTo/subTo below, plain assignment stays on the generic path.
+    // NB: same-scalar plain assignment stays on the generic path.
     // The packet cascade is a measured win for the compound (+=, -=) case, but
     // for plain assignment the generic InnerVectorized path is already well
     // tuned -- the cascade was at best neutral there and could regress float
     // (whose packet half-chain bottoms out at Packet4f, so odd-size tails fall
-    // to scalars). See product_packet_cascade_traits.
-    call_assignment_no_alias(dst, lhs.lazyProduct(rhs), internal::assign_op<typename Dst::Scalar, Scalar>());
+    // to scalars). Mixed products also use the cascade when it widens their packets.
+    using ProdEval = dst_ordered_product_evaluator<Lhs, Rhs, Dst>;
+    using Func = internal::assign_op<typename Dst::Scalar, Scalar>;
+    using Traits = product_packet_cascade_traits<ProdEval, Dst, Func>;
+    product_packet_assign(bool_constant<(ProdEval::MixedRealComplex && Traits::Enable)>(), Func(), dst, lhs, rhs);
   }
 
   template <typename Dst>
@@ -858,6 +887,21 @@ struct generic_product_impl<Lhs, Rhs, DenseShape, DenseShape, CoeffBasedProductM
 template <typename Lhs, typename Rhs>
 struct generic_product_impl<Lhs, Rhs, DenseShape, DenseShape, LazyCoeffBasedProductMode>
     : generic_product_impl<Lhs, Rhs, DenseShape, DenseShape, CoeffBasedProductMode> {};
+
+template <typename Packet, typename Scalar, typename ResultScalar = typename unpacket_traits<Packet>::type,
+          bool Real = std::is_same<Scalar, float>::value || std::is_same<Scalar, double>::value>
+struct product_operand_packet {
+  using type = Packet;
+};
+
+// Preserve real operands: promoting them to complex would introduce artificial 0*inf terms.
+template <typename Packet, typename Real>
+struct product_operand_packet<Packet, Real, std::complex<Real>, true> {
+  using type = typename unpacket_traits<Packet>::as_real;
+};
+
+template <typename Packet, typename Scalar>
+using product_operand_packet_t = typename product_operand_packet<Packet, Scalar>::type;
 
 template <int StorageOrder, int UnrollingIndex, typename Lhs, typename Rhs, typename Packet, int LoadMode>
 struct etor_product_packet_impl;
@@ -949,9 +993,21 @@ struct coeff_based_product_evaluator : evaluator_base<Product<Lhs, Rhs, LazyProd
 
   // Only the operand that is contiguous along the packets' axis can vectorize the product.
   static constexpr bool EvalToRowMajor = EvalToRowMajor_;
-  // TODO: enable vectorization for mixed types
-  static constexpr bool Vectorize = SameType && (EvalToRowMajor ? CanVectorizeRhs : CanVectorizeLhs);
+  using RealScalar = typename NumTraits<Scalar>::Real;
+  static constexpr bool LhsIsReal = std::is_same<LhsScalar, RealScalar>::value;
+  static constexpr bool RhsIsReal = std::is_same<RhsScalar, RealScalar>::value;
+  static constexpr bool MixedScalarTypes =
+      std::is_same<Scalar, std::complex<RealScalar>>::value &&
+      (std::is_same<RealScalar, float>::value || std::is_same<RealScalar, double>::value) &&
+      ((LhsIsReal && std::is_same<RhsScalar, Scalar>::value) || (RhsIsReal && std::is_same<LhsScalar, Scalar>::value));
+  static constexpr bool PacketOperandVectorizable = EvalToRowMajor ? CanVectorizeRhs : CanVectorizeLhs;
+  // Only the complex operand supplies packets; expression and evaluator storage orders must agree.
+  static constexpr bool MixedRealComplex = MixedScalarTypes && PacketOperandVectorizable &&
+                                           (EvalToRowMajor ? !RhsIsReal : !LhsIsReal) &&
+                                           (bool(int(traits<XprType>::Flags) & RowMajorBit) == bool(EvalToRowMajor));
 
+  // TODO: load and expand real coefficient packets in the remaining mixed products.
+  static constexpr bool Vectorize = (SameType && PacketOperandVectorizable) || MixedRealComplex;
   static constexpr int Flags = ((int(LhsFlags) | int(RhsFlags)) & HereditaryBits & ~RowMajorBit) |
                                (EvalToRowMajor ? RowMajorBit : 0) | (Vectorize ? PacketAccessBit : 0) |
                                (XprType::IsVectorAtCompileTime ? LinearAccessBit : 0);
@@ -987,6 +1043,19 @@ struct coeff_based_product_evaluator : evaluator_base<Product<Lhs, Rhs, LazyProd
 
   EIGEN_DEVICE_FUNC constexpr EIGEN_STRONG_INLINE CoeffReturnType coeff_impl(Index row, Index col,
                                                                              std::false_type) const {
+    return coeff_reduced(row, col, bool_constant<MixedRealComplex>());
+  }
+
+  EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE CoeffReturnType coeff_reduced(Index row, Index col, std::true_type) const {
+    using SinglePacket = typename find_best_packet<Scalar, 1>::type;
+    EIGEN_IF_CONSTEXPR (unpacket_traits<SinglePacket>::size == 1) {
+      return pfirst(packetSegment<Unaligned, SinglePacket>(row, col, 0, 1));
+    }
+    return coeff_reduced(row, col, std::false_type());
+  }
+
+  EIGEN_DEVICE_FUNC constexpr EIGEN_STRONG_INLINE CoeffReturnType coeff_reduced(Index row, Index col,
+                                                                                std::false_type) const {
     // fast_mult_op is cwiseProduct's scalar_product_op with a pmul-based scalar path, so the
     // reduction (and its precision) is unchanged but complex scalars avoid std::complex::operator*
     // (the slow libgcc __mul?c3). See fast_mult_op.
@@ -1023,6 +1092,9 @@ struct coeff_based_product_evaluator : evaluator_base<Product<Lhs, Rhs, LazyProd
   template <int LoadMode, typename PacketType>
   EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE const PacketType packetSegment(Index row, Index col, Index begin,
                                                                        Index count) const {
+    EIGEN_IF_CONSTEXPR (MixedRealComplex) {
+      if (count == 0) return pset1<PacketType>(Scalar(0));
+    }
     PacketType res;
     using PacketImpl =
         etor_product_packet_impl<bool(int(Flags) & RowMajorBit) ? RowMajor : ColMajor,
@@ -1092,65 +1164,79 @@ struct product_evaluator<Product<Lhs, Rhs, DefaultProduct>, LazyCoeffBasedProduc
 
 template <int UnrollingIndex, typename Lhs, typename Rhs, typename Packet, int LoadMode>
 struct etor_product_packet_impl<RowMajor, UnrollingIndex, Lhs, Rhs, Packet, LoadMode> {
+  using FactorPacket = product_operand_packet_t<Packet, remove_all_t<decltype(std::declval<const Lhs&>().coeff(0, 0))>>;
+  using ValuePacket = product_operand_packet_t<Packet, remove_all_t<decltype(std::declval<const Rhs&>().coeff(0, 0))>>;
+  using Op = conj_helper<FactorPacket, ValuePacket, false, false>;
   static EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE void run(Index row, Index col, const Lhs& lhs, const Rhs& rhs,
                                                         Index innerDim, Packet& res) {
     etor_product_packet_impl<RowMajor, UnrollingIndex - 1, Lhs, Rhs, Packet, LoadMode>::run(row, col, lhs, rhs,
                                                                                             innerDim, res);
-    res = pmadd(pset1<Packet>(lhs.coeff(row, Index(UnrollingIndex - 1))),
-                rhs.template packet<LoadMode, Packet>(Index(UnrollingIndex - 1), col), res);
+    res = Op().pmadd(pset1<FactorPacket>(lhs.coeff(row, Index(UnrollingIndex - 1))),
+                     rhs.template packet<LoadMode, Packet>(Index(UnrollingIndex - 1), col), res);
   }
   static EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE void run_segment(Index row, Index col, const Lhs& lhs, const Rhs& rhs,
                                                                 Index innerDim, Packet& res, Index begin, Index count) {
     etor_product_packet_impl<RowMajor, UnrollingIndex - 1, Lhs, Rhs, Packet, LoadMode>::run_segment(
         row, col, lhs, rhs, innerDim, res, begin, count);
-    res = pmadd(pset1<Packet>(lhs.coeff(row, Index(UnrollingIndex - 1))),
-                rhs.template packetSegment<LoadMode, Packet>(Index(UnrollingIndex - 1), col, begin, count), res);
+    res = Op().pmadd(pset1<FactorPacket>(lhs.coeff(row, Index(UnrollingIndex - 1))),
+                     rhs.template packetSegment<LoadMode, Packet>(Index(UnrollingIndex - 1), col, begin, count), res);
   }
 };
 
 template <int UnrollingIndex, typename Lhs, typename Rhs, typename Packet, int LoadMode>
 struct etor_product_packet_impl<ColMajor, UnrollingIndex, Lhs, Rhs, Packet, LoadMode> {
+  using FactorPacket = product_operand_packet_t<Packet, remove_all_t<decltype(std::declval<const Rhs&>().coeff(0, 0))>>;
+  using ValuePacket = product_operand_packet_t<Packet, remove_all_t<decltype(std::declval<const Lhs&>().coeff(0, 0))>>;
+  using Op = conj_helper<ValuePacket, FactorPacket, false, false>;
   static EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE void run(Index row, Index col, const Lhs& lhs, const Rhs& rhs,
                                                         Index innerDim, Packet& res) {
     etor_product_packet_impl<ColMajor, UnrollingIndex - 1, Lhs, Rhs, Packet, LoadMode>::run(row, col, lhs, rhs,
                                                                                             innerDim, res);
-    res = pmadd(lhs.template packet<LoadMode, Packet>(row, Index(UnrollingIndex - 1)),
-                pset1<Packet>(rhs.coeff(Index(UnrollingIndex - 1), col)), res);
+    res = Op().pmadd(lhs.template packet<LoadMode, Packet>(row, Index(UnrollingIndex - 1)),
+                     pset1<FactorPacket>(rhs.coeff(Index(UnrollingIndex - 1), col)), res);
   }
   static EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE void run_segment(Index row, Index col, const Lhs& lhs, const Rhs& rhs,
                                                                 Index innerDim, Packet& res, Index begin, Index count) {
     etor_product_packet_impl<ColMajor, UnrollingIndex - 1, Lhs, Rhs, Packet, LoadMode>::run_segment(
         row, col, lhs, rhs, innerDim, res, begin, count);
-    res = pmadd(lhs.template packetSegment<LoadMode, Packet>(row, Index(UnrollingIndex - 1), begin, count),
-                pset1<Packet>(rhs.coeff(Index(UnrollingIndex - 1), col)), res);
+    res = Op().pmadd(lhs.template packetSegment<LoadMode, Packet>(row, Index(UnrollingIndex - 1), begin, count),
+                     pset1<FactorPacket>(rhs.coeff(Index(UnrollingIndex - 1), col)), res);
   }
 };
 
 template <typename Lhs, typename Rhs, typename Packet, int LoadMode>
 struct etor_product_packet_impl<RowMajor, 1, Lhs, Rhs, Packet, LoadMode> {
+  using FactorPacket = product_operand_packet_t<Packet, remove_all_t<decltype(std::declval<const Lhs&>().coeff(0, 0))>>;
+  using ValuePacket = product_operand_packet_t<Packet, remove_all_t<decltype(std::declval<const Rhs&>().coeff(0, 0))>>;
+  using Op = conj_helper<FactorPacket, ValuePacket, false, false>;
   static EIGEN_DEVICE_FUNC constexpr EIGEN_STRONG_INLINE void run(Index row, Index col, const Lhs& lhs, const Rhs& rhs,
                                                                   Index /*innerDim*/, Packet& res) {
-    res = pmul(pset1<Packet>(lhs.coeff(row, Index(0))), rhs.template packet<LoadMode, Packet>(Index(0), col));
+    res =
+        Op().pmul(pset1<FactorPacket>(lhs.coeff(row, Index(0))), rhs.template packet<LoadMode, Packet>(Index(0), col));
   }
   static EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE void run_segment(Index row, Index col, const Lhs& lhs, const Rhs& rhs,
                                                                 Index /*innerDim*/, Packet& res, Index begin,
                                                                 Index count) {
-    res = pmul(pset1<Packet>(lhs.coeff(row, Index(0))),
-               rhs.template packetSegment<LoadMode, Packet>(Index(0), col, begin, count));
+    res = Op().pmul(pset1<FactorPacket>(lhs.coeff(row, Index(0))),
+                    rhs.template packetSegment<LoadMode, Packet>(Index(0), col, begin, count));
   }
 };
 
 template <typename Lhs, typename Rhs, typename Packet, int LoadMode>
 struct etor_product_packet_impl<ColMajor, 1, Lhs, Rhs, Packet, LoadMode> {
+  using FactorPacket = product_operand_packet_t<Packet, remove_all_t<decltype(std::declval<const Rhs&>().coeff(0, 0))>>;
+  using ValuePacket = product_operand_packet_t<Packet, remove_all_t<decltype(std::declval<const Lhs&>().coeff(0, 0))>>;
+  using Op = conj_helper<ValuePacket, FactorPacket, false, false>;
   static EIGEN_DEVICE_FUNC constexpr EIGEN_STRONG_INLINE void run(Index row, Index col, const Lhs& lhs, const Rhs& rhs,
                                                                   Index /*innerDim*/, Packet& res) {
-    res = pmul(lhs.template packet<LoadMode, Packet>(row, Index(0)), pset1<Packet>(rhs.coeff(Index(0), col)));
+    res =
+        Op().pmul(lhs.template packet<LoadMode, Packet>(row, Index(0)), pset1<FactorPacket>(rhs.coeff(Index(0), col)));
   }
   static EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE void run_segment(Index row, Index col, const Lhs& lhs, const Rhs& rhs,
                                                                 Index /*innerDim*/, Packet& res, Index begin,
                                                                 Index count) {
-    res = pmul(lhs.template packetSegment<LoadMode, Packet>(row, Index(0), begin, count),
-               pset1<Packet>(rhs.coeff(Index(0), col)));
+    res = Op().pmul(lhs.template packetSegment<LoadMode, Packet>(row, Index(0), begin, count),
+                    pset1<FactorPacket>(rhs.coeff(Index(0), col)));
   }
 };
 
@@ -1180,37 +1266,56 @@ struct etor_product_packet_impl<ColMajor, 0, Lhs, Rhs, Packet, LoadMode> {
   }
 };
 
+template <typename Packet, typename ReadLhs, typename ReadRhs>
+EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE Packet product_packet_accumulate(Index innerDim, const ReadLhs& lhs,
+                                                                       const ReadRhs& rhs) {
+  using LhsPacket = decltype(lhs(Index(0)));
+  using RhsPacket = decltype(rhs(Index(0)));
+  const conj_helper<LhsPacket, RhsPacket, false, false> op;
+  Packet res = pset1<Packet>(typename unpacket_traits<Packet>::type(0));
+  Index i = 0;
+  // Seeding mixed products from their first term preserves single-term signed zeros.
+  EIGEN_IF_CONSTEXPR ((!std::is_same<LhsPacket, RhsPacket>::value)) {
+    if (innerDim > 0) {
+      res = op.pmul(lhs(0), rhs(0));
+      i = 1;
+    }
+  }
+  for (; i < innerDim; ++i) res = op.pmadd(lhs(i), rhs(i), res);
+  return res;
+}
+
 template <typename Lhs, typename Rhs, typename Packet, int LoadMode>
 struct etor_product_packet_impl<RowMajor, Dynamic, Lhs, Rhs, Packet, LoadMode> {
+  using FactorPacket = product_operand_packet_t<Packet, remove_all_t<decltype(std::declval<const Lhs&>().coeff(0, 0))>>;
   static EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE void run(Index row, Index col, const Lhs& lhs, const Rhs& rhs,
                                                         Index innerDim, Packet& res) {
-    res = pset1<Packet>(typename unpacket_traits<Packet>::type(0));
-    for (Index i = 0; i < innerDim; ++i)
-      res = pmadd(pset1<Packet>(lhs.coeff(row, i)), rhs.template packet<LoadMode, Packet>(i, col), res);
+    res = product_packet_accumulate<Packet>(
+        innerDim, [&](Index i) { return pset1<FactorPacket>(lhs.coeff(row, i)); },
+        [&](Index i) { return rhs.template packet<LoadMode, Packet>(i, col); });
   }
   static EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE void run_segment(Index row, Index col, const Lhs& lhs, const Rhs& rhs,
                                                                 Index innerDim, Packet& res, Index begin, Index count) {
-    res = pset1<Packet>(typename unpacket_traits<Packet>::type(0));
-    for (Index i = 0; i < innerDim; ++i)
-      res = pmadd(pset1<Packet>(lhs.coeff(row, i)), rhs.template packetSegment<LoadMode, Packet>(i, col, begin, count),
-                  res);
+    res = product_packet_accumulate<Packet>(
+        innerDim, [&](Index i) { return pset1<FactorPacket>(lhs.coeff(row, i)); },
+        [&](Index i) { return rhs.template packetSegment<LoadMode, Packet>(i, col, begin, count); });
   }
 };
 
 template <typename Lhs, typename Rhs, typename Packet, int LoadMode>
 struct etor_product_packet_impl<ColMajor, Dynamic, Lhs, Rhs, Packet, LoadMode> {
+  using FactorPacket = product_operand_packet_t<Packet, remove_all_t<decltype(std::declval<const Rhs&>().coeff(0, 0))>>;
   static EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE void run(Index row, Index col, const Lhs& lhs, const Rhs& rhs,
                                                         Index innerDim, Packet& res) {
-    res = pset1<Packet>(typename unpacket_traits<Packet>::type(0));
-    for (Index i = 0; i < innerDim; ++i)
-      res = pmadd(lhs.template packet<LoadMode, Packet>(row, i), pset1<Packet>(rhs.coeff(i, col)), res);
+    res = product_packet_accumulate<Packet>(
+        innerDim, [&](Index i) { return lhs.template packet<LoadMode, Packet>(row, i); },
+        [&](Index i) { return pset1<FactorPacket>(rhs.coeff(i, col)); });
   }
   static EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE void run_segment(Index row, Index col, const Lhs& lhs, const Rhs& rhs,
                                                                 Index innerDim, Packet& res, Index begin, Index count) {
-    res = pset1<Packet>(typename unpacket_traits<Packet>::type(0));
-    for (Index i = 0; i < innerDim; ++i)
-      res = pmadd(lhs.template packetSegment<LoadMode, Packet>(row, i, begin, count), pset1<Packet>(rhs.coeff(i, col)),
-                  res);
+    res = product_packet_accumulate<Packet>(
+        innerDim, [&](Index i) { return lhs.template packetSegment<LoadMode, Packet>(row, i, begin, count); },
+        [&](Index i) { return pset1<FactorPacket>(rhs.coeff(i, col)); });
   }
 };
 
