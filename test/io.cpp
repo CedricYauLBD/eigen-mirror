@@ -49,55 +49,116 @@ static void check_ostream() {
   check_ostream_impl<Scalar>::run();
 }
 
-static std::string check_ioformat(const std::string& rowSeparator = "\n", const std::string& rowPrefix = "[",
-                                  const std::string& rowSuffix = "]") {
-  const auto matrix = (Matrix2i() << 1, 20, 300, 4000).finished();
+static std::string format_2x2(const std::string& rowSeparator = "\n", const std::string& rowPrefix = "[",
+                              const std::string& rowSuffix = "]", const std::string& matPrefix = "",
+                              const std::string& matSuffix = "", int flags = 0) {
+  const auto matrix = (Matrix2i() << 6473, 27, 1, 22334).finished();
   std::ostringstream ss;
-  const auto flags{0};
-  const auto coeffSeparator{", "};
-  const auto matPrefix{"ABC"};
-  const auto matSuffix{"XYZ"};
-  const auto fill{'*'};
-  const auto fmt =
-      IOFormat(StreamPrecision, flags, coeffSeparator, rowSeparator, rowPrefix, rowSuffix, matPrefix, matSuffix, fill);
+  const IOFormat fmt(StreamPrecision, flags, ", ", rowSeparator, rowPrefix, rowSuffix, matPrefix, matSuffix);
   ss << matrix.format(fmt);
   return ss.str();
 }
 
 static void check_ioformat_standard() {
-  const auto found{check_ioformat()};
-  const auto expected =
-      "ABC[***1, **20]\n"
-      "   [*300, 4000]XYZ";
+  const std::string found = format_2x2();
+  const std::string expected =
+      "[ 6473,    27]\n"
+      "[    1, 22334]";
   VERIFY_IS_EQUAL(found, expected);
 }
 
 static void check_ioformat_row_separator_newline() {
-  const auto found{check_ioformat("\nNext\n")};
-  const auto expected =
-      "ABC[***1, **20]\n"
+  const std::string found = format_2x2("\nNext\n");
+  const std::string expected =
+      "[ 6473,    27]\n"
       "Next\n"
-      "   [*300, 4000]XYZ";
+      "[    1, 22334]";
+  VERIFY_IS_EQUAL(found, expected);
+}
+
+static void check_ioformat_row_separator_multiple_newlines() {
+  const std::string found = format_2x2("\nNext\n  ", "[", "]", "Matrix = [", "]");
+  const std::string expected =
+      "Matrix = [[ 6473,    27]\n"
+      "Next\n"
+      "          [    1, 22334]]";
   VERIFY_IS_EQUAL(found, expected);
 }
 
 static void check_ioformat_row_prefix_newline() {
-  const auto found{check_ioformat("\n", "[\n", "]")};
-  const auto expected =
-      "ABC[\n"
-      "***1, **20]\n"
-      "   [\n"
-      "*300, 4000]XYZ";
+  const std::string found = format_2x2("\n", "[\n", "]");
+  const std::string expected =
+      "[\n"
+      " 6473,    27]\n"
+      "[\n"
+      "    1, 22334]";
   VERIFY_IS_EQUAL(found, expected);
 }
 
 static void check_ioformat_row_suffix_newline() {
-  const auto found{check_ioformat("\n", "[", "\n]")};
-  const auto expected =
-      "ABC[***1, **20\n"
+  const std::string found = format_2x2("\n", "[", "\n]");
+  const std::string expected =
+      "[ 6473,    27\n"
       "]\n"
-      "   [*300, 4000\n"
-      "]XYZ";
+      "[    1, 22334\n"
+      "]";
+  VERIFY_IS_EQUAL(found, expected);
+}
+
+static void check_ioformat_rows_same_line() {
+  const std::string found = format_2x2(", ", "[", "]", "[", "]");
+  const std::string expected = "[[ 6473,    27], [    1, 22334]]";
+  VERIFY_IS_EQUAL(found, expected);
+}
+
+static void check_ioformat_row_separator_indent() {
+  const std::string found = format_2x2(",\n  ", "[", "]", "Matrix = [", "]");
+  const std::string expected =
+      "Matrix = [[ 6473,    27],\n"
+      "          [    1, 22334]]";
+  VERIFY_IS_EQUAL(found, expected);
+}
+
+static void check_ioformat_row_prefix_only_newline() {
+  const std::string found = format_2x2("", "\n[", "]", "Matrix =");
+  const std::string expected =
+      "Matrix =\n"
+      "[ 6473,    27]\n"
+      "[    1, 22334]";
+  VERIFY_IS_EQUAL(found, expected);
+}
+
+static void check_ioformat_mat_prefix_newline() {
+  const std::string found = format_2x2("\n", "[", "]", "Matrix =\n [", "].");
+  const std::string expected =
+      "Matrix =\n"
+      " [[ 6473,    27]\n"
+      "  [    1, 22334]].";
+  VERIFY_IS_EQUAL(found, expected);
+}
+
+static void check_ioformat_row_suffix_separator() {
+  const std::string found = format_2x2(", ", "[", "\n]", "Matrix = [", "]");
+  const std::string expected =
+      "Matrix = [[ 6473,    27\n"
+      "],        [    1, 22334\n"
+      "]]";
+  VERIFY_IS_EQUAL(found, expected);
+}
+
+static void check_ioformat_dont_align_cols() {
+  const std::string found = format_2x2("\n", "[", "]", "Matrix = [", "].", DontAlignCols);
+  const std::string expected =
+      "Matrix = [[6473, 27]\n"
+      "[1, 22334]].";
+  VERIFY_IS_EQUAL(found, expected);
+}
+
+static void check_ioformat_carried_exceeds_indent() {
+  const std::string found = format_2x2("\n ---carried--- ", "[", "]", "Matrix [", "]");
+  const std::string expected =
+      "Matrix [[ 6473,    27]\n"
+      " ---carried--- [    1, 22334]]";
   VERIFY_IS_EQUAL(found, expected);
 }
 
@@ -115,6 +176,14 @@ EIGEN_DECLARE_TEST(io) {
   CALL_SUBTEST(check_ostream<Eigen::numext::uint64_t>());
   CALL_SUBTEST(check_ioformat_standard());
   CALL_SUBTEST(check_ioformat_row_separator_newline());
+  CALL_SUBTEST(check_ioformat_row_separator_multiple_newlines());
   CALL_SUBTEST(check_ioformat_row_prefix_newline());
   CALL_SUBTEST(check_ioformat_row_suffix_newline());
+  CALL_SUBTEST(check_ioformat_rows_same_line());
+  CALL_SUBTEST(check_ioformat_row_separator_indent());
+  CALL_SUBTEST(check_ioformat_row_prefix_only_newline());
+  CALL_SUBTEST(check_ioformat_mat_prefix_newline());
+  CALL_SUBTEST(check_ioformat_row_suffix_separator());
+  CALL_SUBTEST(check_ioformat_dont_align_cols());
+  CALL_SUBTEST(check_ioformat_carried_exceeds_indent());
 }
