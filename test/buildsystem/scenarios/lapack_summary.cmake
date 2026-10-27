@@ -3,11 +3,11 @@
 
 bs_configure("LAPACK summary without Python" "${BS_CONSUMER_DIR}/lapack_summary"
              "${WORK_DIR}/build" "-DEIGEN_SOURCE_DIR=${EIGEN_SOURCE_DIR}")
-# The numerical fixture creates its output; the summary must wait for it under -j.
-bs_run(WHAT "registered LAPACK tests without Python"
+# Selecting only the summary must generate its inputs, including under -j.
+bs_run(WHAT "summary selects registered LAPACK tests without Python"
        COMMAND "${CMAKE_COMMAND}" -E chdir "${WORK_DIR}/build"
                "${CMAKE_CTEST_COMMAND}" -C "${BUILD_CONFIG}" --parallel 2
-               --output-on-failure --no-tests=error)
+               -R "^LAPACK_Test_Summary$" --output-on-failure --no-tests=error)
 
 set(summary "${EIGEN_SOURCE_DIR}/lapack/testing_summary.cmake")
 set(report "${WORK_DIR}/report.txt")
@@ -194,3 +194,22 @@ foreach(case numerical diagnostics xerbla error_exits info_summary error_code re
     bs_fail("wrong failure for ${case}: ${output}")
   endif()
 endforeach()
+
+file(WRITE "${WORK_DIR}/build/lapack-reference/TESTING/runtest.cmake" [=[
+get_filename_component(name "${INPUT}" NAME)
+if(name STREQUAL "stest.in")
+  message(FATAL_ERROR "simulated LAPACK driver failure")
+endif()
+configure_file("${INPUT}" "${OUTPUT}" COPYONLY)
+]=])
+set(registered_report "${WORK_DIR}/build/lapack-build/TESTING/testing_results.txt")
+file(WRITE "${registered_report}" "previous summary\n")
+bs_run(WHAT "failed LAPACK fixture skips summary" EXPECT_RESULT FAILURE OUTPUT_VARIABLE output
+       COMMAND "${CMAKE_COMMAND}" -E chdir "${WORK_DIR}/build"
+               "${CMAKE_CTEST_COMMAND}" -C "${BUILD_CONFIG}" --parallel 2
+               -R "^LAPACK_Test_Summary$" --output-on-failure --no-tests=error)
+if(NOT output MATCHES "LAPACK_Test_Summary[^\n]*Not Run")
+  bs_fail("summary was not skipped after a failed driver: ${output}")
+endif()
+file(READ "${registered_report}" contents)
+bs_assert_streq("${contents}" "previous summary\n" "skipped LAPACK summary preserves its report")

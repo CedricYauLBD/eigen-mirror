@@ -7,8 +7,9 @@ The tests and their summary run through CMake/CTest without Python.
 only their expected output files into `TESTING/testing_results.txt` in the
 LAPACK build directory. It fails when the output reports numerical errors,
 illegal-argument or INFO diagnostics, when an expected output is missing, or
-when no numerical tests were analyzed. Run the numerical tests before selecting
-the summary alone.
+when no numerical tests were analyzed. Selecting `LAPACK_Test_Summary` alone also
+runs its numerical tests through a CTest fixture. If a numerical driver fails to
+execute successfully, CTest skips the summary.
 
 Balancing tests contribute their example counts and fail on nonzero INFO/ILO
 error counts or non-finite maximum errors. Their finite maximum errors remain

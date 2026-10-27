@@ -468,7 +468,8 @@ if(EIGEN_ENABLE_LAPACK_TESTS)
               "-DREPORT_FILE=${LAPACK_BINARY_DIR}/TESTING/testing_results.txt"
               -P "${CMAKE_CURRENT_SOURCE_DIR}/testing_summary.cmake"
     )
-    set_tests_properties(LAPACK_Test_Summary PROPERTIES DEPENDS "${EIGEN_LAPACK_TEST_NAMES}")
+    set_tests_properties(${EIGEN_LAPACK_TEST_NAMES} PROPERTIES FIXTURES_SETUP lapack_outputs)
+    set_tests_properties(LAPACK_Test_Summary PROPERTIES FIXTURES_REQUIRED lapack_outputs)
   endif()
 
 endif()
