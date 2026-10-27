@@ -28,7 +28,67 @@ file(READ "${report}" contents)
 bs_assert_streq("${contents}" "Note; unrelated run information\nAll tests passed ( 100 tests run)\nAll tests passed ( 20 tests run)\n"
                 "combined LAPACK report")
 
-foreach(case numerical diagnostics xerbla error_exits info_summary error_code recorded combined_errors empty mixed_empty missing)
+bs_run(WHAT "registered LAPACK example counts" OUTPUT_VARIABLE output
+       COMMAND "${CMAKE_COMMAND}"
+               "-DOUTPUT_MANIFEST=${WORK_DIR}/build/lapack-build/lapack_test_outputs.txt"
+               "-DREPORT_FILE=${report}" -P "${summary}")
+if(NOT output MATCHES "TOTAL: 328 tests, 0 numerical errors, 0 other errors")
+  bs_fail("incorrect registered summary: ${output}")
+endif()
+
+file(WRITE "${manifest}" "${first}\n")
+file(READ "${WORK_DIR}/build/lapack/testing/dgbak.in" balancing)
+string(REPLACE "0.000D+00" "0.125D+00" finite "${balancing}")
+string(REPLACE "example number having largest error = 0"
+               "example number having largest error = 7" finite "${finite}")
+file(WRITE "${first}" "${finite}")
+bs_run(WHAT "finite balancing error maximum" OUTPUT_VARIABLE output
+       COMMAND "${CMAKE_COMMAND}" "-DOUTPUT_MANIFEST=${manifest}"
+               "-DREPORT_FILE=${report}" -P "${summary}")
+if(NOT output MATCHES "13 tests, 0 numerical errors, 0 other errors")
+  bs_fail("incorrect finite balancing summary: ${output}")
+endif()
+
+foreach(kind bal bak gbal gbak)
+  file(READ "${WORK_DIR}/build/lapack/testing/d${kind}.in" balancing)
+  string(REPLACE "number of examples where info is not 0 = 0"
+                 "number of examples where info is not 0 = 2" failing "${balancing}")
+  file(WRITE "${first}" "${failing}")
+  bs_run(WHAT "balancing ${kind} routine errors" EXPECT_RESULT FAILURE OUTPUT_VARIABLE output
+         COMMAND "${CMAKE_COMMAND}" "-DOUTPUT_MANIFEST=${manifest}"
+                 "-DREPORT_FILE=${report}" -P "${summary}")
+  if(NOT output MATCHES "13 tests, 0 numerical errors, 2 other errors")
+    bs_fail("incorrect balancing ${kind} error count: ${output}")
+  endif()
+endforeach()
+
+foreach(kind bal gbal)
+  file(READ "${WORK_DIR}/build/lapack/testing/d${kind}.in" balancing)
+  string(REPLACE "example number where ILO or IHI wrong = 0"
+                 "example number where ILO or IHI wrong = 7" failing "${balancing}")
+  string(REPLACE "number of examples where info is not 0 = 0"
+                 "number of examples where info is not 0 = 1" failing "${failing}")
+  file(WRITE "${first}" "${failing}")
+  bs_run(WHAT "balancing ${kind} ILO/IHI error" EXPECT_RESULT FAILURE OUTPUT_VARIABLE output
+         COMMAND "${CMAKE_COMMAND}" "-DOUTPUT_MANIFEST=${manifest}"
+                 "-DREPORT_FILE=${report}" -P "${summary}")
+  if(NOT output MATCHES "13 tests, 0 numerical errors, 1 other errors")
+    bs_fail("incorrect balancing ${kind} ILO/IHI error count: ${output}")
+  endif()
+endforeach()
+
+foreach(error Infinity -Infinity NaN "************")
+  string(REPLACE "0.000D+00" "${error}" failing "${balancing}")
+  file(WRITE "${first}" "${failing}")
+  bs_run(WHAT "balancing error ${error}" EXPECT_RESULT FAILURE OUTPUT_VARIABLE output
+         COMMAND "${CMAKE_COMMAND}" "-DOUTPUT_MANIFEST=${manifest}"
+                 "-DREPORT_FILE=${report}" -P "${summary}")
+  if(NOT output MATCHES "13 tests, 1 numerical errors, 0 other errors")
+    bs_fail("unrecognized balancing error ${error}: ${output}")
+  endif()
+endforeach()
+
+foreach(case numerical diagnostics xerbla error_exits info_summary error_code recorded combined_errors empty mixed_empty zero_examples missing)
   file(WRITE "${manifest}" "${first}\n")
   if(case STREQUAL "numerical")
     file(WRITE "${first}" "3 out of 20 tests failed ( 20 tests run)\n")
@@ -55,6 +115,11 @@ foreach(case numerical diagnostics xerbla error_exits info_summary error_code re
       file(APPEND "${first}" " 1 error messages recorded\n")
     endif()
     set(expected "100 tests, 0 numerical errors, 1 other errors")
+  elseif(case STREQUAL "zero_examples")
+    string(REPLACE "total number of examples tested = 13"
+                   "total number of examples tested = 0" empty "${balancing}")
+    file(WRITE "${first}" "${empty}")
+    set(expected "No LAPACK numerical tests were analyzed")
   elseif(case STREQUAL "empty" OR case STREQUAL "mixed_empty")
     file(WRITE "${first}" "")
     if(case STREQUAL "mixed_empty")

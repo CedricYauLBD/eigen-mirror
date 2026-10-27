@@ -9,3 +9,7 @@ LAPACK build directory. It fails when the output reports numerical errors,
 illegal-argument or INFO diagnostics, when an expected output is missing, or
 when no numerical tests were analyzed. Run the numerical tests before selecting
 the summary alone.
+
+Balancing tests contribute their example counts and fail on nonzero INFO/ILO
+error counts or non-finite maximum errors. Their finite maximum errors remain
+in the combined report; these drivers do not specify a pass/fail threshold.

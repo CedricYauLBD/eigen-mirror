@@ -38,6 +38,36 @@ foreach(directory MATGEN LIN EIG)
 endforeach()
 file(WRITE "${fixture}/testing/stest.in" "All tests passed ( 100 tests run)\n")
 file(WRITE "${fixture}/testing/dtest.in" "All tests passed ( 20 tests run)\n")
+# LAPACK 3.4.1 TESTING/EIG/?CHKBL, ?CHKBK, ?CHKGL and ?CHKGK summary formats.
+foreach(precision s d c z)
+  add_executable(xeigtst${precision} IMPORTED)
+  set_target_properties(xeigtst${precision} PROPERTIES IMPORTED_LOCATION "${CMAKE_COMMAND}")
+  foreach(kind bal bak gbal gbak)
+    if(kind MATCHES "^g")
+      string(TOUPPER "${precision}g${kind}" routine)
+    else()
+      string(TOUPPER "${precision}ge${kind}" routine)
+    endif()
+    set(output " .. test output of ${routine} ..\n value of largest test error = 0.000D+00\n")
+    if(kind STREQUAL "gbak")
+      string(TOUPPER "${precision}" prefix)
+      string(APPEND output
+        " example number where ${prefix}GGBAL info is not 0 = 0\n"
+        " example number where ${prefix}GGBAK(L) info is not 0 = 0\n"
+        " example number where ${prefix}GGBAK(R) info is not 0 = 0\n")
+    else()
+      string(APPEND output " example number where info is not zero = 0\n")
+      if(kind MATCHES "bal$")
+        string(APPEND output " example number where ILO or IHI wrong = 0\n")
+      endif()
+    endif()
+    string(APPEND output
+      " example number having largest error = 0\n"
+      " number of examples where info is not 0 = 0\n"
+      " total number of examples tested = 13\n")
+    file(WRITE "${fixture}/testing/${precision}${kind}.in" "${output}")
+  endforeach()
+endforeach()
 file(WRITE "${fixture}/testing/runtest.cmake"
      "configure_file(\"\${INPUT}\" \"\${OUTPUT}\" COPYONLY)\n")
 
