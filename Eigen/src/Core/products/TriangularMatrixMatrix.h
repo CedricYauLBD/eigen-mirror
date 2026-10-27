@@ -353,19 +353,37 @@ struct triangular_product_impl<Mode, LhsIsTriangular, Lhs, false, Rhs, false> {
     Index stripedDepth = LhsIsTriangular ? ((!IsLower) ? lhs.cols() : (std::min)(lhs.cols(), lhs.rows()))
                                          : ((IsLower) ? rhs.rows() : (std::min)(rhs.rows(), rhs.cols()));
 
-    BlockingType blocking(stripedRows, stripedCols, stripedDepth, 1, false);
+    const auto run = [&](level3_blocking<Scalar, Scalar>& blocking) {
+      internal::product_triangular_matrix_matrix<
+          Scalar, Index, Mode, LhsIsTriangular,
+          (internal::traits<ActualLhsTypeCleaned>::Flags & RowMajorBit) ? RowMajor : ColMajor,
+          LhsBlasTraits::NeedToConjugate,
+          (internal::traits<ActualRhsTypeCleaned>::Flags & RowMajorBit) ? RowMajor : ColMajor,
+          RhsBlasTraits::NeedToConjugate, (internal::traits<Dest>::Flags & RowMajorBit) ? RowMajor : ColMajor,
+          Dest::InnerStrideAtCompileTime>::run(stripedRows, stripedCols, stripedDepth,  // sizes
+                                               &lhs.coeffRef(0, 0), lhs.outerStride(),  // lhs info
+                                               &rhs.coeffRef(0, 0), rhs.outerStride(),  // rhs info
+                                               &dst.coeffRef(0, 0), dst.innerStride(),
+                                               dst.outerStride(),  // result info
+                                               actualAlpha, blocking);
+    };
 
-    internal::product_triangular_matrix_matrix<
-        Scalar, Index, Mode, LhsIsTriangular,
-        (internal::traits<ActualLhsTypeCleaned>::Flags & RowMajorBit) ? RowMajor : ColMajor,
-        LhsBlasTraits::NeedToConjugate,
-        (internal::traits<ActualRhsTypeCleaned>::Flags & RowMajorBit) ? RowMajor : ColMajor,
-        RhsBlasTraits::NeedToConjugate, (internal::traits<Dest>::Flags & RowMajorBit) ? RowMajor : ColMajor,
-        Dest::InnerStrideAtCompileTime>::run(stripedRows, stripedCols, stripedDepth,                     // sizes
-                                             &lhs.coeffRef(0, 0), lhs.outerStride(),                     // lhs info
-                                             &rhs.coeffRef(0, 0), rhs.outerStride(),                     // rhs info
-                                             &dst.coeffRef(0, 0), dst.innerStride(), dst.outerStride(),  // result info
-                                             actualAlpha, blocking);
+#ifdef EIGEN_VECTORIZE_AVX512
+    // The physical-L1 bound already limits AVX512 micro-panels. On large outputs, the extra TRMM factor
+    // makes depth blocks too short to amortize result loads/stores. Small and narrow products favor it.
+    if ((is_same<Scalar, float>::value || is_same<Scalar, double>::value) && gebp_traits<Scalar, Scalar>::nr == 8 &&
+        stripedRows >= 512 && stripedCols >= 512) {
+      using LargeBlockingType = internal::gemm_blocking_space<(Dest::Flags & RowMajorBit) ? RowMajor : ColMajor, Scalar,
+                                                              Scalar, Lhs::MaxRowsAtCompileTime,
+                                                              Rhs::MaxColsAtCompileTime, Lhs::MaxColsAtCompileTime, 1>;
+      LargeBlockingType blocking(stripedRows, stripedCols, stripedDepth, 1, false);
+      run(blocking);
+    } else
+#endif
+    {
+      BlockingType blocking(stripedRows, stripedCols, stripedDepth, 1, false);
+      run(blocking);
+    }
 
     // A factor s nested in a unit triangle reached the kernel through actualAlpha, so the unit diagonal
     // contributed alpha * s * other instead of alpha * other: subtract alpha * (s - 1) * other.

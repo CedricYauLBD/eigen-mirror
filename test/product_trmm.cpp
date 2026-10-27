@@ -206,4 +206,11 @@ EIGEN_DECLARE_TEST(product_trmm) {
   CALL_SUBTEST_11((trmm<float, Lower, ColMajor, ColMajor, ColMajor>(1, 1, 1)));
   CALL_SUBTEST_14((trmm<std::complex<double>, Upper, RowMajor, ColMajor, RowMajor>(1, 1, 1)));
   CALL_SUBTEST_12((trmm<double, Upper, ColMajor, ColMajor, ColMajor>(EIGEN_TEST_MAX_SIZE, EIGEN_TEST_MAX_SIZE, 1)));
+  // Trapezoids spanning several depth blocks, with partial diagonal panels and packet tails.
+  CALL_SUBTEST_11((trmm<float, Lower, ColMajor, ColMajor, ColMajor>(513, 521, 517)));
+  CALL_SUBTEST_12((trmm<double, Upper, RowMajor, RowMajor, RowMajor>(521, 513, 517)));
+  CALL_SUBTEST_21((trmm<float, UnitLower, ColMajor, RowMajor, RowMajor>(521, 513, 517)));
+  CALL_SUBTEST_22((trmm<double, UnitUpper, RowMajor, ColMajor, ColMajor>(513, 521, 517)));
+  CALL_SUBTEST_31((trmm<float, StrictlyUpper, ColMajor, ColMajor, ColMajor>(521, 513, 517)));
+  CALL_SUBTEST_32((trmm<double, StrictlyLower, RowMajor, RowMajor, RowMajor>(513, 521, 517)));
 }
