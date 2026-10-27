@@ -28,16 +28,21 @@ foreach(precision s d)
 endforeach()
 
 set(fixture "${CMAKE_CURRENT_BINARY_DIR}/lapack")
-file(MAKE_DIRECTORY "${fixture}/reference" "${fixture}/testing")
+set(reference "${CMAKE_CURRENT_BINARY_DIR}/lapack-reference")
+file(MAKE_DIRECTORY "${reference}/SRC" "${reference}/TESTING" "${reference}/INSTALL")
+foreach(precision s d)
+  file(WRITE "${reference}/INSTALL/${precision}roundup_lwork.f" "")
+endforeach()
+set(FETCHCONTENT_SOURCE_DIR_EIGEN_LAPACK_REFERENCE "${reference}")
 file(GLOB sources "${EIGEN_SOURCE_DIR}/lapack/*.cpp")
 file(COPY ${sources} "${EIGEN_SOURCE_DIR}/lapack/CMakeLists.txt"
           "${EIGEN_SOURCE_DIR}/lapack/testing_summary.cmake" DESTINATION "${fixture}")
 foreach(directory MATGEN LIN EIG)
-  file(MAKE_DIRECTORY "${fixture}/testing/${directory}")
-  file(WRITE "${fixture}/testing/${directory}/CMakeLists.txt" "")
+  file(MAKE_DIRECTORY "${reference}/TESTING/${directory}")
+  file(WRITE "${reference}/TESTING/${directory}/CMakeLists.txt" "")
 endforeach()
-file(WRITE "${fixture}/testing/stest.in" "All tests passed ( 100 tests run)\n")
-file(WRITE "${fixture}/testing/dtest.in" "All tests passed ( 20 tests run)\n")
+file(WRITE "${reference}/TESTING/stest.in" "All tests passed ( 100 tests run)\n")
+file(WRITE "${reference}/TESTING/dtest.in" "All tests passed ( 20 tests run)\n")
 # LAPACK 3.4.1 TESTING/EIG/?CHKBL, ?CHKBK, ?CHKGL and ?CHKGK summary formats.
 foreach(precision s d c z)
   add_executable(xeigtst${precision} IMPORTED)
@@ -65,10 +70,10 @@ foreach(precision s d c z)
       " example number having largest error = 0\n"
       " number of examples where info is not 0 = 0\n"
       " total number of examples tested = 13\n")
-    file(WRITE "${fixture}/testing/${precision}${kind}.in" "${output}")
+    file(WRITE "${reference}/TESTING/${precision}${kind}.in" "${output}")
   endforeach()
 endforeach()
-file(WRITE "${fixture}/testing/runtest.cmake"
+file(WRITE "${reference}/TESTING/runtest.cmake"
      "configure_file(\"\${INPUT}\" \"\${OUTPUT}\" COPYONLY)\n")
 
 # Fail if configuration attempts to discover any Python interpreter.

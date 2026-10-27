@@ -13,3 +13,8 @@ the summary alone.
 Balancing tests contribute their example counts and fail on nonzero INFO/ILO
 error counts or non-finite maximum errors. Their finite maximum errors remain
 in the combined report; these drivers do not specify a pass/fail threshold.
+
+The numerical tests use unmodified LAPACK 3.12.1 sources, downloaded with a pinned
+SHA-256 hash. They exercise Eigen's BLAS/LAPACK implementations, using reference
+LAPACK for the remaining routines. All test cases remain enabled; known numerical
+and test-driver failures are reported by the summary.

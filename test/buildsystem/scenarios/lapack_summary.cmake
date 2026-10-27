@@ -37,7 +37,7 @@ if(NOT output MATCHES "TOTAL: 328 tests, 0 numerical errors, 0 other errors")
 endif()
 
 file(WRITE "${manifest}" "${first}\n")
-file(READ "${WORK_DIR}/build/lapack/testing/dgbak.in" balancing)
+file(READ "${WORK_DIR}/build/lapack-reference/TESTING/dgbak.in" balancing)
 string(REPLACE "0.000D+00" "0.125D+00" finite "${balancing}")
 string(REPLACE "example number having largest error = 0"
                "example number having largest error = 7" finite "${finite}")
@@ -50,7 +50,7 @@ if(NOT output MATCHES "13 tests, 0 numerical errors, 0 other errors")
 endif()
 
 foreach(kind bal bak gbal gbak)
-  file(READ "${WORK_DIR}/build/lapack/testing/d${kind}.in" balancing)
+  file(READ "${WORK_DIR}/build/lapack-reference/TESTING/d${kind}.in" balancing)
   string(REPLACE "number of examples where info is not 0 = 0"
                  "number of examples where info is not 0 = 2" failing "${balancing}")
   file(WRITE "${first}" "${failing}")
@@ -63,7 +63,7 @@ foreach(kind bal bak gbal gbak)
 endforeach()
 
 foreach(kind bal gbal)
-  file(READ "${WORK_DIR}/build/lapack/testing/d${kind}.in" balancing)
+  file(READ "${WORK_DIR}/build/lapack-reference/TESTING/d${kind}.in" balancing)
   string(REPLACE "example number where ILO or IHI wrong = 0"
                  "example number where ILO or IHI wrong = 7" failing "${balancing}")
   string(REPLACE "number of examples where info is not 0 = 0"
