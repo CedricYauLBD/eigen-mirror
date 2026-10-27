@@ -371,11 +371,14 @@ struct triangular_product_impl<Mode, LhsIsTriangular, Lhs, false, Rhs, false> {
 #ifdef EIGEN_VECTORIZE_AVX512
     // The physical-L1 bound already limits AVX512 micro-panels. On large outputs, the extra TRMM factor
     // makes depth blocks too short to amortize result loads/stores. Small and narrow products favor it.
-    if ((is_same<Scalar, float>::value || is_same<Scalar, double>::value) && gebp_traits<Scalar, Scalar>::nr == 8 &&
-        stripedRows >= 512 && stripedCols >= 512) {
+    // Fixed-size blocking packs the whole product into inline buffers and ignores KcFactor, so only dynamic
+    // blocking can change; a second fixed-size blocking object would double the stack frame.
+    constexpr bool DynamicBlocking = Lhs::MaxRowsAtCompileTime == Dynamic || Rhs::MaxColsAtCompileTime == Dynamic ||
+                                     Lhs::MaxColsAtCompileTime == Dynamic;
+    if (DynamicBlocking && (is_same<Scalar, float>::value || is_same<Scalar, double>::value) &&
+        gebp_traits<Scalar, Scalar>::nr == 8 && stripedRows >= 512 && stripedCols >= 512) {
       using LargeBlockingType = internal::gemm_blocking_space<(Dest::Flags & RowMajorBit) ? RowMajor : ColMajor, Scalar,
-                                                              Scalar, Lhs::MaxRowsAtCompileTime,
-                                                              Rhs::MaxColsAtCompileTime, Lhs::MaxColsAtCompileTime, 1>;
+                                                              Scalar, Dynamic, Dynamic, Dynamic, 1>;
       LargeBlockingType blocking(stripedRows, stripedCols, stripedDepth, 1, false);
       run(blocking);
     } else
