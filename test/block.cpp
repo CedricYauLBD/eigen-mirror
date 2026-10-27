@@ -459,7 +459,7 @@ void inner_panel_inference_test() {
   check_inner_panel_like((a + a).block<8, 4>(0, j), (a + a).middleCols<4>(j));
   // The inferred alignment follows the parent's outer stride: 48-byte columns keep 16-byte
   // alignment, 40-byte columns do not.
-  alignas(16) float buffer[8 * 12];
+  alignas(16) float buffer[8 * 12] = {};
   Map<ColMajor8, Aligned16, OuterStride<12>> stride12(buffer);
   Map<ColMajor8, Aligned16, OuterStride<10>> stride10(buffer);
   stride12.setRandom();
