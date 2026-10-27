@@ -40,7 +40,8 @@ void check_consumers(const Prod& prod) {
   using Scalar = typename Prod::Scalar;
   using RealScalar = typename NumTraits<Scalar>::Real;
   using Plain = Matrix<Scalar, Dynamic, Dynamic>;
-  const Plain lhs = prod.lhs(), rhs = prod.rhs();
+  const Plain& lhs = prod.lhs();
+  const Plain& rhs = prod.rhs();
   const Plain ref = lhs * rhs;
 
   VERIFY_IS_EQUAL(bool(Prod::IsRowMajor), bool(int(internal::evaluator<Prod>::Flags) & RowMajorBit));
