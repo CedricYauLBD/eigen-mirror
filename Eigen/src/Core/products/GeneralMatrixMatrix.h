@@ -309,9 +309,9 @@ EIGEN_ALWAYS_INLINE void gemm_blocked_product(Index rows, Index cols, Index dept
                                               PackRhs& pack_rhs, Gebp& gebp, ResScalar alpha, bool overwrite,
                                               level3_blocking<LhsScalar, RhsScalar>& blocking,
                                               GemmParallelInfo<Index>* info) {
-  Index kc = blocking.kc();                    // cache block size along the K direction
-  Index mc = (std::min)(rows, blocking.mc());  // cache block size along the M direction
-  Index nc = (std::min)(cols, blocking.nc());  // cache block size along the N direction
+  Index kc = blocking.kc();                      // cache block size along the K direction
+  Index mc = numext::mini(rows, blocking.mc());  // cache block size along the M direction
+  Index nc = numext::mini(cols, blocking.nc());  // cache block size along the N direction
 
 #if !defined(EIGEN_USE_BLAS) && (defined(EIGEN_HAS_OPENMP) || defined(EIGEN_GEMM_THREADPOOL))
   constexpr bool kOverwrites = gebp_kernel_overwrites<Gebp>::value;
@@ -321,14 +321,14 @@ EIGEN_ALWAYS_INLINE void gemm_blocked_product(Index rows, Index cols, Index dept
     int threads = info->num_threads;
 
     LhsScalar* blockA = blocking.blockA();
-    eigen_internal_assert(blockA != 0);
+    eigen_internal_assert(blockA != nullptr);
 
     std::size_t sizeB = kc * nc;
     ei_declare_aligned_stack_constructed_variable(RhsScalar, blockB, sizeB, 0);
 
     // For each horizontal panel of the rhs, and corresponding vertical panel of the lhs...
     for (Index k = 0; k < depth; k += kc) {
-      const Index actual_kc = (std::min)(k + kc, depth) - k;  // => rows of B', and cols of the A'
+      const Index actual_kc = numext::mini(k + kc, depth) - k;  // => rows of B', and cols of the A'
 
       // In order to reduce the chance that a thread has to wait for the other,
       // let's start by packing B'.
@@ -372,7 +372,7 @@ EIGEN_ALWAYS_INLINE void gemm_blocked_product(Index rows, Index cols, Index dept
 
       // Then keep going as usual with the remaining B'
       for (Index j = nc; j < cols; j += nc) {
-        const Index actual_nc = (std::min)(j + nc, cols) - j;
+        const Index actual_nc = numext::mini(j + nc, cols) - j;
 
         // pack B_k,j to B'
         pack_rhs(blockB, rhs.getSubMapper(k, j), actual_kc, actual_nc);
@@ -649,16 +649,15 @@ struct general_matrix_matrix_product<Index, LhsScalar, LhsStorageOrder, Conjugat
                                               GemmParallelInfo<Index>* info) {
     constexpr bool kResultIsWorkspace = std::is_same<ResScalar, AccScalar>::value;
     const Index kc = blocking.kc();
-    const Index nc = (std::min)(cols, blocking.nc());
+    const Index nc = numext::mini(cols, blocking.nc());
     // The LHS converts in chunks of whole mr-row panels sized to half of L1, the RHS a kc x nc block at a time.
     const Index mr = Traits::mr;
     const Index lhs_panels = numext::maxi<Index>(1, Index(l1CacheSize()) / (2 * mr * kc * Index(sizeof(AccScalar))));
     const Index lhs_chunk = numext::mini<Index>(rows, lhs_panels * mr);
     // Each buffer starts on a 64-byte boundary of the aligned allocation.
     const std::size_t line = numext::maxi<std::size_t>(1, 64 / sizeof(AccScalar));
-    const std::size_t res_size =
-        kResultIsWorkspace ? 0 : first_multiple<std::size_t>(std::size_t(rows) * std::size_t(cols), line);
-    const std::size_t rhs_size = first_multiple<std::size_t>(std::size_t(kc) * std::size_t(nc), line);
+    const std::size_t res_size = kResultIsWorkspace ? 0 : first_multiple(std::size_t(rows) * std::size_t(cols), line);
+    const std::size_t rhs_size = first_multiple(std::size_t(kc) * std::size_t(nc), line);
     const std::size_t lhs_size = std::size_t(lhs_chunk) * std::size_t(kc);
     ei_declare_aligned_stack_constructed_variable(AccScalar, workspace, res_size + rhs_size + lhs_size, 0);
     AccScalar* const rhs_buffer = workspace + res_size;

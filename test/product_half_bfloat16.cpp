@@ -201,11 +201,11 @@ void random_values_case(Index rows, Index depth, Index cols, bool nonnegative, b
       for (Index i = 0; i < rows; ++i) reference(i, j) += static_cast<double>(a(i, l)) * blj;
     }
   const double accumulation =
-      5.0 * std::sqrt(double(3 * depth + 2)) * double(NumTraits<float>::epsilon()) *
-      abs_product_update_norm(std::abs(static_cast<double>(alpha)), a, b,
-                              [&c0](Index i, Index j) { return std::abs(static_cast<double>(c0(i, j))); });
+      5.0 * numext::sqrt(double(3 * depth + 2)) * double(NumTraits<float>::epsilon()) *
+      abs_product_update_norm(numext::abs(static_cast<double>(alpha)), a, b,
+                              [&c0](Index i, Index j) { return numext::abs(static_cast<double>(c0(i, j))); });
   const double bound = 0.5 * double(NumTraits<T>::epsilon()) * reference.norm() +
-                       0.5 * double((std::numeric_limits<T>::denorm_min)()) * std::sqrt(double(rows * cols)) +
+                       0.5 * double((std::numeric_limits<T>::denorm_min)()) * numext::sqrt(double(rows * cols)) +
                        accumulation;
   VERIFY(verify_within_product_bound(c.template cast<double>(), reference, bound));
 }
@@ -305,8 +305,8 @@ template <typename = void>
 void overflow_thresholds() {
   overflow_threshold<half>(15, 1.0f, 1.0f, false);
   overflow_threshold<half>(16, 1.0f, 1.0f, true);
-  overflow_threshold<bfloat16>(2, std::ldexp(1.0f, 59), std::ldexp(1.0f, 58), false);
-  overflow_threshold<bfloat16>(2, std::ldexp(1.0f, 59), std::ldexp(1.0f, 59), true);
+  overflow_threshold<bfloat16>(2, numext::ldexp(1.0f, 59), numext::ldexp(1.0f, 58), false);
+  overflow_threshold<bfloat16>(2, numext::ldexp(1.0f, 59), numext::ldexp(1.0f, 59), true);
 }
 
 // 3 * 2^-130 is a float subnormal: a bfloat16 result keeps it wherever the float GEMM does.
@@ -314,8 +314,8 @@ template <typename = void>
 void special_values_bfloat16() {
   using MatrixB = Matrix<bfloat16, Dynamic, Dynamic>;
   const Index rows = 24, cols = 24;
-  const MatrixB p = MatrixB::Constant(rows, 3, bfloat16(std::ldexp(1.0f, -65)));
-  const MatrixB q = MatrixB::Constant(3, cols, bfloat16(std::ldexp(1.0f, -65)));
+  const MatrixB p = MatrixB::Constant(rows, 3, bfloat16(numext::ldexp(1.0f, -65)));
+  const MatrixB q = MatrixB::Constant(3, cols, bfloat16(numext::ldexp(1.0f, -65)));
   MatrixXf float_c(rows, cols);
   float_c.noalias() = p.cast<float>() * q.cast<float>();
   MatrixB c(rows, cols);
@@ -351,16 +351,16 @@ void special_values_half() {
   // Subnormal half results are normal floats. Each product 2^-13 * 2^-13 = 2^-26 is below the smallest half subnormal,
   // 2^-24, and rounds to zero in half, while the float sums k * 2^-26 do not; k = 2 is the tie 2^-25, which rounds to
   // +0, and k = 3 rounds up to 2^-24.
-  a.setConstant(half(std::ldexp(1.0f, -13)));
-  b.setConstant(half(std::ldexp(1.0f, -13)));
+  a.setConstant(half(numext::ldexp(1.0f, -13)));
+  b.setConstant(half(numext::ldexp(1.0f, -13)));
   for (Index k : {2, 3, 8}) {
     MatrixH d(rows, cols);
     d.noalias() = a.leftCols(k) * b.topRows(k);
-    const half expected = half(float(k) * std::ldexp(1.0f, -26));
+    const half expected = half(float(k) * numext::ldexp(1.0f, -26));
     for (Index j = 0; j < cols; ++j)
       for (Index i = 0; i < rows; ++i) VERIFY_IS_EQUAL(bits(d(i, j)), bits(expected));
   }
-  VERIFY_IS_EQUAL(bits(half(std::ldexp(1.0f, -25))), bits(half(0.0f)));
+  VERIFY_IS_EQUAL(bits(half(numext::ldexp(1.0f, -25))), bits(half(0.0f)));
 }
 
 // Scalar factors combine in float: (s A) (t B) with s = t = 2^-14 has st = 2^-28, below the smallest half subnormal.
@@ -368,11 +368,11 @@ template <typename T>
 void scalar_factors_in_float() {
   using MatrixT = Matrix<T, Dynamic, Dynamic>;
   const MatrixT a = MatrixT::Constant(30, 4, T(256.0f)), b = MatrixT::Constant(4, 30, T(256.0f));
-  const T s = T(std::ldexp(1.0f, -14));
+  const T s = T(numext::ldexp(1.0f, -14));
   MatrixT c(30, 30);
   c.noalias() = (s * a) * (s * b);
-  VERIFY_IS_EQUAL(bits(c(0, 0)), bits(T(std::ldexp(1.0f, -10))));
-  VERIFY_IS_EQUAL(bits(c(29, 29)), bits(T(std::ldexp(1.0f, -10))));
+  VERIFY_IS_EQUAL(bits(c(0, 0)), bits(T(numext::ldexp(1.0f, -10))));
+  VERIFY_IS_EQUAL(bits(c(29, 29)), bits(T(numext::ldexp(1.0f, -10))));
 }
 
 // A fixed-size product stays off the heap where Eigen allocates on the stack and its f32 workspace fits
