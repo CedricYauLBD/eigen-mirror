@@ -9,6 +9,19 @@
 
 using namespace Eigen;
 
+// C and reference are two evaluations of n-term inner products; || |T|*|B| ||_F <= ||T||_F * ||B||_F.
+template <typename Mat>
+static bool MatchesDenseProduct(benchmark::State& state, const Mat& C, const Mat& reference, const Mat& T,
+                                const Mat& B) {
+  using Scalar = typename Mat::Scalar;
+  const Scalar bound = Scalar(2) * NumTraits<Scalar>::epsilon() * Scalar(T.rows()) * T.norm() * B.norm();
+  if (!numext::isfinite(bound) || !((C - reference).norm() <= bound)) {
+    state.SkipWithError("TRMM result differs from dense product");
+    return false;
+  }
+  return true;
+}
+
 // C = triangularView<Mode>(A) * B
 template <typename Scalar, unsigned int Mode, int Order = ColMajor>
 static void BM_TRMM_Left(benchmark::State& state) {
@@ -21,12 +34,7 @@ static void BM_TRMM_Left(benchmark::State& state) {
   const Mat dense = A.template triangularView<Mode>();
   const Mat reference = dense * B;
   C.noalias() = A.template triangularView<Mode>() * B;
-  // Two evaluations of n-term inner products; || |A|*|B| ||_F <= ||A||_F * ||B||_F.
-  const Scalar bound = Scalar(2) * NumTraits<Scalar>::epsilon() * Scalar(n) * dense.norm() * B.norm();
-  if (!numext::isfinite(bound) || !((C - reference).norm() <= bound)) {
-    state.SkipWithError("TRMM result differs from dense product");
-    return;
-  }
+  if (!MatchesDenseProduct(state, C, reference, dense, B)) return;
   for (auto _ : state) {
     C.noalias() = A.template triangularView<Mode>() * B;
     benchmark::DoNotOptimize(C.data());
@@ -48,11 +56,7 @@ static void BM_TRMM_Right(benchmark::State& state) {
   const Mat dense = A.template triangularView<Mode>();
   const Mat reference = B * dense;
   C.noalias() = B * A.template triangularView<Mode>();
-  const Scalar bound = Scalar(2) * NumTraits<Scalar>::epsilon() * Scalar(n) * dense.norm() * B.norm();
-  if (!numext::isfinite(bound) || !((C - reference).norm() <= bound)) {
-    state.SkipWithError("TRMM result differs from dense product");
-    return;
-  }
+  if (!MatchesDenseProduct(state, C, reference, dense, B)) return;
   for (auto _ : state) {
     C.noalias() = B * A.template triangularView<Mode>();
     benchmark::DoNotOptimize(C.data());

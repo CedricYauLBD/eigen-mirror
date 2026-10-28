@@ -353,26 +353,26 @@ struct triangular_product_impl<Mode, LhsIsTriangular, Lhs, false, Rhs, false> {
     Index stripedDepth = LhsIsTriangular ? ((!IsLower) ? lhs.cols() : (std::min)(lhs.cols(), lhs.rows()))
                                          : ((IsLower) ? rhs.rows() : (std::min)(rhs.rows(), rhs.cols()));
 
-    const auto run = [&](level3_blocking<Scalar, Scalar>& blocking) {
-      internal::product_triangular_matrix_matrix<
-          Scalar, Index, Mode, LhsIsTriangular,
-          (internal::traits<ActualLhsTypeCleaned>::Flags & RowMajorBit) ? RowMajor : ColMajor,
-          LhsBlasTraits::NeedToConjugate,
-          (internal::traits<ActualRhsTypeCleaned>::Flags & RowMajorBit) ? RowMajor : ColMajor,
-          RhsBlasTraits::NeedToConjugate, (internal::traits<Dest>::Flags & RowMajorBit) ? RowMajor : ColMajor,
-          Dest::InnerStrideAtCompileTime>::run(stripedRows, stripedCols, stripedDepth,  // sizes
-                                               &lhs.coeffRef(0, 0), lhs.outerStride(),  // lhs info
-                                               &rhs.coeffRef(0, 0), rhs.outerStride(),  // rhs info
-                                               &dst.coeffRef(0, 0), dst.innerStride(),
-                                               dst.outerStride(),  // result info
-                                               actualAlpha, blocking);
+    using Trmm = internal::product_triangular_matrix_matrix<
+        Scalar, Index, Mode, LhsIsTriangular,
+        (internal::traits<ActualLhsTypeCleaned>::Flags & RowMajorBit) ? RowMajor : ColMajor,
+        LhsBlasTraits::NeedToConjugate,
+        (internal::traits<ActualRhsTypeCleaned>::Flags & RowMajorBit) ? RowMajor : ColMajor,
+        RhsBlasTraits::NeedToConjugate, (internal::traits<Dest>::Flags & RowMajorBit) ? RowMajor : ColMajor,
+        Dest::InnerStrideAtCompileTime>;
+    const auto runWith = [&](level3_blocking<Scalar, Scalar>& blocking) {
+      Trmm::run(stripedRows, stripedCols, stripedDepth,                     // sizes
+                &lhs.coeffRef(0, 0), lhs.outerStride(),                     // lhs info
+                &rhs.coeffRef(0, 0), rhs.outerStride(),                     // rhs info
+                &dst.coeffRef(0, 0), dst.innerStride(), dst.outerStride(),  // result info
+                actualAlpha, blocking);
     };
 
 #ifdef EIGEN_VECTORIZE_AVX512
-    // The physical-L1 bound already limits AVX512 micro-panels. On large outputs, the extra TRMM factor
-    // makes depth blocks too short to amortize result loads/stores. Small and narrow products favor it.
-    // Fixed-size blocking packs the whole product into inline buffers and ignores KcFactor, so only dynamic
-    // blocking can change; a second fixed-size blocking object would double the stack frame.
+    // The AVX512 physical-L1 cap on kc already keeps the micro-panels in L1, so on large outputs BlockingType's
+    // extra KcFactor = 4 makes depth blocks too short to amortize result loads/stores; small and narrow products
+    // still favor it. Fixed-size blocking packs the whole product into inline buffers and ignores KcFactor, so only
+    // dynamic blocking can change; a second fixed-size blocking object would double the stack frame.
     constexpr bool DynamicBlocking = Lhs::MaxRowsAtCompileTime == Dynamic || Rhs::MaxColsAtCompileTime == Dynamic ||
                                      Lhs::MaxColsAtCompileTime == Dynamic;
     if (DynamicBlocking && (is_same<Scalar, float>::value || is_same<Scalar, double>::value) &&
@@ -380,12 +380,12 @@ struct triangular_product_impl<Mode, LhsIsTriangular, Lhs, false, Rhs, false> {
       using LargeBlockingType = internal::gemm_blocking_space<(Dest::Flags & RowMajorBit) ? RowMajor : ColMajor, Scalar,
                                                               Scalar, Dynamic, Dynamic, Dynamic, 1>;
       LargeBlockingType blocking(stripedRows, stripedCols, stripedDepth, 1, false);
-      run(blocking);
+      runWith(blocking);
     } else
 #endif
     {
       BlockingType blocking(stripedRows, stripedCols, stripedDepth, 1, false);
-      run(blocking);
+      runWith(blocking);
     }
 
     // A factor s nested in a unit triangle reached the kernel through actualAlpha, so the unit diagonal
