@@ -984,6 +984,10 @@ SparseCwiseScalar<2> operator+(const SparseCwiseScalar<0>& lhs, const SparseCwis
   return SparseCwiseScalar<2>(lhs.value + rhs.value);
 }
 
+SparseCwiseScalar<3> operator*(const SparseCwiseScalar<1>& lhs, const SparseCwiseScalar<0>& rhs) {
+  return SparseCwiseScalar<3>(lhs.value * rhs.value);
+}
+
 namespace Eigen {
 template <>
 struct ScalarBinaryOpTraits<SparseCwiseScalar<0>, SparseCwiseScalar<1>,
@@ -996,6 +1000,13 @@ struct ScalarBinaryOpTraits<SparseCwiseScalar<0>, SparseCwiseScalar<1>,
   using ReturnType = SparseCwiseScalar<2>;
 };
 
+
+
+template <>
+struct ScalarBinaryOpTraits<SparseCwiseScalar<1>, SparseCwiseScalar<0>,
+                            internal::scalar_product_op<SparseCwiseScalar<1>, SparseCwiseScalar<0>>> {
+  using ReturnType = SparseCwiseScalar<3>;
+};
 }  // namespace Eigen
 
 template <int Order>
@@ -1078,6 +1089,59 @@ void test_sparse_cwise_sum_operand_types() {
     for (Index i = 0; i < 2; ++i) VERIFY_IS_EQUAL(result(i, j), std::complex<double>(real(i, j)) + complex.coeff(i, j));
 }
 
+struct SparseNoncommutingScalar {
+  explicit SparseNoncommutingScalar(int diagonal = 0) : values{{diagonal, 0, 0, diagonal}} {}
+  std::array<int, 4> values;
+};
+
+SparseNoncommutingScalar operator*(const SparseNoncommutingScalar& lhs, const SparseNoncommutingScalar& rhs) {
+  SparseNoncommutingScalar result;
+  for (int i = 0; i < 2; ++i)
+    for (int j = 0; j < 2; ++j)
+      for (int k = 0; k < 2; ++k) result.values[2 * i + j] += lhs.values[2 * i + k] * rhs.values[2 * k + j];
+  return result;
+}
+
+template <int Order>
+void test_sparse_diagonal_products() {
+  using DiagonalScalar = SparseCwiseScalar<0>;
+  using MatrixScalar = SparseCwiseScalar<1>;
+  using Scalar = SparseNoncommutingScalar;
+  DiagonalMatrix<DiagonalScalar, 3> diagonal;
+  DiagonalMatrix<Scalar, 3> blockDiagonal;
+  for (Index i = 0; i < 3; ++i) {
+    diagonal.diagonal()(i) = DiagonalScalar(int(i) + 2);
+    blockDiagonal.diagonal()(i).values = {{1, 0, int(i) + 2, 1}};
+  }
+  SparseMatrix<MatrixScalar, Order> matrix(3, 3);
+  SparseMatrix<Scalar, Order> blocks(3, 3);
+  matrix.reserve(VectorXi::Constant(3, 3));
+  blocks.reserve(VectorXi::Constant(3, 3));
+  matrix.insert(0, 1) = MatrixScalar(5);
+  matrix.insert(2, 0) = MatrixScalar(-2);
+  blocks.insert(0, 1).values = {{1, 2, 0, 1}};
+  blocks.insert(2, 0).values = {{2, 1, 0, 1}};
+  for (int compressed = 0; compressed < 2; ++compressed) {
+    const SparseMatrix<SparseCwiseScalar<2>, Order> left = diagonal * matrix;
+    const SparseMatrix<SparseCwiseScalar<3>, Order> right = matrix * diagonal;
+    const SparseMatrix<Scalar, Order> blockLeft = blockDiagonal * blocks;
+    const SparseMatrix<Scalar, Order> blockRight = blocks * blockDiagonal;
+    VERIFY_IS_EQUAL(left.nonZeros(), matrix.nonZeros());
+    VERIFY_IS_EQUAL(right.nonZeros(), matrix.nonZeros());
+    for (Index j = 0; j < 3; ++j)
+      for (Index i = 0; i < 3; ++i) {
+        VERIFY_IS_EQUAL(left.coeff(i, j).value, diagonal.diagonal()(i).value * matrix.coeff(i, j).value);
+        VERIFY_IS_EQUAL(right.coeff(i, j).value, matrix.coeff(i, j).value * diagonal.diagonal()(j).value);
+        const Scalar expectedLeft = blockDiagonal.diagonal()(i) * blocks.coeff(i, j);
+        const Scalar expectedRight = blocks.coeff(i, j) * blockDiagonal.diagonal()(j);
+        VERIFY(blockLeft.coeff(i, j).values == expectedLeft.values);
+        VERIFY(blockRight.coeff(i, j).values == expectedRight.values);
+      }
+    matrix.makeCompressed();
+    blocks.makeCompressed();
+  }
+}
+
 template <typename = void>
 void test_sparse_vector_dense_product() {
   SparseVector<double> sv(3);
@@ -1111,6 +1175,9 @@ EIGEN_DECLARE_TEST(sparse_product) {
     CALL_SUBTEST_5((test_mixed_storage<>()));
     CALL_SUBTEST_5((test_sparse_cwise_product_operand_types<ColMajor>()));
     CALL_SUBTEST_7((test_sparse_cwise_sum_operand_types<RowMajor>()));
+
+    CALL_SUBTEST_8((test_sparse_diagonal_products<ColMajor>()));
+    CALL_SUBTEST_8((test_sparse_diagonal_products<RowMajor>()));
 
     CALL_SUBTEST_6((test_pruned_product_custom_scalar<>()));
     CALL_SUBTEST_6((test_ambivector_discard_custom_scalar<>()));
