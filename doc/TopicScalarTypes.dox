@@ -40,7 +40,10 @@ A few practical notes:
   - <b>\c Eigen::half and \c Eigen::bfloat16</b> are primarily storage and interchange formats:
     on hardware without native arithmetic, operations are emulated by converting to \c float and
     back. Both are vectorized on instruction sets with hardware support (see
-    \ref TopicVectorization). To multiply such matrices in \c float,
+    \ref TopicVectorization). A matrix-matrix product of two \c half or two \c bfloat16 matrices
+    that runs on the general matrix-matrix kernel sums in \c float over the whole depth and rounds
+    each result coefficient once; small and fixed-size products, matrix-vector products and the
+    triangular and self-adjoint products still round in the operand type. To keep a \c float result,
     write <tt>A.cast<float>() * B.cast<float>()</tt>: the kernel converts the operands while it
     reads them, without first copying them to \c float.
 

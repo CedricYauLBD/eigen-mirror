@@ -785,6 +785,18 @@ struct gemm_operand_traits<CwiseUnaryOp<core_cast_op<SrcScalar, DstScalar>, Nest
 template <typename Xpr>
 struct gemm_operand_traits<const Xpr> : gemm_operand_traits<Xpr> {};
 
+// Whether a GEMM of LhsScalar by RhsScalar runs in float on the converted operands and rounds each result coefficient
+// once: half by half and bfloat16 by bfloat16 would otherwise round every multiply-add, or every kc block, to 8 or 11
+// significand bits (#3158). OpenBLAS's sbgemm already accumulates bfloat16 in float.
+template <typename LhsScalar, typename RhsScalar>
+struct gemm_accumulates_in_float
+    : bool_constant<std::is_same<LhsScalar, RhsScalar>::value && (std::is_same<LhsScalar, half>::value
+#if !(defined(EIGEN_USE_OPENBLAS_BFLOAT16) && EIGEN_USE_OPENBLAS_BFLOAT16)
+                                                                  || std::is_same<LhsScalar, bfloat16>::value
+#endif
+                                                                  )> {
+};
+
 template <typename Lhs, typename Rhs>
 struct generic_product_impl<Lhs, Rhs, DenseShape, DenseShape, GemmProduct>
     : generic_product_impl_base<Lhs, Rhs, generic_product_impl<Lhs, Rhs, DenseShape, DenseShape, GemmProduct>> {
@@ -865,7 +877,16 @@ struct generic_product_impl<Lhs, Rhs, DenseShape, DenseShape, GemmProduct>
   // would evaluate the product, so the factor is tested before the dispatch
   // rather than inside either kernel.
   static EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE bool scalarFactorIsZero(const Lhs& lhs, const Rhs& rhs) {
+    return scalarFactorIsZero(gemm_accumulates_in_float<LhsScalar, RhsScalar>(), lhs, rhs);
+  }
+  static EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE bool scalarFactorIsZero(std::false_type, const Lhs& lhs,
+                                                                       const Rhs& rhs) {
     return numext::is_exactly_zero(combine_scalar_factors<Scalar>(lhs, rhs));
+  }
+  // The float GEMM combines the factors in float, where their product may not underflow.
+  static EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE bool scalarFactorIsZero(std::true_type, const Lhs& lhs, const Rhs& rhs) {
+    return numext::is_exactly_zero(float(LhsBlasTraits::extractScalarFactor(lhs)) *
+                                   float(RhsBlasTraits::extractScalarFactor(rhs)));
   }
 
   template <typename Dst>
@@ -915,6 +936,44 @@ struct generic_product_impl<Lhs, Rhs, DenseShape, DenseShape, GemmProduct>
   // instantiation.
   template <typename Dest>
   static void scaleAndAddOrEvalTo(Dest& dst, const Lhs& a_lhs, const Rhs& a_rhs, const Scalar& alpha, bool overwrite) {
+    scaleAndAddOrEvalTo(gemm_accumulates_in_float<LhsScalar, RhsScalar>(), dst, a_lhs, a_rhs, alpha, overwrite);
+  }
+
+  // dst (+)= alpha * a_lhs * a_rhs as the float product of the converted operands, rounded once into dst. The packers
+  // convert the operands; only the result needs a float workspace.
+  template <typename Dest>
+  static void scaleAndAddOrEvalTo(std::true_type, Dest& dst, const Lhs& a_lhs, const Rhs& a_rhs, const Scalar& alpha,
+                                  bool overwrite) {
+    EIGEN_INTERNAL_ASSERT_SAME_ROWS(dst, a_lhs);
+    EIGEN_INTERNAL_ASSERT_SAME_COLS(dst, a_rhs);
+    using Real = float;
+    add_const_on_value_type_t<ActualLhsType> lhs = LhsBlasTraits::extract(a_lhs);
+    add_const_on_value_type_t<ActualRhsType> rhs = RhsBlasTraits::extract(a_rhs);
+    using CastLhs = std::remove_const_t<decltype(lhs.template cast<Real>())>;
+    using CastRhs = std::remove_const_t<decltype(rhs.template cast<Real>())>;
+    CastLhs cast_lhs = lhs.template cast<Real>();
+    CastRhs cast_rhs = rhs.template cast<Real>();
+    // The factors combine in float, so that (s * A) * (t * B) keeps an s * t below half's range.
+    Real actualAlpha =
+        Real(alpha) * Real(LhsBlasTraits::extractScalarFactor(a_lhs)) * Real(RhsBlasTraits::extractScalarFactor(a_rhs));
+
+    using Acc = Matrix<Real, Dynamic, Dynamic, (Dest::Flags & RowMajorBit) ? RowMajor : ColMajor,
+                       Dest::MaxRowsAtCompileTime, Dest::MaxColsAtCompileTime>;
+    using FloatGemm = generic_product_impl<CastLhs, CastRhs, DenseShape, DenseShape, GemmProduct>;
+    Acc acc;
+    if (overwrite) {
+      acc.resize(dst.rows(), dst.cols());
+      FloatGemm::scaleAndEvalTo(acc, cast_lhs, cast_rhs, actualAlpha);
+    } else {
+      acc = dst.template cast<Real>();
+      FloatGemm::scaleAndAddTo(acc, cast_lhs, cast_rhs, actualAlpha);
+    }
+    dst = acc.template cast<typename Dest::Scalar>();
+  }
+
+  template <typename Dest>
+  static void scaleAndAddOrEvalTo(std::false_type, Dest& dst, const Lhs& a_lhs, const Rhs& a_rhs, const Scalar& alpha,
+                                  bool overwrite) {
     EIGEN_INTERNAL_ASSERT_SAME_ROWS(dst, a_lhs);
     EIGEN_INTERNAL_ASSERT_SAME_COLS(dst, a_rhs);
     using Gemm = internal::general_matrix_matrix_product<

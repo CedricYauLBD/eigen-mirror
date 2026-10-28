@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MPL-2.0
 
 // GEMMs of 16-bit operands: cast to float (lazily converted while packing), mixed with a float operand, and the
-// native product.
+// native product, which accumulates in float.
 
 #include <benchmark/benchmark.h>
 #include <Eigen/Core>
