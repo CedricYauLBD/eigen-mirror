@@ -146,6 +146,28 @@ foreach(mode alone mixed)
   endif()
 endforeach()
 
+foreach(precision S D C Z)
+  foreach(routine GEEQU GBEQU POEQU PPEQU PBEQU)
+    foreach(mode mixed alone)
+      file(WRITE "${manifest}" "${first}\n")
+      file(WRITE "${first}" " ${precision}${routine} failed test with value  0.100D+03 exceeding threshold  0.200D+02\n")
+      set(tests_run 0)
+      if(mode STREQUAL "mixed")
+        file(APPEND "${first}" " All tests for ${precision}GE routines passed the threshold (    100 tests run)\n")
+        set(tests_run 100)
+      endif()
+      bs_run(WHAT "LAPACK equilibration failure: ${precision}${routine}, ${mode}"
+             EXPECT_RESULT FAILURE OUTPUT_VARIABLE output
+             COMMAND "${CMAKE_COMMAND}" "-DOUTPUT_MANIFEST=${manifest}"
+                     "-DREPORT_FILE=${report}" -P "${summary}")
+      if(NOT output MATCHES "TOTAL: ${tests_run} tests, 1 numerical errors, 0 other errors"
+          OR output MATCHES "No LAPACK numerical tests were analyzed")
+        bs_fail("incorrect equilibration failure diagnostic: ${output}")
+      endif()
+    endforeach()
+  endforeach()
+endforeach()
+
 foreach(case numerical diagnostics xerbla error_exits info_summary error_code recorded combined_errors empty mixed_empty zero_examples missing)
   file(WRITE "${manifest}" "${first}\n")
   if(case STREQUAL "numerical")

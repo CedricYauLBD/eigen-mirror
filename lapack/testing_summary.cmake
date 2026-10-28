@@ -43,6 +43,10 @@ foreach(output IN LISTS OUTPUT_FILES)
       math(EXPR other "${other} + ${balance_errors}")
       set(balance_errors 0)
     endif()
+    # xCHKEQ reports failing routines without an "out of" summary.
+    if(lower MATCHES "^[ \t]*[sdcz](ge|gb|po|pp|pb)equ[ \t]+failed test with value[ \t]+")
+      math(EXPR failed "${failed} + 1")
+    endif()
     # Balance tests report example indices as well as a total error count.
     # An index is only evidence of an error, not the number of errors.
     if(lower MATCHES "number of examples where info is not 0[ \t]*=[ \t]*([0-9]+)")
