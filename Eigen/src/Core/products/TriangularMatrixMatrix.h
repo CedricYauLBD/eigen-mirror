@@ -47,7 +47,8 @@ struct product_triangular_matrix_matrix<Scalar, Index, Mode, true, LhsStorageOrd
                                         ConjugateRhs, ColMajor, ResInnerStride, Version> {
   using Traits = gebp_traits<Scalar, Scalar>;
   enum {
-    SmallPanelWidth = 2 * plain_enum_max(Traits::mr, Traits::nr),
+    // A multiple of mr: horizontal panels then start on lhs micro-panel boundaries.
+    SmallPanelWidth = numext::div_ceil(2 * plain_enum_max(Traits::mr, Traits::nr), int(Traits::mr)) * int(Traits::mr),
     IsLower = (Mode & Lower) == Lower,
     SetDiag = (Mode & (ZeroDiag | UnitDiag)) ? 0 : 1
   };
@@ -69,16 +70,6 @@ EIGEN_DONT_INLINE void product_triangular_matrix_matrix<
   Index rows = IsLower ? _rows : diagSize;
   Index depth = IsLower ? diagSize : _depth;
   Index cols = _cols;
-
-  // Reuse GEMM's RHS cache budget; a full-width packed RHS can exceed it for wide products.
-  const Index nc = (numext::mini)(cols, blocking.nc());
-  if (cols > nc) {
-    for (Index j = 0; j < cols; j += nc)
-      run(rows, (numext::mini)(nc, cols - j), depth, lhs_, lhsStride,
-          rhs_ + j * (RhsStorageOrder == ColMajor ? rhsStride : 1), rhsStride, res_ + j * resStride, resIncr, resStride,
-          alpha, blocking);
-    return;
-  }
 
   using LhsMapper = const_blas_data_mapper<Scalar, Index, LhsStorageOrder>;
   using RhsMapper = const_blas_data_mapper<Scalar, Index, RhsStorageOrder>;
@@ -117,6 +108,9 @@ EIGEN_DONT_INLINE void product_triangular_matrix_matrix<
   gemm_pack_lhs<Scalar, Index, LhsMapper, Traits::mr, Traits::LhsProgress, typename Traits::LhsPacket4Packing,
                 LhsStorageOrder>
       pack_lhs;
+  gemm_pack_lhs<Scalar, Index, LhsMapper, Traits::mr, Traits::LhsProgress, typename Traits::LhsPacket4Packing,
+                LhsStorageOrder, false, true>
+      pack_lhs_panel;
   gemm_pack_rhs<Scalar, Index, RhsMapper, Traits::nr, RhsStorageOrder> pack_rhs;
 
   for (Index k2 = IsLower ? depth : 0; IsLower ? k2 > 0 : k2 < depth; IsLower ? k2 -= kc : k2 += kc) {
@@ -140,54 +134,70 @@ EIGEN_DONT_INLINE void product_triangular_matrix_matrix<
 
     // the block diagonal, if any:
     if (IsLower || actual_k2 < rows) {
-      // Partition the diagonal block into panels, padding only the small diagonal squares.
-      for (Index k1 = 0; k1 < actual_kc; k1 += panelWidth) {
-        Index actualPanelWidth = std::min<Index>(actual_kc - k1, panelWidth);
-        Index lengthTarget = IsLower ? actual_kc - k1 - actualPanelWidth : k1;
-        Index startBlock = actual_k2 + k1;
-        Index blockBOffset = k1;
-
-        // => GEBP with the micro triangular block
-        // The trick is to pack this micro block while filling the opposite triangular part with zeros.
-        // To this end we do an extra triangular copy to a small temporary buffer
-        for (Index k = 0; k < actualPanelWidth; ++k) {
-          EIGEN_IF_CONSTEXPR (SetDiag) triangularBuffer.coeffRef(k, k) = lhs(startBlock + k, startBlock + k);
-          for (Index i = IsLower ? k + 1 : 0; IsLower ? i < actualPanelWidth : i < k; ++i)
-            triangularBuffer.coeffRef(i, k) = lhs(startBlock + i, startBlock + k);
+      // The trick is to pack each micro triangular block while filling the opposite triangular part with zeros.
+      // To this end we do an extra triangular copy to a small temporary buffer
+      const auto copyTriangle = [&](Index k1, Index width) {
+        const Index start = actual_k2 + k1;
+        for (Index k = 0; k < width; ++k) {
+          EIGEN_IF_CONSTEXPR (SetDiag) triangularBuffer.coeffRef(k, k) = lhs(start + k, start + k);
+          for (Index i = IsLower ? k + 1 : 0; IsLower ? i < width : i < k; ++i)
+            triangularBuffer.coeffRef(i, k) = lhs(start + i, start + k);
         }
-        if (cols >= Traits::nr && actual_kc > panelWidth) {
-          // For P equal panels, vertical slicing updates each output panel (P+1)/2 times
-          // on average. Horizontal slicing updates it once, with the same packed coefficients and flop count.
-          // Keep vertical slicing for a partial RHS micro-panel, where the kernel benefits from more rows.
-          gemm_pack_lhs<Scalar, Index, LhsMapper, Traits::mr, Traits::LhsProgress, typename Traits::LhsPacket4Packing,
-                        LhsStorageOrder, false, true>
-              pack_lhs_panel;
-          const Index denseOffset = IsLower ? 0 : k1 + actualPanelWidth;
-          const Index denseLength = IsLower ? k1 : actual_kc - denseOffset;
-          if (denseLength > 0)
-            pack_lhs_panel(blockA, lhs.getSubMapper(startBlock, actual_k2 + denseOffset), denseLength, actualPanelWidth,
-                           actual_kc, denseOffset);
-          pack_lhs_panel(blockA, LhsMapper(triangularBuffer.data(), triangularBuffer.outerStride()), actualPanelWidth,
-                         actualPanelWidth, actual_kc, k1);
-          const Index offset = IsLower ? 0 : k1;
-          gebp_kernel(res.getSubMapper(startBlock, 0), blockA, blockB, actualPanelWidth, denseLength + actualPanelWidth,
-                      cols, alpha, actual_kc, actual_kc, offset, offset);
-          continue;
+      };
+      // P horizontal panels update each output panel once instead of (P+1)/2 times on average, with the same packed
+      // coefficients and flops. Each group of panels that fits blockA is packed in the vertical order, whose tall
+      // column segments stream from memory, at stride actual_kc. A partial RHS micro-panel keeps the vertical
+      // slicing, where the kernel benefits from more rows.
+      if (cols >= Traits::nr && actual_kc > panelWidth && panelWidth == Index(SmallPanelWidth)) {
+        const Index groupRows = mc / panelWidth * panelWidth;
+        for (Index g0 = 0; g0 < actual_kc; g0 += groupRows) {
+          const Index g1 = (std::min)(actual_kc, g0 + groupRows);
+          for (Index k1 = IsLower ? 0 : g0; k1 < (IsLower ? g1 : actual_kc); k1 += panelWidth) {
+            const Index width = (std::min)(actual_kc - k1, panelWidth);
+            if (k1 >= g0 && k1 < g1) {
+              copyTriangle(k1, width);
+              pack_lhs_panel(blockA + (k1 - g0) * actual_kc,
+                             LhsMapper(triangularBuffer.data(), triangularBuffer.outerStride()), width, width,
+                             actual_kc, k1);
+            }
+            const Index begin = IsLower ? (std::max)(k1 + width, g0) : g0;
+            const Index end = IsLower ? g1 : (std::min)(k1, g1);
+            if (end > begin)
+              pack_lhs_panel(blockA + (begin - g0) * actual_kc, lhs.getSubMapper(actual_k2 + begin, actual_k2 + k1),
+                             width, end - begin, actual_kc, k1);
+          }
+          for (Index k1 = g0; k1 < g1; k1 += panelWidth) {
+            const Index width = (std::min)(actual_kc - k1, panelWidth);
+            const Index offset = IsLower ? 0 : k1;
+            gebp_kernel(res.getSubMapper(actual_k2 + k1, 0), blockA + (k1 - g0) * actual_kc, blockB, width,
+                        IsLower ? k1 + width : actual_kc - k1, cols, alpha, actual_kc, actual_kc, offset, offset);
+          }
         }
-        pack_lhs(blockA, LhsMapper(triangularBuffer.data(), triangularBuffer.outerStride()), actualPanelWidth,
-                 actualPanelWidth);
+      } else {
+        // for each small vertical panels of lhs
+        for (Index k1 = 0; k1 < actual_kc; k1 += panelWidth) {
+          Index actualPanelWidth = std::min<Index>(actual_kc - k1, panelWidth);
+          Index lengthTarget = IsLower ? actual_kc - k1 - actualPanelWidth : k1;
+          Index startBlock = actual_k2 + k1;
+          Index blockBOffset = k1;
 
-        gebp_kernel(res.getSubMapper(startBlock, 0), blockA, blockB, actualPanelWidth, actualPanelWidth, cols, alpha,
-                    actualPanelWidth, actual_kc, 0, blockBOffset);
+          // => GEBP with the micro triangular block
+          copyTriangle(k1, actualPanelWidth);
+          pack_lhs(blockA, LhsMapper(triangularBuffer.data(), triangularBuffer.outerStride()), actualPanelWidth,
+                   actualPanelWidth);
 
-        // GEBP with remaining micro panel
-        if (lengthTarget > 0) {
-          Index startTarget = IsLower ? actual_k2 + k1 + actualPanelWidth : actual_k2;
-
-          pack_lhs(blockA, lhs.getSubMapper(startTarget, startBlock), actualPanelWidth, lengthTarget);
-
-          gebp_kernel(res.getSubMapper(startTarget, 0), blockA, blockB, lengthTarget, actualPanelWidth, cols, alpha,
+          gebp_kernel(res.getSubMapper(startBlock, 0), blockA, blockB, actualPanelWidth, actualPanelWidth, cols, alpha,
                       actualPanelWidth, actual_kc, 0, blockBOffset);
+
+          // GEBP with remaining micro panel
+          if (lengthTarget > 0) {
+            Index startTarget = IsLower ? actual_k2 + k1 + actualPanelWidth : actual_k2;
+
+            pack_lhs(blockA, lhs.getSubMapper(startTarget, startBlock), actualPanelWidth, lengthTarget);
+
+            gebp_kernel(res.getSubMapper(startTarget, 0), blockA, blockB, lengthTarget, actualPanelWidth, cols, alpha,
+                        actualPanelWidth, actual_kc, 0, blockBOffset);
+          }
         }
       }
     }
