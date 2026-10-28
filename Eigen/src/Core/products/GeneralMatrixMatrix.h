@@ -341,44 +341,41 @@ EIGEN_STRONG_INLINE void gemm_run_overwrite(Index rows, Index cols, Index depth,
 
 /* Specialization for a row-major destination matrix => simple transposition of the product */
 template <typename Index, typename LhsScalar, int LhsStorageOrder, bool ConjugateLhs, typename RhsScalar,
-          int RhsStorageOrder, bool ConjugateRhs, int ResInnerStride>
+          int RhsStorageOrder, bool ConjugateRhs, int ResInnerStride, typename LhsStorage, typename RhsStorage>
 struct general_matrix_matrix_product<Index, LhsScalar, LhsStorageOrder, ConjugateLhs, RhsScalar, RhsStorageOrder,
-                                     ConjugateRhs, RowMajor, ResInnerStride> {
+                                     ConjugateRhs, RowMajor, ResInnerStride, LhsStorage, RhsStorage> {
   using Traits = gebp_traits<RhsScalar, LhsScalar>;
+  using Transposed =
+      general_matrix_matrix_product<Index, RhsScalar, RhsStorageOrder == RowMajor ? ColMajor : RowMajor, ConjugateRhs,
+                                    LhsScalar, LhsStorageOrder == RowMajor ? ColMajor : RowMajor, ConjugateLhs,
+                                    ColMajor, ResInnerStride, RhsStorage, LhsStorage>;
 
   using ResScalar = typename ScalarBinaryOpTraits<LhsScalar, RhsScalar>::ReturnType;
-  static constexpr bool CanOverwrite = gemm_can_overwrite<general_matrix_matrix_product<
-      Index, RhsScalar, RhsStorageOrder == RowMajor ? ColMajor : RowMajor, ConjugateRhs, LhsScalar,
-      LhsStorageOrder == RowMajor ? ColMajor : RowMajor, ConjugateLhs, ColMajor, ResInnerStride>>::value;
-  static EIGEN_STRONG_INLINE void run(Index rows, Index cols, Index depth, const LhsScalar* lhs, Index lhsStride,
-                                      const RhsScalar* rhs, Index rhsStride, ResScalar* res, Index resIncr,
+  static constexpr bool CanOverwrite = gemm_can_overwrite<Transposed>::value;
+  static EIGEN_STRONG_INLINE void run(Index rows, Index cols, Index depth, const LhsStorage* lhs, Index lhsStride,
+                                      const RhsStorage* rhs, Index rhsStride, ResScalar* res, Index resIncr,
                                       Index resStride, ResScalar alpha, level3_blocking<RhsScalar, LhsScalar>& blocking,
                                       GemmParallelInfo<Index>* info = 0) {
     // transpose the product such that the result is column major
-    general_matrix_matrix_product<Index, RhsScalar, RhsStorageOrder == RowMajor ? ColMajor : RowMajor, ConjugateRhs,
-                                  LhsScalar, LhsStorageOrder == RowMajor ? ColMajor : RowMajor, ConjugateLhs, ColMajor,
-                                  ResInnerStride>::run(cols, rows, depth, rhs, rhsStride, lhs, lhsStride, res, resIncr,
-                                                       resStride, alpha, blocking, info);
+    Transposed::run(cols, rows, depth, rhs, rhsStride, lhs, lhsStride, res, resIncr, resStride, alpha, blocking, info);
   }
   // As run, but overwrites the result instead of accumulating into it.
-  static EIGEN_STRONG_INLINE void run_overwrite(Index rows, Index cols, Index depth, const LhsScalar* lhs,
-                                                Index lhsStride, const RhsScalar* rhs, Index rhsStride, ResScalar* res,
+  static EIGEN_STRONG_INLINE void run_overwrite(Index rows, Index cols, Index depth, const LhsStorage* lhs,
+                                                Index lhsStride, const RhsStorage* rhs, Index rhsStride, ResScalar* res,
                                                 Index resIncr, Index resStride, ResScalar alpha,
                                                 level3_blocking<RhsScalar, LhsScalar>& blocking,
                                                 GemmParallelInfo<Index>* info = 0) {
-    gemm_run_overwrite<general_matrix_matrix_product<
-        Index, RhsScalar, RhsStorageOrder == RowMajor ? ColMajor : RowMajor, ConjugateRhs, LhsScalar,
-        LhsStorageOrder == RowMajor ? ColMajor : RowMajor, ConjugateLhs, ColMajor, ResInnerStride>>(
-        cols, rows, depth, rhs, rhsStride, lhs, lhsStride, res, resIncr, resStride, alpha, blocking, info);
+    gemm_run_overwrite<Transposed>(cols, rows, depth, rhs, rhsStride, lhs, lhsStride, res, resIncr, resStride, alpha,
+                                   blocking, info);
   }
 };
 
 /*  Specialization for a col-major destination matrix
  *    => Blocking algorithm following Goto's paper */
 template <typename Index, typename LhsScalar, int LhsStorageOrder, bool ConjugateLhs, typename RhsScalar,
-          int RhsStorageOrder, bool ConjugateRhs, int ResInnerStride>
+          int RhsStorageOrder, bool ConjugateRhs, int ResInnerStride, typename LhsStorage, typename RhsStorage>
 struct general_matrix_matrix_product<Index, LhsScalar, LhsStorageOrder, ConjugateLhs, RhsScalar, RhsStorageOrder,
-                                     ConjugateRhs, ColMajor, ResInnerStride> {
+                                     ConjugateRhs, ColMajor, ResInnerStride, LhsStorage, RhsStorage> {
   using Traits = gebp_traits<LhsScalar, RhsScalar>;
 
  private:
@@ -389,15 +386,15 @@ struct general_matrix_matrix_product<Index, LhsScalar, LhsStorageOrder, Conjugat
  public:
   using ResScalar = typename ScalarBinaryOpTraits<LhsScalar, RhsScalar>::ReturnType;
   static constexpr bool CanOverwrite = gebp_kernel_overwrites<Gebp>::value;
-  static void run(Index rows, Index cols, Index depth, const LhsScalar* lhs_, Index lhsStride, const RhsScalar* rhs_,
+  static void run(Index rows, Index cols, Index depth, const LhsStorage* lhs_, Index lhsStride, const RhsStorage* rhs_,
                   Index rhsStride, ResScalar* res_, Index resIncr, Index resStride, ResScalar alpha,
                   level3_blocking<LhsScalar, RhsScalar>& blocking, GemmParallelInfo<Index>* info = 0) {
     run_impl(false, rows, cols, depth, lhs_, lhsStride, rhs_, rhsStride, res_, resIncr, resStride, alpha, blocking,
              info);
   }
   // As run, but assigns the result instead of accumulating into it, independently of what res held before.
-  static void run_overwrite(Index rows, Index cols, Index depth, const LhsScalar* lhs_, Index lhsStride,
-                            const RhsScalar* rhs_, Index rhsStride, ResScalar* res_, Index resIncr, Index resStride,
+  static void run_overwrite(Index rows, Index cols, Index depth, const LhsStorage* lhs_, Index lhsStride,
+                            const RhsStorage* rhs_, Index rhsStride, ResScalar* res_, Index resIncr, Index resStride,
                             ResScalar alpha, level3_blocking<LhsScalar, RhsScalar>& blocking,
                             GemmParallelInfo<Index>* info = 0) {
     run_impl(true, rows, cols, depth, lhs_, lhsStride, rhs_, rhsStride, res_, resIncr, resStride, alpha, blocking,
@@ -408,8 +405,8 @@ struct general_matrix_matrix_product<Index, LhsScalar, LhsStorageOrder, Conjugat
   // One body for both: `overwrite` is a runtime flag, so that assignment and accumulation share one
   // instantiation.
   static EIGEN_DONT_INLINE EIGEN_GEMM_NO_CLONE void run_impl(bool overwrite, Index rows, Index cols, Index depth,
-                                                             const LhsScalar* lhs_, Index lhsStride,
-                                                             const RhsScalar* rhs_, Index rhsStride, ResScalar* res_,
+                                                             const LhsStorage* lhs_, Index lhsStride,
+                                                             const RhsStorage* rhs_, Index rhsStride, ResScalar* res_,
                                                              Index resIncr, Index resStride, ResScalar alpha,
                                                              level3_blocking<LhsScalar, RhsScalar>& blocking,
                                                              GemmParallelInfo<Index>* info) {
@@ -428,21 +425,24 @@ struct general_matrix_matrix_product<Index, LhsScalar, LhsStorageOrder, Conjugat
     // The tiny-result and NEON kernels accumulate, so overwriting zeroes their result first; the tiny one runs exactly
     // when sme_tiny_gemm_wins holds.
     if (info == nullptr) {
-      constexpr bool tiny_pair = sme_tiny_gemm_pair<LhsScalar, RhsScalar>::value;
+      // The SME entry points read their operands in the kernel's scalar type.
+      constexpr bool same_storage =
+          std::is_same<LhsStorage, LhsScalar>::value && std::is_same<RhsStorage, RhsScalar>::value;
+      constexpr bool tiny_pair = same_storage && sme_tiny_gemm_pair<LhsScalar, RhsScalar>::value;
       if (overwrite && tiny_pair && sme_tiny_gemm_wins<ResScalar>(rows, cols, depth))
         gemm_zero_result(res_, rows, cols, resIncr, resStride);
       if (sme_run_tiny_gemm<LhsStorageOrder, RhsStorageOrder>(bool_constant<tiny_pair>(), rows, cols, depth, lhs_,
                                                               lhsStride, rhs_, rhsStride, res_, resIncr, resStride,
                                                               alpha) ||
           sme_run_small_gemm<LhsStorageOrder, RhsStorageOrder, ConjugateLhs, ConjugateRhs, ResInnerStride>(
-              bool_constant<sme_has_gebp_kernel<LhsScalar, RhsScalar>::value>(), overwrite, rows, cols, depth, lhs_,
-              lhsStride, rhs_, rhsStride, res_, resIncr, resStride, alpha, blocking))
+              bool_constant < same_storage && sme_has_gebp_kernel<LhsScalar, RhsScalar>::value > (), overwrite, rows,
+              cols, depth, lhs_, lhsStride, rhs_, rhsStride, res_, resIncr, resStride, alpha, blocking))
         return;
     }
 #endif
 
-    using LhsMapper = const_blas_data_mapper<LhsScalar, Index, LhsStorageOrder>;
-    using RhsMapper = const_blas_data_mapper<RhsScalar, Index, RhsStorageOrder>;
+    using LhsMapper = gemm_operand_mapper<LhsScalar, LhsStorage, Index, LhsStorageOrder>;
+    using RhsMapper = gemm_operand_mapper<RhsScalar, RhsStorage, Index, RhsStorageOrder>;
     using ResMapper = blas_data_mapper<typename Traits::ResScalar, Index, ColMajor, Unaligned, ResInnerStride>;
     LhsMapper lhs(lhs_, lhsStride);
     RhsMapper rhs(rhs_, rhsStride);
@@ -758,6 +758,33 @@ class gemm_blocking_space<StorageOrder, LhsScalar_, RhsScalar_, MaxRows, MaxCols
 
 namespace internal {
 
+// blas_traits of a GEMM operand, which also sees through a cast of a real operand with direct access: the packers then
+// read the operand's StorageScalar coefficients and convert them (gemm_operand_mapper), instead of the product
+// materializing the cast. A scalar factor below the cast stays below it, so such an operand is materialized as before.
+// With EIGEN_USE_BLAS the cast is materialized, so that the product still reaches the external ?gemm.
+template <typename Xpr, typename = void>
+struct gemm_operand_traits : blas_traits<Xpr> {
+  using StorageScalar = typename traits<Xpr>::Scalar;
+};
+#ifndef EIGEN_USE_BLAS
+template <typename SrcScalar, typename DstScalar, typename NestedXpr>
+struct gemm_operand_traits<CwiseUnaryOp<core_cast_op<SrcScalar, DstScalar>, NestedXpr>,
+                           std::enable_if_t<bool(blas_traits<remove_all_t<NestedXpr>>::HasUsableDirectAccess) &&
+                                            !bool(blas_traits<remove_all_t<NestedXpr>>::HasScalarFactor) &&
+                                            !NumTraits<SrcScalar>::IsComplex && !NumTraits<DstScalar>::IsComplex>>
+    : blas_traits<remove_all_t<NestedXpr>> {
+  using Base = blas_traits<remove_all_t<NestedXpr>>;
+  using XprType = CwiseUnaryOp<core_cast_op<SrcScalar, DstScalar>, NestedXpr>;
+  using StorageScalar = SrcScalar;
+  using Scalar = DstScalar;
+  enum { IsComplex = 0, NeedToConjugate = 0 };
+  static inline typename Base::ExtractType extract(const XprType& x) { return Base::extract(x.nestedExpression()); }
+  static inline Scalar extractScalarFactor(const XprType&) { return Scalar(1); }
+};
+#endif
+template <typename Xpr>
+struct gemm_operand_traits<const Xpr> : gemm_operand_traits<Xpr> {};
+
 template <typename Lhs, typename Rhs>
 struct generic_product_impl<Lhs, Rhs, DenseShape, DenseShape, GemmProduct>
     : generic_product_impl_base<Lhs, Rhs, generic_product_impl<Lhs, Rhs, DenseShape, DenseShape, GemmProduct>> {
@@ -765,11 +792,11 @@ struct generic_product_impl<Lhs, Rhs, DenseShape, DenseShape, GemmProduct>
   using LhsScalar = typename Lhs::Scalar;
   using RhsScalar = typename Rhs::Scalar;
 
-  using LhsBlasTraits = internal::blas_traits<Lhs>;
+  using LhsBlasTraits = internal::gemm_operand_traits<Lhs>;
   using ActualLhsType = typename LhsBlasTraits::DirectLinearAccessType;
   using ActualLhsTypeCleaned = internal::remove_all_t<ActualLhsType>;
 
-  using RhsBlasTraits = internal::blas_traits<Rhs>;
+  using RhsBlasTraits = internal::gemm_operand_traits<Rhs>;
   using ActualRhsType = typename RhsBlasTraits::DirectLinearAccessType;
   using ActualRhsTypeCleaned = internal::remove_all_t<ActualRhsType>;
 
@@ -894,7 +921,8 @@ struct generic_product_impl<Lhs, Rhs, DenseShape, DenseShape, GemmProduct>
         Index, LhsScalar, (ActualLhsTypeCleaned::Flags & RowMajorBit) ? RowMajor : ColMajor,
         bool(LhsBlasTraits::NeedToConjugate), RhsScalar,
         (ActualRhsTypeCleaned::Flags & RowMajorBit) ? RowMajor : ColMajor, bool(RhsBlasTraits::NeedToConjugate),
-        (Dest::Flags & RowMajorBit) ? RowMajor : ColMajor, Dest::InnerStrideAtCompileTime>;
+        (Dest::Flags & RowMajorBit) ? RowMajor : ColMajor, Dest::InnerStrideAtCompileTime,
+        typename LhsBlasTraits::StorageScalar, typename RhsBlasTraits::StorageScalar>;
     // Empty operands, the GEMV fallbacks and a GEMM that cannot overwrite accumulate, so overwriting zeroes first.
     if (overwrite && (!internal::gemm_can_overwrite<Gemm>::value || a_lhs.cols() == 0 || a_lhs.rows() == 0 ||
                       a_rhs.cols() == 0 || dst.cols() == 1 || dst.rows() == 1)) {

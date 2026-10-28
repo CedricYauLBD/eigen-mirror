@@ -12,6 +12,7 @@ New features:
 - `DenseBase::replicate` and `VectorwiseOp::replicate` accept `Eigen::fix<N>` factors [!3262, !3282]
 - `SelfAdjointView::applyPermutation()` and `SelfAdjointView::applyTransposition()`, which replace the viewed matrix `S` by `P S P^T` in place, reading and writing only the stored triangle [#3174, !3395]
 - `DiscreteAlgebraicRiccatiSolver` in the new contrib module `Riccati`, for the stabilizing solution of the (generalized) discrete-time algebraic Riccati equation with real or complex scalars [!3403]
+- A matrix-matrix product whose operand is a cast of a real matrix with direct access, such as `A.cast<float>() * B.cast<float>()` or `A * B.cast<float>()`, converts that operand while packing it instead of materializing the cast, unless `EIGEN_USE_BLAS` is defined
 
 Bug fixes:
 - Row-major triangular matrix-vector products could return incorrect results or double-destroy temporaries for scalars requiring initialization, and could leak some large right-hand-side buffers [!2818]
