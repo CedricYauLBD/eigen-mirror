@@ -15,6 +15,7 @@ New features:
 - A matrix-matrix product whose operand is a cast of a real matrix with direct access, such as `A.cast<float>() * B.cast<float>()` or `A * B.cast<float>()`, converts that operand while packing it instead of materializing the cast, unless `EIGEN_USE_BLAS` is defined
 
 Bug fixes:
+- A matrix-matrix product of two `half` or two `bfloat16` matrices on the general matrix-matrix kernel rounded every multiply-add, or every depth block, to the operand type; it now sums in `float` over the whole depth and rounds each result coefficient once [#3158]
 - Row-major triangular matrix-vector products could return incorrect results or double-destroy temporaries for scalars requiring initialization, and could leak some large right-hand-side buffers [!2818]
 - `MatrixBase::isLowerTriangular()` skipped the last strictly-upper coefficient of every column past the diagonal block, reporting some wide matrices as lower triangular [!2814]
 - `ArrayBase::shiftRight<N>()` and `ArrayBase::shiftLeft<N>()` did not compile in any configuration, their functors having dropped the shift count [!2814]

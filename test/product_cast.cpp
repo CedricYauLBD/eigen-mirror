@@ -11,7 +11,7 @@
 
 #include "main.h"
 
-// GEMM operands of the form A.cast<T>() are packed straight from A.
+// GEMM operands of the form A.cast<T>() are packed straight from A, and half and bfloat16 GEMMs accumulate in float.
 
 // Temporaries per cast operand: none, or one with EIGEN_USE_BLAS, which materializes the cast for the external ?gemm.
 #ifdef EIGEN_USE_BLAS
@@ -92,8 +92,70 @@ void lazy_cast_products() {
   CALL_SUBTEST((lazy_cast_product<Src, Dst, RowMajor, ColMajor, RowMajor>(31, 7, 23)));
 }
 
+// A half or bfloat16 GEMM sums in float and rounds each coefficient once.
+template <typename T, int LhsOrder, int RhsOrder, int DstOrder>
+void float_accumulation(Index rows, Index cols, Index depth) {
+  using Mat = Matrix<T, Dynamic, Dynamic, DstOrder>;
+  // |sum| <= 16 * depth stays an integer that float holds exactly, so the reference does not depend on the order.
+  Matrix<T, Dynamic, Dynamic, LhsOrder> A = random_small_integers<T, LhsOrder>(rows, depth, 4);
+  Matrix<T, Dynamic, Dynamic, RhsOrder> B = random_small_integers<T, RhsOrder>(depth, cols, 4);
+  MatrixXf exact = A.template cast<float>().eval() * B.template cast<float>().eval();
+
+  Mat C(rows, cols);
+  C.setConstant(T(1000));
+  C.noalias() = A * B;
+  VERIFY_IS_EQUAL(C, exact.cast<T>().eval());
+  C = A * B;
+  VERIFY_IS_EQUAL(C, exact.cast<T>().eval());
+
+  Mat C0 = random_small_integers<T, DstOrder>(rows, cols, 64);
+  C = C0;
+  C.noalias() += A * B;
+  VERIFY_IS_EQUAL(C, (C0.template cast<float>() + exact).template cast<T>().eval());
+  C = C0;
+  C.noalias() -= A * B;
+  VERIFY_IS_EQUAL(C, (C0.template cast<float>() - exact).template cast<T>().eval());
+
+  // Strided destination and operands.
+  Mat big = Mat::Constant(rows + 2, cols + 3, T(7));
+  big.block(1, 2, rows, cols).noalias() = A.leftCols(depth) * B.topRows(depth);
+  VERIFY_IS_EQUAL(big.block(1, 2, rows, cols), exact.cast<T>().eval());
+  VERIFY_IS_EQUAL(big.row(0), Mat::Constant(1, cols + 3, T(7)));
+  VERIFY_IS_EQUAL(big.col(0), Mat::Constant(rows + 2, 1, T(7)));
+  VERIFY_IS_EQUAL(big.rightCols(1), Mat::Constant(rows + 2, 1, T(7)));
+  VERIFY_IS_EQUAL(big.bottomRows(1), Mat::Constant(1, cols + 3, T(7)));
+}
+
+template <typename T>
+void float_accumulations() {
+  const Index rows = internal::random<Index>(20, 200);
+  const Index cols = internal::random<Index>(20, 200);
+  const Index depth = internal::random<Index>(20, 600);
+  CALL_SUBTEST((float_accumulation<T, ColMajor, ColMajor, ColMajor>(rows, cols, depth)));
+  CALL_SUBTEST((float_accumulation<T, RowMajor, ColMajor, RowMajor>(rows, cols, depth)));
+  CALL_SUBTEST((float_accumulation<T, RowMajor, RowMajor, ColMajor>(rows, cols, depth)));
+  CALL_SUBTEST((float_accumulation<T, ColMajor, RowMajor, RowMajor>(13, 9, 31)));
+}
+
+template <typename T>
+void float_accumulation_depth() {
+  // Summed in T, a run of ones stalls where T's spacing reaches 2: at 2048 for half and 256 for bfloat16.
+  const Index depth = std::is_same<T, half>::value ? 4096 : 1024;
+  using Mat = Matrix<T, Dynamic, Dynamic>;
+  Mat A = Mat::Ones(24, depth), B = Mat::Ones(depth, 21);
+  Mat C = A * B;
+  VERIFY_IS_EQUAL(C, Mat::Constant(24, 21, T(float(depth))));
+
+  // The scalar factors combine in float: s * t = 2^-28 is below half's and above bfloat16's smallest subnormal, and
+  // depth * s * t = 2^-16 (half) or 2^-18 (bfloat16) is representable in both.
+  const T s = T(std::ldexp(1.0f, -14));
+  C.noalias() = (s * A) * (B * s);
+  VERIFY_IS_EQUAL(C, Mat::Constant(24, 21, T(std::ldexp(float(depth), -28))));
+}
+
 EIGEN_DECLARE_TEST(product_cast) {
   using MatrixXhalf = Matrix<half, Dynamic, Dynamic>;
+  using internal::gemm_accumulates_in_float;
   using internal::gemm_operand_traits;
 #ifndef EIGEN_USE_BLAS
   STATIC_CHECK((std::is_same<gemm_operand_traits<decltype(MatrixXhalf().cast<float>())>::StorageScalar, half>::value));
@@ -107,6 +169,10 @@ EIGEN_DECLARE_TEST(product_cast) {
                              float>::value));
   STATIC_CHECK((std::is_same<gemm_operand_traits<decltype(MatrixXf().cast<std::complex<float>>())>::StorageScalar,
                              std::complex<float>>::value));
+  STATIC_CHECK((gemm_accumulates_in_float<half, half>::value));
+  STATIC_CHECK((!gemm_accumulates_in_float<float, float>::value));
+  STATIC_CHECK((!gemm_accumulates_in_float<double, double>::value));
+
   for (int i = 0; i < g_repeat; i++) {
     CALL_SUBTEST_1((lazy_cast_products<half, float>()));
     CALL_SUBTEST_2((lazy_cast_products<bfloat16, float>()));
@@ -115,4 +181,10 @@ EIGEN_DECLARE_TEST(product_cast) {
     CALL_SUBTEST_4((lazy_cast_products<int, double>()));
     CALL_SUBTEST_4((lazy_cast_products<half, double>()));
   }
+  for (int i = 0; i < g_repeat; i++) {
+    CALL_SUBTEST_5(float_accumulations<half>());
+    CALL_SUBTEST_6(float_accumulations<bfloat16>());
+  }
+  CALL_SUBTEST_5(float_accumulation_depth<half>());
+  CALL_SUBTEST_6(float_accumulation_depth<bfloat16>());
 }
