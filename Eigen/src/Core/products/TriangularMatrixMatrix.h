@@ -70,6 +70,16 @@ EIGEN_DONT_INLINE void product_triangular_matrix_matrix<
   Index depth = IsLower ? diagSize : _depth;
   Index cols = _cols;
 
+  // Reuse GEMM's RHS cache budget; a full-width packed RHS can exceed it for wide products.
+  const Index nc = (numext::mini)(cols, blocking.nc());
+  if (cols > nc) {
+    for (Index j = 0; j < cols; j += nc)
+      run(rows, (numext::mini)(nc, cols - j), depth, lhs_, lhsStride,
+          rhs_ + j * (RhsStorageOrder == ColMajor ? rhsStride : 1), rhsStride, res_ + j * resStride, resIncr, resStride,
+          alpha, blocking);
+    return;
+  }
+
   using LhsMapper = const_blas_data_mapper<Scalar, Index, LhsStorageOrder>;
   using RhsMapper = const_blas_data_mapper<Scalar, Index, RhsStorageOrder>;
   using ResMapper = blas_data_mapper<typename Traits::ResScalar, Index, ColMajor, Unaligned, ResInnerStride>;
@@ -95,7 +105,8 @@ EIGEN_DONT_INLINE void product_triangular_matrix_matrix<
        SmallPanelWidth * SmallPanelWidth * sizeof(Scalar) <= EIGEN_STACK_ALLOCATION_LIMIT)
           ? int(SmallPanelWidth)
           : Dynamic;
-  Matrix<Scalar, PanelCapacity, PanelCapacity, LhsStorageOrder> triangularBuffer(SmallPanelWidth, SmallPanelWidth);
+  Matrix<Scalar, Dynamic, Dynamic, LhsStorageOrder, PanelCapacity, PanelCapacity> triangularBuffer(panelWidth,
+                                                                                                   panelWidth);
   triangularBuffer.setZero();
   EIGEN_IF_CONSTEXPR ((Mode & ZeroDiag) == ZeroDiag)
     triangularBuffer.diagonal().setZero();
@@ -129,7 +140,7 @@ EIGEN_DONT_INLINE void product_triangular_matrix_matrix<
 
     // the block diagonal, if any:
     if (IsLower || actual_k2 < rows) {
-      // for each small vertical panels of lhs
+      // Partition the diagonal block into panels, padding only the small diagonal squares.
       for (Index k1 = 0; k1 < actual_kc; k1 += panelWidth) {
         Index actualPanelWidth = std::min<Index>(actual_kc - k1, panelWidth);
         Index lengthTarget = IsLower ? actual_kc - k1 - actualPanelWidth : k1;
@@ -143,6 +154,25 @@ EIGEN_DONT_INLINE void product_triangular_matrix_matrix<
           EIGEN_IF_CONSTEXPR (SetDiag) triangularBuffer.coeffRef(k, k) = lhs(startBlock + k, startBlock + k);
           for (Index i = IsLower ? k + 1 : 0; IsLower ? i < actualPanelWidth : i < k; ++i)
             triangularBuffer.coeffRef(i, k) = lhs(startBlock + i, startBlock + k);
+        }
+        if (cols >= Traits::nr && actual_kc > panelWidth) {
+          // For P equal panels, vertical slicing updates each output panel (P+1)/2 times
+          // on average. Horizontal slicing updates it once, with the same packed coefficients and flop count.
+          // Keep vertical slicing for a partial RHS micro-panel, where the kernel benefits from more rows.
+          gemm_pack_lhs<Scalar, Index, LhsMapper, Traits::mr, Traits::LhsProgress, typename Traits::LhsPacket4Packing,
+                        LhsStorageOrder, false, true>
+              pack_lhs_panel;
+          const Index denseOffset = IsLower ? 0 : k1 + actualPanelWidth;
+          const Index denseLength = IsLower ? k1 : actual_kc - denseOffset;
+          if (denseLength > 0)
+            pack_lhs_panel(blockA, lhs.getSubMapper(startBlock, actual_k2 + denseOffset), denseLength, actualPanelWidth,
+                           actual_kc, denseOffset);
+          pack_lhs_panel(blockA, LhsMapper(triangularBuffer.data(), triangularBuffer.outerStride()), actualPanelWidth,
+                         actualPanelWidth, actual_kc, k1);
+          const Index offset = IsLower ? 0 : k1;
+          gebp_kernel(res.getSubMapper(startBlock, 0), blockA, blockB, actualPanelWidth, denseLength + actualPanelWidth,
+                      cols, alpha, actual_kc, actual_kc, offset, offset);
+          continue;
         }
         pack_lhs(blockA, LhsMapper(triangularBuffer.data(), triangularBuffer.outerStride()), actualPanelWidth,
                  actualPanelWidth);
@@ -325,6 +355,31 @@ struct triangular_product_impl<Mode, LhsIsTriangular, Lhs, false, Rhs, false> {
     using RhsScalar = typename Rhs::Scalar;
     using Scalar = typename Dest::Scalar;
 
+    if (a_lhs.rows() == 0 || a_lhs.cols() == 0 || a_rhs.cols() == 0) return;
+    // Reuse GEMM's generic crossover: below it, packing costs more than a coefficient-based product.
+    if (a_lhs.rows() + a_lhs.cols() + a_rhs.cols() < EIGEN_GEMM_TO_COEFFBASED_THRESHOLD) {
+      constexpr bool lower = (Mode & Lower) != 0;
+      constexpr bool implicitDiag = (Mode & (UnitDiag | ZeroDiag)) != 0;
+      evaluator<Lhs> lhs(a_lhs);
+      evaluator<Rhs> rhs(a_rhs);
+      const Index depth = a_lhs.cols();
+      for (Index j = 0; j < a_rhs.cols(); ++j) {
+        for (Index i = 0; i < a_lhs.rows(); ++i) {
+          const Index diagonal = LhsIsTriangular ? i : j;
+          const bool prefix = LhsIsTriangular ? lower : !lower;
+          const Index begin = prefix ? 0 : diagonal + Index(implicitDiag);
+          const Index end = prefix ? (numext::mini)(depth, diagonal + Index(!implicitDiag)) : depth;
+          Scalar sum(0);
+          for (Index k = begin; k < end; ++k) sum += lhs.coeff(i, k) * rhs.coeff(k, j);
+          EIGEN_IF_CONSTEXPR ((Mode & UnitDiag) != 0) {
+            if (diagonal < depth) sum += LhsIsTriangular ? rhs.coeff(i, j) : lhs.coeff(i, j);
+          }
+          dst.coeffRef(i, j) += alpha * sum;
+        }
+      }
+      return;
+    }
+
     using LhsBlasTraits = internal::blas_traits<Lhs>;
     using ActualLhsType = typename LhsBlasTraits::DirectLinearAccessType;
     using ActualLhsTypeCleaned = internal::remove_all_t<ActualLhsType>;
@@ -334,12 +389,6 @@ struct triangular_product_impl<Mode, LhsIsTriangular, Lhs, false, Rhs, false> {
 
     internal::add_const_on_value_type_t<ActualLhsType> lhs = LhsBlasTraits::extract(a_lhs);
     internal::add_const_on_value_type_t<ActualRhsType> rhs = RhsBlasTraits::extract(a_rhs);
-
-    // Empty product, return early.  Otherwise, we get `nullptr` use errors below when we try to access
-    // coeffRef(0,0).
-    if (lhs.size() == 0 || rhs.size() == 0) {
-      return;
-    }
 
     LhsScalar lhs_alpha = LhsBlasTraits::extractScalarFactor(a_lhs);
     RhsScalar rhs_alpha = RhsBlasTraits::extractScalarFactor(a_rhs);
