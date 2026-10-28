@@ -8,6 +8,16 @@
 
 namespace Eigen {
 
+// Coefficient-wise reference independent of StructuredMatrices and KroneckerProduct.
+template <typename Scalar>
+Matrix<Scalar, Dynamic, Dynamic> reference_kron(const Matrix<Scalar, Dynamic, Dynamic>& A,
+                                                const Matrix<Scalar, Dynamic, Dynamic>& B) {
+  Matrix<Scalar, Dynamic, Dynamic> K(A.rows() * B.rows(), A.cols() * B.cols());
+  for (Index i = 0; i < K.rows(); ++i)
+    for (Index j = 0; j < K.cols(); ++j) K(i, j) = A(i / B.rows(), j / B.cols()) * B(i % B.rows(), j % B.cols());
+  return K;
+}
+
 // Vectorized complex products can introduce Inf - Inf across component accumulators.
 // Preserve scalar evaluation order for the non-finite reference results.
 template <typename Scalar>
