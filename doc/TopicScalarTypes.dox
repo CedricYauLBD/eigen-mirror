@@ -40,7 +40,9 @@ A few practical notes:
   - <b>\c Eigen::half and \c Eigen::bfloat16</b> are primarily storage and interchange formats:
     on hardware without native arithmetic, operations are emulated by converting to \c float and
     back. Both are vectorized on instruction sets with hardware support (see
-    \ref TopicVectorization).
+    \ref TopicVectorization). To multiply such matrices in \c float,
+    write <tt>A.cast<float>() * B.cast<float>()</tt>: the kernel converts the operands while it
+    reads them, without first copying them to \c float.
 
 The scalar types with vectorized kernels for a given instruction set are listed on the
 \ref TopicVectorization "vectorization page"; every supported scalar type also works through the

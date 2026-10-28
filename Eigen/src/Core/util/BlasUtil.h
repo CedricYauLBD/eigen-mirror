@@ -56,8 +56,12 @@ template <typename Scalar, typename Index, typename DataMapper, int Pack1, int P
           bool Conjugate = false, bool PanelMode = false>
 struct gemm_pack_lhs;
 
+// LhsStorage and RhsStorage are the scalar types the operands are stored in. The packers convert each coefficient to
+// LhsScalar or RhsScalar as they read it, so that A.cast<float>() * B.cast<float>() runs the float kernel on half
+// operands without materializing the casts.
 template <typename Index, typename LhsScalar, int LhsStorageOrder, bool ConjugateLhs, typename RhsScalar,
-          int RhsStorageOrder, bool ConjugateRhs, int ResStorageOrder, int ResInnerStride>
+          int RhsStorageOrder, bool ConjugateRhs, int ResStorageOrder, int ResInnerStride,
+          typename LhsStorage = LhsScalar, typename RhsStorage = RhsScalar>
 struct general_matrix_matrix_product;
 
 template <typename Index, typename LhsScalar, typename LhsMapper, int LhsStorageOrder, bool ConjugateLhs,
@@ -477,6 +481,87 @@ class const_blas_data_mapper : public blas_data_mapper<const Scalar, Index, Stor
     return SubMapper(&(this->operator()(i, j)), this->m_stride);
   }
 };
+
+// Loads a Packet from the SrcScalar coefficients at `from`, each converted as cast<SrcScalar, Scalar> converts it.
+// Vectorized when a source packet of as many coefficients casts to Packet, as in the core_cast_op evaluator.
+template <typename SrcScalar, typename Packet, typename = void>
+struct cast_ploadu_impl {
+  using Scalar = typename unpacket_traits<Packet>::type;
+  static constexpr int Size = unpacket_traits<Packet>::size;
+  static EIGEN_ALWAYS_INLINE Packet run(const SrcScalar* from) {
+    Scalar to[Size];
+    for (int i = 0; i < Size; ++i) to[i] = cast<SrcScalar, Scalar>(from[i]);
+    return ploadu<Packet>(to);
+  }
+};
+template <typename SrcScalar, typename Packet>
+struct cast_ploadu_impl<
+    SrcScalar, Packet,
+    std::enable_if_t<type_casting_traits<SrcScalar, typename unpacket_traits<Packet>::type>::VectorizedCast &&
+                     find_packet_by_size<SrcScalar, unpacket_traits<Packet>::size>::value>> {
+  using SrcPacket = typename find_packet_by_size<SrcScalar, unpacket_traits<Packet>::size>::type;
+  static EIGEN_ALWAYS_INLINE Packet run(const SrcScalar* from) {
+    return pcast<SrcPacket, Packet>(ploadu<SrcPacket>(from));
+  }
+};
+
+template <typename Scalar, typename SrcScalar, typename Index>
+class BlasCastLinearMapper {
+ public:
+  EIGEN_ALWAYS_INLINE BlasCastLinearMapper(const SrcScalar* data) : m_data(data) {}
+
+  EIGEN_ALWAYS_INLINE void prefetch(Index i) const { internal::prefetch(m_data + i); }
+
+  EIGEN_ALWAYS_INLINE Scalar operator()(Index i) const { return cast<SrcScalar, Scalar>(m_data[i]); }
+
+  template <typename PacketType>
+  EIGEN_ALWAYS_INLINE PacketType loadPacket(Index i) const {
+    return cast_ploadu_impl<SrcScalar, PacketType>::run(m_data + i);
+  }
+
+ protected:
+  const SrcScalar* m_data;
+};
+
+// Read-only counterpart of const_blas_data_mapper over SrcScalar storage that reads each coefficient as Scalar. It
+// provides what the GEMM packers read through, so that they pack A.cast<Scalar>() straight from A.
+template <typename Scalar, typename SrcScalar, typename Index, int StorageOrder>
+class blas_cast_data_mapper {
+ public:
+  using LinearMapper = BlasCastLinearMapper<Scalar, SrcScalar, Index>;
+  using SubMapper = blas_cast_data_mapper;
+
+  EIGEN_ALWAYS_INLINE blas_cast_data_mapper(const SrcScalar* data, Index stride) : m_data(data), m_stride(stride) {}
+
+  EIGEN_ALWAYS_INLINE SubMapper getSubMapper(Index i, Index j) const { return SubMapper(address(i, j), m_stride); }
+
+  EIGEN_ALWAYS_INLINE LinearMapper getLinearMapper(Index i, Index j) const { return LinearMapper(address(i, j)); }
+
+  EIGEN_ALWAYS_INLINE void prefetch(Index i, Index j) const { internal::prefetch(address(i, j)); }
+
+  EIGEN_ALWAYS_INLINE Scalar operator()(Index i, Index j) const { return cast<SrcScalar, Scalar>(*address(i, j)); }
+
+  template <typename PacketType>
+  EIGEN_ALWAYS_INLINE PacketType loadPacket(Index i, Index j) const {
+    return cast_ploadu_impl<SrcScalar, PacketType>::run(address(i, j));
+  }
+
+  EIGEN_ALWAYS_INLINE Index stride() const { return m_stride; }
+
+ protected:
+  EIGEN_ALWAYS_INLINE const SrcScalar* address(Index i, Index j) const {
+    return m_data + (StorageOrder == RowMajor ? j + i * m_stride : i + j * m_stride);
+  }
+
+  const SrcScalar* EIGEN_RESTRICT m_data;
+  const Index m_stride;
+};
+
+// The mapper the GEMM packers read an operand stored as StorageScalar through, as Scalar.
+template <typename Scalar, typename StorageScalar, typename Index, int StorageOrder>
+using gemm_operand_mapper =
+    std::conditional_t<std::is_same<Scalar, StorageScalar>::value, const_blas_data_mapper<Scalar, Index, StorageOrder>,
+                       blas_cast_data_mapper<Scalar, StorageScalar, Index, StorageOrder>>;
 
 /* Helper class to analyze the factors of a Product expression.
  * In particular it allows to pop out operator-, scalar multiples,
