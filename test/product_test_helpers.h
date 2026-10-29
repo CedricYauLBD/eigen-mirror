@@ -123,6 +123,43 @@ bool verifyProductUpdate(const MatrixBase<D1>& actual, const MatrixBase<D2>& exp
                                      product_update_error_bound(alpha, A, B, C0, num_products, lambda));
 }
 
+// Verify, coefficient by coefficient, that C = C0 + A*B was summed in float and rounded once to the 16-bit T.
+// With e the exact result and S = |C0| + |A|*|B|, Thm 3.5 for the float sum and one rounding to T give
+//   |C - e| <= u_T * |e| + (1 + u_T) * gamma_{k+2}(u_float) * S + denorm_min(T) / 2,
+// where u is the unit roundoff and the last term covers a result that underflows in T. Summed in T, the
+// second term would be gamma_k(u_T) * S instead, larger by the factor u_T / u_float = 2^13 (half) or 2^16 (bfloat16).
+template <typename DC, typename DC0, typename DA, typename DB>
+bool verify_float_accumulated_product(const MatrixBase<DC>& C, const MatrixBase<DC0>& C0, const MatrixBase<DA>& A,
+                                      const MatrixBase<DB>& B) {
+  using Scalar = typename DC::Scalar;
+  const double u = 0.5 * static_cast<double>(NumTraits<Scalar>::epsilon());
+  const double u_float = 0.5 * static_cast<double>(NumTraits<float>::epsilon());
+  const double n = double(A.cols() + 2);
+  const double gamma = n * u_float / (1 - n * u_float);
+  const double eta = 0.5 * static_cast<double>(std::numeric_limits<Scalar>::denorm_min());
+  bool ok = true;
+  double worst = 0.0;
+  for (Index j = 0; j < C.cols(); ++j)
+    for (Index i = 0; i < C.rows(); ++i) {
+      const double c0 = static_cast<double>(C0.coeff(i, j));
+      double exact = c0, magnitude = numext::abs(c0);
+      for (Index l = 0; l < A.cols(); ++l) {
+        const double a = static_cast<double>(A.coeff(i, l)), b = static_cast<double>(B.coeff(l, j));
+        exact += a * b;
+        magnitude += numext::abs(a * b);
+      }
+      const double bound = u * numext::abs(exact) + (1 + u) * gamma * magnitude + eta;
+      const double error = numext::abs(static_cast<double>(C.coeff(i, j)) - exact);
+      if (!(error <= bound)) ok = false, worst = (std::max)(worst, error / bound);
+    }
+  if (!ok) {
+    std::cerr << "Float-accumulated product verification failed: error up to " << worst << " times the bound"
+              << std::endl;
+    return false;
+  }
+  return true;
+}
+
 }  // namespace Eigen
 
 #endif  // EIGEN_TEST_PRODUCT_TEST_HELPERS_H
