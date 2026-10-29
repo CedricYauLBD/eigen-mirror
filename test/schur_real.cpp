@@ -30,9 +30,9 @@ void verifyIsQuasiTriangular(const MatrixType& T) {
   for (int row = 1; row < size; ++row) {
     if (!numext::is_exactly_zero(T(row, row - 1))) {
       VERIFY(row == size - 1 || numext::is_exactly_zero(T(row + 1, row)));
-      Scalar tr = T(row - 1, row - 1) + T(row, row);
-      Scalar det = T(row - 1, row - 1) * T(row, row) - T(row - 1, row) * T(row, row - 1);
-      VERIFY(4 * det > tr * tr);
+      // (a-d)^2/4 + b*c < 0 avoids cancellation of the common diagonal shift in tr^2 - 4*det.
+      const Scalar half_difference = (T(row - 1, row - 1) - T(row, row)) / Scalar(2);
+      VERIFY(half_difference * half_difference + T(row - 1, row) * T(row, row - 1) < Scalar(0));
     }
   }
 }
@@ -299,6 +299,14 @@ void schur_workspace_ref() {
 }
 
 EIGEN_DECLARE_TEST(schur_real) {
+  // The imaginary part is representable, but tr^2 and 4*det round to the same value.
+  Matrix2f small_imaginary_float;
+  small_imaginary_float << 1, NumTraits<float>::epsilon(), -NumTraits<float>::epsilon(), 1;
+  CALL_SUBTEST_1(verifyIsQuasiTriangular(small_imaginary_float));
+  Matrix2d small_imaginary_double;
+  small_imaginary_double << 1, NumTraits<double>::epsilon(), -NumTraits<double>::epsilon(), 1;
+  CALL_SUBTEST_2(verifyIsQuasiTriangular(small_imaginary_double));
+
   CALL_SUBTEST_1((schur<Matrix4f>()));
   CALL_SUBTEST_2((schur<MatrixXd>(internal::random<int>(1, EIGEN_TEST_MAX_SIZE / 4))));
   CALL_SUBTEST_3((schur<Matrix<float, 1, 1> >()));
