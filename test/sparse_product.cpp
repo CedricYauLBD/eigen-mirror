@@ -1090,8 +1090,27 @@ void test_sparse_cwise_sum_operand_types() {
 
 struct SparseNoncommutingScalar {
   explicit SparseNoncommutingScalar(int diagonal = 0) : values{{diagonal, 0, 0, diagonal}} {}
+  SparseNoncommutingScalar& operator=(int diagonal) {
+    values = {{diagonal, 0, 0, diagonal}};
+    return *this;
+  }
   std::array<int, 4> values;
 };
+
+double abs(const SparseNoncommutingScalar& scalar) {
+  double result = 0;
+  for (int value : scalar.values) result += numext::abs(value);
+  return result;
+}
+
+namespace Eigen {
+template <>
+struct NumTraits<SparseNoncommutingScalar> : GenericNumTraits<SparseNoncommutingScalar> {
+  using Real = double;
+  static constexpr bool IsSigned = true;
+  static constexpr bool RequireInitialization = true;
+};
+}  // namespace Eigen
 
 SparseNoncommutingScalar operator*(const SparseNoncommutingScalar& lhs, const SparseNoncommutingScalar& rhs) {
   SparseNoncommutingScalar result;
@@ -1176,6 +1195,36 @@ void test_sparse_product_operand_order() {
   }
 }
 
+template <int LOrder, int ROrder, int DOrder>
+void test_sparse_pruned_operand_order() {
+  using Scalar = SparseNoncommutingScalar;
+  SparseMatrix<Scalar, LOrder> lhs(2, 3);
+  SparseMatrix<Scalar, ROrder> rhs(3, 2);
+  lhs.reserve(VectorXi::Constant(lhs.outerSize(), 3));
+  rhs.reserve(VectorXi::Constant(rhs.outerSize(), 3));
+  lhs.insert(0, 0).values = {{1, 2, 0, 1}};
+  lhs.insert(0, 2).values = {{2, 1, 0, 1}};
+  rhs.insert(0, 1).values = {{1, 0, 3, 1}};
+  rhs.insert(2, 1).values = {{2, 0, 1, 1}};
+  for (int compressed = 0; compressed < 2; ++compressed) {
+    SparseMatrix<Scalar, DOrder> result(2, 2);
+    internal::sparse_sparse_product_with_pruning_selector<decltype(lhs), decltype(rhs), decltype(result)>::run(
+        lhs, rhs, result, 0.0);
+    const SparseMatrix<Scalar, DOrder> publicResult = (lhs * rhs).pruned(Scalar(0), 0.0);
+    VERIFY(result.innerIndicesAreSorted());
+    VERIFY_IS_EQUAL(result.nonZeros(), 1);
+    for (Index j = 0; j < 2; ++j)
+      for (Index i = 0; i < 2; ++i) {
+        Scalar expected;
+        for (Index k = 0; k < 3; ++k) expected += lhs.coeff(i, k) * rhs.coeff(k, j);
+        VERIFY(result.coeff(i, j).values == expected.values);
+        VERIFY(publicResult.coeff(i, j).values == expected.values);
+      }
+    lhs.makeCompressed();
+    rhs.makeCompressed();
+  }
+}
+
 template <typename = void>
 void test_sparse_vector_dense_product() {
   SparseVector<double> sv(3);
@@ -1219,6 +1268,14 @@ EIGEN_DECLARE_TEST(sparse_product) {
     CALL_SUBTEST_9((test_sparse_product_operand_order<RowMajor, ColMajor, RowMajor>()));
     CALL_SUBTEST_9((test_sparse_product_operand_order<RowMajor, RowMajor, ColMajor>()));
     CALL_SUBTEST_9((test_sparse_product_operand_order<RowMajor, RowMajor, RowMajor>()));
+    CALL_SUBTEST_11((test_sparse_pruned_operand_order<ColMajor, ColMajor, ColMajor>()));
+    CALL_SUBTEST_11((test_sparse_pruned_operand_order<ColMajor, ColMajor, RowMajor>()));
+    CALL_SUBTEST_11((test_sparse_pruned_operand_order<ColMajor, RowMajor, ColMajor>()));
+    CALL_SUBTEST_11((test_sparse_pruned_operand_order<ColMajor, RowMajor, RowMajor>()));
+    CALL_SUBTEST_11((test_sparse_pruned_operand_order<RowMajor, ColMajor, ColMajor>()));
+    CALL_SUBTEST_11((test_sparse_pruned_operand_order<RowMajor, ColMajor, RowMajor>()));
+    CALL_SUBTEST_11((test_sparse_pruned_operand_order<RowMajor, RowMajor, ColMajor>()));
+    CALL_SUBTEST_11((test_sparse_pruned_operand_order<RowMajor, RowMajor, RowMajor>()));
 
     CALL_SUBTEST_6((test_pruned_product_custom_scalar<>()));
     CALL_SUBTEST_6((test_ambivector_discard_custom_scalar<>()));
