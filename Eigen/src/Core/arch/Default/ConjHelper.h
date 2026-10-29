@@ -89,7 +89,7 @@ struct conj_helper {
   }
 
   EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE ResultType pmul(const LhsType& x, const RhsType& y) const {
-    return conj_if<ConjLhs>()(x) * conj_if<ConjRhs>()(y);
+    return internal::mul(conj_if<ConjLhs>()(x), conj_if<ConjRhs>()(y));
   }
 };
 
@@ -105,9 +105,9 @@ struct conj_helper<LhsScalar, RhsScalar, true, true> {
   // Conjugation can reverse multiplication for noncommutative scalars.
   EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE ResultType pmul(const LhsScalar& x, const RhsScalar& y) const {
     EIGEN_IF_CONSTEXPR ((functor_is_commutative<scalar_product_op<LhsScalar, RhsScalar>>::value)) {
-      return numext::conj(x * y);
+      return numext::conj(internal::mul(x, y));
     } else {
-      return numext::conj(x) * numext::conj(y);
+      return internal::mul(numext::conj(x), numext::conj(y));
     }
   }
 };

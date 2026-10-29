@@ -4,13 +4,15 @@
 #include <benchmark/benchmark.h>
 #include <Eigen/Core>
 
-template <typename Real, int Size, bool ComplexLeft>
+template <typename Real, int Size, bool ComplexLeft, bool ExpandReal = false>
 static void BM_MixedSmallProduct(benchmark::State& state) {
   using Complex = std::complex<Real>;
-  using Lhs = std::conditional_t<ComplexLeft, Eigen::Matrix<Complex, Size, Size, Eigen::ColMajor>,
-                                 Eigen::Matrix<Real, 1, Size>>;
-  using Rhs = std::conditional_t<ComplexLeft, Eigen::Matrix<Real, Size, 1>,
-                                 Eigen::Matrix<Complex, Size, Size, Eigen::RowMajor>>;
+  using MatrixScalar = std::conditional_t<ExpandReal, Real, Complex>;
+  using FactorScalar = std::conditional_t<ExpandReal, Complex, Real>;
+  using Lhs = std::conditional_t<ComplexLeft, Eigen::Matrix<MatrixScalar, Size, Size, Eigen::ColMajor>,
+                                 Eigen::Matrix<FactorScalar, 1, Size>>;
+  using Rhs = std::conditional_t<ComplexLeft, Eigen::Matrix<FactorScalar, Size, 1>,
+                                 Eigen::Matrix<MatrixScalar, Size, Size, Eigen::RowMajor>>;
   using Dst = Eigen::Matrix<Complex, ComplexLeft ? Size : 1, ComplexLeft ? 1 : Size>;
   const Lhs lhs = Lhs::Random();
   const Rhs rhs = Rhs::Random();
@@ -55,3 +57,20 @@ BENCHMARK_TEMPLATE(BM_MixedSmallProduct, double, 2, false);
 BENCHMARK_TEMPLATE(BM_MixedSmallProduct, double, 3, false);
 BENCHMARK_TEMPLATE(BM_MixedSmallProduct, double, 4, false);
 BENCHMARK_TEMPLATE(BM_MixedSmallProduct, double, 8, false);
+
+BENCHMARK_TEMPLATE(BM_MixedSmallProduct, float, 2, true, true);
+BENCHMARK_TEMPLATE(BM_MixedSmallProduct, float, 3, true, true);
+BENCHMARK_TEMPLATE(BM_MixedSmallProduct, float, 4, true, true);
+BENCHMARK_TEMPLATE(BM_MixedSmallProduct, float, 8, true, true);
+BENCHMARK_TEMPLATE(BM_MixedSmallProduct, double, 2, true, true);
+BENCHMARK_TEMPLATE(BM_MixedSmallProduct, double, 3, true, true);
+BENCHMARK_TEMPLATE(BM_MixedSmallProduct, double, 4, true, true);
+BENCHMARK_TEMPLATE(BM_MixedSmallProduct, double, 8, true, true);
+BENCHMARK_TEMPLATE(BM_MixedSmallProduct, float, 2, false, true);
+BENCHMARK_TEMPLATE(BM_MixedSmallProduct, float, 3, false, true);
+BENCHMARK_TEMPLATE(BM_MixedSmallProduct, float, 4, false, true);
+BENCHMARK_TEMPLATE(BM_MixedSmallProduct, float, 8, false, true);
+BENCHMARK_TEMPLATE(BM_MixedSmallProduct, double, 2, false, true);
+BENCHMARK_TEMPLATE(BM_MixedSmallProduct, double, 3, false, true);
+BENCHMARK_TEMPLATE(BM_MixedSmallProduct, double, 4, false, true);
+BENCHMARK_TEMPLATE(BM_MixedSmallProduct, double, 8, false, true);
