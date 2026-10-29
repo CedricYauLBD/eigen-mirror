@@ -96,9 +96,10 @@ EIGEN_DONT_INLINE void product_triangular_matrix_matrix<
        SmallPanelWidth * SmallPanelWidth * sizeof(Scalar) <= EIGEN_STACK_ALLOCATION_LIMIT)
           ? int(SmallPanelWidth)
           : Dynamic;
-  Matrix<Scalar, Dynamic, Dynamic, LhsStorageOrder, PanelCapacity, PanelCapacity> triangularBuffer(panelWidth,
-                                                                                                   panelWidth);
-  triangularBuffer.setZero();
+  // A runtime-sized buffer of the same capacity made the product 2-5% slower for cols < nr on NEON with GCC 13, so
+  // keep the compile-time size and clear only the active corner.
+  Matrix<Scalar, PanelCapacity, PanelCapacity, LhsStorageOrder> triangularBuffer(SmallPanelWidth, SmallPanelWidth);
+  triangularBuffer.topLeftCorner(panelWidth, panelWidth).setZero();
   EIGEN_IF_CONSTEXPR ((Mode & ZeroDiag) == ZeroDiag)
     triangularBuffer.diagonal().setZero();
   else
