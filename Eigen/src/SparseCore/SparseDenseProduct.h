@@ -18,6 +18,28 @@ namespace Eigen {
 
 namespace internal {
 
+template <typename Lhs, typename Rhs, typename Dest, typename Alpha>
+void ordered_sparse_dense_add(Dest& dst, const Lhs& lhs, const Rhs& rhs, const Alpha& alpha, true_type) {
+  if (numext::is_exactly_zero(alpha)) return;
+  evaluator<Lhs> lhsEval(lhs);
+  evaluator<Rhs> rhsEval(rhs);
+  for (Index outer = 0; outer < lhs.outerSize(); ++outer)
+    for (typename evaluator<Lhs>::InnerIterator it(lhsEval, outer); it; ++it)
+      for (Index col = 0; col < rhs.cols(); ++col)
+        dst.coeffRef(it.row(), col) += alpha * (it.value() * rhsEval.coeff(it.col(), col));
+}
+
+template <typename Lhs, typename Rhs, typename Dest, typename Alpha>
+void ordered_sparse_dense_add(Dest& dst, const Lhs& lhs, const Rhs& rhs, const Alpha& alpha, false_type) {
+  if (numext::is_exactly_zero(alpha)) return;
+  evaluator<Lhs> lhsEval(lhs);
+  evaluator<Rhs> rhsEval(rhs);
+  for (Index outer = 0; outer < rhs.outerSize(); ++outer)
+    for (typename evaluator<Rhs>::InnerIterator it(rhsEval, outer); it; ++it)
+      for (Index row = 0; row < lhs.rows(); ++row)
+        dst.coeffRef(row, it.col()) += alpha * (lhsEval.coeff(row, it.row()) * it.value());
+}
+
 template <>
 struct product_promote_storage_type<Sparse, Dense, OuterProduct> {
   using ret = Sparse;
@@ -462,7 +484,19 @@ struct generic_product_impl<Lhs, Rhs, SparseShape, DenseShape, ProductType>
     using RhsNested = typename nested_eval<Rhs, ((Lhs::Flags & RowMajorBit) == 0) ? 1 : Dynamic>::type;
     LhsNested lhsNested(lhs);
     RhsNested rhsNested(rhs);
-    internal::sparse_time_dense_product(lhsNested, rhsNested, dst, alpha);
+    run(dst, lhsNested, rhsNested, alpha,
+        functor_is_commutative<scalar_product_op<typename Lhs::Scalar, typename Rhs::Scalar>>());
+  }
+
+ private:
+  template <typename Dest, typename NestedLhs, typename NestedRhs>
+  static void run(Dest& dst, const NestedLhs& lhs, const NestedRhs& rhs, const Scalar& alpha, true_type) {
+    internal::sparse_time_dense_product(lhs, rhs, dst, alpha);
+  }
+
+  template <typename Dest, typename NestedLhs, typename NestedRhs>
+  static void run(Dest& dst, const NestedLhs& lhs, const NestedRhs& rhs, const Scalar& alpha, false_type) {
+    ordered_sparse_dense_add(dst, lhs, rhs, alpha, true_type());
   }
 };
 
@@ -483,9 +517,21 @@ struct generic_product_impl<Lhs, Rhs, DenseShape, SparseShape, ProductType>
     LhsNested lhsNested(lhs);
     RhsNested rhsNested(rhs);
 
-    // transpose everything
+    run(dst, lhsNested, rhsNested, alpha,
+        functor_is_commutative<scalar_product_op<typename Lhs::Scalar, typename Rhs::Scalar>>());
+  }
+
+ private:
+  template <typename Dst, typename NestedLhs, typename NestedRhs>
+  static void run(Dst& dst, const NestedLhs& lhs, const NestedRhs& rhs, const Scalar& alpha, true_type) {
+    // Transposition reverses coefficient multiplication, so this needs commutative scalars.
     Transpose<Dst> dstT(dst);
-    internal::sparse_time_dense_product(rhsNested.transpose(), lhsNested.transpose(), dstT, alpha);
+    internal::sparse_time_dense_product(rhs.transpose(), lhs.transpose(), dstT, alpha);
+  }
+
+  template <typename Dst, typename NestedLhs, typename NestedRhs>
+  static void run(Dst& dst, const NestedLhs& lhs, const NestedRhs& rhs, const Scalar& alpha, false_type) {
+    ordered_sparse_dense_add(dst, lhs, rhs, alpha, false_type());
   }
 };
 

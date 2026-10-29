@@ -1289,6 +1289,43 @@ void test_sparse_quaternion_product_order() {
   }
 }
 
+template <int Order>
+void test_dense_sparse_quaternion_order() {
+  using Scalar = noncommutative_scalar::Quaternion;
+  const Scalar i(0, 1, 0, 0), j(0, 0, 1, 0);
+  Matrix<Scalar, Dynamic, Dynamic, Order> dense = Matrix<Scalar, Dynamic, Dynamic, Order>::Constant(3, 3, i);
+  Matrix<Scalar, 1, Dynamic> row = Matrix<Scalar, 1, Dynamic>::Constant(3, i);
+  SparseMatrix<Scalar, Order> sparse(3, 3);
+  sparse.reserve(VectorXi::Constant(sparse.outerSize(), 3));
+  sparse.insert(0, 0) = j;
+  sparse.insert(1, 2) = j;
+  for (int compressed = 0; compressed < 2; ++compressed) {
+    const Matrix<Scalar, Dynamic, Dynamic> product = dense * sparse;
+    Matrix<Scalar, Dynamic, Dynamic> scaled = Matrix<Scalar, Dynamic, Dynamic>::Zero(3, 3);
+    scaled.noalias() += j * (dense * sparse);
+    Matrix<Scalar, Dynamic, Dynamic> sparseLeft = Matrix<Scalar, Dynamic, Dynamic>::Zero(3, 3);
+    sparseLeft.noalias() += i * (sparse * dense);
+    const Matrix<Scalar, 1, Dynamic> rowSparse = row * sparse;
+    const SparseMatrix<Scalar, Order> cwise = dense.cwiseProduct(sparse);
+    for (Index col = 0; col < sparse.cols(); ++col) {
+      Scalar expectedRow;
+      for (Index k = 0; k < row.size(); ++k) expectedRow += row(k) * sparse.coeff(k, col);
+      VERIFY(rowSparse(col) == expectedRow);
+      for (Index r = 0; r < dense.rows(); ++r) {
+        Scalar expected;
+        for (Index k = 0; k < dense.cols(); ++k) expected += dense(r, k) * sparse.coeff(k, col);
+        VERIFY(product(r, col) == expected);
+        VERIFY(scaled(r, col) == j * expected);
+        Scalar expectedLeft;
+        for (Index k = 0; k < dense.rows(); ++k) expectedLeft += sparse.coeff(r, k) * dense(k, col);
+        VERIFY(sparseLeft(r, col) == i * expectedLeft);
+        VERIFY(cwise.coeff(r, col) == dense(r, col) * sparse.coeff(r, col));
+      }
+    }
+    sparse.makeCompressed();
+  }
+}
+
 template <typename = void>
 void test_sparse_vector_dense_product() {
   SparseVector<double> sv(3);
@@ -1335,6 +1372,8 @@ EIGEN_DECLARE_TEST(sparse_product) {
     CALL_SUBTEST_10((test_sparse_outer_operand_types<>()));
     CALL_SUBTEST_12((test_sparse_quaternion_product_order<ColMajor>()));
     CALL_SUBTEST_12((test_sparse_quaternion_product_order<RowMajor>()));
+    CALL_SUBTEST_14((test_dense_sparse_quaternion_order<ColMajor>()));
+    CALL_SUBTEST_14((test_dense_sparse_quaternion_order<RowMajor>()));
     CALL_SUBTEST_11((test_sparse_pruned_operand_order<ColMajor, ColMajor, ColMajor>()));
     CALL_SUBTEST_11((test_sparse_pruned_operand_order<ColMajor, ColMajor, RowMajor>()));
     CALL_SUBTEST_11((test_sparse_pruned_operand_order<ColMajor, RowMajor, ColMajor>()));
