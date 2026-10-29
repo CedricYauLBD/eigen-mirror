@@ -765,8 +765,8 @@ template <typename LhsScalar, typename RhsScalar>
 struct gemm_accumulates_in_float : std::false_type {};
 template <>
 struct gemm_accumulates_in_float<half, half> : std::true_type {};
-// OpenBLAS's sbgemm already accumulates bfloat16 in float.
-#if !(defined(EIGEN_USE_OPENBLAS_BFLOAT16) && EIGEN_USE_OPENBLAS_BFLOAT16)
+// OpenBLAS's sbgemm already accumulates bfloat16 in float; Eigen/Core reaches it only under EIGEN_USE_BLAS.
+#if !(defined(EIGEN_USE_BLAS) && defined(EIGEN_USE_OPENBLAS_BFLOAT16) && EIGEN_USE_OPENBLAS_BFLOAT16)
 template <>
 struct gemm_accumulates_in_float<bfloat16, bfloat16> : std::true_type {};
 #endif
