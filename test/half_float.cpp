@@ -10,6 +10,7 @@
 #include <sstream>
 
 #include "main.h"
+#include "product_test_helpers.h"
 
 #define VERIFY_HALF_BITS_EQUAL(h, bits) \
   VERIFY_IS_EQUAL((numext::bit_cast<numext::uint16_t>(h)), (static_cast<numext::uint16_t>(bits)))
@@ -373,6 +374,23 @@ void test_product() {
   VERIFY_IS_APPROX(Ch.noalias() += Ah * Bh, (Cf.noalias() += Af * Bf).cast<half>());
 }
 
+// The blocked GEMM sums in float and rounds each coefficient once; the sizes keep it off the GEMV and coefficient-based
+// paths, which still round in half.
+void test_gemm_float_accumulation() {
+  typedef Matrix<half, Dynamic, Dynamic> MatrixXh;
+  Index rows = internal::random<Index>(2, EIGEN_TEST_MAX_SIZE);
+  Index cols = internal::random<Index>(2, EIGEN_TEST_MAX_SIZE);
+  Index depth = internal::random<Index>(20, EIGEN_TEST_MAX_SIZE);
+  MatrixXh A = MatrixXh::Random(rows, depth);
+  MatrixXh B = MatrixXh::Random(depth, cols);
+  MatrixXh C0 = MatrixXh::Random(rows, cols);
+  MatrixXh C = C0;
+  C.noalias() += A * B;
+  VERIFY(verify_float_accumulated_product(C, C0, A, B));
+  C.noalias() = A * B;
+  VERIFY(verify_float_accumulated_product(C, MatrixXh::Zero(rows, cols), A, B));
+}
+
 void test_nextafter() {
   VERIFY((numext::isnan)(numext::nextafter(std::numeric_limits<half>::quiet_NaN(), half(1.0f))));
   VERIFY((numext::isnan)(numext::nextafter(half(1.0f), std::numeric_limits<half>::quiet_NaN())));
@@ -418,6 +436,7 @@ EIGEN_DECLARE_TEST(half_float) {
     CALL_SUBTEST(test_trigonometric_functions());
     CALL_SUBTEST(test_array());
     CALL_SUBTEST(test_product());
+    CALL_SUBTEST(test_gemm_float_accumulation());
     CALL_SUBTEST(test_nextafter());
   }
 }

@@ -10,6 +10,7 @@
 #define TEST_IGNORE_STACK_ALLOCATED_TEMPORARY
 
 #include "main.h"
+#include "product_test_helpers.h"
 
 // GEMM operands of the form A.cast<T>() are packed straight from A, and half and bfloat16 GEMMs accumulate in float.
 
@@ -145,6 +146,11 @@ void float_accumulation_depth() {
   Mat A = Mat::Ones(24, depth), B = Mat::Ones(depth, 21);
   Mat C = A * B;
   VERIFY_IS_EQUAL(C, Mat::Constant(24, 21, T(float(depth))));
+  // Nonnegative operands, where no cancellation hides the growth of an error summed in T: here it stays one
+  // rounding to T at any depth.
+  Mat X = Mat::Random(24, depth).cwiseAbs(), Y = Mat::Random(depth, 21).cwiseAbs();
+  C.noalias() = X * Y;
+  VERIFY(verify_float_accumulated_product(C, Mat::Zero(24, 21), X, Y));
 
   // The scalar factors combine in float: s * t = 2^-28 is below half's and above bfloat16's smallest subnormal, and
   // depth * s * t = 2^-16 (half) or 2^-18 (bfloat16) is representable in both.
