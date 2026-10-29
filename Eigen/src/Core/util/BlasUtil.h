@@ -507,54 +507,57 @@ struct cast_ploadu_impl<
 
 template <typename Scalar, typename SrcScalar, typename Index>
 class BlasCastLinearMapper {
+  using SrcMapper = BlasLinearMapper<const SrcScalar, Index, Unaligned>;
+
  public:
-  EIGEN_ALWAYS_INLINE BlasCastLinearMapper(const SrcScalar* data) : m_data(data) {}
+  EIGEN_ALWAYS_INLINE explicit BlasCastLinearMapper(const SrcMapper& src) : m_src(src) {}
 
-  EIGEN_ALWAYS_INLINE void prefetch(Index i) const { internal::prefetch(m_data + i); }
+  EIGEN_ALWAYS_INLINE void prefetch(Index i) const { m_src.prefetch(i); }
 
-  EIGEN_ALWAYS_INLINE Scalar operator()(Index i) const { return cast<SrcScalar, Scalar>(m_data[i]); }
+  EIGEN_ALWAYS_INLINE Scalar operator()(Index i) const { return cast<SrcScalar, Scalar>(m_src(i)); }
 
   template <typename PacketType>
   EIGEN_ALWAYS_INLINE PacketType loadPacket(Index i) const {
-    return cast_ploadu_impl<SrcScalar, PacketType>::run(m_data + i);
+    return cast_ploadu_impl<SrcScalar, PacketType>::run(&m_src(i));
   }
 
- protected:
-  const SrcScalar* m_data;
+ private:
+  SrcMapper m_src;
 };
 
 // Read-only counterpart of const_blas_data_mapper over SrcScalar storage that reads each coefficient as Scalar. It
-// provides what the GEMM packers read through, so that they pack A.cast<Scalar>() straight from A.
+// provides what the GEMM packers read through, so that they pack A.cast<Scalar>() straight from A. It holds the
+// SrcScalar mapper rather than deriving from it, so that a packer cannot reach the unconverted loads of the base.
 template <typename Scalar, typename SrcScalar, typename Index, int StorageOrder>
 class blas_cast_data_mapper {
+  using SrcMapper = const_blas_data_mapper<SrcScalar, Index, StorageOrder>;
+
  public:
   using LinearMapper = BlasCastLinearMapper<Scalar, SrcScalar, Index>;
   using SubMapper = blas_cast_data_mapper;
 
-  EIGEN_ALWAYS_INLINE blas_cast_data_mapper(const SrcScalar* data, Index stride) : m_data(data), m_stride(stride) {}
+  EIGEN_ALWAYS_INLINE blas_cast_data_mapper(const SrcScalar* data, Index stride) : m_src(data, stride) {}
+  EIGEN_ALWAYS_INLINE explicit blas_cast_data_mapper(const SrcMapper& src) : m_src(src) {}
 
-  EIGEN_ALWAYS_INLINE SubMapper getSubMapper(Index i, Index j) const { return SubMapper(address(i, j), m_stride); }
+  EIGEN_ALWAYS_INLINE SubMapper getSubMapper(Index i, Index j) const { return SubMapper(m_src.getSubMapper(i, j)); }
 
-  EIGEN_ALWAYS_INLINE LinearMapper getLinearMapper(Index i, Index j) const { return LinearMapper(address(i, j)); }
+  EIGEN_ALWAYS_INLINE LinearMapper getLinearMapper(Index i, Index j) const {
+    return LinearMapper(m_src.getLinearMapper(i, j));
+  }
 
-  EIGEN_ALWAYS_INLINE void prefetch(Index i, Index j) const { internal::prefetch(address(i, j)); }
+  EIGEN_ALWAYS_INLINE void prefetch(Index i, Index j) const { m_src.prefetch(i, j); }
 
-  EIGEN_ALWAYS_INLINE Scalar operator()(Index i, Index j) const { return cast<SrcScalar, Scalar>(*address(i, j)); }
+  EIGEN_ALWAYS_INLINE Scalar operator()(Index i, Index j) const { return cast<SrcScalar, Scalar>(m_src(i, j)); }
 
   template <typename PacketType>
   EIGEN_ALWAYS_INLINE PacketType loadPacket(Index i, Index j) const {
-    return cast_ploadu_impl<SrcScalar, PacketType>::run(address(i, j));
+    return cast_ploadu_impl<SrcScalar, PacketType>::run(&m_src(i, j));
   }
 
-  EIGEN_ALWAYS_INLINE Index stride() const { return m_stride; }
+  EIGEN_ALWAYS_INLINE Index stride() const { return m_src.stride(); }
 
- protected:
-  EIGEN_ALWAYS_INLINE const SrcScalar* address(Index i, Index j) const {
-    return m_data + (StorageOrder == RowMajor ? j + i * m_stride : i + j * m_stride);
-  }
-
-  const SrcScalar* EIGEN_RESTRICT m_data;
-  const Index m_stride;
+ private:
+  SrcMapper m_src;
 };
 
 // The mapper the GEMM packers read an operand stored as StorageScalar through, as Scalar.
