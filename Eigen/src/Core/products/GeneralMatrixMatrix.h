@@ -851,11 +851,14 @@ struct generic_product_impl<Lhs, Rhs, DenseShape, DenseShape, GemmProduct>
 
 #ifdef EIGEN_VECTORIZE_SME
   // Whether the tiny-result kernel takes a product the coeff-based one would; the GEMM driver sees a RowMajor
-  // result transposed.
+  // result transposed. The kernel reads its operands in the kernel's scalar type, so a lazily cast operand cannot
+  // take it.
   template <typename Dst>
   static EIGEN_STRONG_INLINE bool tinyKernelWins(const Dst& dst, const Rhs& rhs) {
     constexpr bool row_major = (Dst::Flags & RowMajorBit) != 0;
-    return sme_tiny_gemm_pair<LhsScalar, RhsScalar>::value &&
+    return std::is_same<typename LhsBlasTraits::StorageScalar, LhsScalar>::value &&
+           std::is_same<typename RhsBlasTraits::StorageScalar, RhsScalar>::value &&
+           sme_tiny_gemm_pair<LhsScalar, RhsScalar>::value &&
            sme_tiny_gemm_wins<Scalar>(row_major ? dst.cols() : dst.rows(), row_major ? dst.rows() : dst.cols(),
                                       rhs.rows());
   }
