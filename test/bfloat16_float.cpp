@@ -415,11 +415,14 @@ void test_gemm_float_accumulation() {
   MatrixXh A = MatrixXh::Random(rows, depth);
   MatrixXh B = MatrixXh::Random(depth, cols);
   MatrixXh C0 = MatrixXh::Random(rows, cols);
+  // References in double, whose rounding error is negligible next to the bound.
+  MatrixXd exact = A.cast<double>() * B.cast<double>();
+  MatrixXd exact_update = C0.cast<double>() + exact;
   MatrixXh C = C0;
   C.noalias() += A * B;
-  VERIFY(verify_float_accumulated_product(C, C0, A, B));
+  VERIFY(verifyProductUpdate<float>(C.cast<double>(), exact_update, bfloat16(1), A, B, C0, 1));
   C.noalias() = A * B;
-  VERIFY(verify_float_accumulated_product(C, MatrixXh::Zero(rows, cols), A, B));
+  VERIFY(verifyProduct<float>(C.cast<double>(), exact, A, B, 1));
 }
 
 void test_nextafter() {
