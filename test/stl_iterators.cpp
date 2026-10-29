@@ -772,6 +772,13 @@ void test_cxx20_ranges(int rows = Rows, int cols = Cols) {
   static_assert(std::ranges::contiguous_range<DynVectorType>);
   static_assert(std::ranges::contiguous_range<const DynVectorType>);
 
+  using StridedVector = Map<DynVectorType, Unaligned, InnerStride<2>>;
+  using RuntimeStridedVector = Map<DynVectorType, Unaligned, InnerStride<Dynamic>>;
+  static_assert(std::random_access_iterator<typename StridedVector::iterator>);
+  static_assert(std::random_access_iterator<typename RuntimeStridedVector::iterator>);
+  static_assert(!std::contiguous_iterator<typename StridedVector::iterator>);
+  static_assert(!std::contiguous_iterator<typename RuntimeStridedVector::iterator>);
+
   // Sized range.
   static_assert(std::ranges::sized_range<VectorType>);
   static_assert(std::ranges::sized_range<DynVectorType>);
