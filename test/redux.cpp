@@ -77,7 +77,9 @@ void matrixRedux(const MatrixType& m) {
   const double bound = (NumTraits<Scalar>::IsComplex ? 8.0 : 2.0) * double(cols + 2 * rows + 1) *
                        static_cast<double>(NumTraits<RealScalar>::epsilon()) * absolute_sum;
   VERIFY((numext::isfinite)(bound));
-  VERIFY(static_cast<double>(numext::abs(nested - evaluated)) <= bound);
+  const double error = static_cast<double>(numext::abs(nested - evaluated));
+  if (!(error <= bound)) std::cerr << "nested reduction: error " << error << " > bound " << bound << std::endl;
+  VERIFY(error <= bound);
 
   // test slice vectorization assuming assign is ok
   Index r0 = internal::random<Index>(0, rows - 1);

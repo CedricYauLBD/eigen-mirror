@@ -30,7 +30,8 @@ void verifyIsQuasiTriangular(const MatrixType& T) {
   for (int row = 1; row < size; ++row) {
     if (!numext::is_exactly_zero(T(row, row - 1))) {
       VERIFY(row == size - 1 || numext::is_exactly_zero(T(row + 1, row)));
-      // (a-d)^2/4 + b*c < 0 avoids cancellation of the common diagonal shift in tr^2 - 4*det.
+      // The test RealSchur::splitOffTwoRows keeps a block on: q = p^2 + bc < 0 with p = (a-d)/2.
+      // tr^2 - 4*det would cancel the common diagonal shift.
       const Scalar half_difference = (T(row - 1, row - 1) - T(row, row)) / Scalar(2);
       VERIFY(half_difference * half_difference + T(row - 1, row) * T(row, row - 1) < Scalar(0));
     }
