@@ -786,16 +786,17 @@ template <typename Xpr>
 struct gemm_operand_traits<const Xpr> : gemm_operand_traits<Xpr> {};
 
 // Whether a GEMM of LhsScalar by RhsScalar runs in float on the converted operands and rounds each result coefficient
-// once: half by half and bfloat16 by bfloat16 would otherwise round every multiply-add, or every kc block, to 8 or 11
-// significand bits (#3158). OpenBLAS's sbgemm already accumulates bfloat16 in float.
+// once. Summed in the operand type, half by half and bfloat16 by bfloat16 round every multiply-add, or every kc block,
+// to 11 or 8 significand bits (#3158).
 template <typename LhsScalar, typename RhsScalar>
-struct gemm_accumulates_in_float
-    : bool_constant<std::is_same<LhsScalar, RhsScalar>::value && (std::is_same<LhsScalar, half>::value
+struct gemm_accumulates_in_float : std::false_type {};
+template <>
+struct gemm_accumulates_in_float<half, half> : std::true_type {};
+// OpenBLAS's sbgemm already accumulates bfloat16 in float.
 #if !(defined(EIGEN_USE_OPENBLAS_BFLOAT16) && EIGEN_USE_OPENBLAS_BFLOAT16)
-                                                                  || std::is_same<LhsScalar, bfloat16>::value
+template <>
+struct gemm_accumulates_in_float<bfloat16, bfloat16> : std::true_type {};
 #endif
-                                                                  )> {
-};
 
 template <typename Lhs, typename Rhs>
 struct generic_product_impl<Lhs, Rhs, DenseShape, DenseShape, GemmProduct>

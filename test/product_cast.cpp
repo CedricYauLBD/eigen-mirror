@@ -176,6 +176,10 @@ EIGEN_DECLARE_TEST(product_cast) {
   STATIC_CHECK((std::is_same<gemm_operand_traits<decltype(MatrixXf().cast<std::complex<float>>())>::StorageScalar,
                              std::complex<float>>::value));
   STATIC_CHECK((gemm_accumulates_in_float<half, half>::value));
+#if !(defined(EIGEN_USE_OPENBLAS_BFLOAT16) && EIGEN_USE_OPENBLAS_BFLOAT16)
+  STATIC_CHECK((gemm_accumulates_in_float<bfloat16, bfloat16>::value));
+#endif
+  STATIC_CHECK((!gemm_accumulates_in_float<half, bfloat16>::value));
   STATIC_CHECK((!gemm_accumulates_in_float<float, float>::value));
   STATIC_CHECK((!gemm_accumulates_in_float<double, double>::value));
 
