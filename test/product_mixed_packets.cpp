@@ -3,6 +3,80 @@
 
 #include "main.h"
 
+template <typename Real, int Order>
+class MixedProxyMatrix;
+
+namespace Eigen {
+namespace internal {
+template <typename Real, int Order>
+struct traits<MixedProxyMatrix<Real, Order>> : traits<Matrix<Real, 2, 2, Order>> {
+  static constexpr unsigned int Flags = traits<Matrix<Real, 2, 2, Order>>::Flags & ~LvalueBit;
+};
+}  // namespace internal
+}  // namespace Eigen
+
+template <typename Real, int Order>
+class MixedProxyMatrix : public MatrixBase<MixedProxyMatrix<Real, Order>> {
+ public:
+  struct Proxy {
+    const Real* value;
+    operator Real() const { return *value; }
+  };
+  MixedProxyMatrix() {
+    for (Index i = 0; i < 2; ++i)
+      for (Index j = 0; j < 2; ++j) {
+        const Index index = Order == ColMajor ? i + 2 * j : 2 * i + j;
+        values[index] = Real(i + 2 * j + 1);
+        proxies[index].value = values + index;
+      }
+  }
+  Index rows() const { return 2; }
+  Index cols() const { return 2; }
+  const Real* data() const { return values; }
+  Index innerStride() const { return 1; }
+  Index outerStride() const { return 2; }
+  Real values[4];
+  Proxy proxies[4];
+};
+
+namespace Eigen {
+namespace internal {
+template <typename Real, int Order>
+struct evaluator<MixedProxyMatrix<Real, Order>> : evaluator_base<MixedProxyMatrix<Real, Order>> {
+  using Xpr = MixedProxyMatrix<Real, Order>;
+  static constexpr int CoeffReadCost = 1;
+  static constexpr unsigned int Flags = DirectAccessBit | PacketAccessBit | (Order == RowMajor ? RowMajorBit : 0);
+  static constexpr int Alignment = 0;
+  const Xpr& matrix;
+  explicit evaluator(const Xpr& xpr) : matrix(xpr) {}
+  const typename Xpr::Proxy& coeff(Index row, Index col) const {
+    return matrix.proxies[Order == ColMajor ? row + 2 * col : 2 * row + col];
+  }
+  template <int LoadMode, typename Packet>
+  Packet packet(Index row, Index col) const {
+    return ploadu<Packet>(matrix.data() + (Order == ColMajor ? row + 2 * col : 2 * row + col));
+  }
+};
+}  // namespace internal
+}  // namespace Eigen
+
+template <typename Real, int Order>
+void mixed_proxy_packets() {
+  using Complex = std::complex<Real>;
+  const MixedProxyMatrix<Real, Order> matrix;
+  STATIC_CHECK((!internal::product_real_packet_access<MixedProxyMatrix<Real, Order>>::value));
+  Matrix<Complex, 2, 1> rhs;
+  rhs << Complex(1, 2), Complex(3, 4);
+  const Matrix<Complex, 2, 1> column = matrix.lazyProduct(rhs);
+  const Matrix<Complex, 1, 2> row = rhs.transpose().lazyProduct(matrix);
+  VERIFY_IS_EQUAL((matrix * rhs).eval(), column);
+  VERIFY_IS_EQUAL((rhs.transpose() * matrix).eval(), row);
+  VERIFY_IS_EQUAL(column(0), Complex(10, 14));
+  VERIFY_IS_EQUAL(column(1), Complex(14, 20));
+  VERIFY_IS_EQUAL(row(0), Complex(7, 10));
+  VERIFY_IS_EQUAL(row(1), Complex(15, 22));
+}
+
 template <typename Product>
 void mixed_infinite_segments(const Product&, internal::false_type) {}
 
@@ -38,35 +112,54 @@ EIGEN_DONT_INLINE void mixed_infinite_factor() {
       Matrix<Complex, Dynamic, Dynamic, RowMajor> transposed = a.transpose();
       Matrix<Real, Dynamic, 1> factors(depth);
       for (bool row_major : {false, true}) {
-        const Real factor = NumTraits<Real>::infinity();
-        factors.setConstant(factor);
-        Matrix<Complex, Dynamic, Dynamic> result;
-        if (row_major) {
-          result = factors.transpose().lazyProduct(transposed).eval();
-          mixed_infinite_segments(factors.transpose().lazyProduct(transposed),
-                                  internal::bool_constant<internal::packet_traits<Complex>::Vectorizable>());
-        } else {
-          result = a.lazyProduct(factors).eval();
-          mixed_infinite_segments(a.lazyProduct(factors),
-                                  internal::bool_constant<internal::packet_traits<Complex>::Vectorizable>());
-        }
-        if (size == 3 && depth == 3) {
-          auto check_fixed = [](const auto& product) {
-            using Product = internal::remove_all_t<decltype(product)>;
-            const typename Product::PlainObject fixed = product;
-            for (Index i = 0; i < fixed.size(); ++i) {
-              VERIFY_IS_EQUAL(fixed(i).real(), NumTraits<Real>::infinity());
-              VERIFY_IS_EQUAL(fixed(i).imag(), NumTraits<Real>::infinity());
-            }
-          };
-          if (row_major)
-            check_fixed(factors.template head<3>().transpose() * transposed.template topLeftCorner<3, 3>());
-          else
-            check_fixed(a.template topLeftCorner<3, 3>() * factors.template head<3>());
-        }
-        for (Index i = 0; i < result.size(); ++i) {
-          VERIFY_IS_EQUAL(result(i).real(), NumTraits<Real>::infinity());
-          VERIFY_IS_EQUAL(result(i).imag(), NumTraits<Real>::infinity());
+        for (bool expand_real : {false, true}) {
+          const Real factor = NumTraits<Real>::infinity();
+          factors.setConstant(factor);
+          const Matrix<Real, Dynamic, Dynamic, ColMajor> real =
+              Matrix<Real, Dynamic, Dynamic, ColMajor>::Constant(size, depth, Real(factor));
+          const Matrix<Complex, Dynamic, 1> complex_factors =
+              Matrix<Complex, Dynamic, 1>::Constant(depth, Complex(1, 2));
+          Matrix<Complex, Dynamic, Dynamic> result;
+          if (expand_real && row_major) {
+            result = complex_factors.transpose().lazyProduct(real.transpose()).eval();
+            mixed_infinite_segments(complex_factors.transpose().lazyProduct(real.transpose()),
+                                    internal::bool_constant<internal::packet_traits<Complex>::Vectorizable>());
+          } else if (expand_real) {
+            result = real.lazyProduct(complex_factors).eval();
+            mixed_infinite_segments(real.lazyProduct(complex_factors),
+                                    internal::bool_constant<internal::packet_traits<Complex>::Vectorizable>());
+          } else if (row_major) {
+            result = factors.transpose().lazyProduct(transposed).eval();
+            mixed_infinite_segments(factors.transpose().lazyProduct(transposed),
+                                    internal::bool_constant<internal::packet_traits<Complex>::Vectorizable>());
+          } else {
+            result = a.lazyProduct(factors).eval();
+            mixed_infinite_segments(a.lazyProduct(factors),
+                                    internal::bool_constant<internal::packet_traits<Complex>::Vectorizable>());
+          }
+          if (size == 3 && depth == 3) {
+            auto check_fixed = [](const auto& product) {
+              using Product = internal::remove_all_t<decltype(product)>;
+              const typename Product::PlainObject fixed = product;
+              for (Index i = 0; i < fixed.size(); ++i) {
+                VERIFY_IS_EQUAL(fixed(i).real(), NumTraits<Real>::infinity());
+                VERIFY_IS_EQUAL(fixed(i).imag(), NumTraits<Real>::infinity());
+              }
+            };
+            if (expand_real && row_major)
+              check_fixed(complex_factors.template head<3>().transpose() *
+                          real.template topLeftCorner<3, 3>().transpose());
+            else if (expand_real)
+              check_fixed(real.template topLeftCorner<3, 3>() * complex_factors.template head<3>());
+            else if (row_major)
+              check_fixed(factors.template head<3>().transpose() * transposed.template topLeftCorner<3, 3>());
+            else
+              check_fixed(a.template topLeftCorner<3, 3>() * factors.template head<3>());
+          }
+          for (Index i = 0; i < result.size(); ++i) {
+            VERIFY_IS_EQUAL(result(i).real(), NumTraits<Real>::infinity());
+            VERIFY_IS_EQUAL(result(i).imag(), NumTraits<Real>::infinity());
+          }
         }
       }
     }
@@ -139,12 +232,24 @@ void mixed_fixed_packets() {
   check_mixed_packets(row, b);
   check_mixed_packets(row, b.conjugate());
 
-  // Loading real packets as complex packets needs a separate adapter and remains disabled.
-  const Matrix<Real, Size, Size> real = a.real();
+  using RealColMatrix = Matrix<Real, Size, Size, ColMajor>;
+  const RealColMatrix real = a.real();
   const Matrix<Complex, Size, 1> vector = a.col(0);
-  using Fallback = decltype(real.lazyProduct(vector));
-  STATIC_CHECK((!(internal::evaluator<Fallback>::Flags & PacketAccessBit)));
+  using Expanded = decltype(real.lazyProduct(vector));
+  STATIC_CHECK((bool(internal::evaluator<Expanded>::Flags & PacketAccessBit) ==
+                (bool(internal::packet_traits<Complex>::Vectorizable) &&
+                 bool(internal::evaluator<RealColMatrix>::Flags & PacketAccessBit))));
   check_mixed_packets(real, vector);
+  check_mixed_packets(real, vector.conjugate());
+  using RealRowMatrix = Matrix<Real, Size, Size, RowMajor>;
+  const RealRowMatrix real_row = real;
+  const Matrix<Complex, 1, Size> complex_row = vector.transpose();
+  using ExpandedRow = decltype(complex_row.lazyProduct(real_row));
+  STATIC_CHECK((bool(internal::evaluator<ExpandedRow>::Flags & PacketAccessBit) ==
+                (bool(internal::packet_traits<Complex>::Vectorizable) &&
+                 bool(internal::evaluator<RealRowMatrix>::Flags & PacketAccessBit))));
+  check_mixed_packets(complex_row, real_row);
+  check_mixed_packets(complex_row.conjugate(), real_row);
   check_mixed_packets(a.unaryExpr([](Complex value) { return value; }), x);
 }
 
@@ -159,6 +264,10 @@ void mixed_dynamic_packets() {
     for (Index j = 0; j < b.cols(); ++j)
       for (Index i = 0; i < depth; ++i) b(i, j) = Real(i - j + 1) / 4;
     check_mixed_packets(a, b);
+    const Matrix<Real, Dynamic, Dynamic, ColMajor> real = a.real();
+    const Matrix<Complex, Dynamic, Dynamic> complex = b.template cast<Complex>();
+    check_mixed_packets(real, complex);
+    check_mixed_packets(complex.transpose(), real.transpose());
     Matrix<Complex, Dynamic, Dynamic, RowMajor> transposed = a.transpose();
     Matrix<Real, 1, Dynamic> row(depth);
     for (Index i = 0; i < depth; ++i) row(i) = Real(i + 1) / 4;
@@ -186,6 +295,34 @@ void mixed_special_packets() {
   const Matrix<Complex, 5, 1> dynamic_result = dynamic.lazyProduct(dynamic_factor);
   VERIFY_IS_EQUAL((std::signbit)(dynamic_result(3).real()), (std::signbit)(result(3).real()));
   VERIFY_IS_EQUAL((std::signbit)(dynamic_result(4).imag()), (std::signbit)(result(4).imag()));
+
+  const Matrix<Real, 5, 1> real = Matrix<Real, 5, 1>::Constant(2);
+  const Matrix<Complex, 1, 1> complex_factor = Matrix<Complex, 1, 1>::Constant(Complex(-Real(0), -Real(0)));
+  const Matrix<Complex, 5, 1> expanded = real.lazyProduct(complex_factor);
+  const Matrix<Real, Dynamic, Dynamic, ColMajor> dynamic_real = real;
+  const Matrix<Complex, Dynamic, Dynamic> dynamic_complex_factor = complex_factor;
+  const Matrix<Complex, Dynamic, Dynamic> dynamic_expanded = dynamic_real.lazyProduct(dynamic_complex_factor);
+  for (Index i = 0; i < real.size(); ++i) {
+    VERIFY_IS_EQUAL(expanded(i).real(), Real(0));
+    VERIFY_IS_EQUAL(expanded(i).imag(), Real(0));
+    VERIFY((std::signbit)(expanded(i).real()));
+    VERIFY((std::signbit)(expanded(i).imag()));
+    VERIFY((std::signbit)(dynamic_expanded(i).real()));
+    VERIFY((std::signbit)(dynamic_expanded(i).imag()));
+  }
+  Matrix<Real, 5, 1> real_special;
+  real_special << inf, nan, Real(0), -Real(0), Real(2);
+  const Matrix<Complex, 1, 1> factor_special = Matrix<Complex, 1, 1>::Constant(Complex(2, -3));
+  const Matrix<Complex, 5, 1> special = real_special.lazyProduct(factor_special);
+  for (Index i = 0; i < real_special.size(); ++i) {
+    const Complex expected = real_special(i) * factor_special(0);
+    VERIFY((numext::isnan)(expected.real()) ? (numext::isnan)(special(i).real())
+                                            : special(i).real() == expected.real());
+    VERIFY((numext::isnan)(expected.imag()) ? (numext::isnan)(special(i).imag())
+                                            : special(i).imag() == expected.imag());
+    if (expected.real() == 0) VERIFY_IS_EQUAL((std::signbit)(special(i).real()), (std::signbit)(expected.real()));
+    if (expected.imag() == 0) VERIFY_IS_EQUAL((std::signbit)(special(i).imag()), (std::signbit)(expected.imag()));
+  }
 }
 
 template <typename Real>
@@ -203,6 +340,12 @@ void mixed_strided_packets() {
   const Matrix<Real, 3, 1> ones = Matrix<Real, 3, 1>::Ones();
   check_mixed_packets(unaligned, ones);
   check_mixed_packets(ones.transpose(), unaligned.transpose());
+  Real real_storage[9];
+  Map<Matrix<Real, 3, 3, ColMajor>, Unaligned> real_map(real_storage);
+  real_map = unaligned.real();
+  const Matrix<Complex, 3, 1> complex_ones = Matrix<Complex, 3, 1>::Constant(Complex(1, 2));
+  check_mixed_packets(real_map, complex_ones);
+  check_mixed_packets(complex_ones.transpose(), real_map.transpose());
   VERIFY_IS_EQUAL(storage.padding, Real(41));
   for (Index inner : {Index(1), Index(2)}) {
     Matrix<Complex, 64, 1> strided_storage;
@@ -215,6 +358,19 @@ void mixed_strided_packets() {
     x << Real(1) / 4, Real(1) / 2, Real(3) / 4;
     check_mixed_packets(a, x);
     check_mixed_packets(x.transpose(), a.transpose());
+    Matrix<Real, 64, 1> real_backing;
+    real_backing.setConstant(Real(43));
+    Map<Matrix<Real, Dynamic, Dynamic, ColMajor>, Unaligned, Stride<Dynamic, Dynamic>> real_map(
+        real_backing.data() + 1, 7, 3, Stride<Dynamic, Dynamic>(20, inner));
+    real_map = a.real();
+    using Fallback = decltype(real_map.lazyProduct(complex_ones));
+    STATIC_CHECK((!(internal::evaluator<Fallback>::Flags & PacketAccessBit)));
+    check_mixed_packets(real_map, complex_ones);
+    check_mixed_packets(complex_ones.transpose(), real_map.transpose());
+    Map<Matrix<Real, Dynamic, Dynamic, ColMajor>, Unaligned, OuterStride<Dynamic>> unit_map(
+        real_backing.data() + 1, 7, 3, OuterStride<Dynamic>(20));
+    check_mixed_packets(unit_map, complex_ones);
+    check_mixed_packets(complex_ones.transpose(), unit_map.transpose());
   }
 }
 
@@ -242,10 +398,33 @@ void mixed_roundoff_packets() {
     VERIFY(std::abs(static_cast<long double>(row_result(i).real()) - real) <= bound);
     VERIFY(std::abs(static_cast<long double>(row_result(i).imag()) - imag) <= bound);
   }
+  const Matrix<Real, 3, 3, ColMajor> real_matrix = a.real();
+  const Matrix<Complex, 3, 1> complex_vector = a.col(0);
+  const Matrix<Complex, 3, 1> expanded = real_matrix * complex_vector;
+  const Matrix<Complex, 1, 3> expanded_row = complex_vector.transpose() * real_matrix.transpose();
+  for (Index i = 0; i < 3; ++i) {
+    long double real = 0, imag = 0, magnitude = 0;
+    for (Index k = 0; k < 3; ++k) {
+      const long double re =
+          static_cast<long double>(real_matrix(i, k)) * static_cast<long double>(complex_vector(k).real());
+      const long double im =
+          static_cast<long double>(real_matrix(i, k)) * static_cast<long double>(complex_vector(k).imag());
+      real += re;
+      imag += im;
+      magnitude += std::abs(re) + std::abs(im);
+    }
+    const long double bound = 8 * static_cast<long double>(NumTraits<Real>::epsilon()) * magnitude;
+    VERIFY(std::abs(static_cast<long double>(expanded(i).real()) - real) <= bound);
+    VERIFY(std::abs(static_cast<long double>(expanded(i).imag()) - imag) <= bound);
+    VERIFY(std::abs(static_cast<long double>(expanded_row(i).real()) - real) <= bound);
+    VERIFY(std::abs(static_cast<long double>(expanded_row(i).imag()) - imag) <= bound);
+  }
 }
 
 template <typename Real>
 void mixed_packet_tests() {
+  mixed_proxy_packets<Real, ColMajor>();
+  mixed_proxy_packets<Real, RowMajor>();
   mixed_fixed_packets<Real, 2>();
   mixed_fixed_packets<Real, 3>();
   mixed_fixed_packets<Real, 4>();

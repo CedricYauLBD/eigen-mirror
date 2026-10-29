@@ -735,8 +735,7 @@ struct product_packet_cascade_traits {
       (int(DstEval::Flags) & DirectAccessBit) != 0 && int(Dst::InnerStrideAtCompileTime) == 1;
   // The product's packets run along its storage order. The cascade axis must match
   // it -- and so must the destination's storage order, so the contiguous packet
-  // store lands on contiguous coefficients. ProdEval::Vectorize is false for
-  // mixed-scalar products, which keep the generic (scalar) path.
+  // store lands on contiguous coefficients.
   static constexpr bool ProdRowMajor = (int(ProdEval::Flags) & RowMajorBit) != 0;
   static constexpr bool VecLhs =  // column-major product & dst: vectorize down each column
       bool(ProdEval::Vectorize) && !ProdRowMajor && !DstRowMajor && Rows != Dynamic;
@@ -750,7 +749,6 @@ struct product_packet_cascade_traits {
       bool(EIGEN_UNALIGNED_VECTORIZE) &&
       (int(DstEval::Flags) & int(ProdEval::Flags) & int(ActualPacketAccessBit)) != 0 &&
       bool(functor_traits<Func>::PacketAccess);
-  // Mixed packets are supported only when the complex operand supplies the packet and the real operand a scalar.
   static constexpr bool Enable = (ProdEval::SameType || ProdEval::MixedRealComplex) && (VecLhs || VecRhs) &&
                                  DstContiguous && MightVectorize && (LargestSize <= Extent) &&
                                  (LargestSize > GenericSize);
@@ -903,6 +901,38 @@ struct product_operand_packet<Packet, Real, std::complex<Real>, true> {
 template <typename Packet, typename Scalar>
 using product_operand_packet_t = typename product_operand_packet<Packet, Scalar>::type;
 
+// ploaddup reads half a real packet. Only contiguous, addressable coefficients may use it.
+template <typename Xpr>
+struct product_real_packet_access {
+  using CoeffReturnType = decltype(std::declval<const evaluator<Xpr>&>().coeff(Index(0), Index(0)));
+  static constexpr bool value =
+      (evaluator<Xpr>::Flags & DirectAccessBit) != 0 && Xpr::InnerStrideAtCompileTime == 1 &&
+      std::is_same<std::remove_const_t<std::remove_reference_t<CoeffReturnType>>, typename Xpr::Scalar>::value &&
+      std::is_lvalue_reference<CoeffReturnType>::value;
+};
+
+template <typename Xpr>
+struct product_real_packet_evaluator : evaluator<Xpr> {
+  using Base = evaluator<Xpr>;
+  EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE explicit product_real_packet_evaluator(const Xpr& xpr) : Base(xpr) {}
+
+  template <int LoadMode, typename Packet>
+  EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE typename unpacket_traits<Packet>::as_real packet(Index row, Index col) const {
+    return ploaddup<typename unpacket_traits<Packet>::as_real>(&this->coeff(row, col));
+  }
+
+  template <int LoadMode, typename Packet>
+  EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE typename unpacket_traits<Packet>::as_real packetSegment(Index row, Index col,
+                                                                                                Index begin,
+                                                                                                Index count) const {
+    // The product evaluator handles partial packets before loading either operand.
+    EIGEN_UNUSED_VARIABLE(begin);
+    EIGEN_UNUSED_VARIABLE(count);
+    eigen_internal_assert(begin == 0 && count == unpacket_traits<Packet>::size);
+    return packet<LoadMode, Packet>(row, col);
+  }
+};
+
 template <int StorageOrder, int UnrollingIndex, typename Lhs, typename Rhs, typename Packet, int LoadMode>
 struct etor_product_packet_impl;
 
@@ -1000,24 +1030,31 @@ struct coeff_based_product_evaluator : evaluator_base<Product<Lhs, Rhs, LazyProd
       std::is_same<Scalar, std::complex<RealScalar>>::value &&
       (std::is_same<RealScalar, float>::value || std::is_same<RealScalar, double>::value) &&
       ((LhsIsReal && std::is_same<RhsScalar, Scalar>::value) || (RhsIsReal && std::is_same<LhsScalar, Scalar>::value));
+  static constexpr bool RealPacketLhs = LhsIsReal && product_real_packet_access<LhsNestedCleaned>::value;
+  static constexpr bool RealPacketRhs = RhsIsReal && product_real_packet_access<RhsNestedCleaned>::value;
   static constexpr bool PacketOperandVectorizable = EvalToRowMajor ? CanVectorizeRhs : CanVectorizeLhs;
-  // Only the complex operand supplies packets; expression and evaluator storage orders must agree.
-  static constexpr bool MixedRealComplex = MixedScalarTypes && PacketOperandVectorizable &&
-                                           (EvalToRowMajor ? !RhsIsReal : !LhsIsReal) &&
-                                           (bool(int(traits<XprType>::Flags) & RowMajorBit) == bool(EvalToRowMajor));
+  // Expression and evaluator storage orders must agree for consumers that index product packets.
+  static constexpr bool MixedRealComplex =
+      MixedScalarTypes && packet_traits<Scalar>::Vectorizable && PacketOperandVectorizable &&
+      (EvalToRowMajor ? (!RhsIsReal || RealPacketRhs) : (!LhsIsReal || RealPacketLhs)) &&
+      (bool(int(traits<XprType>::Flags) & RowMajorBit) == bool(EvalToRowMajor));
 
-  // TODO: load and expand real coefficient packets in the remaining mixed products.
   static constexpr bool Vectorize = (SameType && PacketOperandVectorizable) || MixedRealComplex;
   static constexpr int Flags = ((int(LhsFlags) | int(RhsFlags)) & HereditaryBits & ~RowMajorBit) |
                                (EvalToRowMajor ? RowMajorBit : 0) | (Vectorize ? PacketAccessBit : 0) |
                                (XprType::IsVectorAtCompileTime ? LinearAccessBit : 0);
   using LhsPacketEtorType =
-      std::conditional_t<bool(int(Flags) & PacketAccessBit), LhsEtorType, product_empty_packet_evaluator>;
+      std::conditional_t<bool(int(Flags) & PacketAccessBit),
+                         std::conditional_t<MixedRealComplex && RealPacketLhs && !EvalToRowMajor,
+                                            product_real_packet_evaluator<LhsNestedCleaned>, LhsEtorType>,
+                         product_empty_packet_evaluator>;
   using RhsPacketEtorType =
-      std::conditional_t<bool(int(Flags) & PacketAccessBit), RhsEtorType, product_empty_packet_evaluator>;
+      std::conditional_t<bool(int(Flags) & PacketAccessBit),
+                         std::conditional_t<MixedRealComplex && RealPacketRhs && EvalToRowMajor,
+                                            product_real_packet_evaluator<RhsNestedCleaned>, RhsEtorType>,
+                         product_empty_packet_evaluator>;
 
-  static constexpr bool SingleTermCoeff = InnerSize == 1 && std::is_same<LhsPacketEtorType, LhsEtorType>::value &&
-                                          std::is_same<RhsPacketEtorType, RhsEtorType>::value;
+  static constexpr bool SingleTermCoeff = InnerSize == 1 && Vectorize;
 
   static constexpr int LhsOuterStrideBytes =
       int(LhsNestedCleaned::OuterStrideAtCompileTime) * int(sizeof(typename LhsNestedCleaned::Scalar));
@@ -1075,9 +1112,9 @@ struct coeff_based_product_evaluator : evaluator_base<Product<Lhs, Rhs, LazyProd
   template <int LoadMode, typename PacketType>
   EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE const PacketType packet(Index row, Index col) const {
     PacketType res;
-    using PacketImpl =
-        etor_product_packet_impl<bool(int(Flags) & RowMajorBit) ? RowMajor : ColMajor,
-                                 Unroll ? int(InnerSize) : Dynamic, LhsEtorType, RhsEtorType, PacketType, LoadMode>;
+    using PacketImpl = etor_product_packet_impl<bool(int(Flags) & RowMajorBit) ? RowMajor : ColMajor,
+                                                Unroll ? int(InnerSize) : Dynamic, LhsPacketEtorType, RhsPacketEtorType,
+                                                PacketType, LoadMode>;
     PacketImpl::run(row, col, m_lhsImpl, m_rhsImpl, m_innerDim, res);
     return res;
   }
@@ -1095,10 +1132,21 @@ struct coeff_based_product_evaluator : evaluator_base<Product<Lhs, Rhs, LazyProd
     EIGEN_IF_CONSTEXPR (MixedRealComplex) {
       if (count == 0) return pset1<PacketType>(Scalar(0));
     }
+    EIGEN_IF_CONSTEXPR (MixedRealComplex && (EvalToRowMajor ? RealPacketRhs : RealPacketLhs) &&
+                        unpacket_traits<PacketType>::size > 1) {
+      if (count != unpacket_traits<PacketType>::size) {
+        // The real-packet adapter's ploaddup requires a full source half-packet; a partial load could overread.
+        Scalar values[unpacket_traits<PacketType>::size] = {};
+        for (Index i = begin; i < begin + count; ++i) {
+          values[i] = coeff_reduced(row + (EvalToRowMajor ? 0 : i), col + (EvalToRowMajor ? i : 0), std::false_type());
+        }
+        return ploadu<PacketType>(values);
+      }
+    }
     PacketType res;
-    using PacketImpl =
-        etor_product_packet_impl<bool(int(Flags) & RowMajorBit) ? RowMajor : ColMajor,
-                                 Unroll ? int(InnerSize) : Dynamic, LhsEtorType, RhsEtorType, PacketType, LoadMode>;
+    using PacketImpl = etor_product_packet_impl<bool(int(Flags) & RowMajorBit) ? RowMajor : ColMajor,
+                                                Unroll ? int(InnerSize) : Dynamic, LhsPacketEtorType, RhsPacketEtorType,
+                                                PacketType, LoadMode>;
     PacketImpl::run_segment(row, col, m_lhsImpl, m_rhsImpl, m_innerDim, res, begin, count);
     return res;
   }
