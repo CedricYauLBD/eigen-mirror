@@ -511,6 +511,8 @@ struct sparse_dense_outer_product_evaluator {
   using RhsEval = evaluator<ActualRhs>;
   using LhsIterator = typename evaluator<ActualLhs>::InnerIterator;
   using Scalar = typename ProdXprType::Scalar;
+  using FactorScalar = typename ActualRhs::Scalar;
+  using ProductOp = sparse_scalar_product_op<typename ActualLhs::Scalar, FactorScalar, NeedToTranspose>;
 
  public:
   enum { Flags = NeedToTranspose ? RowMajorBit : 0, CoeffReadCost = HugeCost };
@@ -527,22 +529,22 @@ struct sparse_dense_outer_product_evaluator {
     EIGEN_STRONG_INLINE Index row() const { return NeedToTranspose ? m_outer : LhsIterator::index(); }
     EIGEN_STRONG_INLINE Index col() const { return NeedToTranspose ? LhsIterator::index() : m_outer; }
 
-    EIGEN_STRONG_INLINE Scalar value() const { return LhsIterator::value() * m_factor; }
+    EIGEN_STRONG_INLINE Scalar value() const { return ProductOp()(LhsIterator::value(), m_factor); }
     EIGEN_STRONG_INLINE operator bool() const { return LhsIterator::operator bool() && (!m_empty); }
 
    protected:
-    Scalar get(const RhsEval& rhs, Index outer, Dense = Dense()) const { return rhs.coeff(outer); }
+    FactorScalar get(const RhsEval& rhs, Index outer, Dense = Dense()) const { return rhs.coeff(outer); }
 
-    Scalar get(const RhsEval& rhs, Index outer, Sparse = Sparse()) {
+    FactorScalar get(const RhsEval& rhs, Index outer, Sparse = Sparse()) {
       typename RhsEval::InnerIterator it(rhs, outer);
-      if (it && it.index() == 0 && it.value() != Scalar(0)) return it.value();
+      if (it && it.index() == 0 && it.value() != FactorScalar(0)) return it.value();
       m_empty = true;
-      return Scalar(0);
+      return FactorScalar(0);
     }
 
     Index m_outer;
     bool m_empty;
-    Scalar m_factor;
+    FactorScalar m_factor;
   };
 
   sparse_dense_outer_product_evaluator(const Lhs1& lhs, const ActualRhs& rhs)
