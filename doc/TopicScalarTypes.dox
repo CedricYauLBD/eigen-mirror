@@ -40,7 +40,12 @@ A few practical notes:
   - <b>\c Eigen::half and \c Eigen::bfloat16</b> are primarily storage and interchange formats:
     on hardware without native arithmetic, operations are emulated by converting to \c float and
     back. Both are vectorized on instruction sets with hardware support (see
-    \ref TopicVectorization).
+    \ref TopicVectorization). A general matrix-matrix product of two \c half or two \c bfloat16
+    matrices accumulates every coefficient in \c float over the whole inner dimension and rounds it
+    to the operand type once, on every instruction set; with <tt>C.noalias() += A * B</tt>, the sum
+    <tt>C + A * B</tt> is rounded once as well. Products with a vector operand, products small
+    enough to be evaluated coefficient by coefficient, and triangular and self-adjoint products
+    still accumulate in the operand type.
 
 The scalar types with vectorized kernels for a given instruction set are listed on the
 \ref TopicVectorization "vectorization page"; every supported scalar type also works through the

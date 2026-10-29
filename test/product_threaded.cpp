@@ -158,6 +158,45 @@ void test_parallelize_gemm_indivisible() {
   verify_threaded_product<MatrixXf>(pool, 4099, 331, 64);
 }
 
+// A half or bfloat16 product accumulates in float over its whole depth in every thread's part of the result, which
+// rounds C0 + A * B, or A * B, once: with entries in [0, 3] every float partial sum is an exact integer, so the result
+// is fl_T(exact).
+template <typename T, int ResOrder>
+void verify_threaded_narrow_product(ThreadPool& pool, Index rows, Index depth, Index cols) {
+  using MatrixT = Matrix<T, Dynamic, Dynamic>;
+  const auto small_integer = [](Index i, Index j) { return T(float((i * 7 + j * 13 + (i * j) % 5) % 4)); };
+  const MatrixT a = MatrixT::NullaryExpr(rows, depth, small_integer),
+                b = MatrixT::NullaryExpr(depth, cols, small_integer);
+  const Matrix<T, Dynamic, Dynamic, ResOrder> c0 = MatrixT::NullaryExpr(rows, cols, small_integer);
+  MatrixXd exact = c0.template cast<double>();
+  for (Index j = 0; j < cols; ++j)
+    for (Index l = 0; l < depth; ++l)
+      for (Index i = 0; i < rows; ++i) exact(i, j) += double(a(i, l)) * double(b(l, j));
+  Eigen::setGemmThreadPool(&pool);
+  Matrix<T, Dynamic, Dynamic, ResOrder> c = c0;
+  c.noalias() += a * b;
+  for (Index j = 0; j < cols; ++j)
+    for (Index i = 0; i < rows; ++i)
+      VERIFY_IS_EQUAL(numext::bit_cast<std::uint16_t>(c(i, j)),
+                      numext::bit_cast<std::uint16_t>(T(static_cast<float>(exact(i, j)))));
+  // Assignment overwrites every thread's part of C without reading it.
+  c.setConstant(NumTraits<T>::quiet_NaN());
+  c.noalias() = a * b;
+  for (Index j = 0; j < cols; ++j)
+    for (Index i = 0; i < rows; ++i)
+      VERIFY_IS_EQUAL(numext::bit_cast<std::uint16_t>(c(i, j)),
+                      numext::bit_cast<std::uint16_t>(T(static_cast<float>(exact(i, j) - double(c0(i, j))))));
+}
+
+template <typename T>
+void test_parallelize_gemm_narrow() {
+  static ThreadPool pool(8);
+  verify_threaded_narrow_product<T, ColMajor>(pool, 517, 1031, 263);
+  verify_threaded_narrow_product<T, RowMajor>(pool, 517, 1031, 263);
+  verify_threaded_narrow_product<T, ColMajor>(pool, 64, 4099, 331);
+  verify_threaded_narrow_product<T, RowMajor>(pool, 331, 2049, 64);
+}
+
 // A scalar whose constructors set a magic value that operator= checks: the shared blocking buffers of a threaded
 // product must be constructed before the packers assign into them (NumTraits::RequireInitialization).
 struct TrackedScalar {
@@ -389,6 +428,8 @@ EIGEN_DECLARE_TEST(product_threaded) {
     CALL_SUBTEST_9(with_sme_units(units, test_parallelize_gemm_parts_blocks<>));
     CALL_SUBTEST_10(with_sme_units(units, test_parallelize_gemm_assign<float>));
     CALL_SUBTEST_10(with_sme_units(units, test_parallelize_gemm_assign<std::complex<double>>));
+    CALL_SUBTEST_10(with_sme_units(units, test_parallelize_gemm_narrow<half>));
+    CALL_SUBTEST_10(with_sme_units(units, test_parallelize_gemm_narrow<bfloat16>));
   }
   CALL_SUBTEST_3(test_balanced_gemm_range<>());
   CALL_SUBTEST_5(test_parallelize_gemm_require_initialization<>());
