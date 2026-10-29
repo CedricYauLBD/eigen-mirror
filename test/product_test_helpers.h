@@ -100,13 +100,16 @@ double frobenius_norm_in_double(const MatrixBase<Derived>& M) {
 }
 
 // A product that sums in an Accumulator wider than its operand Scalar rounds each result coefficient
-// once to Scalar: num_products * u * ||expected||_F more, with u = epsilon/2 of Scalar. Summed in
-// Scalar, that rounding is one of the k+2 operations the bound already counts.
+// once to Scalar, with error at most u|e| + denorm_min/2 (u = epsilon/2 of Scalar; the second term
+// covers subnormal results): num_products * (u ||expected||_F + denorm_min/2 sqrt(mn)) more. Summed
+// in Scalar, that rounding is one of the k+2 operations the bound already counts.
 template <typename Scalar, typename Accumulator, typename Derived>
 double result_rounding_bound(const MatrixBase<Derived>& expected, int num_products) {
   if (std::is_same<product_accumulator_t<Scalar, Accumulator>, Scalar>::value) return 0.0;
-  return 0.5 * static_cast<double>(NumTraits<Scalar>::epsilon()) * double(num_products) *
-         frobenius_norm_in_double(expected);
+  return 0.5 * double(num_products) *
+         (static_cast<double>(NumTraits<Scalar>::epsilon()) * frobenius_norm_in_double(expected) +
+          static_cast<double>((std::numeric_limits<typename NumTraits<Scalar>::Real>::denorm_min)()) *
+              numext::sqrt(double(expected.size())));
 }
 
 // Returns true if ||actual - expected||_F <= bound.
