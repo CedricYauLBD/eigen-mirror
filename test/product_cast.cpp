@@ -155,6 +155,29 @@ void float_accumulation_depth() {
   VERIFY_IS_EQUAL(C, Mat::Constant(24, 21, T(std::ldexp(float(depth), -28))));
 }
 
+// A cast to T is materialized in T, as before, rather than packed from the source and summed in float: the product
+// sees T's overflow, its rounding of the source, and inf * 0.
+template <typename T, typename Src>
+void cast_to_float_accumulated() {
+  using SrcMat = Matrix<Src, Dynamic, Dynamic>;
+  using Mat = Matrix<T, Dynamic, Dynamic>;
+  const Index n = 32;
+  SrcMat A = random_small_integers<Src, ColMajor>(n, n, 8), B = random_small_integers<Src, ColMajor>(n, n, 8);
+  // Out of half's range, and above bfloat16's spacing of 2^10 at 2^17.
+  A(0, 0) = Src(std::is_same<T, half>::value ? 70000 : 205001);
+  // 2051 rounds to 2052 in half and 2048 in bfloat16.
+  A(1, 0) = Src(2051);
+  B.row(0).setConstant(Src(3));
+  B(0, 1) = Src(0);
+  Mat ref = A.template cast<T>().eval() * B.template cast<T>().eval();
+  Mat C = A.template cast<T>() * B.template cast<T>();
+  // inf and NaN coefficients compare unequal, so compare their classification and the finite rest.
+  VERIFY((C.array().isNaN() == ref.array().isNaN()).all());
+  VERIFY((C.array().isInf() == ref.array().isInf()).all());
+  VERIFY_IS_EQUAL(C.array().isFinite().select(C, T(0)).eval(), ref.array().isFinite().select(ref, T(0)).eval());
+  VERIFY_IS_EQUAL(C.array().isInf().any(), (std::is_same<T, half>::value));
+}
+
 EIGEN_DECLARE_TEST(product_cast) {
   using MatrixXhalf = Matrix<half, Dynamic, Dynamic>;
   using internal::gemm_accumulates_in_float;
@@ -171,6 +194,7 @@ EIGEN_DECLARE_TEST(product_cast) {
                              float>::value));
   STATIC_CHECK((std::is_same<gemm_operand_traits<decltype(MatrixXf().cast<std::complex<float>>())>::StorageScalar,
                              std::complex<float>>::value));
+  STATIC_CHECK((std::is_same<gemm_operand_traits<decltype(MatrixXf().cast<half>())>::StorageScalar, half>::value));
   STATIC_CHECK((gemm_accumulates_in_float<half, half>::value));
 #if !(defined(EIGEN_USE_OPENBLAS_BFLOAT16) && EIGEN_USE_OPENBLAS_BFLOAT16)
   STATIC_CHECK((gemm_accumulates_in_float<bfloat16, bfloat16>::value));
@@ -193,4 +217,8 @@ EIGEN_DECLARE_TEST(product_cast) {
   }
   CALL_SUBTEST_5(float_accumulation_depth<half>());
   CALL_SUBTEST_6(float_accumulation_depth<bfloat16>());
+  CALL_SUBTEST_5((cast_to_float_accumulated<half, float>()));
+  CALL_SUBTEST_5((cast_to_float_accumulated<half, double>()));
+  CALL_SUBTEST_6((cast_to_float_accumulated<bfloat16, float>()));
+  CALL_SUBTEST_6((cast_to_float_accumulated<bfloat16, double>()));
 }
