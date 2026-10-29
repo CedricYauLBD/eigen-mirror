@@ -22,6 +22,7 @@ inline void on_temporary_creation() {
 
 #define EIGEN_TEST_ANNOYING_SCALAR_DONT_THROW
 #include "AnnoyingScalar.h"
+#include "NonCommutativeScalar.h"
 
 #define VERIFY_EVALUATION_COUNT(XPR, N)                                                   \
   {                                                                                       \
@@ -1226,6 +1227,69 @@ void test_sparse_pruned_operand_order() {
 }
 
 template <typename = void>
+void test_sparse_outer_operand_types() {
+  SparseVector<SparseCwiseScalar<0>> column(2);
+  column.insert(1) = SparseCwiseScalar<0>(3);
+  Matrix<SparseCwiseScalar<1>, 1, Dynamic> row(3);
+  for (Index i = 0; i < row.size(); ++i) row(i) = SparseCwiseScalar<1>(int(i + 2));
+  using LeftEval = internal::sparse_dense_outer_product_evaluator<decltype(column), decltype(row), false>;
+  const LeftEval left(column, row);
+  for (Index j = 0; j < row.size(); ++j) {
+    typename LeftEval::InnerIterator it(left, j);
+    VERIFY(it);
+    VERIFY_IS_EQUAL(it.row(), 1);
+    VERIFY_IS_EQUAL(it.value().value, 3 * row(j).value);
+    ++it;
+    VERIFY(!it);
+  }
+
+  SparseVector<SparseCwiseScalar<1>, RowMajor> sparseRow(3);
+  sparseRow.insert(2) = SparseCwiseScalar<1>(5);
+  Matrix<SparseCwiseScalar<0>, Dynamic, 1> denseColumn(2);
+  denseColumn(0) = SparseCwiseScalar<0>(2);
+  denseColumn(1) = SparseCwiseScalar<0>(4);
+  using RightEval = internal::sparse_dense_outer_product_evaluator<decltype(denseColumn), decltype(sparseRow), true>;
+  const RightEval right(denseColumn, sparseRow);
+  for (Index i = 0; i < denseColumn.size(); ++i) {
+    typename RightEval::InnerIterator it(right, i);
+    VERIFY(it);
+    VERIFY_IS_EQUAL(it.col(), 2);
+    VERIFY_IS_EQUAL(it.value().value, denseColumn(i).value * 5);
+  }
+}
+
+template <int Order>
+void test_sparse_quaternion_product_order() {
+  using Scalar = noncommutative_scalar::Quaternion;
+  const Scalar i(0, 1, 0, 0), j(0, 0, 1, 0), k(0, 0, 0, 1);
+  SparseMatrix<Scalar, Order> lhs(1, 1), rhs(1, 1), pruned(1, 1);
+  lhs.insert(0, 0) = i;
+  rhs.insert(0, 0) = j;
+  DiagonalMatrix<Scalar, 1> diagonal;
+  diagonal.diagonal()(0) = j;
+  Matrix<Scalar, 1, 1> dense;
+  SparseVector<Scalar, RowMajor> row(1);
+  row.insert(0) = j;
+  dense(0) = i;
+  using Outer = internal::sparse_dense_outer_product_evaluator<decltype(dense), decltype(row), true>;
+  const Outer outer(dense, row);
+  VERIFY(typename Outer::InnerIterator(outer, 0).value() == k);
+  for (int compressed = 0; compressed < 2; ++compressed) {
+    const SparseMatrix<Scalar, Order> left = diagonal * lhs, right = lhs * diagonal, product = lhs * rhs;
+    const Matrix<Scalar, 1, 1, Order> denseProduct = lhs * rhs;
+    VERIFY(left.coeff(0, 0) == -k);
+    VERIFY(right.coeff(0, 0) == k);
+    VERIFY(product.coeff(0, 0) == k);
+    VERIFY(denseProduct(0) == k);
+    internal::sparse_sparse_product_with_pruning_selector<decltype(lhs), decltype(rhs), decltype(pruned)>::run(
+        lhs, rhs, pruned, 0.0);
+    VERIFY(pruned.coeff(0, 0) == k);
+    lhs.makeCompressed();
+    rhs.makeCompressed();
+  }
+}
+
+template <typename = void>
 void test_sparse_vector_dense_product() {
   SparseVector<double> sv(3);
   sv.insert(0) = 1.0;
@@ -1268,6 +1332,9 @@ EIGEN_DECLARE_TEST(sparse_product) {
     CALL_SUBTEST_9((test_sparse_product_operand_order<RowMajor, ColMajor, RowMajor>()));
     CALL_SUBTEST_9((test_sparse_product_operand_order<RowMajor, RowMajor, ColMajor>()));
     CALL_SUBTEST_9((test_sparse_product_operand_order<RowMajor, RowMajor, RowMajor>()));
+    CALL_SUBTEST_10((test_sparse_outer_operand_types<>()));
+    CALL_SUBTEST_12((test_sparse_quaternion_product_order<ColMajor>()));
+    CALL_SUBTEST_12((test_sparse_quaternion_product_order<RowMajor>()));
     CALL_SUBTEST_11((test_sparse_pruned_operand_order<ColMajor, ColMajor, ColMajor>()));
     CALL_SUBTEST_11((test_sparse_pruned_operand_order<ColMajor, ColMajor, RowMajor>()));
     CALL_SUBTEST_11((test_sparse_pruned_operand_order<ColMajor, RowMajor, ColMajor>()));
