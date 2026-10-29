@@ -469,10 +469,36 @@ def test_git_shallow_base():
         ).stdout.strip()
         clone = os.path.join(root, "clone")
         subprocess.run(["git", "clone", "-q", "--depth=1", "file://" + source, clone], check=True)
-        subprocess.run(["git", "fetch", "-q", "--depth=1", "origin", base], cwd=clone, check=True)
+        # Fetching an unadvertised SHA over file:// needs protocol v2, whatever the user's git config says.
+        subprocess.run(["git", "-c", "protocol.version=2", "fetch", "-q", "--depth=1", "origin", base], cwd=clone,
+                       check=True)
         changed = changed_files_from_git(clone, base)
         check(changed == ["Head.h", "Middle.h"],
               "a shallow clone with only the base diffs against it, got %s" % changed)
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def test_git_merge_base():
+    """With history, the diff is three-dot: a commit on the base branch alone does not count."""
+    root = tempfile.mkdtemp(prefix="eigen-affected-merge-base-")
+    try:
+        git = ["git", "-c", "user.name=Eigen Tests", "-c", "user.email=eigen@example.com"]
+
+        def commit(name):
+            with open(os.path.join(root, name), "w") as handle:
+                handle.write("// test\n")
+            subprocess.run(["git", "add", name], cwd=root, check=True)
+            subprocess.run(git + ["commit", "-qm", name], cwd=root, check=True)
+
+        subprocess.run(["git", "init", "-q", "-b", "target"], cwd=root, check=True)
+        commit("Base.h")
+        subprocess.run(["git", "checkout", "-qb", "topic"], cwd=root, check=True)
+        commit("Topic.h")
+        subprocess.run(["git", "checkout", "-q", "target"], cwd=root, check=True)
+        commit("Target.h")
+        changed = changed_files_from_git(root, "target", "topic")
+        check(changed == ["Topic.h"], "changes on the base branch alone are not selected, got %s" % changed)
     finally:
         shutil.rmtree(root, ignore_errors=True)
 
@@ -599,6 +625,7 @@ def main():
     test_output_encoding()
     test_git_rename_paths()
     test_git_shallow_base()
+    test_git_merge_base()
     test_real_tree()
 
     if FAILURES:

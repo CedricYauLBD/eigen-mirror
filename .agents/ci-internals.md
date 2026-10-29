@@ -22,7 +22,8 @@ and a depth-1 checkout about 5 MiB. When a job diffs against the merge request b
 `before_script: !reference [.fetch:diff-base, script]`, which fetches `CI_MERGE_REQUEST_DIFF_BASE_SHA` alone. Diff
 two-dot, `git diff BASE HEAD`. A three-dot diff needs the history between the two commits and fails with `no merge
 base` in this checkout. Do not raise `GIT_DEPTH` for one job instead: no fixed depth is sure to reach the base of a
-long-lived merge request. When a job reads nothing from the checkout, set `GIT_STRATEGY: none`, as `deploy:docs` does.
+long-lived merge request. Keep the default `GIT_STRATEGY` even for a job that reads nothing from the checkout: on runners
+that reuse their working tree, the checkout's `git clean -ffdx` is what removes the files an earlier job left behind.
 
 ## Artifacts And Test Reports
 

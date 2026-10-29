@@ -23,8 +23,6 @@ deploy:docs:
   needs: [ build:linux:docs ]
   variables:
     PAGES_PREFIX: docs-weekly
-    # Publishes the docs build's artifact and reads nothing from the source.
-    GIT_STRATEGY: none
   script:
     - echo "Deploying site to $CI_PAGES_URL"
     - mv ${EIGEN_CI_BUILDDIR}/doc/html public
