@@ -53,13 +53,17 @@ double abs_product_update_norm(double abs_alpha, const MatrixBase<DerivedA>& A, 
   return numext::sqrt(squared_norm);
 }
 
+// The type a product sums in: Accumulator, or the operand scalar when Accumulator is void.
+template <typename Scalar, typename Accumulator>
+using product_accumulator_t = std::conditional_t<std::is_void<Accumulator>::value, Scalar, Accumulator>;
+
 // Returns lambda * sqrt(k) * epsilon * num_products * || |A|*|B| ||_F, with epsilon that of the
-// operand scalar but the value kept in double: narrowed to half, a triple-product bound already
-// overflows at k = 100 for all-one operands.
-template <typename DerivedA, typename DerivedB>
+// accumulator (by default the operand scalar) but the value kept in double: narrowed to half, a
+// triple-product bound already overflows at k = 100 for all-one operands.
+template <typename Accumulator = void, typename DerivedA, typename DerivedB>
 double product_error_bound(const MatrixBase<DerivedA>& A, const MatrixBase<DerivedB>& B, int num_products = 1,
                            double lambda = 5) {
-  using Scalar = typename DerivedA::Scalar;
+  using Scalar = product_accumulator_t<typename DerivedA::Scalar, Accumulator>;
   const double norm = abs_product_update_norm(1.0, A, B, [](Index, Index) { return 0.0; });
   return lambda * numext::sqrt(double(A.cols())) * static_cast<double>(NumTraits<Scalar>::epsilon()) *
          double(num_products) * norm;
@@ -70,17 +74,39 @@ double product_error_bound(const MatrixBase<DerivedA>& A, const MatrixBase<Deriv
 // k+2: a k-term inner product, then the alpha scale and the sum with c0 (real arithmetic; complex
 // scalars use the same depth by extension, as in product_error_bound). The |C0| term is needed: a
 // bound on A*B alone fails once |alpha|*|A|*|B| << |C0|.
-template <typename DerivedA, typename DerivedB, typename DerivedC0>
+template <typename Accumulator = void, typename DerivedA, typename DerivedB, typename DerivedC0>
 double product_update_error_bound(const typename DerivedA::Scalar& alpha, const MatrixBase<DerivedA>& A,
                                   const MatrixBase<DerivedB>& B, const MatrixBase<DerivedC0>& C0, int num_products = 1,
                                   double lambda = 5) {
-  using Scalar = typename DerivedA::Scalar;
+  using Scalar = product_accumulator_t<typename DerivedA::Scalar, Accumulator>;
   eigen_assert(C0.rows() == A.rows() && C0.cols() == B.cols());
   const double norm = abs_product_update_norm(static_cast<double>(numext::abs(alpha)), A, B, [&C0](Index i, Index j) {
     return static_cast<double>(numext::abs(C0.coeff(i, j)));
   });
   return lambda * numext::sqrt(double(A.cols() + 2)) * static_cast<double>(NumTraits<Scalar>::epsilon()) *
          double(num_products) * norm;
+}
+
+// Returns ||M||_F accumulated in double, so that it overflows only when the norm itself does.
+template <typename Derived>
+double frobenius_norm_in_double(const MatrixBase<Derived>& M) {
+  double squared_norm = 0.0;
+  for (Index j = 0; j < M.cols(); ++j)
+    for (Index i = 0; i < M.rows(); ++i) {
+      const double d = static_cast<double>(numext::abs(M.coeff(i, j)));
+      squared_norm += d * d;
+    }
+  return numext::sqrt(squared_norm);
+}
+
+// A product that sums in an Accumulator wider than its operand Scalar rounds each result coefficient
+// once to Scalar: num_products * u * ||expected||_F more, with u = epsilon/2 of Scalar. Summed in
+// Scalar, that rounding is one of the k+2 operations the bound already counts.
+template <typename Scalar, typename Accumulator, typename Derived>
+double result_rounding_bound(const MatrixBase<Derived>& expected, int num_products) {
+  if (std::is_same<product_accumulator_t<Scalar, Accumulator>, Scalar>::value) return 0.0;
+  return 0.5 * static_cast<double>(NumTraits<Scalar>::epsilon()) * double(num_products) *
+         frobenius_norm_in_double(expected);
 }
 
 // Returns true if ||actual - expected||_F <= bound.
@@ -90,14 +116,7 @@ double product_update_error_bound(const typename DerivedA::Scalar& alpha, const 
 // an overflowed result.
 template <typename D1, typename D2>
 bool verify_within_product_bound(const MatrixBase<D1>& actual, const MatrixBase<D2>& expected, double bound) {
-  const typename D1::PlainObject diff = actual - expected;
-  double squared_error = 0.0;
-  for (Index j = 0; j < diff.cols(); ++j)
-    for (Index i = 0; i < diff.rows(); ++i) {
-      const double d = static_cast<double>(numext::abs(diff.coeff(i, j)));
-      squared_error += d * d;
-    }
-  const double error = numext::sqrt(squared_error);
+  const double error = frobenius_norm_in_double((actual - expected).eval());
   if (!((numext::isfinite)(bound) && error <= bound)) {
     std::cerr << "Product verification failed: error " << error << " exceeds bound " << bound << std::endl;
     return false;
@@ -106,58 +125,29 @@ bool verify_within_product_bound(const MatrixBase<D1>& actual, const MatrixBase<
 }
 
 // Verify that two computations of A*B agree within the Higham-Mary bound.
-// Returns true if ||actual - expected||_F <= product_error_bound(A, B, ...).
-template <typename D1, typename D2, typename DA, typename DB>
+// Returns true if ||actual - expected||_F <= product_error_bound<Accumulator>(A, B, ...), plus the
+// result_rounding_bound when Accumulator is wider than the operand scalar. Against an exact
+// expected value, pass num_products = 1.
+template <typename Accumulator = void, typename D1, typename D2, typename DA, typename DB>
 inline bool verifyProduct(const MatrixBase<D1>& actual, const MatrixBase<D2>& expected, const MatrixBase<DA>& A,
                           const MatrixBase<DB>& B, int num_products = 2, double lambda = 5) {
-  return verify_within_product_bound(actual, expected, product_error_bound(A, B, num_products, lambda));
+  return verify_within_product_bound(
+      actual, expected,
+      product_error_bound<Accumulator>(A, B, num_products, lambda) +
+          result_rounding_bound<typename DA::Scalar, Accumulator>(expected, num_products));
 }
 
 // Verify that two computations of C0 + alpha*A*B agree within the Higham-Mary bound.
-// Returns true if ||actual - expected||_F <= product_update_error_bound(alpha, A, B, C0, ...).
-template <typename D1, typename D2, typename DA, typename DB, typename DC0>
+// Returns true if ||actual - expected||_F <= product_update_error_bound<Accumulator>(alpha, A, B, C0,
+// ...), plus the result_rounding_bound when Accumulator is wider than the operand scalar.
+template <typename Accumulator = void, typename D1, typename D2, typename DA, typename DB, typename DC0>
 bool verifyProductUpdate(const MatrixBase<D1>& actual, const MatrixBase<D2>& expected, const typename DA::Scalar& alpha,
                          const MatrixBase<DA>& A, const MatrixBase<DB>& B, const MatrixBase<DC0>& C0,
                          int num_products = 2, double lambda = 5) {
-  return verify_within_product_bound(actual, expected,
-                                     product_update_error_bound(alpha, A, B, C0, num_products, lambda));
-}
-
-// Verify, coefficient by coefficient, that C = C0 + A*B was summed in float and rounded once to the 16-bit T.
-// With e the exact result and S = |C0| + |A|*|B|, Thm 3.5 for the float sum and one rounding to T give
-//   |C - e| <= u_T * |e| + (1 + u_T) * gamma_{k+2}(u_float) * S + denorm_min(T) / 2,
-// where u is the unit roundoff and the last term covers a result that underflows in T. Summed in T, the
-// second term would be gamma_k(u_T) * S instead, larger by the factor u_T / u_float = 2^13 (half) or 2^16 (bfloat16).
-template <typename DC, typename DC0, typename DA, typename DB>
-bool verify_float_accumulated_product(const MatrixBase<DC>& C, const MatrixBase<DC0>& C0, const MatrixBase<DA>& A,
-                                      const MatrixBase<DB>& B) {
-  using Scalar = typename DC::Scalar;
-  const double u = 0.5 * static_cast<double>(NumTraits<Scalar>::epsilon());
-  const double u_float = 0.5 * static_cast<double>(NumTraits<float>::epsilon());
-  const double n = double(A.cols() + 2);
-  const double gamma = n * u_float / (1 - n * u_float);
-  const double eta = 0.5 * static_cast<double>(std::numeric_limits<Scalar>::denorm_min());
-  bool ok = true;
-  double worst = 0.0;
-  for (Index j = 0; j < C.cols(); ++j)
-    for (Index i = 0; i < C.rows(); ++i) {
-      const double c0 = static_cast<double>(C0.coeff(i, j));
-      double exact = c0, magnitude = numext::abs(c0);
-      for (Index l = 0; l < A.cols(); ++l) {
-        const double a = static_cast<double>(A.coeff(i, l)), b = static_cast<double>(B.coeff(l, j));
-        exact += a * b;
-        magnitude += numext::abs(a * b);
-      }
-      const double bound = u * numext::abs(exact) + (1 + u) * gamma * magnitude + eta;
-      const double error = numext::abs(static_cast<double>(C.coeff(i, j)) - exact);
-      if (!(error <= bound)) ok = false, worst = (std::max)(worst, error / bound);
-    }
-  if (!ok) {
-    std::cerr << "Float-accumulated product verification failed: error up to " << worst << " times the bound"
-              << std::endl;
-    return false;
-  }
-  return true;
+  return verify_within_product_bound(
+      actual, expected,
+      product_update_error_bound<Accumulator>(alpha, A, B, C0, num_products, lambda) +
+          result_rounding_bound<typename DA::Scalar, Accumulator>(expected, num_products));
 }
 
 }  // namespace Eigen
