@@ -13,8 +13,11 @@ template <typename Scalar>
 Matrix<Scalar, Dynamic, Dynamic> reference_kron(const Matrix<Scalar, Dynamic, Dynamic>& A,
                                                 const Matrix<Scalar, Dynamic, Dynamic>& B) {
   Matrix<Scalar, Dynamic, Dynamic> K(A.rows() * B.rows(), A.cols() * B.cols());
-  for (Index i = 0; i < K.rows(); ++i)
-    for (Index j = 0; j < K.cols(); ++j) K(i, j) = A(i / B.rows(), j / B.cols()) * B(i % B.rows(), j % B.cols());
+  for (Index j = 0; j < A.cols(); ++j) {
+    for (Index i = 0; i < A.rows(); ++i) {
+      K.block(i * B.rows(), j * B.cols(), B.rows(), B.cols()) = A(i, j) * B;
+    }
+  }
   return K;
 }
 
