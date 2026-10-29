@@ -78,9 +78,8 @@ static std::enable_if_t<(NumDims > 0), void> SetSkewedInnerBlockInnerOffset(DSiz
 template <int Layout, int NumDims>
 static TensorBlockParams<NumDims> SkewedInnerBlock(DSizes<Index, NumDims> dims) {
   using BlockMapper = internal::TensorBlockMapper<NumDims, Layout, Index>;
-  BlockMapper block_mapper(
-      dims,
-      {internal::TensorBlockShapeType::kSkewedInnerDims, internal::random<size_t>(1, dims.TotalSize()), {0, 0, 0}});
+  BlockMapper block_mapper(dims,
+                           {internal::TensorBlockShapeType::kSkewedInnerDims, randomTensorBlockSize(dims), {0, 0, 0}});
 
   Index total_blocks = block_mapper.blockCount();
   Index block_index = internal::random<Index>(0, total_blocks - 1);
@@ -836,10 +835,9 @@ static void test_eval_tensor_inflation() {
   Tensor<T, NumDims, Layout> input(dims);
   input.setRandom();
 
-  DSizes<Index, NumDims> strides;
+  DSizes<Index, NumDims> strides = randomTensorDims<NumDims>(1, 3);
   DSizes<Index, NumDims> inflated_dims;
   for (int i = 0; i < NumDims; ++i) {
-    strides[i] = internal::random<Index>(1, 3);
     inflated_dims[i] = (dims[i] - 1) * strides[i] + 1;
   }
 
