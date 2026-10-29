@@ -758,33 +758,6 @@ class gemm_blocking_space<StorageOrder, LhsScalar_, RhsScalar_, MaxRows, MaxCols
 
 namespace internal {
 
-// blas_traits of a GEMM operand, which also sees through a cast of a real operand with direct access: the packers then
-// read the operand's StorageScalar coefficients and convert them (gemm_operand_mapper), instead of the product
-// materializing the cast. A scalar factor below the cast stays below it, so such an operand is materialized as before.
-// With EIGEN_USE_BLAS the cast is materialized, so that the product still reaches the external ?gemm.
-template <typename Xpr, typename = void>
-struct gemm_operand_traits : blas_traits<Xpr> {
-  using StorageScalar = typename traits<Xpr>::Scalar;
-};
-#ifndef EIGEN_USE_BLAS
-template <typename SrcScalar, typename DstScalar, typename NestedXpr>
-struct gemm_operand_traits<CwiseUnaryOp<core_cast_op<SrcScalar, DstScalar>, NestedXpr>,
-                           std::enable_if_t<bool(blas_traits<remove_all_t<NestedXpr>>::HasUsableDirectAccess) &&
-                                            !bool(blas_traits<remove_all_t<NestedXpr>>::HasScalarFactor) &&
-                                            !NumTraits<SrcScalar>::IsComplex && !NumTraits<DstScalar>::IsComplex>>
-    : blas_traits<remove_all_t<NestedXpr>> {
-  using Base = blas_traits<remove_all_t<NestedXpr>>;
-  using XprType = CwiseUnaryOp<core_cast_op<SrcScalar, DstScalar>, NestedXpr>;
-  using StorageScalar = SrcScalar;
-  using Scalar = DstScalar;
-  enum { IsComplex = 0, NeedToConjugate = 0 };
-  static inline typename Base::ExtractType extract(const XprType& x) { return Base::extract(x.nestedExpression()); }
-  static inline Scalar extractScalarFactor(const XprType&) { return Scalar(1); }
-};
-#endif
-template <typename Xpr>
-struct gemm_operand_traits<const Xpr> : gemm_operand_traits<Xpr> {};
-
 // Whether a GEMM of LhsScalar by RhsScalar runs in float on the converted operands and rounds each result coefficient
 // once. Summed in the operand type, half by half and bfloat16 by bfloat16 round every multiply-add, or every kc block,
 // to 11 or 8 significand bits (#3158).
@@ -797,6 +770,35 @@ struct gemm_accumulates_in_float<half, half> : std::true_type {};
 template <>
 struct gemm_accumulates_in_float<bfloat16, bfloat16> : std::true_type {};
 #endif
+
+// blas_traits of a GEMM operand, which also sees through a cast of a real operand with direct access: the packers then
+// read the operand's StorageScalar coefficients and convert them (gemm_operand_mapper), instead of the product
+// materializing the cast. A scalar factor below the cast stays below it, so such an operand is materialized as before.
+// So is a cast to a type whose GEMM sums in float, which would otherwise skip the rounding to that type.
+// With EIGEN_USE_BLAS the cast is materialized, so that the product still reaches the external ?gemm.
+template <typename Xpr, typename = void>
+struct gemm_operand_traits : blas_traits<Xpr> {
+  using StorageScalar = typename traits<Xpr>::Scalar;
+};
+#ifndef EIGEN_USE_BLAS
+template <typename SrcScalar, typename DstScalar, typename NestedXpr>
+struct gemm_operand_traits<
+    CwiseUnaryOp<core_cast_op<SrcScalar, DstScalar>, NestedXpr>,
+    std::enable_if_t<bool(blas_traits<remove_all_t<NestedXpr>>::HasUsableDirectAccess) &&
+                     !bool(blas_traits<remove_all_t<NestedXpr>>::HasScalarFactor) && !NumTraits<SrcScalar>::IsComplex &&
+                     !NumTraits<DstScalar>::IsComplex && !gemm_accumulates_in_float<DstScalar, DstScalar>::value>>
+    : blas_traits<remove_all_t<NestedXpr>> {
+  using Base = blas_traits<remove_all_t<NestedXpr>>;
+  using XprType = CwiseUnaryOp<core_cast_op<SrcScalar, DstScalar>, NestedXpr>;
+  using StorageScalar = SrcScalar;
+  using Scalar = DstScalar;
+  enum { IsComplex = 0, NeedToConjugate = 0 };
+  static inline typename Base::ExtractType extract(const XprType& x) { return Base::extract(x.nestedExpression()); }
+  static inline Scalar extractScalarFactor(const XprType&) { return Scalar(1); }
+};
+#endif
+template <typename Xpr>
+struct gemm_operand_traits<const Xpr> : gemm_operand_traits<Xpr> {};
 
 template <typename Lhs, typename Rhs>
 struct generic_product_impl<Lhs, Rhs, DenseShape, DenseShape, GemmProduct>
