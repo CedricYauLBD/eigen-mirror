@@ -25,9 +25,10 @@ void matrixRedux(const MatrixType& m) {
 
   MatrixType m1 = MatrixType::Random(rows, cols);
 
-  // With at most 10000 entries, this keeps every partial product normal, even for all-negative inputs.
-  // For real inputs, a fixed spread gives E[log(prod)] proportional to -rows*cols and can underflow.
-  const RealScalar product_scale = RealScalar(0.2) / numext::sqrt(RealScalar(rows * cols));
+  // With N = rows*cols <= 10000, the spread s = min(0.2, 20/N) keeps every partial product above
+  // (1 - s)^N >= 0.8^100 ~ e^-22, even for all-negative inputs, and s = 0.2 up to N = 100 keeps a dropped
+  // factor visible to VERIFY_IS_APPROX. A fixed spread can underflow: for real inputs E[log(prod)] ~ -N.
+  const RealScalar product_scale = numext::mini(RealScalar(0.2), RealScalar(20) / RealScalar(rows * cols));
   MatrixType m1_for_prod = MatrixType::Ones(rows, cols) + product_scale * m1;
 
   Matrix<Scalar, MatrixType::RowsAtCompileTime, MatrixType::RowsAtCompileTime> m2(rows, rows);

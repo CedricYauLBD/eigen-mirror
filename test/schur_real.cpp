@@ -299,13 +299,13 @@ void schur_workspace_ref() {
 }
 
 EIGEN_DECLARE_TEST(schur_real) {
-  // The imaginary part is representable, but tr^2 and 4*det round to the same value.
+  // RealSchur keeps these blocks (|c| > eps*(|a|+|d|)), but tr^2 and 4*det round to the same value.
   Matrix2f small_imaginary_float;
-  small_imaginary_float << 1, NumTraits<float>::epsilon(), -NumTraits<float>::epsilon(), 1;
-  CALL_SUBTEST_1(verifyIsQuasiTriangular(small_imaginary_float));
+  small_imaginary_float << 1, 0.1f, -3e-7f, 1;
+  CALL_SUBTEST_1(verifyIsQuasiTriangular(RealSchur<Matrix2f>(small_imaginary_float).matrixT()));
   Matrix2d small_imaginary_double;
-  small_imaginary_double << 1, NumTraits<double>::epsilon(), -NumTraits<double>::epsilon(), 1;
-  CALL_SUBTEST_2(verifyIsQuasiTriangular(small_imaginary_double));
+  small_imaginary_double << 1, 0.1, -5e-16, 1;
+  CALL_SUBTEST_2(verifyIsQuasiTriangular(RealSchur<Matrix2d>(small_imaginary_double).matrixT()));
 
   CALL_SUBTEST_1((schur<Matrix4f>()));
   CALL_SUBTEST_2((schur<MatrixXd>(internal::random<int>(1, EIGEN_TEST_MAX_SIZE / 4))));
