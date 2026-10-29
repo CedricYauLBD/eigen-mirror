@@ -943,7 +943,8 @@ struct generic_product_impl<Lhs, Rhs, DenseShape, DenseShape, GemmProduct>
   }
 
   // dst (+)= alpha * a_lhs * a_rhs as the float product of the converted operands, rounded once into dst. The packers
-  // convert the operands; only the result needs a float workspace.
+  // convert the operands; only the result needs a float workspace, which goes where the packed blocks do: on the stack
+  // up to EIGEN_STACK_ALLOCATION_LIMIT, so that a fixed-size or preallocated product does not allocate.
   template <typename Dest>
   static void scaleAndAddOrEvalTo(std::true_type, Dest& dst, const Lhs& a_lhs, const Rhs& a_rhs, const Scalar& alpha,
                                   bool overwrite) {
@@ -952,20 +953,27 @@ struct generic_product_impl<Lhs, Rhs, DenseShape, DenseShape, GemmProduct>
     using Real = float;
     add_const_on_value_type_t<ActualLhsType> lhs = LhsBlasTraits::extract(a_lhs);
     add_const_on_value_type_t<ActualRhsType> rhs = RhsBlasTraits::extract(a_rhs);
-    using CastLhs = std::remove_const_t<decltype(lhs.template cast<Real>())>;
-    using CastRhs = std::remove_const_t<decltype(rhs.template cast<Real>())>;
+    // A cast the float GEMM does not pack in place (under EIGEN_USE_BLAS) is materialized at run-time size, so that
+    // a fixed-size operand does not land on the stack.
+    using CastLhsXpr = std::remove_const_t<decltype(lhs.template cast<Real>())>;
+    using CastRhsXpr = std::remove_const_t<decltype(rhs.template cast<Real>())>;
+    using CastLhs = std::conditional_t<
+        std::is_same<typename gemm_operand_traits<CastLhsXpr>::StorageScalar, Real>::value,
+        Matrix<Real, Dynamic, Dynamic, (ActualLhsTypeCleaned::Flags & RowMajorBit) ? RowMajor : ColMajor>, CastLhsXpr>;
+    using CastRhs = std::conditional_t<
+        std::is_same<typename gemm_operand_traits<CastRhsXpr>::StorageScalar, Real>::value,
+        Matrix<Real, Dynamic, Dynamic, (ActualRhsTypeCleaned::Flags & RowMajorBit) ? RowMajor : ColMajor>, CastRhsXpr>;
     CastLhs cast_lhs = lhs.template cast<Real>();
     CastRhs cast_rhs = rhs.template cast<Real>();
     // The factors combine in float, so that (s * A) * (t * B) keeps an s * t below half's range.
     Real actualAlpha =
         Real(alpha) * Real(LhsBlasTraits::extractScalarFactor(a_lhs)) * Real(RhsBlasTraits::extractScalarFactor(a_rhs));
 
-    using Acc = Matrix<Real, Dynamic, Dynamic, (Dest::Flags & RowMajorBit) ? RowMajor : ColMajor,
-                       Dest::MaxRowsAtCompileTime, Dest::MaxColsAtCompileTime>;
     using FloatGemm = generic_product_impl<CastLhs, CastRhs, DenseShape, DenseShape, GemmProduct>;
-    Acc acc;
+    ei_declare_aligned_stack_constructed_variable(Real, acc_data, dst.size(), nullptr);
+    Map<Matrix<Real, Dynamic, Dynamic, (Dest::Flags & RowMajorBit) ? RowMajor : ColMajor>> acc(acc_data, dst.rows(),
+                                                                                               dst.cols());
     if (overwrite) {
-      acc.resize(dst.rows(), dst.cols());
       FloatGemm::scaleAndEvalTo(acc, cast_lhs, cast_rhs, actualAlpha);
     } else {
       acc = dst.template cast<Real>();

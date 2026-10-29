@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: MPL-2.0
 
 #define TEST_ENABLE_TEMPORARY_TRACKING
+#define EIGEN_RUNTIME_NO_MALLOC
 #define TEST_IGNORE_STACK_ALLOCATED_TEMPORARY
 
 #include "main.h"
@@ -178,6 +179,36 @@ void cast_to_float_accumulated() {
   VERIFY_IS_EQUAL(C.array().isInf().any(), (std::is_same<T, half>::value));
 }
 
+// The float workspace goes where the packed blocks do: a fixed-size product above the stack limit compiles and runs,
+// and a preallocated product below it does not allocate.
+template <typename T>
+void float_accumulation_workspace() {
+  using Fixed = Matrix<T, 192, 192>;
+  std::unique_ptr<Fixed> A(new Fixed), B(new Fixed), C(new Fixed);
+  *A = random_small_integers<T, ColMajor>(192, 192, 4);
+  *B = random_small_integers<T, ColMajor>(192, 192, 4);
+  C->noalias() = *A * *B;
+  using Mat = Matrix<T, Dynamic, Dynamic>;
+  MatrixXf Af = A->template cast<float>(), Bf = B->template cast<float>();
+  VERIFY_IS_EQUAL(Mat(*C), (Af * Bf).template cast<T>().eval());
+
+  // With EIGEN_USE_BLAS the float product materializes both casts for the external sgemm.
+#ifndef EIGEN_USE_BLAS
+  Mat X = random_small_integers<T, ColMajor>(48, 40, 4), Y = random_small_integers<T, ColMajor>(40, 36, 4);
+  MatrixXf exact = X.template cast<float>() * Y.template cast<float>();
+  Mat Z(48, 36);
+  internal::set_is_malloc_allowed(false);
+  Z.noalias() = X * Y;
+  internal::set_is_malloc_allowed(true);
+  VERIFY_IS_EQUAL(Z, exact.cast<T>().eval());
+  MatrixXf twice = Z.template cast<float>() + exact;
+  internal::set_is_malloc_allowed(false);
+  Z.noalias() += X * Y;
+  internal::set_is_malloc_allowed(true);
+  VERIFY_IS_EQUAL(Z, twice.cast<T>().eval());
+#endif
+}
+
 EIGEN_DECLARE_TEST(product_cast) {
   using MatrixXhalf = Matrix<half, Dynamic, Dynamic>;
   using internal::gemm_accumulates_in_float;
@@ -221,4 +252,6 @@ EIGEN_DECLARE_TEST(product_cast) {
   CALL_SUBTEST_5((cast_to_float_accumulated<half, double>()));
   CALL_SUBTEST_6((cast_to_float_accumulated<bfloat16, float>()));
   CALL_SUBTEST_6((cast_to_float_accumulated<bfloat16, double>()));
+  CALL_SUBTEST_5(float_accumulation_workspace<half>());
+  CALL_SUBTEST_6(float_accumulation_workspace<bfloat16>());
 }
