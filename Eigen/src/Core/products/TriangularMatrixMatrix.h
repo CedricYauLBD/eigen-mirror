@@ -47,8 +47,10 @@ struct product_triangular_matrix_matrix<Scalar, Index, Mode, true, LhsStorageOrd
                                         ConjugateRhs, ColMajor, ResInnerStride, Version> {
   using Traits = gebp_traits<Scalar, Scalar>;
   enum {
-    // A multiple of mr: horizontal panels then start on lhs micro-panel boundaries.
-    SmallPanelWidth = numext::div_ceil(2 * plain_enum_max(Traits::mr, Traits::nr), int(Traits::mr)) * int(Traits::mr),
+    SmallPanelWidth = 2 * plain_enum_max(Traits::mr, Traits::nr),
+    // A multiple of mr, so that horizontal panels start on lhs micro-panel boundaries. It exceeds SmallPanelWidth only
+    // if nr > mr, e.g. for NEON double (18 vs 16), whose vertical panels ran 1-3% slower at 18 on Cortex-A76.
+    HorizontalPanelWidth = numext::div_ceil(int(SmallPanelWidth), int(Traits::mr)) * int(Traits::mr),
     IsLower = (Mode & Lower) == Lower,
     SetDiag = (Mode & (ZeroDiag | UnitDiag)) ? 0 : 1
   };
@@ -80,10 +82,22 @@ EIGEN_DONT_INLINE void product_triangular_matrix_matrix<
 
   Index kc = blocking.kc();                    // cache block size along the K direction
   Index mc = (std::min)(rows, blocking.mc());  // cache block size along the M direction
+#ifdef EIGEN_VECTORIZE_SME
+  // The SME kernel moves each output block through ZA on every call, which a panelWidth-deep update does not amortize.
+  constexpr bool HorizontalBelowNr = sme_has_gebp_kernel<Scalar, Scalar>::value;
+#else
+  constexpr bool HorizontalBelowNr = false;
+#endif
+  // P horizontal panels update each output panel once instead of (P+1)/2 times on average, with the same packed
+  // coefficients and flops. Below nr columns, the generic kernel's partial register blocks run faster over the short
+  // depth of vertical panels.
+  const bool horizontal =
+      (HorizontalBelowNr || cols >= Traits::nr) && Index(HorizontalPanelWidth) <= (std::min)(kc, mc);
   // The small panel size must not be larger than blocking size.
   // Usually this should never be the case because SmallPanelWidth^2 is very small
   // compared to L2 cache size, but let's be safe:
-  Index panelWidth = (std::min)(Index(SmallPanelWidth), (std::min)(kc, mc));
+  const Index panelWidth =
+      horizontal ? Index(HorizontalPanelWidth) : (std::min)(Index(SmallPanelWidth), (std::min)(kc, mc));
 
   std::size_t sizeA = kc * mc;
   std::size_t sizeB = kc * cols;
@@ -93,10 +107,11 @@ EIGEN_DONT_INLINE void product_triangular_matrix_matrix<
 
   static constexpr int PanelCapacity =
       (EIGEN_STACK_ALLOCATION_LIMIT == 0 ||
-       SmallPanelWidth * SmallPanelWidth * sizeof(Scalar) <= EIGEN_STACK_ALLOCATION_LIMIT)
-          ? int(SmallPanelWidth)
+       HorizontalPanelWidth * HorizontalPanelWidth * sizeof(Scalar) <= EIGEN_STACK_ALLOCATION_LIMIT)
+          ? int(HorizontalPanelWidth)
           : Dynamic;
-  Matrix<Scalar, PanelCapacity, PanelCapacity, LhsStorageOrder> triangularBuffer(SmallPanelWidth, SmallPanelWidth);
+  Matrix<Scalar, PanelCapacity, PanelCapacity, LhsStorageOrder> triangularBuffer(HorizontalPanelWidth,
+                                                                                 HorizontalPanelWidth);
   triangularBuffer.topLeftCorner(panelWidth, panelWidth).setZero();
   EIGEN_IF_CONSTEXPR ((Mode & ZeroDiag) == ZeroDiag)
     triangularBuffer.diagonal().setZero();
@@ -109,13 +124,6 @@ EIGEN_DONT_INLINE void product_triangular_matrix_matrix<
                 LhsStorageOrder, false, true>
       pack_lhs;
   gemm_pack_rhs<Scalar, Index, RhsMapper, Traits::nr, RhsStorageOrder> pack_rhs;
-
-#ifdef EIGEN_VECTORIZE_SME
-  // The SME kernel moves each output block through ZA on every call, which a panelWidth-deep update does not amortize.
-  constexpr bool HorizontalBelowNr = sme_has_gebp_kernel<Scalar, Scalar>::value;
-#else
-  constexpr bool HorizontalBelowNr = false;
-#endif
 
   for (Index k2 = IsLower ? depth : 0; IsLower ? k2 > 0 : k2 < depth; IsLower ? k2 -= kc : k2 += kc) {
     Index actual_kc = (std::min)(IsLower ? k2 : depth - k2, kc);
@@ -149,11 +157,9 @@ EIGEN_DONT_INLINE void product_triangular_matrix_matrix<
         }
         pack_lhs(dst, LhsMapper(triangularBuffer.data(), triangularBuffer.outerStride()), width, width, stride, offset);
       };
-      // P horizontal panels update each output panel once instead of (P+1)/2 times on average, with the same packed
-      // coefficients and flops. Each group of panels that fits blockA is packed in the vertical order, whose tall
-      // column segments stream from memory, at stride actual_kc. Below nr columns, the generic kernel's partial
-      // register blocks run faster over the short depth of vertical panels.
-      if ((HorizontalBelowNr || cols >= Traits::nr) && panelWidth == Index(SmallPanelWidth)) {
+      // Each group of horizontal panels that fits blockA is packed in the vertical order, whose tall column segments
+      // stream from memory, at stride actual_kc.
+      if (horizontal) {
         const Index groupRows = mc / panelWidth * panelWidth;
         for (Index g0 = 0; g0 < actual_kc; g0 += groupRows) {
           const Index g1 = (std::min)(actual_kc, g0 + groupRows);

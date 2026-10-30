@@ -272,10 +272,10 @@ void trmm_wide_depth_blocks() {
   using Lhs = Matrix<Scalar, Dynamic, Dynamic, LhsOrder>;
   using Mat = Matrix<Scalar, Dynamic, Dynamic>;
   using Real = typename NumTraits<Scalar>::Real;
-  const Index panel = Kernel::SmallPanelWidth, nr = Kernel::Traits::nr;
-  // Depth blocks of one full panel plus a row, and of three plus a partial one; an RHS of one column, which only SME
-  // slices horizontally, and of one and two micro panels; an lhs block of every row, and of one panel, which packs a
-  // depth block one panel at a time.
+  const Index panel = Kernel::HorizontalPanelWidth, nr = Kernel::Traits::nr;
+  // Depth blocks of one full horizontal panel plus a row, and of three plus a partial one; an RHS of one column, which
+  // only SME slices horizontally, and of one and two micro panels; an lhs block of every row, and of one panel, which
+  // packs a depth block one panel at a time.
   for (Index kc : {panel + 1, 3 * panel + 5})
     for (Index cols : {Index(1), nr, 2 * nr + 1})
       for (bool narrowBlock : {false, true}) {
