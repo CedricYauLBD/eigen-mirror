@@ -790,9 +790,12 @@ struct gemm_operand_traits<
   using XprType = CwiseUnaryOp<core_cast_op<SrcScalar, DstScalar>, NestedXpr>;
   using StorageScalar = SrcScalar;
   using Scalar = DstScalar;
-  enum { IsComplex = 0, NeedToConjugate = 0 };
-  static inline typename Base::ExtractType extract(const XprType& x) { return Base::extract(x.nestedExpression()); }
-  static inline Scalar extractScalarFactor(const XprType&) { return Scalar(1); }
+  static constexpr bool IsComplex = false;
+  static constexpr bool NeedToConjugate = false;
+  static EIGEN_DEVICE_FUNC inline typename Base::ExtractType extract(const XprType& x) {
+    return Base::extract(x.nestedExpression());
+  }
+  static EIGEN_DEVICE_FUNC inline Scalar extractScalarFactor(const XprType&) { return Scalar(1); }
 };
 #endif
 template <typename Xpr>
