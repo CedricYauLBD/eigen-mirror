@@ -7,6 +7,74 @@
 #include <Eigen/Geometry>
 #include <Eigen/SparseCore>
 
+template <int Dimension>
+struct QuantityScalar {
+  double value = 0;
+  QuantityScalar() = default;
+  QuantityScalar(double x) : value(x) {}
+};
+
+template <int A, int B>
+QuantityScalar<A + B> operator*(QuantityScalar<A> lhs, QuantityScalar<B> rhs) {
+  return lhs.value * rhs.value;
+}
+template <int A>
+QuantityScalar<A> operator+(QuantityScalar<A> lhs, QuantityScalar<A> rhs) {
+  return lhs.value + rhs.value;
+}
+template <int A>
+QuantityScalar<A>& operator+=(QuantityScalar<A>& lhs, QuantityScalar<A> rhs) {
+  lhs.value += rhs.value;
+  return lhs;
+}
+
+namespace Eigen {
+template <int A>
+struct NumTraits<QuantityScalar<A>> : NumTraits<double> {
+  using Real = QuantityScalar<A>;
+  using NonInteger = QuantityScalar<A>;
+  using Nested = QuantityScalar<A>;
+  using Literal = QuantityScalar<A>;
+  static constexpr bool RequireInitialization = true;
+};
+template <int A, typename B>
+struct ScalarBinaryOpTraits<QuantityScalar<A>, B, internal::scalar_product_op<QuantityScalar<A>, B>> {
+  using ReturnType = decltype(std::declval<QuantityScalar<A>>() * std::declval<B>());
+};
+template <typename A, int B>
+struct ScalarBinaryOpTraits<A, QuantityScalar<B>, internal::scalar_product_op<A, QuantityScalar<B>>> {
+  using ReturnType = decltype(std::declval<A>() * std::declval<QuantityScalar<B>>());
+};
+template <int A, int B>
+struct ScalarBinaryOpTraits<QuantityScalar<A>, QuantityScalar<B>,
+                            internal::scalar_product_op<QuantityScalar<A>, QuantityScalar<B>>> {
+  using ReturnType = QuantityScalar<A + B>;
+};
+}  // namespace Eigen
+
+template <int Size, int Order, int RhsDimension>
+void quantity_scalar_product() {
+  Matrix<QuantityScalar<1>, Size, Size, Order> lhs(2, 2);
+  Matrix<QuantityScalar<RhsDimension>, Size, Size, Order> rhs(2, 2);
+  for (Index j = 0; j < 2; ++j)
+    for (Index i = 0; i < 2; ++i) {
+      lhs(i, j) = double(i + 2 * j + 1);
+      rhs(i, j) = double(2 * i - j + 1);
+    }
+  const Matrix<QuantityScalar<1 + RhsDimension>, Size, Size, Order> result = lhs * rhs;
+  const Matrix<QuantityScalar<1>, Dynamic, Dynamic, Order> dynamic_lhs = lhs;
+  const Matrix<QuantityScalar<RhsDimension>, Dynamic, Dynamic, Order> dynamic_rhs = rhs;
+  const Matrix<QuantityScalar<1 + RhsDimension>, Dynamic, Dynamic, Order> lazy_result =
+      dynamic_lhs.lazyProduct(dynamic_rhs);
+  for (Index j = 0; j < 2; ++j)
+    for (Index i = 0; i < 2; ++i) {
+      double expected = 0;
+      for (Index k = 0; k < 2; ++k) expected += lhs(i, k).value * rhs(k, j).value;
+      VERIFY_IS_EQUAL(result(i, j).value, expected);
+      VERIFY_IS_EQUAL(lazy_result(i, j).value, expected);
+    }
+}
+
 template <typename Kind>
 struct EigenBaseScalar;
 namespace Eigen {
@@ -359,6 +427,8 @@ void bounded_array_scalar_binary_op_overloads() {
 }
 
 EIGEN_DECLARE_TEST(scalar_binary_op_overloads) {
+  quantity_scalar_product<2, ColMajor, 2>();
+  quantity_scalar_product<2, RowMajor, 2>();
   BaseReferenceMatrix base_matrix;
   base_matrix(0) = BaseReferenceScalar(2);
   const MatrixBase<BaseReferenceMatrix>& matrix_base = base_matrix;
