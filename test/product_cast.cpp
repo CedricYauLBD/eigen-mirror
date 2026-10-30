@@ -25,13 +25,20 @@ Matrix<Src, Dynamic, Dynamic, Order> random_small_integers(Index rows, Index col
   return m;
 }
 
+// Integers in [-bound, bound], or for a floating-point Src, fractions there that a narrowing cast rounds.
+template <typename Src, int Order>
+Matrix<Src, Dynamic, Dynamic, Order> random_operand(Index rows, Index cols, int bound) {
+  if (NumTraits<Src>::IsInteger) return random_small_integers<Src, Order>(rows, cols, bound);
+  return Matrix<Src, Dynamic, Dynamic, Order>::Random(rows, cols) * Src(bound);
+}
+
 // The lazily cast operands pack to the same blocks as the materialized casts, so the products agree bit for bit.
 template <typename Src, typename Dst, int LhsOrder, int RhsOrder, int DstOrder>
 void lazy_cast_product(Index rows, Index cols, Index depth) {
   using DstMat = Matrix<Dst, Dynamic, Dynamic, DstOrder>;
   using PlainDst = Matrix<Dst, Dynamic, Dynamic>;
-  Matrix<Src, Dynamic, Dynamic, LhsOrder> a = random_small_integers<Src, LhsOrder>(rows + 3, depth + 2, 8);
-  Matrix<Src, Dynamic, Dynamic, RhsOrder> b = random_small_integers<Src, RhsOrder>(depth + 1, cols + 4, 8);
+  Matrix<Src, Dynamic, Dynamic, LhsOrder> a = random_operand<Src, LhsOrder>(rows + 3, depth + 2, 8);
+  Matrix<Src, Dynamic, Dynamic, RhsOrder> b = random_operand<Src, RhsOrder>(depth + 1, cols + 4, 8);
   // Strided operands: blocks of larger matrices.
   auto A = a.block(1, 2, rows, depth);
   auto B = b.block(1, 3, depth, cols);
@@ -43,10 +50,13 @@ void lazy_cast_product(Index rows, Index cols, Index depth) {
   dst.setRandom();
   VERIFY_EVALUATION_COUNT(dst.noalias() = A.template cast<Dst>() * B.template cast<Dst>(), 2 * kCastTemporaries);
   VERIFY_IS_EQUAL(dst, ref);
+  DstMat ref_update = ref;
+  ref_update.noalias() += Ad * Bd;
   VERIFY_EVALUATION_COUNT(dst.noalias() += A.template cast<Dst>() * B.template cast<Dst>(), 2 * kCastTemporaries);
-  VERIFY_IS_EQUAL(dst, (ref + ref).eval());
+  VERIFY_IS_EQUAL(dst, ref_update);
+  ref_update.noalias() -= Ad * Bd;
   VERIFY_EVALUATION_COUNT(dst.noalias() -= A.template cast<Dst>() * B.template cast<Dst>(), 2 * kCastTemporaries);
-  VERIFY_IS_EQUAL(dst, ref);
+  VERIFY_IS_EQUAL(dst, ref_update);
 
   // One side already in the kernel's type.
   ref.noalias() = Ad * Bd;
@@ -69,10 +79,10 @@ void lazy_cast_product(Index rows, Index cols, Index depth) {
   ref.noalias() = (Dst(3) * Ad) * Bd;
   dst.noalias() = (Dst(3) * A.template cast<Dst>()) * B.template cast<Dst>();
   VERIFY_IS_EQUAL(dst, ref);
-  // Not a GEMM: the GEMV fallback for a single result column.
+  // Not a GEMM: the GEMV fallback for a single result column, which sums in another order than the GEMV kernel.
   PlainDst col(rows, 1);
   col.noalias() = A.template cast<Dst>() * B.col(0).template cast<Dst>();
-  VERIFY_IS_EQUAL(col, (Ad * Bd.col(0)).eval());
+  VERIFY_IS_APPROX(col, (Ad * Bd.col(0)).eval());
 }
 
 template <typename Src, typename Dst>
@@ -93,9 +103,11 @@ void lazy_cast_products() {
 template <typename T, int LhsOrder, int RhsOrder, int DstOrder>
 void float_accumulation(Index rows, Index cols, Index depth) {
   using Mat = Matrix<T, Dynamic, Dynamic, DstOrder>;
-  // |sum| <= 16 * depth stays an integer that float holds exactly, so the reference does not depend on the order.
-  Matrix<T, Dynamic, Dynamic, LhsOrder> A = random_small_integers<T, LhsOrder>(rows, depth, 4);
-  Matrix<T, Dynamic, Dynamic, RhsOrder> B = random_small_integers<T, RhsOrder>(depth, cols, 4);
+  // |sum| <= 256 * depth < 2^24 stays an integer that float holds exactly, so the reference does not depend on the
+  // order. Its spread of about 16^2 / 3 * sqrt(depth) exceeds half's and bfloat16's exact integers, so a sum in T
+  // rounds.
+  Matrix<T, Dynamic, Dynamic, LhsOrder> A = random_small_integers<T, LhsOrder>(rows, depth, 16);
+  Matrix<T, Dynamic, Dynamic, RhsOrder> B = random_small_integers<T, RhsOrder>(depth, cols, 16);
   MatrixXf exact = A.template cast<float>().eval() * B.template cast<float>().eval();
 
   Mat C(rows, cols);
@@ -277,6 +289,7 @@ EIGEN_DECLARE_TEST(product_cast) {
     CALL_SUBTEST_2((lazy_cast_products<bfloat16, float>()));
     CALL_SUBTEST_3((lazy_cast_products<float, double>()));
     CALL_SUBTEST_3((lazy_cast_products<int, float>()));
+    CALL_SUBTEST_3((lazy_cast_products<double, float>()));
     CALL_SUBTEST_4((lazy_cast_products<int, double>()));
     CALL_SUBTEST_4((lazy_cast_products<half, double>()));
   }
