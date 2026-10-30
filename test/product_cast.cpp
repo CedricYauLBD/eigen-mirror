@@ -154,6 +154,19 @@ void float_accumulation_depth() {
   const T s = T(std::ldexp(1.0f, -14));
   C.noalias() = (s * A) * (B * s);
   VERIFY_IS_EQUAL(C, Mat::Constant(24, 21, T(std::ldexp(float(depth), -28))));
+  // Where s * s underflows in T, a product small enough for the coefficient-based path would evaluate 0 * inf there,
+  // so it takes the float GEMM as well.
+  for (Index n : {5, 24}) {
+    Mat P = Mat::Ones(n, n), Q = Mat::Ones(n, n), R(n, n);
+    P(0, 0) = NumTraits<T>::infinity();
+    R.noalias() = (s * P) * (Q * s);
+    VERIFY(R.row(0).array().isInf().all());
+    VERIFY_IS_EQUAL(R.bottomRows(n - 1), Mat::Constant(n - 1, n, T(std::ldexp(float(n), -28))));
+    R.setOnes();
+    R.noalias() += (s * P) * (Q * s);
+    VERIFY(R.row(0).array().isInf().all());
+    VERIFY_IS_EQUAL(R.bottomRows(n - 1), Mat::Constant(n - 1, n, T(1.0f + std::ldexp(float(n), -28))));
+  }
 }
 
 // A cast to T is materialized in T, as before, rather than packed from the source and summed in float: the product
