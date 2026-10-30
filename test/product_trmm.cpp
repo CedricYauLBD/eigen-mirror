@@ -235,6 +235,10 @@ EIGEN_DECLARE_TEST(product_trmm) {
   CALL_SUBTEST_31((trmm<float, StrictlyUpper, ColMajor, ColMajor, ColMajor>(521, 513, 517)));
   CALL_SUBTEST_32((trmm<double, StrictlyLower, RowMajor, RowMajor, RowMajor>(513, 521, 517)));
   CALL_SUBTEST_11((trmm_maps<Lower, Matrix<float, 24, 20>, Matrix<float, 20, 16>, Matrix<float, 24, 16>>(24, 20, 16)));
+  // Upper trapezoids filling the inline blockB, with a packed triangle (depth^2 scalars) that ends off a packet
+  // boundary, so the general panel after it is moved forward to realign.
+  CALL_SUBTEST_11((trmm_maps<Upper, Matrix<float, 4, 3>, Matrix<float, 3, 5>, Matrix<float, 4, 5>>(4, 3, 5)));
+  CALL_SUBTEST_12((trmm_maps<Upper, Matrix<double, 4, 3>, Matrix<double, 3, 5>, Matrix<double, 4, 5>>(4, 3, 5)));
   CALL_SUBTEST_12(
       (trmm_maps<UnitUpper, Matrix<double, 13, 17, RowMajor>, Matrix<double, 17, 11>, Matrix<double, 13, 11, RowMajor>>(
           13, 17, 11)));
