@@ -425,18 +425,15 @@ struct general_matrix_matrix_product<Index, LhsScalar, LhsStorageOrder, Conjugat
     // The tiny-result and NEON kernels accumulate, so overwriting zeroes their result first; the tiny one runs exactly
     // when sme_tiny_gemm_wins holds.
     if (info == nullptr) {
-      // The SME entry points read their operands in the kernel's scalar type.
-      constexpr bool same_storage =
-          std::is_same<LhsStorage, LhsScalar>::value && std::is_same<RhsStorage, RhsScalar>::value;
-      constexpr bool tiny_pair = same_storage && sme_tiny_gemm_pair<LhsScalar, RhsScalar>::value;
+      constexpr bool tiny_pair = sme_tiny_gemm_pair<LhsScalar, RhsScalar>::value;
       if (overwrite && tiny_pair && sme_tiny_gemm_wins<ResScalar>(rows, cols, depth))
         gemm_zero_result(res_, rows, cols, resIncr, resStride);
       if (sme_run_tiny_gemm<LhsStorageOrder, RhsStorageOrder>(bool_constant<tiny_pair>(), rows, cols, depth, lhs_,
                                                               lhsStride, rhs_, rhsStride, res_, resIncr, resStride,
                                                               alpha) ||
           sme_run_small_gemm<LhsStorageOrder, RhsStorageOrder, ConjugateLhs, ConjugateRhs, ResInnerStride>(
-              bool_constant < same_storage && sme_has_gebp_kernel<LhsScalar, RhsScalar>::value > (), overwrite, rows,
-              cols, depth, lhs_, lhsStride, rhs_, rhsStride, res_, resIncr, resStride, alpha, blocking))
+              bool_constant<sme_has_gebp_kernel<LhsScalar, RhsScalar>::value>(), overwrite, rows, cols, depth, lhs_,
+              lhsStride, rhs_, rhsStride, res_, resIncr, resStride, alpha, blocking))
         return;
     }
 #endif
@@ -775,12 +772,13 @@ struct gemm_accumulates_in_float<bfloat16, bfloat16> : std::true_type {};
 // read the operand's StorageScalar coefficients and convert them (gemm_operand_mapper), instead of the product
 // materializing the cast. A scalar factor below the cast stays below it, so such an operand is materialized as before.
 // So is a cast to a type whose GEMM sums in float, which would otherwise skip the rounding to that type.
-// With EIGEN_USE_BLAS the cast is materialized, so that the product still reaches the external ?gemm.
+// With EIGEN_USE_BLAS the cast is materialized, so that the product still reaches the external ?gemm, and so it is on
+// SME, whose tiny, small and direct-packing paths read the operand in the kernel's scalar type.
 template <typename Xpr, typename = void>
 struct gemm_operand_traits : blas_traits<Xpr> {
   using StorageScalar = typename traits<Xpr>::Scalar;
 };
-#ifndef EIGEN_USE_BLAS
+#if !defined(EIGEN_USE_BLAS) && !defined(EIGEN_VECTORIZE_SME)
 template <typename SrcScalar, typename DstScalar, typename NestedXpr>
 struct gemm_operand_traits<
     CwiseUnaryOp<core_cast_op<SrcScalar, DstScalar>, NestedXpr>,
@@ -851,14 +849,11 @@ struct generic_product_impl<Lhs, Rhs, DenseShape, DenseShape, GemmProduct>
 
 #ifdef EIGEN_VECTORIZE_SME
   // Whether the tiny-result kernel takes a product the coeff-based one would; the GEMM driver sees a RowMajor
-  // result transposed. The kernel reads its operands in the kernel's scalar type, so a lazily cast operand cannot
-  // take it.
+  // result transposed.
   template <typename Dst>
   static EIGEN_STRONG_INLINE bool tinyKernelWins(const Dst& dst, const Rhs& rhs) {
     constexpr bool row_major = (Dst::Flags & RowMajorBit) != 0;
-    return std::is_same<typename LhsBlasTraits::StorageScalar, LhsScalar>::value &&
-           std::is_same<typename RhsBlasTraits::StorageScalar, RhsScalar>::value &&
-           sme_tiny_gemm_pair<LhsScalar, RhsScalar>::value &&
+    return sme_tiny_gemm_pair<LhsScalar, RhsScalar>::value &&
            sme_tiny_gemm_wins<Scalar>(row_major ? dst.cols() : dst.rows(), row_major ? dst.rows() : dst.cols(),
                                       rhs.rows());
   }
@@ -980,8 +975,8 @@ struct generic_product_impl<Lhs, Rhs, DenseShape, DenseShape, GemmProduct>
     using Real = float;
     add_const_on_value_type_t<ActualLhsType> lhs = LhsBlasTraits::extract(a_lhs);
     add_const_on_value_type_t<ActualRhsType> rhs = RhsBlasTraits::extract(a_rhs);
-    // A cast the float GEMM does not pack in place (under EIGEN_USE_BLAS) is materialized at run-time size, so that
-    // a fixed-size operand does not land on the stack.
+    // A cast the float GEMM does not pack in place (under EIGEN_USE_BLAS or on SME) is materialized at run-time size,
+    // so that a fixed-size operand does not land on the stack.
     using CastLhsXpr = std::remove_const_t<decltype(lhs.template cast<Real>())>;
     using CastRhsXpr = std::remove_const_t<decltype(rhs.template cast<Real>())>;
     using CastLhs = std::conditional_t<

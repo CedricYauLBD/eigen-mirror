@@ -10,11 +10,11 @@
 
 // GEMM operands of the form A.cast<T>() are packed straight from A, and half and bfloat16 GEMMs accumulate in float.
 
-// Temporaries per cast operand: none, or one with EIGEN_USE_BLAS, which materializes the cast for the external ?gemm.
-#ifdef EIGEN_USE_BLAS
-constexpr int kCastTemporaries = 1;
-#else
+// Temporaries per cast operand: none, or one with EIGEN_USE_BLAS or on SME, which materialize the cast.
+#if !defined(EIGEN_USE_BLAS) && !defined(EIGEN_VECTORIZE_SME)
 constexpr int kCastTemporaries = 0;
+#else
+constexpr int kCastTemporaries = 1;
 #endif
 
 template <typename Src, int Order>
@@ -205,8 +205,8 @@ void float_accumulation_workspace() {
   MatrixXf Af = A->template cast<float>(), Bf = B->template cast<float>();
   VERIFY_IS_EQUAL(Mat(*C), (Af * Bf).template cast<T>().eval());
 
-  // With EIGEN_USE_BLAS the float product materializes both casts for the external sgemm.
-#ifndef EIGEN_USE_BLAS
+  // With EIGEN_USE_BLAS or on SME the float product materializes both casts.
+#if !defined(EIGEN_USE_BLAS) && !defined(EIGEN_VECTORIZE_SME)
   Mat X = random_small_integers<T, ColMajor>(48, 40, 4), Y = random_small_integers<T, ColMajor>(40, 36, 4);
   MatrixXf exact = X.template cast<float>() * Y.template cast<float>();
   Mat Z(48, 36);
@@ -251,7 +251,7 @@ EIGEN_DECLARE_TEST(product_cast) {
   using MatrixXhalf = Matrix<half, Dynamic, Dynamic>;
   using internal::gemm_accumulates_in_float;
   using internal::gemm_operand_traits;
-#ifndef EIGEN_USE_BLAS
+#if !defined(EIGEN_USE_BLAS) && !defined(EIGEN_VECTORIZE_SME)
   STATIC_CHECK((std::is_same<gemm_operand_traits<decltype(MatrixXhalf().cast<float>())>::StorageScalar, half>::value));
   STATIC_CHECK((
       std::is_same<gemm_operand_traits<decltype(MatrixXf().transpose().cast<double>())>::StorageScalar, float>::value));
