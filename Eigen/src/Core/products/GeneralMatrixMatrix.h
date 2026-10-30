@@ -945,6 +945,28 @@ struct generic_product_impl<Lhs, Rhs, DenseShape, DenseShape, GemmProduct>
     scaleAndAddOrEvalTo(gemm_accumulates_in_float<LhsScalar, RhsScalar>(), dst, a_lhs, a_rhs, alpha, overwrite);
   }
 
+  // The products the GEMM kernel does not take: empty operands, zero depth and a runtime vector result, which goes to
+  // GEMV. They run on the operand type also where the GEMM sums in float, so that they leave an empty product's dst
+  // untouched and do not allocate. Returns whether dst is done.
+  template <typename Dest>
+  static bool evalWithoutGemm(Dest& dst, const Lhs& a_lhs, const Rhs& a_rhs, const Scalar& alpha, bool overwrite) {
+    if (a_lhs.rows() == 0 || a_rhs.cols() == 0) return true;
+    if (a_lhs.cols() != 0 && dst.cols() != 1 && dst.rows() != 1) return false;
+    // Zero depth and GEMV accumulate, so overwriting zeroes first.
+    if (overwrite) dst.setZero();
+    if (a_lhs.cols() == 0) return true;
+    if (dst.cols() == 1) {
+      typename Dest::ColXpr dst_vec(dst.col(0));
+      internal::generic_product_impl<Lhs, typename Rhs::ConstColXpr, DenseShape, DenseShape,
+                                     GemvProduct>::scaleAndAddTo(dst_vec, a_lhs, a_rhs.col(0), alpha);
+    } else {
+      typename Dest::RowXpr dst_vec(dst.row(0));
+      internal::generic_product_impl<typename Lhs::ConstRowXpr, Rhs, DenseShape, DenseShape,
+                                     GemvProduct>::scaleAndAddTo(dst_vec, a_lhs.row(0), a_rhs, alpha);
+    }
+    return true;
+  }
+
   // dst (+)= alpha * a_lhs * a_rhs as the float product of the converted operands, rounded once into dst. The packers
   // convert the operands; only the result needs a float workspace, which goes where the packed blocks do: on the stack
   // up to EIGEN_STACK_ALLOCATION_LIMIT, so that a fixed-size or preallocated product does not allocate.
@@ -953,6 +975,7 @@ struct generic_product_impl<Lhs, Rhs, DenseShape, DenseShape, GemmProduct>
                                   bool overwrite) {
     EIGEN_INTERNAL_ASSERT_SAME_ROWS(dst, a_lhs);
     EIGEN_INTERNAL_ASSERT_SAME_COLS(dst, a_rhs);
+    if (evalWithoutGemm(dst, a_lhs, a_rhs, alpha, overwrite)) return;
     using Real = float;
     add_const_on_value_type_t<ActualLhsType> lhs = LhsBlasTraits::extract(a_lhs);
     add_const_on_value_type_t<ActualRhsType> rhs = RhsBlasTraits::extract(a_rhs);
@@ -996,24 +1019,11 @@ struct generic_product_impl<Lhs, Rhs, DenseShape, DenseShape, GemmProduct>
         (ActualRhsTypeCleaned::Flags & RowMajorBit) ? RowMajor : ColMajor, bool(RhsBlasTraits::NeedToConjugate),
         (Dest::Flags & RowMajorBit) ? RowMajor : ColMajor, Dest::InnerStrideAtCompileTime,
         typename LhsBlasTraits::StorageScalar, typename RhsBlasTraits::StorageScalar>;
-    // Empty operands, the GEMV fallbacks and a GEMM that cannot overwrite accumulate, so overwriting zeroes first.
-    if (overwrite && (!internal::gemm_can_overwrite<Gemm>::value || a_lhs.cols() == 0 || a_lhs.rows() == 0 ||
-                      a_rhs.cols() == 0 || dst.cols() == 1 || dst.rows() == 1)) {
+    if (evalWithoutGemm(dst, a_lhs, a_rhs, alpha, overwrite)) return;
+    // A GEMM that cannot overwrite accumulates, so overwriting zeroes first.
+    if (overwrite && !internal::gemm_can_overwrite<Gemm>::value) {
       dst.setZero();
       overwrite = false;
-    }
-    if (a_lhs.cols() == 0 || a_lhs.rows() == 0 || a_rhs.cols() == 0) return;
-
-    if (dst.cols() == 1) {
-      // Fallback to GEMV if either the lhs or rhs is a runtime vector
-      typename Dest::ColXpr dst_vec(dst.col(0));
-      return internal::generic_product_impl<Lhs, typename Rhs::ConstColXpr, DenseShape, DenseShape,
-                                            GemvProduct>::scaleAndAddTo(dst_vec, a_lhs, a_rhs.col(0), alpha);
-    } else if (dst.rows() == 1) {
-      // Fallback to GEMV if either the lhs or rhs is a runtime vector
-      typename Dest::RowXpr dst_vec(dst.row(0));
-      return internal::generic_product_impl<typename Lhs::ConstRowXpr, Rhs, DenseShape, DenseShape,
-                                            GemvProduct>::scaleAndAddTo(dst_vec, a_lhs.row(0), a_rhs, alpha);
     }
 
     add_const_on_value_type_t<ActualLhsType> lhs = LhsBlasTraits::extract(a_lhs);
