@@ -207,6 +207,31 @@ void float_accumulation_workspace() {
   internal::set_is_malloc_allowed(true);
   VERIFY_IS_EQUAL(Z, twice.cast<T>().eval());
 #endif
+
+  // A runtime vector result takes GEMV on T, which does not allocate for a row-major matrix by a column or a row by a
+  // column-major matrix. Entries in [-1, 1] at depth 40 keep every partial sum exact in T.
+  Matrix<T, Dynamic, Dynamic, RowMajor> R = random_small_integers<T, RowMajor>(48, 40, 1);
+  Mat v = random_small_integers<T, ColMajor>(40, 1, 1), w = random_small_integers<T, ColMajor>(1, 40, 1);
+  Mat V = random_small_integers<T, ColMajor>(40, 36, 1), y(48, 1), z(1, 36);
+  internal::set_is_malloc_allowed(false);
+  y.noalias() = R * v;
+  z.noalias() = w * V;
+  internal::set_is_malloc_allowed(true);
+  VERIFY_IS_EQUAL(y, (R.template cast<float>() * v.template cast<float>()).template cast<T>().eval());
+  VERIFY_IS_EQUAL(z, (w.template cast<float>() * V.template cast<float>()).template cast<T>().eval());
+
+  // An empty product neither allocates nor rewrites dst, which keeps a NaN payload that a round trip through float
+  // would quieten.
+  Mat E0(200, 0), E1(0, 200), W = Mat::Ones(200, 200);
+  W(0, 0) = numext::bit_cast<T>(std::is_same<T, half>::value ? uint16_t(0x7d01) : uint16_t(0x7fa1));
+  const Mat W0 = W;
+  internal::set_is_malloc_allowed(false);
+  W.noalias() += E0 * E1;
+  internal::set_is_malloc_allowed(true);
+  VERIFY_IS_EQUAL(numext::bit_cast<uint16_t>(W(0, 0)), numext::bit_cast<uint16_t>(W0(0, 0)));
+  VERIFY_IS_EQUAL(W.bottomRows(199), W0.bottomRows(199));
+  W.noalias() = E0 * E1;
+  VERIFY_IS_EQUAL(W, Mat::Zero(200, 200));
 }
 
 EIGEN_DECLARE_TEST(product_cast) {
