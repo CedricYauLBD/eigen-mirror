@@ -177,7 +177,7 @@ else()
 endif()
 
 
-find_package(PASTIX QUIET COMPONENTS METIS)
+find_package(PASTIX QUIET)
 set(PASTIX_NO_MPI FALSE)
 if(PASTIX_FOUND)
   include(CMakePushCheckState)
@@ -207,6 +207,7 @@ else()
   ei_add_property(EIGEN_MISSING_BACKENDS  "PaStiX, ")
 endif()
 
+find_package(METIS QUIET)
 if(METIS_FOUND)
   add_definitions("-DEIGEN_METIS_SUPPORT")
   include_directories(${METIS_INCLUDE_DIRS})

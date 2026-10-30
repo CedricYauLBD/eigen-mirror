@@ -16,7 +16,6 @@
 #              )
 #
 # Requires PaStiX 6.x and its pkg-config metadata, including SpM and ordering dependencies.
-# The optional METIS component also discovers METIS for Eigen's standalone ordering test.
 #
 # This module finds headers and pastix library.
 # Results are reported in variables:
@@ -100,9 +99,6 @@ if(PASTIX6_FOUND AND PASTIX6_VERSION VERSION_LESS 7)
   unset(_pastix_library)
   set(PASTIX_LIBRARIES PkgConfig::PASTIX6)
   set(PASTIX_LIBRARIES_DEP PkgConfig::PASTIX6)
-  if("METIS" IN_LIST PASTIX_FIND_COMPONENTS)
-    find_package(METIS QUIET)
-  endif()
 endif()
 
 include(FindPackageHandleStandardArgs)
