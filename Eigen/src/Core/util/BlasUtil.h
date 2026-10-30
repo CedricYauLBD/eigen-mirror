@@ -504,6 +504,18 @@ struct cast_ploadu_impl<
     return pcast<SrcPacket, Packet>(ploadu<SrcPacket>(from));
   }
 };
+#ifdef EIGEN_VECTORIZE_VSX
+// Packet8bf is its own half, so no bfloat16 packet holds four coefficients. pcast<Packet8bf, Packet4f> widens the
+// first four, so splatting them as one 64-bit lane suffices.
+template <>
+struct cast_ploadu_impl<bfloat16, Packet4f> {
+  static EIGEN_ALWAYS_INLINE Packet4f run(const bfloat16* from) {
+    unsigned long long bits;
+    std::memcpy(&bits, from, sizeof(bits));
+    return pcast<Packet8bf, Packet4f>(Packet8bf(reinterpret_cast<Packet8us>(vec_splats(bits))));
+  }
+};
+#endif
 
 template <typename Scalar, typename SrcScalar, typename Index>
 class BlasCastLinearMapper {
