@@ -146,8 +146,8 @@ void float_accumulation_depth() {
   // rounding to T at any depth.
   Mat X = Mat::Random(24, depth).cwiseAbs(), Y = Mat::Random(depth, 21).cwiseAbs();
   C.noalias() = X * Y;
-  VERIFY(verifyProduct<float>(C.template cast<double>(), (X.template cast<double>() * Y.template cast<double>()).eval(),
-                              X, Y, 1));
+  VERIFY(verifyProduct<float>(C.template cast<double>(),
+                              (X.template cast<double>().eval() * Y.template cast<double>().eval()).eval(), X, Y, 1));
 
   // The scalar factors combine in float: s * t = 2^-28 is below half's and above bfloat16's smallest subnormal, and
   // depth * s * t = 2^-16 (half) or 2^-18 (bfloat16) is representable in both.
