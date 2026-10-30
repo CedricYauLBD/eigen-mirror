@@ -47,12 +47,11 @@ namespace Eigen {
 namespace internal {
 
 template <typename MatrixType, typename Rhs, typename Dest, typename Preconditioner>
-bool idrstabl(const MatrixType &mat, const Rhs &rhs, Dest &x, const Preconditioner &precond, Index &iters,
-              typename Dest::RealScalar &tol_error, Index L, Index S) {
+constexpr bool idrstabl(const MatrixType& mat, const Rhs& rhs, Dest& x, const Preconditioner& precond, Index& iters,
+                        typename Dest::RealScalar& tol_error, Index L, Index S) {
   /*
     Setup and type definitions.
   */
-  using numext::abs;
   using Scalar = typename Dest::Scalar;
   using RealScalar = typename Dest::RealScalar;
   using VectorType = Matrix<Scalar, Dynamic, 1>;
@@ -134,7 +133,7 @@ bool idrstabl(const MatrixType &mat, const Rhs &rhs, Dest &x, const Precondition
       u.col(0) = w;
       h_FOM(col_index, col_index - 1) = u.col(0).stableNorm();
 
-      if (abs(h_FOM(col_index, col_index - 1)) != RealScalar(0)) {
+      if (numext::abs(h_FOM(col_index, col_index - 1)) != RealScalar(0)) {
         /*
         This only happens if u is NOT exactly zero. In case it is exactly zero
         it would imply that that this u has no component in the direction of the
@@ -436,7 +435,7 @@ class IDRSTABL : public IterativeSolverBase<IDRSTABL<MatrixType_, Preconditioner
 
  public:
   /** Default constructor. */
-  IDRSTABL() = default;
+  constexpr IDRSTABL() = default;
 
   /**   Initialize the solver with matrix \a A for further \c Ax=b solving.
 
@@ -449,7 +448,7 @@ class IDRSTABL : public IterativeSolverBase<IDRSTABL<MatrixType_, Preconditioner
   matrix A, or modify a copy of A.
           */
   template <typename MatrixDerived>
-  explicit IDRSTABL(const EigenBase<MatrixDerived> &A) : Base(A.derived()) {}
+  constexpr explicit IDRSTABL(const EigenBase<MatrixDerived>& A) : Base(A.derived()) {}
 
   /** \internal */
   /**     Loops over the number of columns of b and does the following:
@@ -458,7 +457,7 @@ class IDRSTABL : public IterativeSolverBase<IDRSTABL<MatrixType_, Preconditioner
      routine
   */
   template <typename Rhs, typename Dest>
-  void _solve_vector_with_guess_impl(const Rhs &b, Dest &x) const {
+  constexpr void _solve_vector_with_guess_impl(const Rhs& b, Dest& x) const {
     m_iterations = Base::maxIterations();
     m_error = Base::m_tolerance;
     bool ret = internal::idrstabl(matrix(), b, x, Base::m_preconditioner, m_iterations, m_error, m_L, m_S);
@@ -468,13 +467,13 @@ class IDRSTABL : public IterativeSolverBase<IDRSTABL<MatrixType_, Preconditioner
 
   /** Sets the parameter L, indicating the amount of minimize residual steps are
    * used. */
-  void setL(Index L) {
+  constexpr void setL(Index L) {
     eigen_assert(L >= 1 && "L needs to be positive");
     m_L = L;
   }
   /** Sets the parameter S, indicating the dimension of the shadow residual
    * space. */
-  void setS(Index S) {
+  constexpr void setS(Index S) {
     eigen_assert(S >= 1 && "S needs to be positive");
     m_S = S;
   }
