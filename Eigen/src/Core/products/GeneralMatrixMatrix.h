@@ -889,7 +889,8 @@ struct generic_product_impl<Lhs, Rhs, DenseShape, DenseShape, GemmProduct>
                                                                        const Rhs& rhs) {
     return numext::is_exactly_zero(combine_scalar_factors<Scalar>(lhs, rhs));
   }
-  // The float GEMM combines the factors in float, where their product may not underflow.
+  // The float GEMM combines the factors in float, where their product may not underflow. The coefficient-based path
+  // recombines them in Scalar and would then evaluate 0 * lazyProduct, so such a product takes the GEMM.
   static EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE bool scalarFactorIsZero(std::true_type, const Lhs& lhs, const Rhs& rhs) {
     return numext::is_exactly_zero(float(LhsBlasTraits::extractScalarFactor(lhs)) *
                                    float(RhsBlasTraits::extractScalarFactor(rhs)));
@@ -901,7 +902,7 @@ struct generic_product_impl<Lhs, Rhs, DenseShape, DenseShape, GemmProduct>
       dst.setZero();
       return;
     }
-    if (useRuntimeCoeffBasedProduct(dst, rhs))
+    if (useRuntimeCoeffBasedProduct(dst, rhs) && !numext::is_exactly_zero(combine_scalar_factors<Scalar>(lhs, rhs)))
       lazyproduct::eval_dynamic(dst, lhs, rhs, internal::assign_op<typename Dst::Scalar, Scalar>());
     else
       scaleAndEvalTo(dst, lhs, rhs, Scalar(1));
@@ -910,7 +911,7 @@ struct generic_product_impl<Lhs, Rhs, DenseShape, DenseShape, GemmProduct>
   template <typename Dst>
   static void addTo(Dst& dst, const Lhs& lhs, const Rhs& rhs) {
     if (scalarFactorIsZero(lhs, rhs)) return;
-    if (useRuntimeCoeffBasedProduct(dst, rhs))
+    if (useRuntimeCoeffBasedProduct(dst, rhs) && !numext::is_exactly_zero(combine_scalar_factors<Scalar>(lhs, rhs)))
       lazyproduct::eval_dynamic(dst, lhs, rhs, internal::add_assign_op<typename Dst::Scalar, Scalar>());
     else
       scaleAndAddTo(dst, lhs, rhs, Scalar(1));
@@ -919,7 +920,7 @@ struct generic_product_impl<Lhs, Rhs, DenseShape, DenseShape, GemmProduct>
   template <typename Dst>
   static void subTo(Dst& dst, const Lhs& lhs, const Rhs& rhs) {
     if (scalarFactorIsZero(lhs, rhs)) return;
-    if (useRuntimeCoeffBasedProduct(dst, rhs))
+    if (useRuntimeCoeffBasedProduct(dst, rhs) && !numext::is_exactly_zero(combine_scalar_factors<Scalar>(lhs, rhs)))
       lazyproduct::eval_dynamic(dst, lhs, rhs, internal::sub_assign_op<typename Dst::Scalar, Scalar>());
     else
       scaleAndAddTo(dst, lhs, rhs, Scalar(-1));
