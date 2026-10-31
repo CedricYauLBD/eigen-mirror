@@ -12,6 +12,7 @@ New features:
 - `DenseBase::replicate` and `VectorwiseOp::replicate` accept `Eigen::fix<N>` factors [!3262, !3282]
 - `SelfAdjointView::applyPermutation()` and `SelfAdjointView::applyTransposition()`, which replace the viewed matrix `S` by `P S P^T` in place, reading and writing only the stored triangle [#3174, !3395]
 - `DiscreteAlgebraicRiccatiSolver` in the new contrib module `Riccati`, for the stabilizing solution of the (generalized) discrete-time algebraic Riccati equation with real or complex scalars [!3403]
+- The new contrib module `GPU` (`#include <contrib/Eigen/GPU>`), which runs dense and sparse linear algebra on NVIDIA GPUs from host code through cuBLAS, cuSOLVER, cuSPARSE, cuFFT and cuDSS, and runs `ConjugateGradient` on device-resident vectors. Requires the CUDA Toolkit; see the manual page "Offloading linear algebra to a GPU with the GPU module" [!2412, !2413, !2414, !2415, !2476, !2681, !3130, !3135]
 
 Bug fixes:
 - Row-major triangular matrix-vector products could return incorrect results or double-destroy temporaries for scalars requiring initialization, and could leak some large right-hand-side buffers [!2818]
