@@ -26,6 +26,7 @@ namespace Eigen {
   - \subpage TopicUsingIntelMKL
   - \subpage TopicUsingAOCL
   - \subpage TopicCUDA
+  - \subpage TopicGPUModule
   - \subpage TopicPitfalls
   - \subpage TopicTemplateKeyword
   - \subpage TopicWritingEfficientProductExpression

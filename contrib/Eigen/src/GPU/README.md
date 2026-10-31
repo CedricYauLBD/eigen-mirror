@@ -1,7 +1,7 @@
 # Eigen GPU Module (`contrib/Eigen/GPU`)
 
 GPU-accelerated linear algebra for Eigen users, dispatching to NVIDIA CUDA
-Math Libraries (cuBLAS, cuSOLVER, cuFFT, cuSPARSE, cuDSS). Requires CUDA 11.4+;
+Math Libraries (cuBLAS, cuSOLVER, cuFFT, cuSPARSE, cuDSS). Requires CUDA 11.8+;
 cuDSS features require CUDA 12.0+ and a separate cuDSS install. Header-only.
 
 This module dispatches rather than reimplements, so numerical behavior,
@@ -21,26 +21,19 @@ does not state:
 
 ## Why this module
 
-Eigen is the linear algebra foundation for a large ecosystem of C++ projects
-in robotics (ROS, Drake, MoveIt, Pinocchio), computer vision (OpenCV, COLMAP,
-Open3D), scientific computing (Ceres, Stan), and beyond. Many of these
-projects run on GPU-equipped hardware but cannot use GPUs for Eigen operations
-without dropping down to raw CUDA library APIs.
+Eigen's own products and solvers run on the CPU. Code that keeps its data in
+Eigen types and wants these operations on a GPU otherwise has to call the CUDA
+libraries directly and convert to and from their formats. This module wraps
+those calls in types that follow Eigen's API. It provides matrix products
+(cuBLAS), dense solvers (cuSOLVER), sparse Cholesky, LDL^T, and LU factorization
+(cuDSS), FFT (cuFFT), and sparse matrix-vector products (cuSPARSE).
 
-GPU sparse solvers are a particularly acute gap. Sparse factorization is the
-bottleneck in SLAM, bundle adjustment, FEM, and nonlinear optimization --
-exactly the workloads where GPU acceleration matters most. Downstream projects
-like [Ceres](https://github.com/ceres-solver/ceres-solver/issues/1151) and
-[COLMAP](https://github.com/colmap/colmap/issues/4018) have open requests for
-GPU-accelerated sparse solvers, and third-party projects like
-[cholespy](https://github.com/rgl-epfl/cholespy) exist specifically because
-Eigen lacks them. The `contrib/Eigen/GPU` module provides GPU sparse Cholesky, LDL^T,
-and LU factorization via cuDSS, alongside dense solvers (cuSOLVER), matrix
-products (cuBLAS), FFT (cuFFT), and sparse matrix-vector products (cuSPARSE).
-
-Existing Eigen users should be able to move performance-critical dense or
-sparse linear algebra to the GPU with minimal code changes and without
-learning CUDA library APIs directly.
+Some projects that use Eigen have integrated GPU solvers of their own:
+[Ceres](https://github.com/ceres-solver/ceres-solver/blob/master/internal/ceres/cuda_sparse_cholesky.h)
+calls cuDSS directly, and
+[COLMAP](https://github.com/colmap/colmap/pull/4018) added GPU bundle adjustment
+through Caspar. This module is an alternative for code that has not done that
+work.
 
 ## Design philosophy
 
@@ -50,7 +43,7 @@ explicitly -- `gpu::LLT<double>` vs `Eigen::LLT<MatrixXd>`,
 `gpu::SparseLLT<double>` vs `SimplicialLLT<SparseMatrix<double>>` -- and both
 coexist in the same binary.
 This also lets users keep the factored matrix on device across multiple solves,
-something impossible with compile-time replacement.
+which compile-time replacement cannot do.
 
 **Familiar syntax.** GPU operations use the same expression patterns as CPU
 Eigen. Here is a side-by-side comparison:
@@ -83,22 +76,23 @@ compile errors.
 **Standalone module.** `contrib/Eigen/GPU` does not modify or depend on Eigen's Core
 expression template system (`MatrixBase`, `CwiseBinaryOp`, etc.).
 `DeviceMatrix` is not an Eigen expression type and does not inherit from
-`MatrixBase`. The expression layer is a thin compile-time dispatch where every
-supported expression maps to a single NVIDIA library call. There is no
-coefficient-level evaluation, lazy fusion, or packet operations.
+`MatrixBase`. The expression layer is a thin compile-time dispatch from each
+supported expression to NVIDIA library calls, usually one: `norm()` is a dot
+product and an NPP square root, and `llt().solve()` is a copy, a factorization
+and a solve. There is no coefficient-level evaluation, lazy fusion, or packet
+operations.
 
 **Interoperability where useful.** `DeviceMatrix` provides the same operator
 signatures as `Matrix` for common vector operations: `+=`, `-=`, `*=`, `/=`,
 `dot()`, `squaredNorm()`, `norm()`, `stableNorm()`, `setZero()`, `noalias()`,
 and copy construction and assignment (a device-to-device copy). This makes
-`DeviceMatrix` usable as a drop-in `VectorType` in Eigen algorithm templates
+`DeviceMatrix` usable as the `VectorType` in Eigen algorithm templates
 that rely on these operations, and `DeviceSparseView` is a matrix-free matrix
 type for Eigen's iterative solvers: `ConjugateGradient<gpu::DeviceSparseView<double>,
 Lower | Upper>` runs Eigen's own algorithm, unmodified, on device vectors (see
 [Eigen algorithm interop](#eigen_gpu_interop)).
-Conjugate gradient is just the motivating example; we are open to expanding
-operator coverage as needed to support other high-level Eigen algorithms on the
-GPU.
+Conjugate gradient is the algorithm this is tested with; other Eigen algorithms
+might need more operators.
 
 **Explicit over implicit.** Host-device transfers, stream management, and
 library handle lifetimes are visible in the API. There are no hidden
@@ -216,23 +210,26 @@ gpu::Context::setThreadLocal(nullptr); // restore lazy-created default
 ### Linking {#eigen_gpu_linking}
 
 The module is header-only, but each feature pulls in the corresponding NVIDIA
-library at link time. cuSOLVER, cuBLASLt, and cuSPARSE are created lazily on
-first use, so a translation unit that only uses cuBLAS or cuFFT does not need
-to link the others:
+library at link time. Always link `-lcublas -lcublasLt -lcudart`, and add the
+libraries of the features you use:
 
-| Feature                                 | Link flags                |
+| Feature                                 | Additional link flags     |
 |-----------------------------------------|---------------------------|
-| `DeviceMatrix`, GEMM, TRSM, SYMM, SYRK  | `-lcublas -lcublasLt`     |
-| Dense solvers (LLT, LU, QR, SVD, EVD)   | `-lcusolver -lcublas`     |
-| FFT (`gpu::FFT`)                        | `-lcufft -lcublas`        |
-| SpMV / SpMM (`gpu::SparseContext`)      | `-lcusparse -lcublas`     |
+| `DeviceMatrix`, GEMM, TRSM, SYMM, SYRK  | none                      |
+| Dense solvers (LLT, LU, QR, SVD, EVD)   | `-lcusolver`              |
+| FFT (`gpu::FFT`)                        | `-lcufft`                 |
+| SpMV / SpMM (`gpu::SparseContext`)      | `-lcusparse`              |
 | `norm()`, `DeviceScalar` arithmetic, `/=`, `cwiseProduct` | `-lnpps -lnppc` |
-| Sparse direct solvers (cuDSS)           | `-lcudss -lcublas`        |
+| `ConjugateGradient` on `DeviceSparseView` | `-lcusparse -lnpps -lnppc` |
+| Sparse direct solvers (cuDSS)           | `-lcudss`                 |
 
-cuBLAS is required by `DeviceMatrix` itself (every `Context` creates a cuBLAS
-handle eagerly) and is also a runtime dependency of cuDSS, so it is the one
-constant. cuDSS additionally requires `EIGEN_CUDSS` to be defined before
-including `contrib/Eigen/GPU`.
+Every `Context` creates a cuBLAS handle eagerly, and cuDSS also depends on
+cuBLAS at run time. The cuBLASLt handle is lazy, but `Context`'s destructor
+references `cublasLtDestroy` directly, so any translation unit using a
+`Context` needs cuBLASLt even without a product. The cuSOLVER and cuSPARSE
+handles are lazy behind function-pointer deleters, so a translation unit that
+does not use those features does not link them. cuDSS additionally requires
+`EIGEN_CUDSS` to be defined before including `contrib/Eigen/GPU`.
 
 ## Usage
 
@@ -314,7 +311,7 @@ Backed by the dense part of [cuSOLVER](https://docs.nvidia.com/cuda/cusolver/)
 when it reports a numerical failure.
 
 **One-shot expression syntax** -- "one-shot" means factorization and solve
-run as a single fused call with no persistent factorization object; each
+run as one expression with no persistent factorization object; each
 evaluation re-factorizes:
 
 ```cpp
