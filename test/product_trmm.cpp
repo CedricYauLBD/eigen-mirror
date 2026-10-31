@@ -9,6 +9,7 @@
 // SPDX-License-Identifier: MPL-2.0
 
 #include "main.h"
+#include "product_test_helpers.h"
 
 template <typename T>
 int get_random_size() {
@@ -195,6 +196,105 @@ void trmm_maps(Index rows, Index depth, Index cols) {
   VERIFY_IS_APPROX(dst_map.noalias() = lhs_map * rhs_map.template triangularView<Mode>(), lhs * tri_rhs);
 }
 
+template <typename Scalar, int Mode, int Order>
+void trmm_panel_boundaries() {
+  using Mat = Matrix<Scalar, Dynamic, Dynamic, Order>;
+  using Real = typename NumTraits<Scalar>::Real;
+  {
+    // The coefficient-based path must evaluate nested products before accessing their coefficients.
+    Mat a = Mat::Random(3, 3), b = Mat::Random(3, 3), c = Mat::Random(3, 3), actual(3, 3);
+    const Mat ab = a * b, bc = b * c;
+    const Mat triangle = a.template triangularView<Mode>();
+    const Mat productTriangle = ab.template triangularView<Mode>();
+    actual.noalias() = a.template triangularView<Mode>() * (b * c);
+    VERIFY(verifyProduct(actual, triangle.lazyProduct(bc).eval(), triangle, bc));
+    actual.noalias() = (b * c) * a.template triangularView<Mode>();
+    VERIFY(verifyProduct(actual, bc.lazyProduct(triangle).eval(), bc, triangle));
+    actual.noalias() = (a * b).template triangularView<Mode>() * c;
+    VERIFY(verifyProduct(actual, productTriangle.lazyProduct(c).eval(), productTriangle, c));
+    actual.noalias() = c * (a * b).template triangularView<Mode>();
+    VERIFY(verifyProduct(actual, c.lazyProduct(productTriangle).eval(), c, productTriangle));
+  }
+  const Index panel = internal::product_triangular_matrix_matrix<Scalar, Index, Mode, true, ColMajor, false, ColMajor,
+                                                                 false, ColMajor, 1>::SmallPanelWidth;
+  // Small-product dispatch, partial diagonal panels, and multiple depth blocks under EIGEN_DEBUG_SMALL_PRODUCT_BLOCKS.
+  const Index sizes[] = {2, 3, 5, 6, 7, panel - 1, panel, panel + 1, 2 * panel + 3, 131};
+  for (Index n : sizes) {
+    for (Index delta : {-1, 0, 1}) {
+      const Index rows = n + delta, depth = n - delta, columns = n == 131 ? 531 : n + 2;
+      Mat a = Mat::Random(rows, depth), b = Mat::Random(depth, columns);
+      const Mat triangle = a.template triangularView<Mode>();
+      const Mat expected = triangle.lazyProduct(b);
+      // Poison coefficients that the triangular view does not own, including implicit diagonals.
+      for (Index j = 0; j < depth; ++j)
+        for (Index i = 0; i < rows; ++i)
+          if (((Mode & Lower) ? i < j : i > j) || ((Mode & (UnitDiag | ZeroDiag)) && i == j))
+            a(i, j) = Scalar(NumTraits<Real>::quiet_NaN());
+      Mat actual(rows, columns);
+      actual.noalias() = a.template triangularView<Mode>() * b;
+      VERIFY(verifyProduct(actual, expected, triangle, b));
+      Mat saved = Mat::Random(rows, columns);
+      actual = saved;
+      actual.noalias() -= a.template triangularView<Mode>() * b;
+      VERIFY(verifyProductUpdate(actual, (saved - expected).eval(), Scalar(-1), triangle, b, saved));
+      Mat scaledTriangle = Scalar(2) * triangle;
+      EIGEN_IF_CONSTEXPR ((Mode & UnitDiag) != 0) scaledTriangle.diagonal().setOnes();
+      actual.noalias() = (Scalar(2) * a).template triangularView<Mode>() * b;
+      VERIFY(verifyProduct(actual, scaledTriangle.lazyProduct(b).eval(), scaledTriangle, b));
+      // A strided destination also checks the untouched interleaved coefficients.
+      Mat storage = Mat::Random(2 * rows, 2 * columns), original = storage;
+      Map<Mat, 0, Stride<Dynamic, 2>> strided(storage.data(), rows, columns,
+                                              Stride<Dynamic, 2>(storage.outerStride(), 2));
+      strided.noalias() = a.template triangularView<Mode>() * b;
+      VERIFY(verifyProduct(strided, expected, triangle, b));
+      for (Index j = 0; j < storage.cols(); ++j)
+        for (Index i = 0; i < storage.rows(); ++i) {
+          const bool written = Order == ColMajor ? (i % 2 == 0 && j < columns) : (j % 2 == 0 && i < rows);
+          if (!written) VERIFY_IS_EQUAL(storage(i, j), original(i, j));
+        }
+    }
+  }
+}
+
+// The suite's reduced cache model caps kc at the left kernel's diagonal panel width on wide-register targets, so the
+// public products above never slice a diagonal block into horizontal panels there; a hand-set blocking does.
+template <typename Scalar, int Mode, int LhsOrder>
+void trmm_wide_depth_blocks() {
+  struct Blocking : internal::level3_blocking<Scalar, Scalar> {
+    Blocking(Index mc, Index nc, Index kc) {
+      this->m_mc = mc;
+      this->m_nc = nc;
+      this->m_kc = kc;
+    }
+  };
+  using Kernel = internal::product_triangular_matrix_matrix<Scalar, Index, Mode, true, LhsOrder, false, ColMajor, false,
+                                                            ColMajor, 1>;
+  using Lhs = Matrix<Scalar, Dynamic, Dynamic, LhsOrder>;
+  using Mat = Matrix<Scalar, Dynamic, Dynamic>;
+  using Real = typename NumTraits<Scalar>::Real;
+  const Index panel = Kernel::HorizontalPanelWidth, nr = Kernel::Traits::nr;
+  // Depth blocks of one full horizontal panel plus a row, and of three plus a partial one; an RHS of one column, which
+  // only SME slices horizontally, and of one and two micro panels; an lhs block of every row, and of one panel, which
+  // packs a depth block one panel at a time.
+  for (Index kc : {panel + 1, 3 * panel + 5})
+    for (Index cols : {Index(1), nr, 2 * nr + 1})
+      for (bool narrowBlock : {false, true}) {
+        const Index n = 2 * kc + 3;
+        Lhs a = Lhs::Random(n, n);
+        const Mat b = Mat::Random(n, cols);
+        const Mat triangle = a.template triangularView<Mode>();
+        for (Index j = 0; j < n; ++j)
+          for (Index i = 0; i < n; ++i)
+            if (((Mode & Lower) ? i < j : i > j) || ((Mode & (UnitDiag | ZeroDiag)) && i == j))
+              a(i, j) = Scalar(NumTraits<Real>::quiet_NaN());
+        Mat actual = Mat::Zero(n, cols);
+        Blocking blocking(narrowBlock ? panel + 1 : n, cols, kc);
+        Kernel::run(n, cols, n, a.data(), a.outerStride(), b.data(), b.outerStride(), actual.data(), 1,
+                    actual.outerStride(), Scalar(1), blocking);
+        VERIFY(verifyProduct(actual, triangle.lazyProduct(b).eval(), triangle, b));
+      }
+}
+
 #define CALL_ALL_ORDERS(NB, SCALAR, MODE)                                             \
   EIGEN_CAT(CALL_SUBTEST_, NB)((trmm<SCALAR, MODE, ColMajor, ColMajor, ColMajor>())); \
   EIGEN_CAT(CALL_SUBTEST_, NB)((trmm<SCALAR, MODE, ColMajor, ColMajor, RowMajor>())); \
@@ -223,8 +323,25 @@ EIGEN_DECLARE_TEST(product_trmm) {
     CALL_ALL(3, std::complex<float>);   //  EIGEN_SUFFIXES;13;113;23;123;33;133
     CALL_ALL(4, std::complex<double>);  //  EIGEN_SUFFIXES;14;114;24;124;34;134
   }
+  CALL_SUBTEST_11((trmm_panel_boundaries<float, Lower, ColMajor>()));
+  CALL_SUBTEST_12((trmm_panel_boundaries<double, Upper, RowMajor>()));
+  CALL_SUBTEST_13((trmm_panel_boundaries<std::complex<float>, Upper, ColMajor>()));
+  CALL_SUBTEST_14((trmm_panel_boundaries<std::complex<double>, Lower, RowMajor>()));
+  CALL_SUBTEST_21((trmm_panel_boundaries<float, UnitLower, ColMajor>()));
+  CALL_SUBTEST_22((trmm_panel_boundaries<double, UnitUpper, RowMajor>()));
+  CALL_SUBTEST_31((trmm_panel_boundaries<float, StrictlyLower, ColMajor>()));
+  CALL_SUBTEST_32((trmm_panel_boundaries<double, StrictlyUpper, RowMajor>()));
+  CALL_SUBTEST_11((trmm_wide_depth_blocks<float, Lower, ColMajor>()));
+  CALL_SUBTEST_12((trmm_wide_depth_blocks<double, Upper, ColMajor>()));
+  CALL_SUBTEST_13((trmm_wide_depth_blocks<std::complex<float>, Lower, RowMajor>()));
+  CALL_SUBTEST_14((trmm_wide_depth_blocks<std::complex<double>, Upper, ColMajor>()));
+  CALL_SUBTEST_21((trmm_wide_depth_blocks<float, UnitUpper, RowMajor>()));
+  CALL_SUBTEST_22((trmm_wide_depth_blocks<double, UnitLower, ColMajor>()));
+  CALL_SUBTEST_31((trmm_wide_depth_blocks<float, StrictlyLower, ColMajor>()));
+  CALL_SUBTEST_32((trmm_wide_depth_blocks<double, StrictlyUpper, RowMajor>()));
   // 1x1 and blocking-boundary sizes for the view-times-view products.
   CALL_SUBTEST_11((trmm<float, Lower, ColMajor, ColMajor, ColMajor>(1, 1, 1)));
+  CALL_SUBTEST_11((trmm<float, Lower, ColMajor, ColMajor, ColMajor>(6, 6, 6)));
   CALL_SUBTEST_14((trmm<std::complex<double>, Upper, RowMajor, ColMajor, RowMajor>(1, 1, 1)));
   CALL_SUBTEST_12((trmm<double, Upper, ColMajor, ColMajor, ColMajor>(EIGEN_TEST_MAX_SIZE, EIGEN_TEST_MAX_SIZE, 1)));
   // Trapezoids spanning several depth blocks, with partial diagonal panels and packet tails.
