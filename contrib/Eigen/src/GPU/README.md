@@ -1,7 +1,7 @@
 # Eigen GPU Module (`contrib/Eigen/GPU`)
 
 GPU-accelerated linear algebra for Eigen users, dispatching to NVIDIA CUDA
-Math Libraries (cuBLAS, cuSOLVER, cuFFT, cuSPARSE, cuDSS). Requires CUDA 11.4+;
+Math Libraries (cuBLAS, cuSOLVER, cuFFT, cuSPARSE, cuDSS). Requires CUDA 11.8+;
 cuDSS features require CUDA 12.0+ and a separate cuDSS install. Header-only.
 
 This module dispatches rather than reimplements, so numerical behavior,
@@ -76,9 +76,11 @@ compile errors.
 **Standalone module.** `contrib/Eigen/GPU` does not modify or depend on Eigen's Core
 expression template system (`MatrixBase`, `CwiseBinaryOp`, etc.).
 `DeviceMatrix` is not an Eigen expression type and does not inherit from
-`MatrixBase`. The expression layer is a thin compile-time dispatch where every
-supported expression maps to a single NVIDIA library call. There is no
-coefficient-level evaluation, lazy fusion, or packet operations.
+`MatrixBase`. The expression layer is a thin compile-time dispatch from each
+supported expression to NVIDIA library calls, usually one: `norm()` is a dot
+product and an NPP square root, and `llt().solve()` is a copy, a factorization
+and a solve. There is no coefficient-level evaluation, lazy fusion, or packet
+operations.
 
 **Interoperability where useful.** `DeviceMatrix` provides the same operator
 signatures as `Matrix` for common vector operations: `+=`, `-=`, `*=`, `/=`,
@@ -208,23 +210,26 @@ gpu::Context::setThreadLocal(nullptr); // restore lazy-created default
 ### Linking {#eigen_gpu_linking}
 
 The module is header-only, but each feature pulls in the corresponding NVIDIA
-library at link time. cuSOLVER, cuBLASLt, and cuSPARSE are created lazily on
-first use, so a translation unit that only uses cuBLAS or cuFFT does not need
-to link the others:
+library at link time. Always link `-lcublas -lcublasLt -lcudart`, and add the
+libraries of the features you use:
 
-| Feature                                 | Link flags                |
+| Feature                                 | Additional link flags     |
 |-----------------------------------------|---------------------------|
-| `DeviceMatrix`, GEMM, TRSM, SYMM, SYRK  | `-lcublas -lcublasLt`     |
-| Dense solvers (LLT, LU, QR, SVD, EVD)   | `-lcusolver -lcublas`     |
-| FFT (`gpu::FFT`)                        | `-lcufft -lcublas`        |
-| SpMV / SpMM (`gpu::SparseContext`)      | `-lcusparse -lcublas`     |
+| `DeviceMatrix`, GEMM, TRSM, SYMM, SYRK  | none                      |
+| Dense solvers (LLT, LU, QR, SVD, EVD)   | `-lcusolver`              |
+| FFT (`gpu::FFT`)                        | `-lcufft`                 |
+| SpMV / SpMM (`gpu::SparseContext`)      | `-lcusparse`              |
 | `norm()`, `DeviceScalar` arithmetic, `/=`, `cwiseProduct` | `-lnpps -lnppc` |
-| Sparse direct solvers (cuDSS)           | `-lcudss -lcublas`        |
+| `ConjugateGradient` on `DeviceSparseView` | `-lcusparse -lnpps -lnppc` |
+| Sparse direct solvers (cuDSS)           | `-lcudss`                 |
 
-cuBLAS is required by `DeviceMatrix` itself (every `Context` creates a cuBLAS
-handle eagerly) and is also a runtime dependency of cuDSS, so it is the one
-constant. cuDSS additionally requires `EIGEN_CUDSS` to be defined before
-including `contrib/Eigen/GPU`.
+Every `Context` creates a cuBLAS handle eagerly, and cuDSS also depends on
+cuBLAS at run time. The cuBLASLt handle is lazy, but `Context`'s destructor
+references `cublasLtDestroy` directly, so any translation unit using a
+`Context` needs cuBLASLt even without a product. The cuSOLVER and cuSPARSE
+handles are lazy behind function-pointer deleters, so a translation unit that
+does not use those features does not link them. cuDSS additionally requires
+`EIGEN_CUDSS` to be defined before including `contrib/Eigen/GPU`.
 
 ## Usage
 
@@ -306,7 +311,7 @@ Backed by the dense part of [cuSOLVER](https://docs.nvidia.com/cuda/cusolver/)
 when it reports a numerical failure.
 
 **One-shot expression syntax** -- "one-shot" means factorization and solve
-run as a single fused call with no persistent factorization object; each
+run as one expression with no persistent factorization object; each
 evaluation re-factorizes:
 
 ```cpp
