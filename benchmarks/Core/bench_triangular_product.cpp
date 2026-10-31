@@ -68,10 +68,12 @@ static void BM_TRMM_Right(benchmark::State& state) {
 
 // clang-format off
 #define TRMM_SIZES \
-  ->Args({64, 64})->Args({128, 128})->Args({256, 256})->Args({512, 512}) \
-  ->Args({1001, 1001})->Args({1024, 1024})->Args({2048, 2048})->Args({4096, 4096}) \
-  ->Args({4096, 16})->Args({4096, 128})->Args({128, 4096}) \
-  ->Args({4096, 1024})->Args({1024, 4096})
+  ->Args({2, 2})->Args({4, 4})->Args({8, 8})->Args({16, 16})->Args({17, 17})->Args({32, 32}) \
+  ->Args({64, 64})->Args({65, 65})->Args({128, 128})->Args({256, 256})->Args({257, 257}) \
+  ->Args({512, 512})->Args({1001, 1001})->Args({1024, 1024})->Args({2048, 2048})->Args({4096, 4096}) \
+  ->Args({1024, 8})->Args({1024, 64})->Args({4096, 8})->Args({4096, 16})->Args({4096, 64}) \
+  ->Args({4096, 128})->Args({4096, 256})->Args({4096, 1024}) \
+  ->Args({64, 4096})->Args({128, 4096})->Args({256, 4096})->Args({1024, 4096})
 // Left product
 BENCHMARK(BM_TRMM_Left<float, Lower>) TRMM_SIZES ->Name("TRMM_Left_float_Lower");
 BENCHMARK(BM_TRMM_Left<float, Upper>) TRMM_SIZES ->Name("TRMM_Left_float_Upper");
