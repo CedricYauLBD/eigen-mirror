@@ -1414,6 +1414,17 @@ static void test_contraction_require_initialization_throws() {
     VERIFY(throws_in_multiply(multiplications + 1,
                               [&]() { concatenated.device(device) = contraction().concatenate(contraction(), 0); }));
     verify_released(live);
+
+    // A throw in the DefaultDevice executor's own loop, after the operands were evaluated, releases them. The
+    // ThreadPoolDevice executor is not covered: its loop can still be running on other threads when this one throws.
+    Eigen::DefaultDevice default_device;
+    TrackedScalar::multiply_countdown = countdown;
+    result.device(default_device) = t_left.contract(t_right, dims);
+    const int default_multiplications = countdown - TrackedScalar::multiply_countdown.load();
+    TrackedScalar::multiply_countdown = 0;
+    VERIFY(throws_in_multiply(default_multiplications + 1,
+                              [&]() { result.device(default_device) = contraction() * result; }));
+    verify_released(live);
   }
   VERIFY_IS_EQUAL(TrackedScalar::instances.load(), 0);
 #endif
