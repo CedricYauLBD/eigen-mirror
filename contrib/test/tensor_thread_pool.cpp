@@ -23,20 +23,21 @@ class TestAllocator : public Allocator {
  public:
   ~TestAllocator() EIGEN_OVERRIDE {}
   EIGEN_DEVICE_FUNC void* allocate(size_t num_bytes) const EIGEN_OVERRIDE {
-    const_cast<TestAllocator*>(this)->alloc_count_++;
+    alloc_count_++;
     return internal::aligned_malloc(num_bytes);
   }
   EIGEN_DEVICE_FUNC void deallocate(void* buffer) const EIGEN_OVERRIDE {
-    const_cast<TestAllocator*>(this)->dealloc_count_++;
+    dealloc_count_++;
     internal::aligned_free(buffer);
   }
 
-  int alloc_count() const { return alloc_count_; }
-  int dealloc_count() const { return dealloc_count_; }
+  int alloc_count() const { return alloc_count_.load(); }
+  int dealloc_count() const { return dealloc_count_.load(); }
 
  private:
-  int alloc_count_ = 0;
-  int dealloc_count_ = 0;
+  // Pool workers allocate through the device concurrently.
+  mutable std::atomic<int> alloc_count_{0};
+  mutable std::atomic<int> dealloc_count_{0};
 };
 
 template <typename = void>
@@ -1075,8 +1076,9 @@ struct TrackedScalar {
   float v;
   unsigned magic;
   TrackedScalar() : v(0.0f), magic(kMagic) {
-    if (throw_countdown.load() > 0 && std::this_thread::get_id() == throw_thread && --throw_countdown == 0) {
-      throw std::runtime_error("TrackedScalar");
+    if (throw_countdown.load() > 0 && std::this_thread::get_id() == throw_thread) {
+      const int remaining = --throw_countdown;
+      if (remaining == 0) EIGEN_THROW_X(std::runtime_error("TrackedScalar"));
     }
     ++instances;
   }
@@ -1127,8 +1129,6 @@ struct NumTraits<TrackedScalar> : GenericNumTraits<TrackedScalar> {
 template <int DataLayout>
 static void test_multithread_contraction_require_initialization(Index m, Index k, Index n) {
   using DimPair = typename Tensor<float, 1>::DimensionPair;
-  Eigen::ThreadPool tp(4);
-  Eigen::ThreadPoolDevice device(&tp, 4);
 
   Tensor<float, 2, DataLayout> left(m, k);
   Tensor<float, 2, DataLayout> right(k, n);
@@ -1140,6 +1140,10 @@ static void test_multithread_contraction_require_initialization(Index m, Index k
   TrackedScalar::instances = 0;
   TrackedScalar::unconstructed_assignments = 0;
   {
+    // Destroying the pool at the end of this block joins the workers before the checks below: the kernel task that
+    // sends the final notification still holds alpha and beta until its frame unwinds.
+    Eigen::ThreadPool tp(4);
+    Eigen::ThreadPoolDevice device(&tp, 4);
     Tensor<TrackedScalar, 2, DataLayout> t_left = left.template cast<TrackedScalar>();
     Tensor<TrackedScalar, 2, DataLayout> t_right = right.template cast<TrackedScalar>();
     Tensor<TrackedScalar, 2, DataLayout> result(m, n);
