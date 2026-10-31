@@ -105,7 +105,10 @@ struct redux_traits {
   };
 
  public:
-  enum { Unrolling = Cost <= UnrollingLimit ? CompleteUnrolling : NoUnrolling };
+  // UnrollingLimit grows with the packet size and by default reaches HugeCost from 91 scalars per packet on, so the
+  // Cost of a runtime size alone does not rule out unrolling it.
+  static constexpr int Unrolling =
+      (Evaluator::SizeAtCompileTime != Dynamic && Cost <= UnrollingLimit) ? CompleteUnrolling : NoUnrolling;
 
 #ifdef EIGEN_DEBUG_ASSIGN
   static void debug() {
