@@ -217,7 +217,7 @@ void map_outer_stride_boundary() {
   typedef Matrix<Scalar, Dynamic, Dynamic> Mat;
   // Test various inner dimensions around packet size
   const Index inner_sizes[] = {1, PS - 1, PS, PS + 1, 2 * PS, 2 * PS + 1};
-  const Index outer_stride = 64;  // large enough for any inner size
+  const Index outer_stride = numext::maxi<Index>(64, 2 * PS + 1);  // large enough for any inner size
   const Index cols = 4;
 
   for (int si = 0; si < 6; ++si) {

@@ -48,7 +48,9 @@ struct packetwise_redux_traits {
   static constexpr int Cost = OuterSize == Dynamic
                                   ? HugeCost
                                   : OuterSize * Evaluator::CoeffReadCost + (OuterSize - 1) * functor_traits<Func>::Cost;
-  static constexpr int Unrolling = Cost <= EIGEN_UNROLLING_LIMIT ? CompleteUnrolling : NoUnrolling;
+  // A user-set EIGEN_UNROLLING_LIMIT can reach HugeCost, which therefore does not rule out a runtime size.
+  static constexpr int Unrolling =
+      (OuterSize != Dynamic && Cost <= EIGEN_UNROLLING_LIMIT) ? CompleteUnrolling : NoUnrolling;
 };
 
 /* Value to be returned when size==0 , by default let's return 0 */
