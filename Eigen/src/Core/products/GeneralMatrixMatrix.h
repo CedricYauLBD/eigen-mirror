@@ -894,13 +894,19 @@ struct generic_product_impl<Lhs, Rhs, DenseShape, DenseShape, GemmProduct>
                                    float(RhsBlasTraits::extractScalarFactor(rhs)));
   }
 
+  // A factor that underflows in Scalar but not in float takes the float GEMM (see scalarFactorIsZero).
+  template <typename Dst>
+  static EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE bool useCoeffBasedPath(const Dst& dst, const Lhs& lhs, const Rhs& rhs) {
+    return useRuntimeCoeffBasedProduct(dst, rhs) && !numext::is_exactly_zero(combine_scalar_factors<Scalar>(lhs, rhs));
+  }
+
   template <typename Dst>
   static void evalTo(Dst& dst, const Lhs& lhs, const Rhs& rhs) {
     if (scalarFactorIsZero(lhs, rhs)) {
       dst.setZero();
       return;
     }
-    if (useRuntimeCoeffBasedProduct(dst, rhs) && !numext::is_exactly_zero(combine_scalar_factors<Scalar>(lhs, rhs)))
+    if (useCoeffBasedPath(dst, lhs, rhs))
       lazyproduct::eval_dynamic(dst, lhs, rhs, internal::assign_op<typename Dst::Scalar, Scalar>());
     else
       scaleAndEvalTo(dst, lhs, rhs, Scalar(1));
@@ -909,7 +915,7 @@ struct generic_product_impl<Lhs, Rhs, DenseShape, DenseShape, GemmProduct>
   template <typename Dst>
   static void addTo(Dst& dst, const Lhs& lhs, const Rhs& rhs) {
     if (scalarFactorIsZero(lhs, rhs)) return;
-    if (useRuntimeCoeffBasedProduct(dst, rhs) && !numext::is_exactly_zero(combine_scalar_factors<Scalar>(lhs, rhs)))
+    if (useCoeffBasedPath(dst, lhs, rhs))
       lazyproduct::eval_dynamic(dst, lhs, rhs, internal::add_assign_op<typename Dst::Scalar, Scalar>());
     else
       scaleAndAddTo(dst, lhs, rhs, Scalar(1));
@@ -918,7 +924,7 @@ struct generic_product_impl<Lhs, Rhs, DenseShape, DenseShape, GemmProduct>
   template <typename Dst>
   static void subTo(Dst& dst, const Lhs& lhs, const Rhs& rhs) {
     if (scalarFactorIsZero(lhs, rhs)) return;
-    if (useRuntimeCoeffBasedProduct(dst, rhs) && !numext::is_exactly_zero(combine_scalar_factors<Scalar>(lhs, rhs)))
+    if (useCoeffBasedPath(dst, lhs, rhs))
       lazyproduct::eval_dynamic(dst, lhs, rhs, internal::sub_assign_op<typename Dst::Scalar, Scalar>());
     else
       scaleAndAddTo(dst, lhs, rhs, Scalar(-1));
