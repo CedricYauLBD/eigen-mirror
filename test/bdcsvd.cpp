@@ -442,6 +442,64 @@ void bdcsvd_secular_extrapolation() {
   }
 }
 
+// The top-level merge of this bidiagonal has the exact poles p = 1 + eps and q = p + w, w = 9 eps, the smallest odd gap
+// above the 8 eps deflation threshold. With mu = sigma - p, the secular function between them is about
+//   f(mu) = 1 - A w / mu + B w / (w - mu),   A = z1^2 / (2 w),   B = z2^2 / (2 w).
+// For some of these weights the root lies between the exact midpoint p + 4.5 eps and the p + 5 eps it rounds to, and
+// the interpolation falls back on bisection, whose search must therefore start from q. Rounding moves that set of
+// weights between compilers, so sweep them.
+template <typename RealScalar>
+void bdcsvd_secular_close_poles() {
+  using Mat = Matrix<RealScalar, Dynamic, Dynamic>;
+  using Vec = Matrix<RealScalar, Dynamic, 1>;
+  const RealScalar eps = NumTraits<RealScalar>::epsilon();
+  const RealScalar p = RealScalar(1) + eps, w = RealScalar(9) * eps;
+  // Reconstruction accumulates O(n * epsilon) rounding.
+  const RealScalar bound = RealScalar(64) * eps;
+  BDCSVD<Mat, ComputeFullU | ComputeFullV> svd;
+  svd.setSwitchSize(3);
+  Vec diagonal(3), superdiagonal(2);
+  Mat bidiagonal = Mat::Zero(3, 3);
+  for (int ia = 60; ia <= 120; ++ia) {
+    for (int ib = 10; ib <= 50; ++ib) {
+      diagonal << RealScalar(0), numext::sqrt(RealScalar(2) * w * RealScalar(ia) / RealScalar(100)), p + w;
+      superdiagonal << p, numext::sqrt(RealScalar(2) * w * RealScalar(ib) / RealScalar(100));
+      bidiagonal.diagonal() = diagonal;
+      bidiagonal.template diagonal<1>() = superdiagonal;
+      svd.compute(diagonal, superdiagonal);
+      VERIFY_IS_EQUAL(svd.info(), Success);
+      VERIFY((bidiagonal - svd.matrixU() * svd.singularValues().asDiagonal() * svd.matrixV().transpose()).norm() <=
+             bound * bidiagonal.norm());
+    }
+  }
+}
+
+// About 1 in 10^4 of these small merges has a bisection midpoint that is an exact root of the secular equation, which
+// must end the search. Which ones do depends on rounding, so this relies on the number of problems, not on a fixed
+// input.
+template <typename RealScalar>
+void bdcsvd_secular_exact_root() {
+  using Mat = Matrix<RealScalar, Dynamic, Dynamic>;
+  using Vec = Matrix<RealScalar, Dynamic, 1>;
+  const RealScalar bound = RealScalar(64) * NumTraits<RealScalar>::epsilon();
+  BDCSVD<Mat, ComputeFullU | ComputeFullV> svd;
+  svd.setSwitchSize(3);
+  Mat bidiagonal;
+  Vec diagonal, superdiagonal;
+  for (int i = 0; i < 100000; ++i) {
+    const Index n = 3 + i % 6;
+    diagonal = Vec::Random(n);
+    superdiagonal = Vec::Random(n - 1);
+    bidiagonal.setZero(n, n);
+    bidiagonal.diagonal() = diagonal;
+    bidiagonal.template diagonal<1>() = superdiagonal;
+    svd.compute(diagonal, superdiagonal);
+    VERIFY_IS_EQUAL(svd.info(), Success);
+    VERIFY((bidiagonal - svd.matrixU() * svd.singularValues().asDiagonal() * svd.matrixV().transpose()).norm() <=
+           bound * bidiagonal.norm());
+  }
+}
+
 template <typename Scalar, int StorageOrder>
 void bdcsvd_qr_crossover() {
   using RealScalar = typename NumTraits<Scalar>::Real;
@@ -585,6 +643,10 @@ EIGEN_DECLARE_TEST(bdcsvd) {
   CALL_SUBTEST_54((bdcsvd_fast_math_regression_1588<>()));
   CALL_SUBTEST_55((bdcsvd_secular_extrapolation<float>()));
   CALL_SUBTEST_56((bdcsvd_secular_extrapolation<double>()));
+  CALL_SUBTEST_66((bdcsvd_secular_close_poles<float>()));
+  CALL_SUBTEST_66((bdcsvd_secular_close_poles<double>()));
+  CALL_SUBTEST_67((bdcsvd_secular_exact_root<float>()));
+  CALL_SUBTEST_67((bdcsvd_secular_exact_root<double>()));
   CALL_SUBTEST_57((bdcsvd_qr_crossover<float, ColMajor>()));
   CALL_SUBTEST_58((bdcsvd_qr_crossover<double, RowMajor>()));
   CALL_SUBTEST_59((bdcsvd_qr_crossover<std::complex<double>, ColMajor>()));
