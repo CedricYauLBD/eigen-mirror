@@ -279,7 +279,7 @@ struct TensorContractionKernel {
   }
 
   template <typename Device>
-  EIGEN_DEVICE_FUNC static void deallocate(Device& d, BlockMemHandle handle) {
+  EIGEN_DEVICE_FUNC static void deallocate(Device& d, const BlockMemHandle& handle) {
     BlockMemAllocator::deallocate(d, handle);
   }
 
@@ -705,19 +705,21 @@ struct TensorContractionEvaluatorBase {
   EIGEN_STRONG_INLINE bool evalSubExprsIfNeeded(EvaluatorPointerType data) {
     m_leftImpl.evalSubExprsIfNeeded(nullptr);
     m_rightImpl.evalSubExprsIfNeeded(nullptr);
-    if (data) {
-      evalTo(data);
-      return false;
-    } else {
-      m_result = static_cast<EvaluatorPointerType>(m_device.allocate(dimensions().TotalSize() * sizeof(Scalar)));
-      constructResult();
-      EIGEN_TRY { evalTo(m_result); }
-      EIGEN_CATCH(...) {
-        releaseResult();
-        EIGEN_THROW;
+    // The executor does not call cleanup() when evaluation throws, so release the operands and the result here.
+    EIGEN_TRY {
+      if (data) {
+        evalTo(data);
+      } else {
+        m_result = static_cast<EvaluatorPointerType>(m_device.allocate(dimensions().TotalSize() * sizeof(Scalar)));
+        constructResult();
+        evalTo(m_result);
       }
-      return true;
     }
+    EIGEN_CATCH(...) {
+      cleanup();
+      EIGEN_THROW;
+    }
+    return data == nullptr;
   }
 
 #ifdef EIGEN_USE_THREADS
@@ -1015,6 +1017,13 @@ struct TensorContractionEvaluatorBase {
 
     using BlockMemHandle = typename TensorContractionKernel::BlockMemHandle;
     const BlockMemHandle packed_mem = kernel.allocate(this->m_device, &blockA, &blockB);
+    // Releases the packed blocks also when packing, gebp or the output kernel throws.
+    struct PackedMemGuard {
+      TensorContractionKernel& kernel;
+      const Device& device;
+      const BlockMemHandle& mem;
+      EIGEN_DEVICE_FUNC ~PackedMemGuard() { kernel.deallocate(device, mem); }
+    } packed_mem_guard{kernel, this->m_device, packed_mem};
 
     // If a contraction kernel does not support beta, explicitly initialize
     // output buffer with zeroes.
@@ -1052,8 +1061,6 @@ struct TensorContractionEvaluatorBase {
         }
       }
     }
-
-    kernel.deallocate(this->m_device, packed_mem);
   }
 
   EIGEN_STRONG_INLINE void cleanup() {

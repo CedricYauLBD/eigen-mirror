@@ -13,6 +13,7 @@
 #include "main.h"
 #include <atomic>
 #include <iostream>
+#include <limits>
 #include <stdexcept>
 #include <thread>
 #include <Eigen/Tensor>
@@ -1070,13 +1071,17 @@ struct TrackedScalar {
   static constexpr unsigned kMagic = 0x5EEDu;
   static std::atomic<int> instances;
   static std::atomic<int> unconstructed_assignments;
-  // When positive, the throw_countdown-th default construction on throw_thread throws.
+  // Assignments on threads other than test_thread, to check that the work ran on the pool.
+  static std::atomic<int> pool_assignments;
+  // When positive, the throw_countdown-th default construction on test_thread throws.
   static std::atomic<int> throw_countdown;
-  static std::thread::id throw_thread;
+  // When positive, the multiply_countdown-th multiplication on test_thread throws.
+  static std::atomic<int> multiply_countdown;
+  static std::thread::id test_thread;
   float v;
   unsigned magic;
   TrackedScalar() : v(0.0f), magic(kMagic) {
-    if (throw_countdown.load() > 0 && std::this_thread::get_id() == throw_thread) {
+    if (throw_countdown.load() > 0 && std::this_thread::get_id() == test_thread) {
       const int remaining = --throw_countdown;
       if (remaining == 0) EIGEN_THROW_X(std::runtime_error("TrackedScalar"));
     }
@@ -1090,12 +1095,19 @@ struct TrackedScalar {
   }
   TrackedScalar& operator=(const TrackedScalar& o) {
     if (magic != kMagic) ++unconstructed_assignments;
+    if (std::this_thread::get_id() != test_thread) ++pool_assignments;
     v = o.v;
     return *this;
   }
   TrackedScalar operator+(const TrackedScalar& o) const { return TrackedScalar(v + o.v); }
   TrackedScalar operator-(const TrackedScalar& o) const { return TrackedScalar(v - o.v); }
-  TrackedScalar operator*(const TrackedScalar& o) const { return TrackedScalar(v * o.v); }
+  TrackedScalar operator*(const TrackedScalar& o) const {
+    if (multiply_countdown.load() > 0 && std::this_thread::get_id() == test_thread) {
+      const int remaining = --multiply_countdown;
+      if (remaining == 0) EIGEN_THROW_X(std::runtime_error("TrackedScalar"));
+    }
+    return TrackedScalar(v * o.v);
+  }
   TrackedScalar operator-() const { return TrackedScalar(-v); }
   TrackedScalar& operator+=(const TrackedScalar& o) { return *this = *this + o; }
   TrackedScalar& operator*=(const TrackedScalar& o) { return *this = *this * o; }
@@ -1104,8 +1116,10 @@ struct TrackedScalar {
 };
 std::atomic<int> TrackedScalar::instances(0);
 std::atomic<int> TrackedScalar::unconstructed_assignments(0);
+std::atomic<int> TrackedScalar::pool_assignments(0);
 std::atomic<int> TrackedScalar::throw_countdown(0);
-std::thread::id TrackedScalar::throw_thread;
+std::atomic<int> TrackedScalar::multiply_countdown(0);
+std::thread::id TrackedScalar::test_thread;
 
 namespace Eigen {
 template <>
@@ -1124,11 +1138,28 @@ struct NumTraits<TrackedScalar> : GenericNumTraits<TrackedScalar> {
 };
 }  // namespace Eigen
 
-// Issue #2714: the threaded contraction paths (parallel packing with thread-local blocks, sharding by the inner
-// dimension, async evaluation, temporary results) construct and destruct scalars that require initialization.
+// The thread pool contraction paths, identified by the allocations of one direct contraction: parallel packing
+// allocates its packed blocks once, thread-local packing (parallelize_by_sharding_dim_only) also allocates the
+// thread-local blocks, and sharding by the inner dimension allocates a buffer and packed blocks per block.
+enum class ContractionPath { ParallelPack, ThreadLocalPack, ShardByInnerDim };
+
+// The path depends on the cache sizes, so the tests that check it pin them to typical x86 values.
+struct ScopedCacheSizes {
+  ScopedCacheSizes() : l1(l1CacheSize()), l2(l2CacheSize()), l3(l3CacheSize()) {
+    setCpuCacheSizes(32 * 1024, 1024 * 1024, 32 * 1024 * 1024);
+  }
+  ~ScopedCacheSizes() { setCpuCacheSizes(l1, l2, l3); }
+  std::ptrdiff_t l1, l2, l3;
+};
+
+// Issue #2714: the threaded contraction paths, async evaluation and temporary results construct and destruct scalars
+// that require initialization.
 template <int DataLayout>
-static void test_multithread_contraction_require_initialization(Index m, Index k, Index n) {
+static void test_multithread_contraction_require_initialization(Index m, Index k, Index n, ContractionPath path) {
   using DimPair = typename Tensor<float, 1>::DimensionPair;
+  const ScopedCacheSizes cache_sizes;
+  TestAllocator test_allocator;
+  TrackedScalar::test_thread = std::this_thread::get_id();
 
   Tensor<float, 2, DataLayout> left(m, k);
   Tensor<float, 2, DataLayout> right(k, n);
@@ -1143,7 +1174,7 @@ static void test_multithread_contraction_require_initialization(Index m, Index k
     // Destroying the pool at the end of this block joins the workers before the checks below: the kernel task that
     // sends the final notification still holds alpha and beta until its frame unwinds.
     Eigen::ThreadPool tp(4);
-    Eigen::ThreadPoolDevice device(&tp, 4);
+    Eigen::ThreadPoolDevice device(&tp, 4, &test_allocator);
     Tensor<TrackedScalar, 2, DataLayout> t_left = left.template cast<TrackedScalar>();
     Tensor<TrackedScalar, 2, DataLayout> t_right = right.template cast<TrackedScalar>();
     Tensor<TrackedScalar, 2, DataLayout> result(m, n);
@@ -1153,16 +1184,42 @@ static void test_multithread_contraction_require_initialization(Index m, Index k
       }
     };
 
+    TrackedScalar::pool_assignments = 0;
+    const int allocations_before = test_allocator.alloc_count();
     result.device(device) = t_left.contract(t_right, dims);
     check(1);
-    // A contraction nested in another expression evaluates into a temporary result buffer.
-    result.device(device) = t_left.contract(t_right, dims) + t_left.contract(t_right, dims);
-    check(2);
+    VERIFY(TrackedScalar::pool_assignments.load() > 0);
+    const int allocations = test_allocator.alloc_count() - allocations_before;
+    switch (path) {
+      case ContractionPath::ParallelPack:
+        VERIFY_IS_EQUAL(allocations, 1);
+        break;
+      case ContractionPath::ThreadLocalPack:
+        VERIFY_IS_EQUAL(allocations, 2);
+        break;
+      case ContractionPath::ShardByInnerDim:
+        VERIFY(allocations >= 3);
+        break;
+    }
+    // A contraction nested in another expression evaluates into a temporary result buffer. The buffer does not
+    // depend on the path, so the slowest shape skips it.
+    const bool nested = path != ContractionPath::ThreadLocalPack;
+    if (nested) {
+      result.device(device) = t_left.contract(t_right, dims) + t_left.contract(t_right, dims);
+      check(2);
+    }
 
     Eigen::Barrier done(1);
     result.device(device, [&done]() { done.Notify(); }) = t_left.contract(t_right, dims);
     done.Wait();
     check(1);
+    if (nested) {
+      Eigen::Barrier done_nested(1);
+      result.device(device, [&done_nested]() { done_nested.Notify(); }) =
+          t_left.contract(t_right, dims) + t_left.contract(t_right, dims);
+      done_nested.Wait();
+      check(2);
+    }
   }
   VERIFY_IS_EQUAL(TrackedScalar::unconstructed_assignments.load(), 0);
   VERIFY_IS_EQUAL(TrackedScalar::instances.load(), 0);
@@ -1174,11 +1231,11 @@ template <int DataLayout>
 static void test_contraction_require_initialization_throws() {
 #ifdef EIGEN_EXCEPTIONS
   using DimPair = typename Tensor<float, 1>::DimensionPair;
-  using BlockAllocator = internal::TensorContractionBlockMemAllocator<TrackedScalar, TrackedScalar>;
+  const ScopedCacheSizes cache_sizes;
   Eigen::ThreadPool tp(4);
   TestAllocator test_allocator;
   Eigen::ThreadPoolDevice device(&tp, 4, &test_allocator);
-  TrackedScalar::throw_thread = std::this_thread::get_id();
+  TrackedScalar::test_thread = std::this_thread::get_id();
 
   // Runs f with the count-th default construction on this thread throwing; returns whether it threw.
   const auto throws_at = [](int count, const auto& f) {
@@ -1197,31 +1254,36 @@ static void test_contraction_require_initialization_throws() {
     VERIFY_IS_EQUAL(test_allocator.alloc_count(), test_allocator.dealloc_count());
   };
 
-  TrackedScalar::instances = 0;
-  {
+  // Throws at every element the allocator constructs. With float lhs blocks, only the rhs blocks are constructed.
+  const auto sweep_allocator = [&](auto* lhs_tag, int lhs_constructed) {
+    using LhsScalar = std::remove_pointer_t<decltype(lhs_tag)>;
+    using BlockAllocator = internal::TensorContractionBlockMemAllocator<LhsScalar, TrackedScalar>;
     const Index bm = 3, bk = 4, bn = 5;
-    const int block_elements = bm * bk + bn * bk;
+    const int block_elements = lhs_constructed * bm * bk + bn * bk;
     for (int count = 1; count <= block_elements; ++count) {
-      TrackedScalar* lhs = nullptr;
+      LhsScalar* lhs = nullptr;
       TrackedScalar* rhs = nullptr;
       VERIFY(throws_at(count, [&]() { BlockAllocator::allocate(device, bm, bk, bn, &lhs, &rhs); }));
       verify_released(0);
     }
 
     const Index num_lhs = 2, num_rhs = 3, num_slices = 2;
-    const int slice_elements = (num_lhs * bm * bk + num_rhs * bn * bk) * num_slices;
+    const int slice_elements = (lhs_constructed * num_lhs * bm * bk + num_rhs * bn * bk) * num_slices;
     for (int count = 1; count <= slice_elements; ++count) {
-      std::vector<TrackedScalar*> lhs_blocks[num_slices];
+      std::vector<LhsScalar*> lhs_blocks[num_slices];
       std::vector<TrackedScalar*> rhs_blocks[num_slices];
       VERIFY(throws_at(count, [&]() {
         BlockAllocator::allocateSlices(device, bm, bk, bn, num_lhs, num_rhs, num_slices, lhs_blocks, rhs_blocks);
       }));
       verify_released(0);
     }
-  }
+  };
+  TrackedScalar::instances = 0;
+  sweep_allocator(static_cast<TrackedScalar*>(nullptr), 1);
+  sweep_allocator(static_cast<float*>(nullptr), 0);
 
   // Sharded by the inner dimension: the result of a nested contraction, then the per-block buffers.
-  const Index m = 2, k = 30000, n = 10;
+  const Index m = 3, k = 100003, n = 11;
   Tensor<float, 2, DataLayout> left(m, k);
   Tensor<float, 2, DataLayout> right(k, n);
   left.setRandom();
@@ -1233,6 +1295,10 @@ static void test_contraction_require_initialization_throws() {
     Tensor<TrackedScalar, 2, DataLayout> t_right = right.template cast<TrackedScalar>();
     Tensor<TrackedScalar, 2, DataLayout> result(m, n);
     const int live = TrackedScalar::instances.load();
+    const int allocations_before = test_allocator.alloc_count();
+    result.device(device) = t_left.contract(t_right, dims);
+    // Sharding by the inner dimension allocates a buffer and packed blocks per block (see ContractionPath).
+    VERIFY(test_allocator.alloc_count() - allocations_before >= 3);
     const int result_elements = static_cast<int>(m * n);
     for (int count : {1, result_elements, result_elements + 1}) {
       VERIFY(throws_at(count, [&]() { result.device(device) = t_left.contract(t_right, dims); }));
@@ -1244,6 +1310,50 @@ static void test_contraction_require_initialization_throws() {
 
     result.device(device) = t_left.contract(t_right, dims);
     for (Index i = 0; i < result.size(); ++i) VERIFY_IS_APPROX(result.data()[i].v, expected.data()[i]);
+    verify_released(live);
+  }
+  VERIFY_IS_EQUAL(TrackedScalar::instances.load(), 0);
+
+  // A throw in the multiplication of a sequential contraction releases the packed blocks, the temporary result and
+  // the operands, here a nested contraction with its own temporary result.
+  {
+    Tensor<TrackedScalar, 2, DataLayout> t_left(9, 10);
+    Tensor<TrackedScalar, 2, DataLayout> t_right(10, 11);
+    Tensor<TrackedScalar, 2, DataLayout> t_square(11, 11);
+    Tensor<TrackedScalar, 2, DataLayout> result(9, 11);
+    t_left.setConstant(TrackedScalar(1.0f));
+    t_right.setConstant(TrackedScalar(2.0f));
+    t_square.setConstant(TrackedScalar(1.0f));
+    // Runs f with the count-th multiplication on this thread throwing; returns whether it threw.
+    const auto throws_in_multiply = [](int count, const auto& f) {
+      TrackedScalar::multiply_countdown = count;
+      bool threw = false;
+      try {
+        f();
+      } catch (const std::runtime_error&) {
+        threw = true;
+      }
+      TrackedScalar::multiply_countdown = 0;
+      return threw;
+    };
+    const int live = TrackedScalar::instances.load();
+    TrackedScalar::pool_assignments = 0;
+    const int countdown = std::numeric_limits<int>::max();
+    TrackedScalar::multiply_countdown = countdown;
+    result.device(device) = t_left.contract(t_right, dims);
+    const int multiplications = countdown - TrackedScalar::multiply_countdown.load();
+    TrackedScalar::multiply_countdown = 0;
+    VERIFY_IS_EQUAL(TrackedScalar::pool_assignments.load(), 0);
+    VERIFY_IS_EQUAL(result(0, 0).v, 20.0f);
+
+    VERIFY(throws_in_multiply(1, [&]() { result.device(device) = t_left.contract(t_right, dims); }));
+    verify_released(live);
+    VERIFY(throws_in_multiply(1, [&]() { result.device(device) = t_left.contract(t_right, dims) + result; }));
+    verify_released(live);
+    // The nested contraction is the operand: it completes, then the outer contraction throws.
+    VERIFY(throws_in_multiply(multiplications + 1, [&]() {
+      result.device(device) = t_left.contract(t_right, dims).contract(t_square, dims);
+    }));
     verify_released(live);
   }
   VERIFY_IS_EQUAL(TrackedScalar::instances.load(), 0);
@@ -1669,12 +1779,18 @@ EIGEN_DECLARE_TEST(tensor_thread_pool) {
   CALL_SUBTEST_12(test_enqueue_with_args<>());
   CALL_SUBTEST_12(test_async_forced_eval_non_pod<>());
   CALL_SUBTEST_12(test_async_single_block_scratch_freed_before_done<>());
-  // Parallel packing.
-  CALL_SUBTEST_12(test_multithread_contraction_require_initialization<ColMajor>(301, 257, 283));
-  CALL_SUBTEST_12(test_multithread_contraction_require_initialization<RowMajor>(301, 257, 283));
-  // Sharded by the inner dimension.
-  CALL_SUBTEST_12(test_multithread_contraction_require_initialization<ColMajor>(2, 30000, 10));
-  CALL_SUBTEST_12(test_multithread_contraction_require_initialization<RowMajor>(2, 30000, 10));
+  CALL_SUBTEST_12(
+      test_multithread_contraction_require_initialization<ColMajor>(131, 67, 509, ContractionPath::ParallelPack));
+  CALL_SUBTEST_12(
+      test_multithread_contraction_require_initialization<RowMajor>(131, 67, 509, ContractionPath::ParallelPack));
+  CALL_SUBTEST_12(
+      test_multithread_contraction_require_initialization<ColMajor>(3, 127, 20001, ContractionPath::ThreadLocalPack));
+  CALL_SUBTEST_12(
+      test_multithread_contraction_require_initialization<RowMajor>(3, 127, 20001, ContractionPath::ThreadLocalPack));
+  CALL_SUBTEST_12(
+      test_multithread_contraction_require_initialization<ColMajor>(3, 100003, 11, ContractionPath::ShardByInnerDim));
+  CALL_SUBTEST_12(
+      test_multithread_contraction_require_initialization<RowMajor>(3, 100003, 11, ContractionPath::ShardByInnerDim));
   CALL_SUBTEST_12(test_contraction_require_initialization_throws<ColMajor>());
   CALL_SUBTEST_12(test_contraction_require_initialization_throws<RowMajor>());
 
