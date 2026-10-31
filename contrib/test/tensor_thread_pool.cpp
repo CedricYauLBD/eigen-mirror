@@ -1225,6 +1225,19 @@ static void test_multithread_contraction_require_initialization(Index m, Index k
   VERIFY_IS_EQUAL(TrackedScalar::instances.load(), 0);
 }
 
+// A TestAllocator whose throw_countdown-th allocation on TrackedScalar::test_thread throws.
+class ThrowingAllocator : public TestAllocator {
+ public:
+  EIGEN_DEVICE_FUNC void* allocate(size_t num_bytes) const EIGEN_OVERRIDE {
+    if (throw_countdown.load() > 0 && std::this_thread::get_id() == TrackedScalar::test_thread) {
+      const int remaining = --throw_countdown;
+      if (remaining == 0) EIGEN_THROW_X(std::runtime_error("ThrowingAllocator"));
+    }
+    return TestAllocator::allocate(num_bytes);
+  }
+  mutable std::atomic<int> throw_countdown{0};
+};
+
 // Issue #2714: if a constructor throws partway through constructing the contraction buffers, the elements constructed
 // so far are destructed and the buffers are freed.
 template <int DataLayout>
@@ -1233,7 +1246,7 @@ static void test_contraction_require_initialization_throws() {
   using DimPair = typename Tensor<float, 1>::DimensionPair;
   const ScopedCacheSizes cache_sizes;
   Eigen::ThreadPool tp(4);
-  TestAllocator test_allocator;
+  ThrowingAllocator test_allocator;
   Eigen::ThreadPoolDevice device(&tp, 4, &test_allocator);
   TrackedScalar::test_thread = std::this_thread::get_id();
 
@@ -1282,6 +1295,33 @@ static void test_contraction_require_initialization_throws() {
   sweep_allocator(static_cast<TrackedScalar*>(nullptr), 1);
   sweep_allocator(static_cast<float*>(nullptr), 0);
 
+  // Parallel evaluation: the EvalParallelContext constructor allocates the packed blocks and, with thread-local
+  // packing, the thread-local blocks, all on this thread and before any task starts. A throw while constructing the
+  // first block, or from either allocation, releases what the constructor allocated.
+  {
+    Eigen::array<DimPair, 1> dims{{DimPair(1, 0)}};
+    const auto parallel_throws = [&](Index pm, Index pk, Index pn, int allocations) {
+      Tensor<TrackedScalar, 2, DataLayout> t_left(pm, pk);
+      Tensor<TrackedScalar, 2, DataLayout> t_right(pk, pn);
+      Tensor<TrackedScalar, 2, DataLayout> result(pm, pn);
+      t_left.setConstant(TrackedScalar(1.0f));
+      t_right.setConstant(TrackedScalar(1.0f));
+      const auto contract = [&]() { result.device(device) = t_left.contract(t_right, dims); };
+      const int live = TrackedScalar::instances.load();
+      VERIFY(throws_at(1, contract));
+      verify_released(live);
+      for (int allocation = 1; allocation <= allocations; ++allocation) {
+        test_allocator.throw_countdown = allocation;
+        VERIFY(throws_at(0, contract));
+        test_allocator.throw_countdown = 0;
+        verify_released(live);
+      }
+    };
+    // The paths of these shapes are checked in test_multithread_contraction_require_initialization.
+    parallel_throws(131, 67, 509, /*allocations=*/1);
+    parallel_throws(3, 127, 20001, /*allocations=*/2);
+  }
+
   // Sharded by the inner dimension: the result of a nested contraction, then the per-block buffers.
   const Index m = 3, k = 100003, n = 11;
   Tensor<float, 2, DataLayout> left(m, k);
@@ -1315,12 +1355,14 @@ static void test_contraction_require_initialization_throws() {
   VERIFY_IS_EQUAL(TrackedScalar::instances.load(), 0);
 
   // A throw in the multiplication of a sequential contraction releases the packed blocks, the temporary result and
-  // the operands, here a nested contraction with its own temporary result.
+  // the operands, here a nested contraction with its own temporary result. A throw in a later operand of an
+  // expression releases the operands evaluated before it.
   {
     Tensor<TrackedScalar, 2, DataLayout> t_left(9, 10);
     Tensor<TrackedScalar, 2, DataLayout> t_right(10, 11);
     Tensor<TrackedScalar, 2, DataLayout> t_square(11, 11);
     Tensor<TrackedScalar, 2, DataLayout> result(9, 11);
+    Tensor<TrackedScalar, 2, DataLayout> concatenated(18, 11);
     t_left.setConstant(TrackedScalar(1.0f));
     t_right.setConstant(TrackedScalar(2.0f));
     t_square.setConstant(TrackedScalar(1.0f));
@@ -1354,6 +1396,23 @@ static void test_contraction_require_initialization_throws() {
     VERIFY(throws_in_multiply(multiplications + 1, [&]() {
       result.device(device) = t_left.contract(t_right, dims).contract(t_square, dims);
     }));
+    verify_released(live);
+
+    // A later operand throws after an earlier one completed: the earlier operand's temporary result is released.
+    const auto contraction = [&]() { return t_left.contract(t_right, dims); };
+    VERIFY(throws_in_multiply(multiplications + 1, [&]() { result.device(device) = contraction() + contraction(); }));
+    verify_released(live);
+    VERIFY(throws_in_multiply(multiplications + 1, [&]() {
+      result.device(device) = contraction().contract(t_square.contract(t_square, dims), dims);
+    }));
+    verify_released(live);
+    Tensor<bool, 2, DataLayout> t_cond(9, 11);
+    t_cond.setConstant(true);
+    VERIFY(throws_in_multiply(multiplications + 1,
+                              [&]() { result.device(device) = t_cond.select(contraction(), contraction()); }));
+    verify_released(live);
+    VERIFY(throws_in_multiply(multiplications + 1,
+                              [&]() { concatenated.device(device) = contraction().concatenate(contraction(), 0); }));
     verify_released(live);
   }
   VERIFY_IS_EQUAL(TrackedScalar::instances.load(), 0);

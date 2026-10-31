@@ -704,8 +704,12 @@ struct TensorContractionEvaluatorBase {
 
   EIGEN_STRONG_INLINE bool evalSubExprsIfNeeded(EvaluatorPointerType data) {
     m_leftImpl.evalSubExprsIfNeeded(nullptr);
-    m_rightImpl.evalSubExprsIfNeeded(nullptr);
     // The executor does not call cleanup() when evaluation throws, so release the operands and the result here.
+    EIGEN_TRY { m_rightImpl.evalSubExprsIfNeeded(nullptr); }
+    EIGEN_CATCH(...) {
+      m_leftImpl.cleanup();
+      EIGEN_THROW;
+    }
     EIGEN_TRY {
       if (data) {
         evalTo(data);
