@@ -1064,15 +1064,37 @@ struct TensorEvaluator<const TensorContractionOp<Indices, LeftArgType, RightArgT
         l0_state.emplace_back(internal::convert_index<int>(num_pending_tasks));
       }
 
-      // Allocate temporary buffers for each block.
-      for (Index block_idx = 0; block_idx < num_blocks; ++block_idx) {
-        Scalar* buf = block_idx == 0 ? result : static_cast<Scalar*>(evaluator->m_device.allocate(buffer_size_bytes));
-        block_buffers.emplace_back(buf);
+      // Allocate temporary buffers for each block. The destructor does not run if this throws, so release them here.
+      EIGEN_TRY {
+        for (Index block_idx = 0; block_idx < num_blocks; ++block_idx) {
+          block_buffers.emplace_back(block_idx == 0 ? result : allocateBlockBuffer());
+        }
+      }
+      EIGEN_CATCH(...) {
+        releaseBlockBuffers();
+        EIGEN_THROW;
       }
     }
 
-    ~EvalShardedByInnerDimContext() {
-      for (Index i = 1; i < num_blocks; ++i) {
+    ~EvalShardedByInnerDimContext() { releaseBlockBuffers(); }
+
+    Scalar* allocateBlockBuffer() const {
+      Scalar* buf = static_cast<Scalar*>(evaluator->m_device.allocate(buffer_size_bytes));
+      EIGEN_IF_CONSTEXPR (NumTraits<Scalar>::RequireInitialization) {
+        EIGEN_TRY { internal::default_construct_elements_of_array(buf, m * n); }
+        EIGEN_CATCH(...) {
+          evaluator->m_device.deallocate(buf);
+          EIGEN_THROW;
+        }
+      }
+      return buf;
+    }
+
+    void releaseBlockBuffers() {
+      for (size_t i = 1; i < block_buffers.size(); ++i) {
+        EIGEN_IF_CONSTEXPR (NumTraits<Scalar>::RequireInitialization) {
+          internal::destruct_elements_of_array(block_buffers[i], m * n);
+        }
         evaluator->m_device.deallocate(block_buffers[i]);
       }
     }
