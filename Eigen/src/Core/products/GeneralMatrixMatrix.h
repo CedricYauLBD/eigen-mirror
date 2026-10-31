@@ -974,7 +974,7 @@ struct generic_product_impl<Lhs, Rhs, DenseShape, DenseShape, GemmProduct>
 
   // dst (+)= alpha * a_lhs * a_rhs as the float product of the converted operands, rounded once into dst. The packers
   // convert the operands; only the result needs a float workspace, which goes where the packed blocks do: on the stack
-  // up to EIGEN_STACK_ALLOCATION_LIMIT, so that a fixed-size or preallocated product does not allocate.
+  // up to EIGEN_STACK_ALLOCATION_LIMIT, and on the heap above it, also for a fixed-size result.
   template <typename Dest>
   static void scaleAndAddOrEvalTo(std::true_type, Dest& dst, const Lhs& a_lhs, const Rhs& a_rhs, const Scalar& alpha,
                                   bool overwrite) {
