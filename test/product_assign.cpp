@@ -129,7 +129,9 @@ void assign_depth_passes() {
   using Blocking = internal::gemm_blocking_space<ColMajor, Scalar, Scalar, Dynamic, Dynamic, Dynamic>;
   for (Index m : {Index(33), Index(129)}) {
     const Index n = 40;
-    Index k = 2 * Blocking(m, n, 1 << 20, 1, true).kc() + 7;
+    // At least 48: the heuristic does not block a product with max(m, n, k) < 48, and wide packets shrink kc so far
+    // (16 at VLEN 1024) that 2 * kc + 7 alone can fall below that.
+    Index k = numext::maxi<Index>(2 * Blocking(m, n, 1 << 20, 1, true).kc() + 7, 48);
     VERIFY(Blocking(m, n, k, 1, true).kc() < k);
     const Mat a = Mat::Random(m, k), b = Mat::Random(k, n);
     Mat c(m, n);

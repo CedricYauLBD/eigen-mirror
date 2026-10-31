@@ -357,6 +357,7 @@ if(NOT EIGEN_TEST_NO_EXCEPTIONS AND NOT EIGEN_TEST_OPENMP)
 endif()
 ei_add_test(redux)
 ei_add_test(redux_bounded)
+ei_add_test(redux_unrolling)
 if(CMAKE_COMPILER_IS_GNUCXX)
   # Check optimized bounds diagnostics: scalar with assertions, vectorized without.
   add_executable(redux_bounded_compile EXCLUDE_FROM_ALL redux_bounded_compile.cpp)
