@@ -474,9 +474,11 @@ void bdcsvd_secular_close_poles() {
   }
 }
 
-// About 1 in 10^4 of these small merges has a bisection midpoint that is an exact root of the secular equation, which
-// must end the search. Which ones do depends on rounding, so this relies on the number of problems, not on a fixed
-// input.
+// A bisection midpoint that is an exact root of the secular equation must end the search. About 1 in 20 of these small
+// problems reaches one, and about 1 in 10^4 reaches one early enough that overshooting it shows in the reconstruction.
+// Which ones do depends on rounding, so this relies on the number of problems, not on a fixed input. A build that
+// contracts the update in secularEq into an FMA, as CI's aarch64 gcc-10 flags do, met no exact zero in 2 * 10^6
+// problems, so this test does not exercise the stop there.
 template <typename RealScalar>
 void bdcsvd_secular_exact_root() {
   using Mat = Matrix<RealScalar, Dynamic, Dynamic>;
