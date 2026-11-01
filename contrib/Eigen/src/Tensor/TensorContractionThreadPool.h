@@ -501,7 +501,9 @@ struct TensorEvaluator<const TensorContractionOp<Indices, LeftArgType, RightArgT
       }
     }
 
-    void run() {
+    // The calling thread runs part of the work after tasks are enqueued, and those tasks use this context. A throw here
+    // cannot unwind safely, so it terminates, as a throw on a worker does.
+    void run() noexcept {
       // Kick off packing of the first slice.
       signal_switch(0, 1);
 
@@ -1119,8 +1121,7 @@ struct TensorEvaluator<const TensorContractionOp<Indices, LeftArgType, RightArgT
     template <int Alignment>
     void run() {
       Barrier barrier(internal::convert_index<int>(num_blocks));
-      eval<Alignment>(barrier, 0, num_blocks);
-      barrier.Wait();
+      evalBlocks<Alignment>(barrier);
 
       // Aggregate partial sums from l0 ranges.
       aggregateL0Blocks<Alignment>();
@@ -1129,8 +1130,16 @@ struct TensorEvaluator<const TensorContractionOp<Indices, LeftArgType, RightArgT
       applyOutputKernel();
     }
 
+    // The calling thread evaluates a block after tasks are enqueued, and those tasks use this context and the barrier.
+    // A throw here cannot unwind safely, so it terminates, as a throw on a worker does.
     template <int Alignment>
-    void runAsync() {
+    void evalBlocks(Barrier& barrier) noexcept {
+      eval<Alignment>(barrier, 0, num_blocks);
+      barrier.Wait();
+    }
+
+    template <int Alignment>
+    void runAsync() noexcept {
       evalAsync<Alignment>(0, num_blocks);
     }
 
