@@ -817,6 +817,30 @@ void packetmath_pnot_ptrue() {
   VERIFY(test::areEqualBits(ref, res, PacketSize, false) && "ptrue");
 }
 
+template <typename Scalar, typename Packet, std::enable_if_t<!internal::is_fused_madd<Packet>::value, int> = 0>
+void packetmath_fused_madd() {}
+
+template <typename Scalar, typename Packet, std::enable_if_t<internal::is_fused_madd<Packet>::value, int> = 0>
+void packetmath_fused_madd() {
+  constexpr int Size = internal::unpacket_traits<Packet>::size;
+  // (1+delta)*(1-delta) rounds to 1, but its fused residual is -delta^2.
+  const Scalar delta = numext::ldexp(Scalar(1), -(NumTraits<Scalar>::digits() / 2 + 1));
+  const Packet a = internal::pset1<Packet>(Scalar(1) + delta);
+  const Packet b = internal::pset1<Packet>(Scalar(1) - delta);
+  const Packet one = internal::pset1<Packet>(Scalar(1));
+  Scalar result[Size];
+  internal::pstoreu(result, internal::pmadd(a, b, internal::pnegate(one)));
+  for (int i = 0; i < Size; ++i) VERIFY_IS_EQUAL(result[i], -delta * delta);
+  internal::pstoreu(result, internal::pmsub(a, b, one));
+  for (int i = 0; i < Size; ++i) VERIFY_IS_EQUAL(result[i], -delta * delta);
+  const Packet zero = internal::pset1<Packet>(Scalar(0));
+  internal::pstoreu(result, internal::pmsub(zero, one, zero));
+  for (int i = 0; i < Size; ++i) {
+    VERIFY_IS_EQUAL(result[i], Scalar(0));
+    VERIFY(!std::signbit(static_cast<double>(result[i])));
+  }
+}
+
 template <typename Scalar, typename Packet>
 void packetmath() {
   using PacketTraits = internal::packet_traits<Scalar>;
@@ -1048,6 +1072,7 @@ void packetmath() {
   packetmath_float_predicates_test<Scalar, Packet>::run();
   packetmath_64bit_boundary_test<Scalar, Packet>::run();
 
+  packetmath_fused_madd<Scalar, Packet>();
   CHECK_CWISE3_IF(PacketTraits::HasMul && PacketTraits::HasAdd, REF_MADD, internal::pmadd);
   if (!std::is_same<Scalar, bool>::value && NumTraits<Scalar>::IsSigned) {
     nmsub_test<Scalar, Packet>(data1, data2, ref, PacketSize);
