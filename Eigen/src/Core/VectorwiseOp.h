@@ -83,8 +83,8 @@ struct partial_redux_dummy_func;
 #define EIGEN_MAKE_PARTIAL_REDUX_FUNCTOR(MEMBER, COST, VECTORIZABLE, BINARYOP)              \
   template <typename ResultType, typename Scalar>                                           \
   struct member_##MEMBER {                                                                  \
-    typedef ResultType result_type;                                                         \
-    typedef BINARYOP<Scalar, Scalar> BinaryOp;                                              \
+    using result_type = ResultType;                                                         \
+    using BinaryOp = BINARYOP<Scalar, Scalar>;                                              \
     template <int Size>                                                                     \
     struct Cost : std::integral_constant<int, COST> {};                                     \
     enum { Vectorizable = (VECTORIZABLE) && functor_traits<BinaryOp>::PacketAccess };       \
