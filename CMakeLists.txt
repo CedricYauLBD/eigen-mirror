@@ -39,15 +39,12 @@ endif ()
 # Version Info.
 #==============================================================================
 
-# Each version field comes from Eigen/Version unless given with -D. The parsed
+# MAJOR, MINOR, PATCH, PRERELEASE and BUILD come from Eigen/Version unless given
+# with -D; WORLD is frozen at 3, which cmake/Version.in hard-codes. The parsed
 # values are plain variables, not cache entries: a cached value would survive a
 # later edit of Eigen/Version in the same build tree.
 file(READ "${CMAKE_CURRENT_SOURCE_DIR}/Eigen/Version" _eigen_version_header)
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/Eigen/Version")
-if (NOT DEFINED EIGEN_WORLD_VERSION)
-  string(REGEX MATCH "define[ \t]+EIGEN_WORLD_VERSION[ \t]+([0-9]+)" _eigen_world_version_match "${_eigen_version_header}")
-  set(EIGEN_WORLD_VERSION "${CMAKE_MATCH_1}")
-endif()
 if (NOT DEFINED EIGEN_MAJOR_VERSION)
   string(REGEX MATCH "define[ \t]+EIGEN_MAJOR_VERSION[ \t]+([0-9]+)" _eigen_major_version_match "${_eigen_version_header}")
   set(EIGEN_MAJOR_VERSION "${CMAKE_MATCH_1}")
