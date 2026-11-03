@@ -166,9 +166,9 @@ struct general_matrix_matrix_product<Index, Eigen::bfloat16, LhsStorageOrder, Co
     float falpha = static_cast<float>(alpha);
     float fbeta = float(1.0);
 
-    using MatrixXbf16 = Matrix<Eigen::bfloat16, Dynamic, Dynamic>;
+    // ColMajor, also under EIGEN_DEFAULT_TO_ROW_MAJOR: the strides below are BLAS's.
+    using MatrixXbf16 = Matrix<Eigen::bfloat16, Dynamic, Dynamic, ColMajor>;
     MatrixXbf16 a_tmp, b_tmp;
-    MatrixXf r_tmp;
 
     /* Set transpose options */
     transa = (LhsStorageOrder == RowMajor) ? ((ConjugateLhs) ? 'C' : 'T') : 'N';
@@ -203,15 +203,14 @@ struct general_matrix_matrix_product<Index, Eigen::bfloat16, LhsStorageOrder, Co
       b = rhs_;
     }
 
-    // Evaluate to a temporary intermediate array.
-    r_tmp.resize(m, n);
+    // sbgemm updates a float C, so res <- bf16(float(res) + alpha * A * B), rounded once.
+    Map<MatrixXbf16, 0, OuterStride<> > result(res, m, n, OuterStride<>(resStride));
+    Matrix<float, Dynamic, Dynamic, ColMajor> r_tmp = result.cast<float>();
 
     EIGEN_BLAS_SYM(sbgemm)
     (&transa, &transb, &m, &n, &k, (const float*)&numext::real_ref(falpha), a, &lda, b, &ldb,
      (const float*)&numext::real_ref(fbeta), r_tmp.data(), &ldc);
 
-    // Cast to the output.
-    Map<MatrixXbf16, 0, OuterStride<> > result(res, m, n, OuterStride<>(resStride));
     result = r_tmp.cast<Eigen::bfloat16>();
   }
 };
