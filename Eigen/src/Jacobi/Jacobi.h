@@ -41,38 +41,38 @@ class JacobiRotation {
   using RealScalar = typename NumTraits<Scalar>::Real;
 
   /** Default constructor without any initialization. */
-  EIGEN_DEVICE_FUNC JacobiRotation() {}
+  constexpr EIGEN_DEVICE_FUNC JacobiRotation() = default;
 
   /** Construct a planar rotation from a cosine-sine pair (\a c, \c s). */
-  EIGEN_DEVICE_FUNC JacobiRotation(const Scalar& c, const Scalar& s) : m_c(c), m_s(s) {}
+  EIGEN_DEVICE_FUNC constexpr JacobiRotation(const Scalar& c, const Scalar& s) : m_c(c), m_s(s) {}
 
-  EIGEN_DEVICE_FUNC Scalar& c() { return m_c; }
-  EIGEN_DEVICE_FUNC Scalar c() const { return m_c; }
-  EIGEN_DEVICE_FUNC Scalar& s() { return m_s; }
-  EIGEN_DEVICE_FUNC Scalar s() const { return m_s; }
+  EIGEN_DEVICE_FUNC constexpr Scalar& c() { return m_c; }
+  EIGEN_DEVICE_FUNC constexpr Scalar c() const { return m_c; }
+  EIGEN_DEVICE_FUNC constexpr Scalar& s() { return m_s; }
+  EIGEN_DEVICE_FUNC constexpr Scalar s() const { return m_s; }
 
   /** Concatenates two planar rotations */
-  EIGEN_DEVICE_FUNC JacobiRotation operator*(const JacobiRotation& other) {
+  EIGEN_DEVICE_FUNC constexpr JacobiRotation operator*(const JacobiRotation& other) {
     return JacobiRotation(m_c * other.m_c - numext::conj(m_s) * other.m_s,
                           numext::conj(m_c * numext::conj(other.m_s) + numext::conj(m_s) * numext::conj(other.m_c)));
   }
 
   /** Returns the transposed transformation */
-  EIGEN_DEVICE_FUNC JacobiRotation transpose() const { return JacobiRotation(m_c, -numext::conj(m_s)); }
+  EIGEN_DEVICE_FUNC constexpr JacobiRotation transpose() const { return JacobiRotation(m_c, -numext::conj(m_s)); }
 
   /** Returns the adjoint transformation */
-  EIGEN_DEVICE_FUNC JacobiRotation adjoint() const { return JacobiRotation(numext::conj(m_c), -m_s); }
+  EIGEN_DEVICE_FUNC constexpr JacobiRotation adjoint() const { return JacobiRotation(numext::conj(m_c), -m_s); }
 
   template <typename Derived>
-  EIGEN_DEVICE_FUNC bool makeJacobi(const MatrixBase<Derived>&, Index p, Index q);
-  EIGEN_DEVICE_FUNC bool makeJacobi(const RealScalar& x, const Scalar& y, const RealScalar& z);
+  EIGEN_DEVICE_FUNC constexpr bool makeJacobi(const MatrixBase<Derived>&, Index p, Index q);
+  EIGEN_DEVICE_FUNC constexpr bool makeJacobi(const RealScalar& x, const Scalar& y, const RealScalar& z);
 
-  EIGEN_DEVICE_FUNC void makeGivens(const Scalar& p, const Scalar& q, Scalar* r = 0);
+  EIGEN_DEVICE_FUNC constexpr void makeGivens(const Scalar& p, const Scalar& q, Scalar* r = 0);
 
  protected:
-  EIGEN_DEVICE_FUNC void makeGivens(const Scalar& p, const Scalar& q, Scalar* r, std::true_type);
-  EIGEN_DEVICE_FUNC void makeGivens(const Scalar& p, const Scalar& q, Scalar* r, std::false_type);
-  EIGEN_DEVICE_FUNC EIGEN_DONT_INLINE void makeGivensScaled(const Scalar& p, const Scalar& q, Scalar* r);
+  EIGEN_DEVICE_FUNC constexpr void makeGivens(const Scalar& p, const Scalar& q, Scalar* r, std::true_type);
+  EIGEN_DEVICE_FUNC constexpr void makeGivens(const Scalar& p, const Scalar& q, Scalar* r, std::false_type);
+  EIGEN_DEVICE_FUNC constexpr void makeGivensScaled(const Scalar& p, const Scalar& q, Scalar* r);
 
   Scalar m_c, m_s;
 };
@@ -85,7 +85,8 @@ class JacobiRotation {
  * MatrixBase::applyOnTheRight()
  */
 template <typename Scalar>
-EIGEN_DEVICE_FUNC bool JacobiRotation<Scalar>::makeJacobi(const RealScalar& x, const Scalar& y, const RealScalar& z) {
+EIGEN_DEVICE_FUNC constexpr bool JacobiRotation<Scalar>::makeJacobi(const RealScalar& x, const Scalar& y,
+                                                                    const RealScalar& z) {
   const RealScalar abs_y = numext::abs(y);
   const RealScalar deno = RealScalar(2) * abs_y;
   if (deno < (std::numeric_limits<RealScalar>::min)()) {
@@ -132,7 +133,7 @@ EIGEN_DEVICE_FUNC bool JacobiRotation<Scalar>::makeJacobi(const RealScalar& x, c
  */
 template <typename Scalar>
 template <typename Derived>
-EIGEN_DEVICE_FUNC inline bool JacobiRotation<Scalar>::makeJacobi(const MatrixBase<Derived>& m, Index p, Index q) {
+EIGEN_DEVICE_FUNC constexpr bool JacobiRotation<Scalar>::makeJacobi(const MatrixBase<Derived>& m, Index p, Index q) {
   return makeJacobi(numext::real(m.coeff(p, p)), m.coeff(p, q), numext::real(m.coeff(q, q)));
 }
 
@@ -153,13 +154,14 @@ EIGEN_DEVICE_FUNC inline bool JacobiRotation<Scalar>::makeJacobi(const MatrixBas
  * \sa MatrixBase::applyOnTheLeft(), MatrixBase::applyOnTheRight()
  */
 template <typename Scalar>
-EIGEN_DEVICE_FUNC void JacobiRotation<Scalar>::makeGivens(const Scalar& p, const Scalar& q, Scalar* r) {
+EIGEN_DEVICE_FUNC constexpr void JacobiRotation<Scalar>::makeGivens(const Scalar& p, const Scalar& q, Scalar* r) {
   makeGivens(p, q, r, internal::bool_constant<NumTraits<Scalar>::IsComplex>());
 }
 
 // specialization for complexes
 template <typename Scalar>
-EIGEN_DEVICE_FUNC void JacobiRotation<Scalar>::makeGivens(const Scalar& p, const Scalar& q, Scalar* r, std::true_type) {
+EIGEN_DEVICE_FUNC constexpr void JacobiRotation<Scalar>::makeGivens(const Scalar& p, const Scalar& q, Scalar* r,
+                                                                    std::true_type) {
   if (q == Scalar(0)) {
     m_c = numext::real(p) < 0 ? Scalar(-1) : Scalar(1);
     m_s = 0;
@@ -209,8 +211,8 @@ EIGEN_DEVICE_FUNC void JacobiRotation<Scalar>::makeGivens(const Scalar& p, const
 
 // specialization for reals
 template <typename Scalar>
-EIGEN_DEVICE_FUNC void JacobiRotation<Scalar>::makeGivens(const Scalar& p, const Scalar& q, Scalar* r,
-                                                          std::false_type) {
+EIGEN_DEVICE_FUNC constexpr void JacobiRotation<Scalar>::makeGivens(const Scalar& p, const Scalar& q, Scalar* r,
+                                                                    std::false_type) {
   if (numext::is_exactly_zero_no_flush(q)) {
     // DAZ can hide the sign; MSVC's non-intrinsic abs(float) can flush the
     // result through a float->double->float conversion even with FTZ alone.
@@ -249,8 +251,8 @@ EIGEN_DEVICE_FUNC void JacobiRotation<Scalar>::makeGivens(const Scalar& p, const
 #else
   // GCC does not fold the SSE numext::sqrt intrinsic for the constant range thresholds below.
   EIGEN_USING_STD(sqrt);
-  const Scalar rtmin = sqrt(safmin);
-  const Scalar rtmax = sqrt(safmax / Scalar(2));
+  const Scalar rtmin = numext::sqrt(safmin);
+  const Scalar rtmax = numext::sqrt<Scalar>(safmax / Scalar(2));
 #endif
   const Scalar abs_p = numext::abs(p);
   const Scalar abs_q = numext::abs(q);
@@ -280,37 +282,38 @@ EIGEN_DEVICE_FUNC void JacobiRotation<Scalar>::makeGivens(const Scalar& p, const
 }
 
 template <typename Scalar>
-EIGEN_DEVICE_FUNC EIGEN_DONT_INLINE void JacobiRotation<Scalar>::makeGivensScaled(const Scalar& p, const Scalar& q,
-                                                                                  Scalar* r) {
-  using Scaling = internal::safe_scaling<Scalar>;
-  Matrix<Scalar, 2, 1> scaled;
-  scaled << p, q;
-  const Scalar maximum = Scaling::recover_flushed_max_coeff(scaled, scaled.cwiseAbs().maxCoeff());
-  const auto factors = Scaling::scale_to(scaled, scaled, maximum);
-  const Scalar ps = scaled.x(), qs = scaled.y();
-  Scalar norm;
-  if (numext::abs(ps) > numext::abs(qs)) {
-    const Scalar t = qs / ps;
-    Scalar u = numext::sqrt<Scalar>(Scalar(1) + numext::abs2(t));
-    if (ps < Scalar(0)) u = -u;
-    m_c = Scalar(1) / u;
-    m_s = -t * m_c;
-    if (r) norm = ps * u;
-  } else {
-    const Scalar t = ps / qs;
-    Scalar u = numext::sqrt<Scalar>(Scalar(1) + numext::abs2(t));
-    if (qs < Scalar(0)) u = -u;
-    m_s = -Scalar(1) / u;
-    m_c = -t * m_s;
-    if (r) norm = qs * u;
-  }
-  if (r) {
-    // Restore subnormal r through the same FTZ/DAZ-safe path as the inputs.
-    Matrix<Scalar, 1, 1> result;
-    result[0] = norm;
-    Scaling::unscale_in_place(result, maximum, factors);
-    *r = result[0];
-  }
+EIGEN_DEVICE_FUNC constexpr void JacobiRotation<Scalar>::makeGivensScaled(const Scalar& p, const Scalar& q, Scalar* r) {
+  internal::noinline_invoke([&] {
+    using Scaling = internal::safe_scaling<Scalar>;
+    Matrix<Scalar, 2, 1> scaled;
+    scaled << p, q;
+    const Scalar maximum = Scaling::recover_flushed_max_coeff(scaled, scaled.cwiseAbs().maxCoeff());
+    const auto factors = Scaling::scale_to(scaled, scaled, maximum);
+    const Scalar ps = scaled.x(), qs = scaled.y();
+    Scalar norm{};
+    if (numext::abs(ps) > numext::abs(qs)) {
+      const Scalar t = qs / ps;
+      Scalar u = numext::sqrt<Scalar>(Scalar(1) + numext::abs2(t));
+      if (ps < Scalar(0)) u = -u;
+      m_c = Scalar(1) / u;
+      m_s = -t * m_c;
+      if (r) norm = ps * u;
+    } else {
+      const Scalar t = ps / qs;
+      Scalar u = numext::sqrt<Scalar>(Scalar(1) + numext::abs2(t));
+      if (qs < Scalar(0)) u = -u;
+      m_s = -Scalar(1) / u;
+      m_c = -t * m_s;
+      if (r) norm = qs * u;
+    }
+    if (r) {
+      // Restore subnormal r through the same FTZ/DAZ-safe path as the inputs.
+      Matrix<Scalar, 1, 1> result;
+      result[0] = norm;
+      Scaling::unscale_in_place(result, maximum, factors);
+      *r = result[0];
+    }
+  });
 }
 
 /****************************************************************************************
@@ -326,8 +329,8 @@ namespace internal {
  * \sa MatrixBase::applyOnTheLeft(), MatrixBase::applyOnTheRight()
  */
 template <typename VectorX, typename VectorY, typename OtherScalar>
-EIGEN_DEVICE_FUNC void apply_rotation_in_the_plane(DenseBase<VectorX>& xpr_x, DenseBase<VectorY>& xpr_y,
-                                                   const JacobiRotation<OtherScalar>& j);
+EIGEN_DEVICE_FUNC constexpr void apply_rotation_in_the_plane(DenseBase<VectorX>& xpr_x, DenseBase<VectorY>& xpr_y,
+                                                             const JacobiRotation<OtherScalar>& j);
 }  // namespace internal
 
 /** \jacobi_module
@@ -338,8 +341,8 @@ EIGEN_DEVICE_FUNC void apply_rotation_in_the_plane(DenseBase<VectorX>& xpr_x, De
  */
 template <typename Derived>
 template <typename OtherScalar>
-EIGEN_DEVICE_FUNC inline void MatrixBase<Derived>::applyOnTheLeft(Index p, Index q,
-                                                                  const JacobiRotation<OtherScalar>& j) {
+EIGEN_DEVICE_FUNC constexpr void MatrixBase<Derived>::applyOnTheLeft(Index p, Index q,
+                                                                     const JacobiRotation<OtherScalar>& j) {
   RowXpr x(this->row(p));
   RowXpr y(this->row(q));
   internal::apply_rotation_in_the_plane(x, y, j);
@@ -353,8 +356,8 @@ EIGEN_DEVICE_FUNC inline void MatrixBase<Derived>::applyOnTheLeft(Index p, Index
  */
 template <typename Derived>
 template <typename OtherScalar>
-EIGEN_DEVICE_FUNC inline void MatrixBase<Derived>::applyOnTheRight(Index p, Index q,
-                                                                   const JacobiRotation<OtherScalar>& j) {
+EIGEN_DEVICE_FUNC constexpr void MatrixBase<Derived>::applyOnTheRight(Index p, Index q,
+                                                                      const JacobiRotation<OtherScalar>& j) {
   ColXpr x(this->col(p));
   ColXpr y(this->col(q));
   internal::apply_rotation_in_the_plane(x, y, j.transpose());
@@ -364,15 +367,14 @@ namespace internal {
 
 template <typename Scalar, typename OtherScalar, int SizeAtCompileTime, int MinAlignment, bool Vectorizable>
 struct apply_rotation_in_the_plane_selector {
-  static EIGEN_DEVICE_FUNC inline void run(Scalar* x, Index incrx, Scalar* y, Index incry, Index size, OtherScalar c,
-                                           OtherScalar s) {
+  static EIGEN_DEVICE_FUNC constexpr void run(Scalar* x, Index incrx, Scalar* y, Index incry, Index size, OtherScalar c,
+                                              OtherScalar s) {
+    // Indexing, not advancing x and y past the last element, keeps every pointer within the arrays.
     for (Index i = 0; i < size; ++i) {
-      Scalar xi = *x;
-      Scalar yi = *y;
-      *x = c * xi + numext::conj(s) * yi;
-      *y = -s * xi + numext::conj(c) * yi;
-      x += incrx;
-      y += incry;
+      Scalar xi = x[i * incrx];
+      Scalar yi = y[i * incry];
+      x[i * incrx] = c * xi + numext::conj(s) * yi;
+      y[i * incry] = -s * xi + numext::conj(c) * yi;
     }
   }
 };
@@ -480,8 +482,8 @@ struct apply_rotation_in_the_plane_selector<Scalar, OtherScalar, SizeAtCompileTi
 };
 
 template <typename VectorX, typename VectorY, typename OtherScalar>
-EIGEN_DEVICE_FUNC void inline apply_rotation_in_the_plane(DenseBase<VectorX>& xpr_x, DenseBase<VectorY>& xpr_y,
-                                                          const JacobiRotation<OtherScalar>& j) {
+EIGEN_DEVICE_FUNC constexpr void apply_rotation_in_the_plane(DenseBase<VectorX>& xpr_x, DenseBase<VectorY>& xpr_y,
+                                                             const JacobiRotation<OtherScalar>& j) {
   using Scalar = typename VectorX::Scalar;
   constexpr bool Vectorizable = (int(evaluator<VectorX>::Flags) & int(evaluator<VectorY>::Flags) & PacketAccessBit) &&
                                 (int(packet_traits<Scalar>::size) == int(packet_traits<OtherScalar>::size));
@@ -499,13 +501,19 @@ EIGEN_DEVICE_FUNC void inline apply_rotation_in_the_plane(DenseBase<VectorX>& xp
   if (numext::is_exactly_one(c) && numext::is_exactly_zero(s)) return;
 
   constexpr int Alignment = (std::min)(int(evaluator<VectorX>::Alignment), int(evaluator<VectorY>::Alignment));
+  if (is_constant_evaluated()) {
+    apply_rotation_in_the_plane_selector<Scalar, OtherScalar, VectorX::SizeAtCompileTime, Alignment, false>::run(
+        x, incrx, y, incry, size, c, s);
+    return;
+  }
   apply_rotation_in_the_plane_selector<Scalar, OtherScalar, VectorX::SizeAtCompileTime, Alignment, Vectorizable>::run(
       x, incrx, y, incry, size, c, s);
 }
 
 template <typename MatrixType, typename RealScalar, typename Index>
-EIGEN_DONT_INLINE void real_2x2_jacobi_svd(const MatrixType& matrix, Index p, Index q,
-                                           JacobiRotation<RealScalar>* j_left, JacobiRotation<RealScalar>* j_right) {
+EIGEN_DONT_INLINE constexpr void real_2x2_jacobi_svd(const MatrixType& matrix, Index p, Index q,
+                                                     JacobiRotation<RealScalar>* j_left,
+                                                     JacobiRotation<RealScalar>* j_right) {
   // Extract 2x2 submatrix into scalars (avoids Matrix construction on stack).
   const RealScalar m00 = numext::real(matrix.coeff(p, p));
   const RealScalar m01 = numext::real(matrix.coeff(p, q));
@@ -516,7 +524,7 @@ EIGEN_DONT_INLINE void real_2x2_jacobi_svd(const MatrixType& matrix, Index p, In
   const RealScalar t = m00 + m11;
   const RealScalar d = m10 - m01;
 
-  RealScalar c1, s1;
+  RealScalar c1{}, s1{};
   if (numext::abs(d) < (std::numeric_limits<RealScalar>::min)()) {
     c1 = RealScalar(1);
     s1 = RealScalar(0);

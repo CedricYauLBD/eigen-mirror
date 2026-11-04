@@ -400,14 +400,15 @@ EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE void gemv_prepare_rhs(
 template <int StorageOrder, bool BlasCompatible>
 struct gemv_dense_selector<OnTheLeft, StorageOrder, BlasCompatible> {
   template <typename Lhs, typename Rhs, typename Dest>
-  static void run(const Lhs& lhs, const Rhs& rhs, Dest& dest, const typename Dest::Scalar& alpha) {
+  static constexpr void run(const Lhs& lhs, const Rhs& rhs, Dest& dest, const typename Dest::Scalar& alpha) {
     run_impl(lhs, rhs, dest, alpha,
              functor_is_commutative<scalar_product_op<typename Lhs::Scalar, typename Rhs::Scalar>>());
   }
 
  private:
   template <typename Lhs, typename Rhs, typename Dest>
-  static void run_impl(const Lhs& lhs, const Rhs& rhs, Dest& dest, const typename Dest::Scalar& alpha, true_type) {
+  static constexpr void run_impl(const Lhs& lhs, const Rhs& rhs, Dest& dest, const typename Dest::Scalar& alpha,
+                                 true_type) {
     Transpose<Dest> destT(dest);
     enum { OtherStorageOrder = StorageOrder == RowMajor ? ColMajor : RowMajor };
     gemv_dense_selector<OnTheRight, OtherStorageOrder, BlasCompatible>::run(rhs.transpose(), lhs.transpose(), destT,
@@ -415,7 +416,8 @@ struct gemv_dense_selector<OnTheLeft, StorageOrder, BlasCompatible> {
   }
 
   template <typename Lhs, typename Rhs, typename Dest>
-  static void run_impl(const Lhs& lhs, const Rhs& rhs, Dest& dest, const typename Dest::Scalar& alpha, false_type) {
+  static constexpr void run_impl(const Lhs& lhs, const Rhs& rhs, Dest& dest, const typename Dest::Scalar& alpha,
+                                 false_type) {
     if (numext::is_exactly_zero(alpha)) return;
     evaluator<Lhs> lhsEval(lhs);
     evaluator<Rhs> rhsEval(rhs);
@@ -467,7 +469,7 @@ struct gemv_single_column<true, ConjugateLhs, ConjugateRhs> {
 template <>
 struct gemv_dense_selector<OnTheRight, ColMajor, true> {
   template <typename Lhs, typename Rhs, typename Dest>
-  static inline void run(const Lhs& lhs, const Rhs& rhs, Dest& dest, const typename Dest::Scalar& alpha) {
+  static void run(const Lhs& lhs, const Rhs& rhs, Dest& dest, const typename Dest::Scalar& alpha) {
     using LhsScalar = typename Lhs::Scalar;
     using RhsScalar = typename Rhs::Scalar;
     using ResScalar = typename Dest::Scalar;
@@ -600,7 +602,7 @@ struct gemv_dense_selector<OnTheRight, RowMajor, true> {
 template <>
 struct gemv_dense_selector<OnTheRight, ColMajor, false> {
   template <typename Lhs, typename Rhs, typename Dest>
-  static void run(const Lhs& lhs, const Rhs& rhs, Dest& dest, const typename Dest::Scalar& alpha) {
+  static constexpr void run(const Lhs& lhs, const Rhs& rhs, Dest& dest, const typename Dest::Scalar& alpha) {
     EIGEN_STATIC_ASSERT((!nested_eval<Lhs, 1>::Evaluate),
                         EIGEN_INTERNAL_COMPILATION_ERROR_OR_YOU_MADE_A_PROGRAMMING_MISTAKE);
     // TODO: if rhs is large enough it might be beneficial to make sure that dest is sequentially stored in memory,
@@ -614,7 +616,7 @@ struct gemv_dense_selector<OnTheRight, ColMajor, false> {
 template <>
 struct gemv_dense_selector<OnTheRight, RowMajor, false> {
   template <typename Lhs, typename Rhs, typename Dest>
-  static void run(const Lhs& lhs, const Rhs& rhs, Dest& dest, const typename Dest::Scalar& alpha) {
+  static constexpr void run(const Lhs& lhs, const Rhs& rhs, Dest& dest, const typename Dest::Scalar& alpha) {
     EIGEN_STATIC_ASSERT((!nested_eval<Lhs, 1>::Evaluate),
                         EIGEN_INTERNAL_COMPILATION_ERROR_OR_YOU_MADE_A_PROGRAMMING_MISTAKE);
     typename nested_eval<Rhs, Lhs::RowsAtCompileTime>::type actual_rhs(rhs);
@@ -638,7 +640,7 @@ struct gemv_dense_selector<OnTheRight, RowMajor, false> {
  */
 template <typename Derived>
 template <typename OtherDerived>
-EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE const Product<Derived, OtherDerived> MatrixBase<Derived>::operator*(
+EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE constexpr const Product<Derived, OtherDerived> MatrixBase<Derived>::operator*(
     const MatrixBase<OtherDerived>& other) const {
   // A note regarding the function declaration: In MSVC, this function will sometimes
   // not be inlined since DenseStorage is an unwindable object for dynamic
@@ -679,7 +681,7 @@ EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE const Product<Derived, OtherDerived> Matri
  */
 template <typename Derived>
 template <typename OtherDerived>
-EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE const Product<Derived, OtherDerived, LazyProduct>
+EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE constexpr const Product<Derived, OtherDerived, LazyProduct>
 MatrixBase<Derived>::lazyProduct(const MatrixBase<OtherDerived>& other) const {
   enum {
     ProductIsValid = Derived::ColsAtCompileTime == Dynamic || OtherDerived::RowsAtCompileTime == Dynamic ||
