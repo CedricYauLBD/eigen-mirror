@@ -182,12 +182,12 @@ EIGEN_MAKE_CWISE_BINARY_OP(atan2, internal::scalar_atan2_op)
     return CwiseBinaryOp<internal::scalar_cmp_op<Scalar, typename OtherDerived::Scalar, internal::cmp_##COMPARATOR>, \
                          const Derived, const OtherDerived>(derived(), other.derived());                             \
   }                                                                                                                  \
-  using Cmp##COMPARATOR##ReturnType = CwiseBinaryOp<internal::scalar_cmp_op<Scalar, Scalar, internal::cmp_##COMPARATOR>, const Derived,          \
-                        const CwiseNullaryOp<internal::scalar_constant_op<Scalar>, PlainObject> >                    \
-;                                                                                   \
-  using RCmp##COMPARATOR##ReturnType = CwiseBinaryOp<internal::scalar_cmp_op<Scalar, Scalar, internal::cmp_##COMPARATOR>,                         \
-                        const CwiseNullaryOp<internal::scalar_constant_op<Scalar>, PlainObject>, const Derived>      \
-;                                                                                  \
+  using Cmp##COMPARATOR##ReturnType =                                                                                \
+      CwiseBinaryOp<internal::scalar_cmp_op<Scalar, Scalar, internal::cmp_##COMPARATOR>, const Derived,              \
+                    const CwiseNullaryOp<internal::scalar_constant_op<Scalar>, PlainObject> >;                       \
+  using RCmp##COMPARATOR##ReturnType =                                                                               \
+      CwiseBinaryOp<internal::scalar_cmp_op<Scalar, Scalar, internal::cmp_##COMPARATOR>,                             \
+                    const CwiseNullaryOp<internal::scalar_constant_op<Scalar>, PlainObject>, const Derived>;         \
   EIGEN_DEVICE_FUNC constexpr EIGEN_STRONG_INLINE const Cmp##COMPARATOR##ReturnType OP(const Scalar &s) const {      \
     return this->OP(Derived::PlainObject::Constant(rows(), cols(), s));                                              \
   }                                                                                                                  \

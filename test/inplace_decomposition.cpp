@@ -412,7 +412,7 @@ EIGEN_DECLARE_TEST(inplace_decomposition) {
   CALL_SUBTEST_14((inplace_qz_inner_stride<double, RealQZ, RowMajor>()));
   CALL_SUBTEST_14((inplace_qz_inner_stride<std::complex<double>, ComplexQZ, ColMajor>()));
   CALL_SUBTEST_14((inplace_qz_inner_stride<std::complex<double>, ComplexQZ, RowMajor>()));
-  EIGEN_UNUSED using Matrix43d = Matrix<double, 4, 3>;
+  using Matrix43d EIGEN_UNUSED = Matrix<double, 4, 3>;
   for (int i = 0; i < g_repeat; i++) {
     EIGEN_UNUSED const Index size = internal::random<Index>(2, EIGEN_TEST_MAX_SIZE / 4);
 
