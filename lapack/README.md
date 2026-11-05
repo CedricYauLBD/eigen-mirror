@@ -101,32 +101,47 @@ every combination of `SIDE`, `TRANS`, `DIRECT` and `STOREV`.
 
 ## Tests
 
-`lapack_routines`, built with Eigen's other tests (`EIGEN_BUILD_TESTING`), checks Eigen's routines
-directly from C++ and needs no Fortran compiler.
-
 The optional numerical tests (`EIGEN_ENABLE_LAPACK_TESTS`) require a Fortran
-compiler and the LAPACK test data. They use unmodified LAPACK 3.12.1 sources,
-downloaded with a pinned SHA-256 hash. They exercise Eigen's BLAS/LAPACK
-implementations, using reference LAPACK for the remaining routines. The
-reference routines are compiled into `eigen_lapack_static`, so in a build with
-the tests enabled that library is no longer a subset of LAPACK. All test cases remain enabled;
-the summary reports known numerical and test-driver failures.
+compiler. CMake downloads the unmodified reference LAPACK release that
+`CMakeLists.txt` pins by SHA-256 hash.
+
+The tests run reference LAPACK's own drivers on every input that reference
+LAPACK's `TESTING/CMakeLists.txt` registers. They also run
+`testing/[sdcz]test_large.in`, which repeat the linear-equation paths that reach
+Eigen's routines at sizes above Eigen's blocking thresholds; the reference inputs
+stop at N = 50. The drivers link Eigen's BLAS and LAPACK libraries. Each routine
+that `eigen_lapack.def` does not export comes from the reference sources, built
+into the test-only `eigen_lapack_reference` library, which is never installed.
+`LAPACK_Test_Symbols` checks the split: Eigen defines every routine the `.def`
+file lists, defines no Fortran-callable routine it omits, and shares none with
+the reference library. On ELF platforms it also checks that the shared library
+exports every listed routine. `buildtests_lapack` builds the drivers, and
+`buildtests_blas` the Fortran BLAS tests under `blas/testing`.
 
 The tests and their summary run through CMake/CTest without Python.
-`LAPACK_Test_Summary` waits for the registered numerical tests and combines
-only their expected output files into `TESTING/testing_results.txt` in the
-LAPACK build directory. It fails in any of these cases:
+`LAPACK_Test_Summary` waits for the drivers and combines their output files into
+`TESTING/testing_results.txt` in the LAPACK build directory. For each output it
+counts numerical errors and other errors (illegal-argument, error-exit and INFO
+diagnostics). It fails when an output reports more of either than
+`testing_allowed_failures.txt` allows, which is none for an output the file does
+not list. It also fails when an expected output is missing, when no numerical
+tests were analyzed, and when an entry of the file names no output.
+`TESTING/testing_failures.txt` records the observed counts in the file's format.
+Selecting `LAPACK_Test_Summary` alone also runs its drivers through a CTest
+fixture. If a driver fails to execute successfully, CTest skips the summary.
 
-- The output reports numerical errors.
-- The output reports illegal-argument or `INFO` diagnostics.
-- An expected output is missing.
-- No numerical tests were analyzed.
+Balancing tests contribute their example counts and fail on nonzero INFO/ILO
+error counts or non-finite maximum errors. Their finite maximum errors remain
+in the combined report; these drivers do not specify a pass/fail threshold.
 
-Selecting `LAPACK_Test_Summary` alone also runs its numerical tests through a
-CTest fixture. If a numerical driver fails to execute successfully, CTest skips
-the summary.
+The allowed counts are those of the `test:linux:lapack` CI job. Other compilers,
+flags and architectures round differently and fail a different set, mostly the
+eigenvalue tests that compare results computed with and without eigenvectors
+bit for bit ([#3220](https://gitlab.com/libeigen/eigen/-/work_items/3220)). To
+check such a configuration, set `EIGEN_LAPACK_TEST_ALLOWED_FAILURES` to a file of
+its own, or to an empty string to allow no failures. A change that alters the
+job's counts on purpose updates the file's entries from the job's
+`testing_failures.txt` artifact.
 
-Balancing tests contribute their example counts. They fail on nonzero
-`INFO`/`ILO` error counts or on non-finite maximum errors. Their finite maximum
-errors remain in the combined report; these drivers do not specify a pass/fail
-threshold.
+`lapack_routines`, built with Eigen's other tests (`EIGEN_BUILD_TESTING`), checks Eigen's routines
+directly from C++ and needs no Fortran compiler. `buildtests_lapack` builds it as well.

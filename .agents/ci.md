@@ -70,6 +70,14 @@ substitute on a merge request: it needs the branch in `libeigen/eigen` and runs 
 are `allow_failure: true` while their builds cannot finish within the 3 h job limit. A red NVHPC job is therefore only
 a warning. When you report on an `nvhpc-tests` run, read the failing tests in the job logs, not the pipeline status.
 
+The job `test:linux:lapack` also sits outside the tiers. It runs reference LAPACK's test drivers and the Fortran BLAS
+tests against Eigen's BLAS and LAPACK libraries, and it is the only job with a Fortran compiler. It runs on schedules,
+web pipelines and default-branch pushes. It also runs on merge requests that change `lapack/`, `blas/`,
+`Eigen/src/Core/products`, the decompositions and triangular inverse the libraries wrap, or the job itself. When a merge request changes
+numerics that reach those libraries from another path, such as a packet kernel, recommend the `lapack-tests` label.
+The job fails on any failure beyond `lapack/testing_allowed_failures.txt`; [`lapack/README.md`](../lapack/README.md)
+records how to update that file.
+
 The affected tier exists because the smoke list is only a sample. It is broad but shallow: for a change confined to one
 module, it runs only the parts of the related tests that the list names, usually one per test. Use `affected-tests`
 for depth, then choose platform labels for the compilers and backends the change can affect. For a shared-header
