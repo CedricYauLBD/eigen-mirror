@@ -8,6 +8,7 @@ New features:
 - Generic clang vector extension backend [!2051]
 - `ArrayBase::logicalShiftRight<N>()`, a zero-filling right shift, alongside `arithmeticShiftRight<N>()` and `logicalShiftLeft<N>()` as the spelled-out names for the existing shift operators [!2816]
 - Support building Eigen's in-tree BLAS library with 64-bit (`ILP64`) integers (`eigen_blas_ilp64` and `eigen_blas_ilp64_static`, controlled by `EIGEN_BUILD_BLAS_ILP64`)
+- Eigen's in-tree LAPACK library adds `SSYTRF`/`DSYTRF`, `CHETRF`/`ZHETRF` and their `xSYTRS`/`xHETRS` solves, computed by `BunchKaufman`, and `xPSTRF`, computed by `LDLT`'s complete diagonal pivoting, which stops at the numerical rank
 - `PreconditionSquareMatrix` option, which applies JacobiSVD's QR preconditioners to square matrices. BDCSVD forwards this option to JacobiSVD for matrices smaller than the switch size [!3212]
 - `DenseBase::replicate` and `VectorwiseOp::replicate` accept `Eigen::fix<N>` factors [!3262, !3282]
 - `SelfAdjointView::applyPermutation()` and `SelfAdjointView::applyTransposition()`, which replace the viewed matrix `S` by `P S P^T` in place, reading and writing only the stored triangle [#3174, !3395]
