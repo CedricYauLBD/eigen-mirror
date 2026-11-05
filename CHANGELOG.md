@@ -8,6 +8,7 @@ New features:
 - Generic clang vector extension backend [!2051]
 - `ArrayBase::logicalShiftRight<N>()`, a zero-filling right shift, alongside `arithmeticShiftRight<N>()` and `logicalShiftLeft<N>()` as the spelled-out names for the existing shift operators [!2816]
 - Support building Eigen's in-tree BLAS library with 64-bit (`ILP64`) integers (`eigen_blas_ilp64` and `eigen_blas_ilp64_static`, controlled by `EIGEN_BUILD_BLAS_ILP64`)
+- Eigen's in-tree LAPACK library adds `SSYTRF`/`DSYTRF`, `CHETRF`/`ZHETRF` and their `xSYTRS`/`xHETRS` solves, computed by `BunchKaufman`, and `xPSTRF`, computed by `LDLT`'s complete diagonal pivoting, which stops at the numerical rank
 - `PreconditionSquareMatrix` option, which applies JacobiSVD's QR preconditioners to square matrices. BDCSVD forwards this option to JacobiSVD for matrices smaller than the switch size [!3212]
 - `DenseBase::replicate` and `VectorwiseOp::replicate` accept `Eigen::fix<N>` factors [!3262, !3282]
 - `BunchKaufman`, the Bunch-Kaufman factorization `P A P^T = L D L^*` of a real symmetric or complex Hermitian matrix, with `D` block diagonal in 1x1 and 2x2 blocks. Unlike `LLT` and `LDLT` it is backward stable on indefinite matrices, the dense analog of LAPACK's `?sytrf` and `?hetrf`. It solves, estimates `rcond()`, computes the determinant, reveals the inertia through `isPositive()` and `isNegative()`, and supports in-place decomposition. Also available as `MatrixBase::bunchKaufman()` and `SelfAdjointView::bunchKaufman()` [!2612, !2991]
