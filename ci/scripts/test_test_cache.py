@@ -268,6 +268,19 @@ def test_needed_libraries(builddir):
               "DT_NEEDED must be read from a %d-bit %s-endian ELF file, got %s"
               % (64 if is64 else 32, "big" if big_endian else "little", test_cache.needed_libraries(path)))
 
+    # Linker output has the layouts write_elf does not: several PT_LOAD
+    # segments, .dynstr outside the first.  The interpreter running this
+    # links its C library: libc.so.6 (glibc) or libc.musl-<arch>.so.1 (musl,
+    # the lint image).  Not ELF, as on macOS: nothing to check.
+    interpreter = os.path.realpath(sys.executable)
+    with open(interpreter, "rb") as handle:
+        is_elf = handle.read(4) == b"\x7fELF"
+    if is_elf:
+        clear_caches()
+        names = test_cache.needed_libraries(interpreter)
+        check(any(name.startswith("libc.") for name in names),
+              "DT_NEEDED of %s must name its C library, got %s" % (interpreter, names))
+
     write_elf(path)
     clear_caches()
     check(test_cache.needed_libraries(path) == (), "an ELF file without PT_DYNAMIC loads no libraries")
