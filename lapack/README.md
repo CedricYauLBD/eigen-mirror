@@ -101,6 +101,9 @@ every combination of `SIDE`, `TRANS`, `DIRECT` and `STOREV`.
 
 ## Tests
 
+`lapack_routines`, built with Eigen's other tests (`EIGEN_BUILD_TESTING`), checks Eigen's routines
+directly from C++ and needs no Fortran compiler.
+
 The optional numerical tests (`EIGEN_ENABLE_LAPACK_TESTS`) require a Fortran
 compiler and the LAPACK test data. They use unmodified LAPACK 3.12.1 sources,
 downloaded with a pinned SHA-256 hash. They exercise Eigen's BLAS/LAPACK
