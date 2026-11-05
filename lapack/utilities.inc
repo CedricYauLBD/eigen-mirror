@@ -14,7 +14,7 @@
 
 // Compute sqrt(x*x + y*y) taking care not to cause unnecessary overflow.
 extern "C" EIGEN_LAPACK_API Scalar EIGEN_BLAS_FUNC_NAME(lapy2)(Scalar* x, Scalar* y) {
-  return Eigen::numext::hypot(*x, *y);
+  return Eigen::internal::xlapy2(*x, *y);
 }
 
 // Compute sqrt(x*x + y*y + z*z) taking care not to cause unnecessary overflow.
@@ -36,7 +36,7 @@ extern "C" EIGEN_LAPACK_API Scalar EIGEN_BLAS_FUNC_NAME(lamc3)(Scalar* a, Scalar
 }
 
 // Performs complex division in real arithmetic, avoiding unnecessary overflow.
-// Consistent with LAPACK SLADIV / DLADIV (Smith's algorithm).
+// Consistent with LAPACK SLADIV / DLADIV.
 EIGEN_LAPACK_FUNC(ladiv)(const Scalar* a, const Scalar* b, const Scalar* c, const Scalar* d, Scalar* p, Scalar* q) {
   const std::complex<Scalar> res = Eigen::internal::xladiv(*a, *b, *c, *d);
   *p = Eigen::numext::real(res);
@@ -75,7 +75,7 @@ EIGEN_LAPACK_FUNC(lacgv)(int* n, RealScalar* px, int* incx) {
 }
 
 // Performs complex division avoiding unnecessary overflow.
-// Consistent with LAPACK CLADIV / ZLADIV (Smith's algorithm).
+// Consistent with LAPACK CLADIV / ZLADIV.
 // Note on calling convention: Returning a 2-element struct { RealScalar r, i; }
 // by value adheres to the SysV AMD64 ABI (gfortran on Linux/x86_64), consistent
 // with the return-by-value convention used for cdotc/zdotc in blas/complexdots.cpp.

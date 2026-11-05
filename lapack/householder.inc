@@ -52,12 +52,13 @@ EIGEN_LAPACK_FUNC(larfg)(int* n, RealScalar* palpha, RealScalar* px, int* incx, 
     RealScalar rsafmn = RealScalar(1) / safmin;
     Eigen::Map<Eigen::Matrix<Scalar, Eigen::Dynamic, 1>, 0, Eigen::InnerStride<Eigen::Dynamic> > xvec(
         x, m, Eigen::InnerStride<Eigen::Dynamic>(*incx));
+    // At most 20 passes, as in reference xLARFG.
     do {
       ++knt;
       xvec *= rsafmn;
       beta *= rsafmn;
       alphar *= rsafmn;
-    } while (Eigen::numext::abs(beta) < safmin);
+    } while (Eigen::numext::abs(beta) < safmin && knt < 20);
 
     xnorm = xvec.stableNorm();
     beta = -Eigen::numext::copysign(Eigen::internal::xlapy2(alphar, xnorm), alphar);
@@ -90,6 +91,7 @@ EIGEN_LAPACK_FUNC(larfg)(int* n, RealScalar* palpha, RealScalar* px, int* incx, 
   int knt = 0;
 
   if (Eigen::numext::abs(beta) < safmin) {
+    // At most 20 passes, as in reference xLARFG.
     do {
       ++knt;
       if (m > 0) {
@@ -100,7 +102,7 @@ EIGEN_LAPACK_FUNC(larfg)(int* n, RealScalar* palpha, RealScalar* px, int* incx, 
       beta *= rsafmn;
       alphi *= rsafmn;
       alphr *= rsafmn;
-    } while (Eigen::numext::abs(beta) < safmin);
+    } while (Eigen::numext::abs(beta) < safmin && knt < 20);
 
     if (m > 0) {
       Eigen::Map<Eigen::Matrix<Scalar, Eigen::Dynamic, 1>, 0, Eigen::InnerStride<Eigen::Dynamic> > xvec(
@@ -235,7 +237,7 @@ EIGEN_LAPACK_FUNC(larft)
         int lastv = i;
         if (colwise) {
           for (lastv = *n - 1; lastv >= i + 1; --lastv) {
-            if (v[lastv + i * (*ldv)] != Scalar(0)) break;
+            if (v[lastv + i * Eigen::Index(*ldv)] != Scalar(0)) break;
           }
           int j = Eigen::numext::mini(lastv, prevlastv - 1);
           if (i > 0) {
@@ -251,29 +253,30 @@ EIGEN_LAPACK_FUNC(larft)
               Eigen::Map<const Eigen::Matrix<Scalar, Eigen::Dynamic, Eigen::Dynamic, Eigen::ColMajor>, 0,
                          Eigen::OuterStride<> >
                   V_prev_sub(&v[i + 1], len_sub, i, Eigen::OuterStride<>(*ldv));
-              Eigen::Map<const Eigen::Matrix<Scalar, Eigen::Dynamic, 1> > V_cur_sub(&v[(i + 1) + i * (*ldv)], len_sub);
+              Eigen::Map<const Eigen::Matrix<Scalar, Eigen::Dynamic, 1> > V_cur_sub(
+                  &v[(i + 1) + i * Eigen::Index(*ldv)], len_sub);
               T_mat.col(i).head(i).noalias() += -tau[i] * (V_prev_sub.adjoint() * V_cur_sub);
             }
           }
         } else {
           for (lastv = *n - 1; lastv >= i + 1; --lastv) {
-            if (v[i + lastv * (*ldv)] != Scalar(0)) break;
+            if (v[i + lastv * Eigen::Index(*ldv)] != Scalar(0)) break;
           }
           int j = Eigen::numext::mini(lastv, prevlastv - 1);
           if (i > 0) {
             // Reflectors v(0..i-1, i) have implicit unit diagonal at col i.
             // Split dot product: V_prev(:, i) * 1 + V_prev(:, i+1:j) * V_cur(i+1:j)^*
             // avoiding mutation of v[i + i*ldv].
-            Eigen::Map<const Eigen::Matrix<Scalar, Eigen::Dynamic, 1> > V_prev_col(&v[i * (*ldv)], i);
+            Eigen::Map<const Eigen::Matrix<Scalar, Eigen::Dynamic, 1> > V_prev_col(&v[i * Eigen::Index(*ldv)], i);
             T_mat.col(i).head(i).noalias() = -tau[i] * V_prev_col;
 
             if (j > i) {
               int len_sub = j - i;
               Eigen::Map<const Eigen::Matrix<Scalar, Eigen::Dynamic, Eigen::Dynamic, Eigen::ColMajor>, 0,
                          Eigen::OuterStride<> >
-                  V_prev_sub(&v[(i + 1) * (*ldv)], i, len_sub, Eigen::OuterStride<>(*ldv));
+                  V_prev_sub(&v[(i + 1) * Eigen::Index(*ldv)], i, len_sub, Eigen::OuterStride<>(*ldv));
               Eigen::Map<const Eigen::Matrix<Scalar, Eigen::Dynamic, 1>, 0, Eigen::InnerStride<Eigen::Dynamic> >
-                  V_cur_sub(&v[i + (i + 1) * (*ldv)], len_sub, Eigen::InnerStride<Eigen::Dynamic>(*ldv));
+                  V_cur_sub(&v[i + (i + 1) * Eigen::Index(*ldv)], len_sub, Eigen::InnerStride<Eigen::Dynamic>(*ldv));
               T_mat.col(i).head(i).noalias() += -tau[i] * (V_prev_sub * V_cur_sub.conjugate());
             }
           }
@@ -311,7 +314,7 @@ EIGEN_LAPACK_FUNC(larft)
           if (colwise) {
             int diag_row = *n - *k + i;
             for (lastv = 0; lastv < i; ++lastv) {
-              if (v[lastv + i * (*ldv)] != Scalar(0)) break;
+              if (v[lastv + i * Eigen::Index(*ldv)] != Scalar(0)) break;
             }
             int j = Eigen::numext::maxi(lastv, prevlastv);
 
@@ -319,38 +322,40 @@ EIGEN_LAPACK_FUNC(larft)
             // Split dot product: V_rest(diag_row, :)^H * 1 + V_rest(j:diag_row-1, :)^H * V_cur(j:diag_row-1)
             // avoiding mutation of v[diag_row + i*ldv].
             Eigen::Map<const Eigen::Matrix<Scalar, 1, Eigen::Dynamic>, 0, Eigen::InnerStride<Eigen::Dynamic> >
-                V_rest_row(&v[diag_row + (i + 1) * (*ldv)], num_vecs, Eigen::InnerStride<Eigen::Dynamic>(*ldv));
+                V_rest_row(&v[diag_row + (i + 1) * Eigen::Index(*ldv)], num_vecs,
+                           Eigen::InnerStride<Eigen::Dynamic>(*ldv));
             T_mat.col(i).tail(num_vecs).noalias() = -tau[i] * V_rest_row.conjugate().transpose();
 
             if (diag_row > j) {
               int len_sub = diag_row - j;
               Eigen::Map<const Eigen::Matrix<Scalar, Eigen::Dynamic, Eigen::Dynamic, Eigen::ColMajor>, 0,
                          Eigen::OuterStride<> >
-                  V_rest_sub(&v[j + (i + 1) * (*ldv)], len_sub, num_vecs, Eigen::OuterStride<>(*ldv));
-              Eigen::Map<const Eigen::Matrix<Scalar, Eigen::Dynamic, 1> > V_cur_sub(&v[j + i * (*ldv)], len_sub);
+                  V_rest_sub(&v[j + (i + 1) * Eigen::Index(*ldv)], len_sub, num_vecs, Eigen::OuterStride<>(*ldv));
+              Eigen::Map<const Eigen::Matrix<Scalar, Eigen::Dynamic, 1> > V_cur_sub(&v[j + i * Eigen::Index(*ldv)],
+                                                                                    len_sub);
               T_mat.col(i).tail(num_vecs).noalias() += -tau[i] * (V_rest_sub.adjoint() * V_cur_sub);
             }
           } else {
             int diag_col = *n - *k + i;
             for (lastv = 0; lastv < i; ++lastv) {
-              if (v[i + lastv * (*ldv)] != Scalar(0)) break;
+              if (v[i + lastv * Eigen::Index(*ldv)] != Scalar(0)) break;
             }
             int j = Eigen::numext::maxi(lastv, prevlastv);
 
             // Reflectors v(i+1..k-1, j..diag_col) have implicit unit diagonal at col diag_col.
             // Split dot product: V_rest(:, diag_col) * 1 + V_rest(:, j:diag_col-1) * V_cur(j:diag_col-1)^*
             // avoiding mutation of v[i + diag_col*ldv].
-            Eigen::Map<const Eigen::Matrix<Scalar, Eigen::Dynamic, 1> > V_rest_col(&v[(i + 1) + diag_col * (*ldv)],
-                                                                                   num_vecs);
+            Eigen::Map<const Eigen::Matrix<Scalar, Eigen::Dynamic, 1> > V_rest_col(
+                &v[(i + 1) + diag_col * Eigen::Index(*ldv)], num_vecs);
             T_mat.col(i).tail(num_vecs).noalias() = -tau[i] * V_rest_col;
 
             if (diag_col > j) {
               int len_sub = diag_col - j;
               Eigen::Map<const Eigen::Matrix<Scalar, Eigen::Dynamic, Eigen::Dynamic, Eigen::ColMajor>, 0,
                          Eigen::OuterStride<> >
-                  V_rest_sub(&v[(i + 1) + j * (*ldv)], num_vecs, len_sub, Eigen::OuterStride<>(*ldv));
+                  V_rest_sub(&v[(i + 1) + j * Eigen::Index(*ldv)], num_vecs, len_sub, Eigen::OuterStride<>(*ldv));
               Eigen::Map<const Eigen::Matrix<Scalar, Eigen::Dynamic, 1>, 0, Eigen::InnerStride<Eigen::Dynamic> >
-                  V_cur_sub(&v[i + j * (*ldv)], len_sub, Eigen::InnerStride<Eigen::Dynamic>(*ldv));
+                  V_cur_sub(&v[i + j * Eigen::Index(*ldv)], len_sub, Eigen::InnerStride<Eigen::Dynamic>(*ldv));
               T_mat.col(i).tail(num_vecs).noalias() += -tau[i] * (V_rest_sub * V_cur_sub.conjugate());
             }
           }
@@ -525,7 +530,7 @@ EIGEN_LAPACK_FUNC(larfb)
         W.noalias() = C1 * V1.template triangularView<Eigen::UnitLower>();
         if (lastv > *k) {
           Eigen::Map<Eigen::Matrix<Scalar, Eigen::Dynamic, Eigen::Dynamic, Eigen::ColMajor>, 0, Eigen::OuterStride<> >
-              C2(&c[*k * (*ldc)], lastc, lastv - *k, Eigen::OuterStride<>(*ldc));
+              C2(&c[*k * Eigen::Index(*ldc)], lastc, lastv - *k, Eigen::OuterStride<>(*ldc));
           Eigen::Map<const Eigen::Matrix<Scalar, Eigen::Dynamic, Eigen::Dynamic, Eigen::ColMajor>, 0,
                      Eigen::OuterStride<> >
               V2(&v[*k], lastv - *k, *k, Eigen::OuterStride<>(*ldv));
@@ -540,7 +545,7 @@ EIGEN_LAPACK_FUNC(larfb)
 
         if (lastv > *k) {
           Eigen::Map<Eigen::Matrix<Scalar, Eigen::Dynamic, Eigen::Dynamic, Eigen::ColMajor>, 0, Eigen::OuterStride<> >
-              C2(&c[*k * (*ldc)], lastc, lastv - *k, Eigen::OuterStride<>(*ldc));
+              C2(&c[*k * Eigen::Index(*ldc)], lastc, lastv - *k, Eigen::OuterStride<>(*ldc));
           Eigen::Map<const Eigen::Matrix<Scalar, Eigen::Dynamic, Eigen::Dynamic, Eigen::ColMajor>, 0,
                      Eigen::OuterStride<> >
               V2(&v[*k], lastv - *k, *k, Eigen::OuterStride<>(*ldv));
@@ -552,8 +557,10 @@ EIGEN_LAPACK_FUNC(larfb)
       }
     } else {
       // colwise && !forward
+      // The unit triangle of V lies in its last k rows, whose implicit unit diagonal the caller need not store, so
+      // trimming V to its last nonzero row would misplace the triangle. Reference LAPACK does not trim V either.
       if (applyleft) {
-        lastv = Eigen::numext::maxi(*k, Eigen::internal::ilaxlr(*m, *k, v, *ldv));
+        lastv = *m;
         lastc = Eigen::internal::ilaxlc(lastv, *n, c, *ldc);
         if (lastc == 0) return;
 
@@ -594,14 +601,14 @@ EIGEN_LAPACK_FUNC(larfb)
         C2.noalias() -= W.adjoint();
 
       } else {
-        lastv = Eigen::numext::maxi(*k, Eigen::internal::ilaxlr(*n, *k, v, *ldv));
+        lastv = *n;
         lastc = Eigen::internal::ilaxlr(*m, lastv, c, *ldc);
         if (lastc == 0) return;
 
         Eigen::Map<Eigen::Matrix<Scalar, Eigen::Dynamic, Eigen::Dynamic, Eigen::ColMajor>, 0, Eigen::OuterStride<> > W(
             work, lastc, *k, Eigen::OuterStride<>(*ldwork));
         Eigen::Map<Eigen::Matrix<Scalar, Eigen::Dynamic, Eigen::Dynamic, Eigen::ColMajor>, 0, Eigen::OuterStride<> > C2(
-            &c[(lastv - *k) * (*ldc)], lastc, *k, Eigen::OuterStride<>(*ldc));
+            &c[(lastv - *k) * Eigen::Index(*ldc)], lastc, *k, Eigen::OuterStride<>(*ldc));
         Eigen::Map<const Eigen::Matrix<Scalar, Eigen::Dynamic, Eigen::Dynamic, Eigen::ColMajor>, 0,
                    Eigen::OuterStride<> >
             V2(&v[lastv - *k], *k, *k, Eigen::OuterStride<>(*ldv));
@@ -657,7 +664,7 @@ EIGEN_LAPACK_FUNC(larfb)
               C2(&c[*k], lastv - *k, lastc, Eigen::OuterStride<>(*ldc));
           Eigen::Map<const Eigen::Matrix<Scalar, Eigen::Dynamic, Eigen::Dynamic, Eigen::ColMajor>, 0,
                      Eigen::OuterStride<> >
-              V2(&v[*k * (*ldv)], *k, lastv - *k, Eigen::OuterStride<>(*ldv));
+              V2(&v[*k * Eigen::Index(*ldv)], *k, lastv - *k, Eigen::OuterStride<>(*ldv));
           W.noalias() += C2.adjoint() * V2.adjoint();
         }
 
@@ -672,7 +679,7 @@ EIGEN_LAPACK_FUNC(larfb)
               C2(&c[*k], lastv - *k, lastc, Eigen::OuterStride<>(*ldc));
           Eigen::Map<const Eigen::Matrix<Scalar, Eigen::Dynamic, Eigen::Dynamic, Eigen::ColMajor>, 0,
                      Eigen::OuterStride<> >
-              V2(&v[*k * (*ldv)], *k, lastv - *k, Eigen::OuterStride<>(*ldv));
+              V2(&v[*k * Eigen::Index(*ldv)], *k, lastv - *k, Eigen::OuterStride<>(*ldv));
           C2.noalias() -= V2.adjoint() * W.adjoint();
         }
 
@@ -695,10 +702,10 @@ EIGEN_LAPACK_FUNC(larfb)
         W.noalias() = C1 * V1.template triangularView<Eigen::UnitUpper>().adjoint();
         if (lastv > *k) {
           Eigen::Map<Eigen::Matrix<Scalar, Eigen::Dynamic, Eigen::Dynamic, Eigen::ColMajor>, 0, Eigen::OuterStride<> >
-              C2(&c[*k * (*ldc)], lastc, lastv - *k, Eigen::OuterStride<>(*ldc));
+              C2(&c[*k * Eigen::Index(*ldc)], lastc, lastv - *k, Eigen::OuterStride<>(*ldc));
           Eigen::Map<const Eigen::Matrix<Scalar, Eigen::Dynamic, Eigen::Dynamic, Eigen::ColMajor>, 0,
                      Eigen::OuterStride<> >
-              V2(&v[*k * (*ldv)], *k, lastv - *k, Eigen::OuterStride<>(*ldv));
+              V2(&v[*k * Eigen::Index(*ldv)], *k, lastv - *k, Eigen::OuterStride<>(*ldv));
           W.noalias() += C2 * V2.adjoint();
         }
 
@@ -710,10 +717,10 @@ EIGEN_LAPACK_FUNC(larfb)
 
         if (lastv > *k) {
           Eigen::Map<Eigen::Matrix<Scalar, Eigen::Dynamic, Eigen::Dynamic, Eigen::ColMajor>, 0, Eigen::OuterStride<> >
-              C2(&c[*k * (*ldc)], lastc, lastv - *k, Eigen::OuterStride<>(*ldc));
+              C2(&c[*k * Eigen::Index(*ldc)], lastc, lastv - *k, Eigen::OuterStride<>(*ldc));
           Eigen::Map<const Eigen::Matrix<Scalar, Eigen::Dynamic, Eigen::Dynamic, Eigen::ColMajor>, 0,
                      Eigen::OuterStride<> >
-              V2(&v[*k * (*ldv)], *k, lastv - *k, Eigen::OuterStride<>(*ldv));
+              V2(&v[*k * Eigen::Index(*ldv)], *k, lastv - *k, Eigen::OuterStride<>(*ldv));
           C2.noalias() -= W * V2;
         }
 
@@ -722,8 +729,9 @@ EIGEN_LAPACK_FUNC(larfb)
       }
     } else {
       // storev == 'R' && !forward
+      // The unit triangle of V lies in its last k columns; see the column-wise backward case.
       if (applyleft) {
-        lastv = Eigen::numext::maxi(*k, Eigen::internal::ilaxlc(*k, *m, v, *ldv));
+        lastv = *m;
         lastc = Eigen::internal::ilaxlc(lastv, *n, c, *ldc);
         if (lastc == 0) return;
 
@@ -733,7 +741,7 @@ EIGEN_LAPACK_FUNC(larfb)
             &c[lastv - *k], *k, lastc, Eigen::OuterStride<>(*ldc));
         Eigen::Map<const Eigen::Matrix<Scalar, Eigen::Dynamic, Eigen::Dynamic, Eigen::ColMajor>, 0,
                    Eigen::OuterStride<> >
-            V2(&v[(lastv - *k) * (*ldv)], *k, *k, Eigen::OuterStride<>(*ldv));
+            V2(&v[(lastv - *k) * Eigen::Index(*ldv)], *k, *k, Eigen::OuterStride<>(*ldv));
 
         W.noalias() = C2.adjoint() * V2.template triangularView<Eigen::UnitLower>().adjoint();
         if (lastv > *k) {
@@ -764,17 +772,17 @@ EIGEN_LAPACK_FUNC(larfb)
         C2.noalias() -= W.adjoint();
 
       } else {
-        lastv = Eigen::numext::maxi(*k, Eigen::internal::ilaxlc(*k, *n, v, *ldv));
+        lastv = *n;
         lastc = Eigen::internal::ilaxlr(*m, lastv, c, *ldc);
         if (lastc == 0) return;
 
         Eigen::Map<Eigen::Matrix<Scalar, Eigen::Dynamic, Eigen::Dynamic, Eigen::ColMajor>, 0, Eigen::OuterStride<> > W(
             work, lastc, *k, Eigen::OuterStride<>(*ldwork));
         Eigen::Map<Eigen::Matrix<Scalar, Eigen::Dynamic, Eigen::Dynamic, Eigen::ColMajor>, 0, Eigen::OuterStride<> > C2(
-            &c[(lastv - *k) * (*ldc)], lastc, *k, Eigen::OuterStride<>(*ldc));
+            &c[(lastv - *k) * Eigen::Index(*ldc)], lastc, *k, Eigen::OuterStride<>(*ldc));
         Eigen::Map<const Eigen::Matrix<Scalar, Eigen::Dynamic, Eigen::Dynamic, Eigen::ColMajor>, 0,
                    Eigen::OuterStride<> >
-            V2(&v[(lastv - *k) * (*ldv)], *k, *k, Eigen::OuterStride<>(*ldv));
+            V2(&v[(lastv - *k) * Eigen::Index(*ldv)], *k, *k, Eigen::OuterStride<>(*ldv));
 
         W.noalias() = C2 * V2.template triangularView<Eigen::UnitLower>().adjoint();
         if (lastv > *k) {

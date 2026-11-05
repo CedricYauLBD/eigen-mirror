@@ -33,7 +33,18 @@ EIGEN_LAPACK_FUNC(potrf)(const char *uplo, int *n, RealScalar *pa, int *lda, int
   else
     ret = int(Eigen::internal::llt_inplace<Scalar, Eigen::Lower>::blocked(A));
 
-  if (ret >= 0) *info = ret + 1;
+  if (ret >= 0) {
+    *info = ret + 1;
+  } else {
+    // The kernel stops only at a pivot <= 0; xPOTRF also stops at a NaN pivot. A NaN pivot makes every later pivot
+    // NaN, so the first NaN on the diagonal of the factor is the pivot that xPOTRF reports.
+    for (int j = 0; j < *n; ++j) {
+      if ((Eigen::numext::isnan)(Eigen::numext::real(A(j, j)))) {
+        *info = j + 1;
+        break;
+      }
+    }
+  }
 }
 
 // POTRS solves a system of linear equations A*X = B with a symmetric

@@ -132,6 +132,18 @@ foreach(target IN LISTS EIGEN_LAPACK_TARGETS)
   endif()
 endforeach()
 
+# Checks of Eigen's routines that need no Fortran compiler.
+if(EIGEN_BUILD_TESTING)
+  add_executable(lapack_routines testing/lapack_routines.cpp)
+  target_include_directories(lapack_routines PRIVATE "${Eigen_SOURCE_DIR}/test")
+  target_link_libraries(lapack_routines eigen_lapack_static)
+  if(NOT EIGEN_LEAVE_TEST_IN_ALL_TARGET)
+    set_target_properties(lapack_routines PROPERTIES EXCLUDE_FROM_ALL ON)
+  endif()
+  add_test(NAME lapack_routines COMMAND lapack_routines)
+  add_dependencies(buildtests lapack_routines)
+endif()
+
 
 if(EIGEN_ENABLE_LAPACK_TESTS)
 

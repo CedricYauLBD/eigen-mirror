@@ -37,8 +37,6 @@ EIGEN_LAPACK_FUNC(gesdd)
     *info = -3;
   else if (*lda < std::max(1, *m))
     *info = -5;
-  else if (*lda < std::max(1, *m))
-    *info = -8;
   else if (*ldu < 1 || ((*jobz == 'A' || *jobz == 'S') && *ldu < *m) || (*jobz == 'O' && *m < *n && *ldu < *m))
     *info = -8;
   else if (*ldvt < 1 || (*jobz == 'A' && *ldvt < *n) || (*jobz == 'S' && *ldvt < diag_size) ||
@@ -63,6 +61,12 @@ EIGEN_LAPACK_FUNC(gesdd)
 
   PlainMatrixType mat(*m, *n);
   mat = matrix(a, *m, *n, *lda);
+
+  // Reference DGESDD and ZGESDD reject a NaN in A this way, without calling XERBLA.
+  if (mat.hasNaN()) {
+    *info = -4;
+    return;
+  }
 
   if (*jobz == 'A') {
     Eigen::BDCSVD<PlainMatrixType, Eigen::ComputeFullU | Eigen::ComputeFullV> svd(mat);
