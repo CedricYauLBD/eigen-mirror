@@ -1,9 +1,9 @@
 // SPDX-FileCopyrightText: The Eigen Authors
 // SPDX-License-Identifier: MPL-2.0
 
-// Runs the level-3 BLAS adapters (?gemm, ?symm and ?hemm, ?trmm) against Eigen's in-tree BLAS library. Parts 1 and 2
-// use column-major default storage, parts 3 and 4 row-major default storage, under which the adapters' temporaries
-// must still be column-major.
+// Runs the level-3 BLAS adapters (?gemm, ?symm and ?hemm, ?trmm) against the BLAS library the tests link: Eigen's own
+// shared library unless EIGEN_TEST_EXTERNAL_BLAS. Parts 1 and 2 use column-major default storage, parts 3 and 4
+// row-major default storage, under which the adapters' temporaries must still be column-major.
 #if (defined(EIGEN_TEST_PART_3) || defined(EIGEN_TEST_PART_4)) && !defined(EIGEN_DEFAULT_TO_ROW_MAJOR)
 #define EIGEN_DEFAULT_TO_ROW_MAJOR
 #endif
