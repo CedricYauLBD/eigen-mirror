@@ -122,24 +122,23 @@ void test_potrf_info() {
   const Scalar nan(std::numeric_limits<double>::quiet_NaN());
   Mat spd(3, 3);
   spd << Scalar(4), Scalar(1), Scalar(1), Scalar(1), Scalar(5), Scalar(1), Scalar(1), Scalar(1), Scalar(6);
+  // spd with entries (i, j) and (j, i) set to value.
+  const auto modified = [&](int i, int j, const Scalar& value) {
+    Mat a = spd;
+    a(i, j) = a(j, i) = value;
+    return a;
+  };
   struct Case {
     Mat a;
     int info;
   };
-  std::vector<Case> cases;
-  cases.push_back({spd, 0});
-  Mat a = spd;
-  a(0, 0) = nan;
-  cases.push_back({a, 1});
-  a = spd;
-  a(1, 1) = nan;
-  cases.push_back({a, 2});
-  a = spd;
-  a(2, 0) = a(0, 2) = nan;  // a NaN off the diagonal first makes pivot 3 NaN
-  cases.push_back({a, 3});
-  a = spd;
-  a(1, 1) = Scalar(0.25);  // 0.25 - 1/4 = 0: not positive definite
-  cases.push_back({a, 2});
+  const Case cases[] = {
+      {spd, 0},
+      {modified(0, 0, nan), 1},
+      {modified(1, 1, nan), 2},
+      {modified(2, 0, nan), 3},           // a NaN off the diagonal first makes pivot 3 NaN
+      {modified(1, 1, Scalar(0.25)), 2},  // 0.25 - 1/4 = 0: not positive definite
+  };
   for (const Case& cs : cases) {
     for (char uplo : {'L', 'U'}) {
       Mat factor = cs.a;
