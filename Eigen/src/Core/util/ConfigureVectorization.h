@@ -103,9 +103,11 @@
 #define EIGEN_IDEAL_MAX_ALIGN_BYTES 32
 #elif defined __HVX__ && (__HVX_LENGTH__ == 128)
 #define EIGEN_IDEAL_MAX_ALIGN_BYTES 128
-#elif defined(EIGEN_RISCV64_USE_RVV10)
+#elif defined(EIGEN_RISCV64_USE_RVV10) && defined(__riscv_v_fixed_vlen)
 // As for SVE: a default packet is VLEN * LMUL / 8 bytes and asks for that much alignment, which a
 // fixed-size object must be able to offer to reach the aligned path. The Alignment enum stops at 128.
+// Without a fixed VLEN, falling through to 16 keeps vectorization on, so the RVV block below reports
+// the missing -mrvv-vector-bits=zvl; evaluating the formula would give 0 and disable that block.
 #if (__riscv_v_fixed_vlen * EIGEN_RISCV64_DEFAULT_LMUL / 8) <= 128
 #define EIGEN_IDEAL_MAX_ALIGN_BYTES (__riscv_v_fixed_vlen * EIGEN_RISCV64_DEFAULT_LMUL / 8)
 #else
