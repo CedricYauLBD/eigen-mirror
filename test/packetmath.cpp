@@ -817,6 +817,34 @@ void packetmath_pnot_ptrue() {
   VERIFY(test::areEqualBits(ref, res, PacketSize, false) && "ptrue");
 }
 
+// pmsub, pnmadd and pnmsub must round a * b exactly as pmadd does: the random tests compare all four against one
+// scalar reference, so a variant that fuses differently fails them whenever a * b and c nearly cancel.
+// (1 + d)(1 - d) = 1 - d^2 rounds to 1, so a fused a * b - 1 is -d^2 and an unfused one is 0.
+template <typename Scalar, typename Packet,
+          std::enable_if_t<!std::is_same<Scalar, float>::value && !std::is_same<Scalar, double>::value, int> = 0>
+void packetmath_madd_variants_fusion() {}
+
+template <typename Scalar, typename Packet,
+          std::enable_if_t<std::is_same<Scalar, float>::value || std::is_same<Scalar, double>::value, int> = 0>
+void packetmath_madd_variants_fusion() {
+  constexpr int PacketSize = internal::unpacket_traits<Packet>::size;
+  const Scalar d = std::ldexp(Scalar(1), -(NumTraits<Scalar>::digits() / 2 + 2));
+  const Packet a = internal::pset1<Packet>(Scalar(1) + d);
+  const Packet b = internal::pset1<Packet>(Scalar(1) - d);
+  const Packet one = internal::pset1<Packet>(Scalar(1));
+  const Packet minus_one = internal::pnegate(one);
+  Scalar expected[PacketSize], actual[PacketSize];
+  internal::pstoreu(expected, internal::pmadd(a, b, minus_one));
+  internal::pstoreu(actual, internal::pmsub(a, b, one));
+  VERIFY(test::areEqual(expected, actual, PacketSize) && "pmsub");
+  internal::pstoreu(expected, internal::pmadd(internal::pnegate(a), b, one));
+  internal::pstoreu(actual, internal::pnmadd(a, b, one));
+  VERIFY(test::areEqual(expected, actual, PacketSize) && "pnmadd");
+  internal::pstoreu(expected, internal::pnegate(internal::pmadd(a, b, minus_one)));
+  internal::pstoreu(actual, internal::pnmsub(a, b, minus_one));
+  VERIFY(test::areEqual(expected, actual, PacketSize) && "pnmsub");
+}
+
 template <typename Scalar, typename Packet, std::enable_if_t<!internal::is_fused_madd<Packet>::value, int> = 0>
 void packetmath_fused_madd() {}
 
@@ -1073,6 +1101,7 @@ void packetmath() {
   packetmath_64bit_boundary_test<Scalar, Packet>::run();
 
   packetmath_fused_madd<Scalar, Packet>();
+  packetmath_madd_variants_fusion<Scalar, Packet>();
   CHECK_CWISE3_IF(PacketTraits::HasMul && PacketTraits::HasAdd, REF_MADD, internal::pmadd);
   if (!std::is_same<Scalar, bool>::value && NumTraits<Scalar>::IsSigned) {
     nmsub_test<Scalar, Packet>(data1, data2, ref, PacketSize);
