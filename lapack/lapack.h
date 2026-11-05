@@ -71,6 +71,10 @@ EIGEN_LAPACK_API void BLASFUNC(ssyev)(const char *, const char *, int *, float *
                                       int *);
 EIGEN_LAPACK_API void BLASFUNC(dsyev)(const char *, const char *, int *, double *, int *, double *, double *, int *,
                                       int *);
+EIGEN_LAPACK_API void BLASFUNC(cheev)(const char *, const char *, int *, float *, int *, float *, float *, int *,
+                                      float *, int *);
+EIGEN_LAPACK_API void BLASFUNC(zheev)(const char *, const char *, int *, double *, int *, double *, double *, int *,
+                                      double *, int *);
 
 // LU.
 EIGEN_LAPACK_API void BLASFUNC(sgetrf)(int *, int *, float *, int *, int *, int *);

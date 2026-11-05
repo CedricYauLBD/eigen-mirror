@@ -49,6 +49,8 @@ EXPORTS
     ; Eigenvalues
     ssyev_
     dsyev_
+    cheev_
+    zheev_
 
     ; LU
     sgetrf_

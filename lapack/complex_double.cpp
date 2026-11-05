@@ -17,6 +17,7 @@
 #include "cholesky.inc"
 #include "triangular.inc"
 #include "lu.inc"
+#include "eigenvalues.inc"
 #include "svd.inc"
 #include "householder.inc"
 #include "utilities.inc"
