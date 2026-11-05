@@ -753,6 +753,16 @@ EIGEN_STRONG_INLINE PacketXf pmsub(const PacketXf& a, const PacketXf& b, const P
 }
 
 template <>
+EIGEN_STRONG_INLINE PacketXf pnmadd(const PacketXf& a, const PacketXf& b, const PacketXf& c) {
+  return svmls_f32_x(svptrue_b32(), c, a, b);
+}
+
+template <>
+EIGEN_STRONG_INLINE PacketXf pnmsub(const PacketXf& a, const PacketXf& b, const PacketXf& c) {
+  return pnegate(pmadd(a, b, c));
+}
+
+template <>
 struct pminmax_propagates_nan<PacketXf> : bool_constant<true> {};
 
 template <>
@@ -1135,6 +1145,16 @@ EIGEN_STRONG_INLINE PacketXd pmadd(const PacketXd& a, const PacketXd& b, const P
 template <>
 EIGEN_STRONG_INLINE PacketXd pmsub(const PacketXd& a, const PacketXd& b, const PacketXd& c) {
   return svmla_f64_x(svptrue_b64(), svneg_f64_x(svptrue_b64(), c), a, b);
+}
+
+template <>
+EIGEN_STRONG_INLINE PacketXd pnmadd(const PacketXd& a, const PacketXd& b, const PacketXd& c) {
+  return svmls_f64_x(svptrue_b64(), c, a, b);
+}
+
+template <>
+EIGEN_STRONG_INLINE PacketXd pnmsub(const PacketXd& a, const PacketXd& b, const PacketXd& c) {
+  return pnegate(pmadd(a, b, c));
 }
 
 template <>
