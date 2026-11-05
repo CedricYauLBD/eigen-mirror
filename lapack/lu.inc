@@ -8,10 +8,10 @@
 // with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
 // SPDX-License-Identifier: MPL-2.0
 
-#include "common.h"
+#include "lapack_common.h"
 #include <Eigen/LU>
 
-// computes an LU factorization of a general M-by-N matrix A using partial pivoting with row interchanges
+// GETRF computes an LU factorization of a general M-by-N matrix A using partial pivoting with row interchanges.
 EIGEN_LAPACK_FUNC(getrf)(int *m, int *n, RealScalar *pa, int *lda, int *ipiv, int *info) {
   *info = 0;
   if (*m < 0)
@@ -37,9 +37,8 @@ EIGEN_LAPACK_FUNC(getrf)(int *m, int *n, RealScalar *pa, int *lda, int *ipiv, in
   if (ret >= 0) *info = ret + 1;
 }
 
-// GETRS solves a system of linear equations
-//     A * X = B  or  A' * X = B
-//   with a general N-by-N matrix A using the LU factorization computed  by GETRF
+// GETRS solves op(A) * X = B, where op(A) is A, A**T or A**H, with a general N-by-N matrix A using the LU
+// factorization computed by GETRF.
 EIGEN_LAPACK_FUNC(getrs)
 (const char *trans, int *n, int *nrhs, RealScalar *pa, int *lda, int *ipiv, RealScalar *pb, int *ldb, int *info) {
   *info = 0;
@@ -81,4 +80,75 @@ EIGEN_LAPACK_FUNC(getrs)
     lu.triangularView<UnitLower>().adjoint().solveInPlace(B);
     B = pivots.transpose() * B;
   }
+}
+
+// GETRI computes the inverse of a matrix using the LU factorization computed by GETRF: inv(A) is found by solving
+// inv(A) * L = inv(U). WORK(1) returns the optimal LWORK on a workspace query (LWORK = -1) and the workspace used
+// otherwise; LWORK >= N suffices, and LWORK >= 64 * N lets the solve run on block columns.
+EIGEN_LAPACK_FUNC(getri)(int *n, RealScalar *pa, int *lda, int *ipiv, RealScalar *pwork, int *lwork, int *info) {
+  constexpr Eigen::Index kGetriBlockSize = 64;
+  constexpr Eigen::Index kNbMin = 2;
+  *info = 0;
+  Scalar *work = reinterpret_cast<Scalar *>(pwork);
+  work[0] = Scalar(RealScalar(std::max<Eigen::Index>(1, Eigen::Index(*n) * kGetriBlockSize)));
+  const bool query = *lwork == -1;
+  if (*n < 0)
+    *info = -1;
+  else if (*lda < std::max(1, *n))
+    *info = -3;
+  else if (*lwork < std::max(1, *n) && !query)
+    *info = -6;
+  if (*info != 0) {
+    int e = -*info;
+    return xerbla_(SCALAR_SUFFIX_UP "GETRI", &e, kBlasNameLength);
+  }
+  if (query || *n == 0) return;
+
+  // Form inv(U). If U is singular (INFO > 0), A is left unchanged.
+  EIGEN_BLAS_FUNC_NAME(trtri)("U", "N", n, pa, lda, info);
+  if (*info > 0) return;
+
+  const Eigen::Index size = *n;
+  Scalar *a = reinterpret_cast<Scalar *>(pa);
+  MatrixType A(a, size, size, *lda);
+  Eigen::Index nb = kGetriBlockSize;
+  Eigen::Index iws = size;
+  if (nb < size) {
+    iws = nb * size;
+    if (*lwork < iws) nb = *lwork / size;
+  }
+
+  // Column j of inv(A) is column j of inv(U) minus inv(A)(:, j+1:n) * L(j+1:n, j), with the strictly lower part of L
+  // copied to WORK and zeroed in A so that the columns to the right already hold inv(A) when they are used.
+  // Block columns of width nb take the same step with a GEMM and a unit-lower right triangular solve.
+  if (nb < kNbMin || nb >= size) {
+    CompactVectorType w(work, size);
+    for (Eigen::Index j = size - 1; j >= 0; --j) {
+      const Eigen::Index rest = size - j - 1;
+      w.tail(rest) = A.col(j).tail(rest);
+      A.col(j).tail(rest).setZero();
+      if (rest > 0) A.col(j).noalias() -= A.middleCols(j + 1, rest) * w.tail(rest);
+    }
+  } else {
+    MatrixType W(work, size, nb, size);
+    for (Eigen::Index j = ((size - 1) / nb) * nb; j >= 0; j -= nb) {
+      const Eigen::Index jb = std::min(nb, size - j);
+      const Eigen::Index rest = size - j - jb;
+      for (Eigen::Index jj = 0; jj < jb; ++jj) {
+        const Eigen::Index below = size - j - jj - 1;
+        W.col(jj).tail(below) = A.col(j + jj).tail(below);
+        A.col(j + jj).tail(below).setZero();
+      }
+      auto Aj = A.middleCols(j, jb);
+      if (rest > 0) Aj.noalias() -= A.middleCols(j + jb, rest) * W.block(j + jb, 0, rest, jb);
+      W.block(j, 0, jb, jb).triangularView<Eigen::UnitLower>().solveInPlace<Eigen::OnTheRight>(Aj);
+    }
+  }
+
+  // inv(A) = inv(U) * inv(L) * P**T, where A = P * L * U.
+  for (Eigen::Index j = size - 2; j >= 0; --j) {
+    const Eigen::Index jp = ipiv[j] - 1;
+    if (jp != j) A.col(j).swap(A.col(jp));
+  }
+  work[0] = Scalar(RealScalar(iws));
 }
