@@ -61,7 +61,7 @@ EIGEN_LAPACK_FUNC(gesdd)
 
   PlainMatrixType mat = matrix(a, *m, *n, *lda);
 
-  // Reference DGESDD and ZGESDD reject a NaN in A this way, without calling XERBLA.
+  // As reference xGESDD documents: INFO = -4 if A has a NaN entry, without a call to XERBLA.
   if (mat.hasNaN()) {
     *info = -4;
     return;

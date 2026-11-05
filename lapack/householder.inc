@@ -401,16 +401,17 @@ EIGEN_LAPACK_FUNC(larfb)
   const bool colwise = (*storev == 'C' || *storev == 'c');
   // With W = C^H V (left) or C V (right), H C and C H^H take W T^H, while H^H C and C H take W T.
   const bool adjoint_t = (applyleft == notran);
+  // Like reference xLARFB, apply H to all of C without trimming V or C to their last nonzero rows or columns. A trim
+  // would skip the NaNs and infinities the reference propagates from the rows it drops, and in the backward direction
+  // it would cut off the implicit unit triangle in V's last k rows (columns), whose diagonal the caller need not store.
+  const int lastv = applyleft ? *m : *n;
+  const int lastc = applyleft ? *n : *m;
 
   ConstMatrixType T_mat(reinterpret_cast<const Scalar*>(pt), *k, *k, *ldt);
 
   if (colwise) {
     if (forward) {
       if (applyleft) {
-        const int lastv = Eigen::numext::maxi(*k, Eigen::internal::ilaxlr(*m, *k, v, *ldv));
-        const int lastc = Eigen::internal::ilaxlc(lastv, *n, c, *ldc);
-        if (lastc == 0) return;
-
         MatrixType W(work, lastc, *k, *ldwork);
         MatrixType C1(c, *k, lastc, *ldc);
         ConstMatrixType V1(v, *k, *k, *ldv);
@@ -430,10 +431,6 @@ EIGEN_LAPACK_FUNC(larfb)
         apply_triangular_right_lower_adjoint<true>(W, V1);
         C1.noalias() -= W.adjoint();
       } else {
-        const int lastv = Eigen::numext::maxi(*k, Eigen::internal::ilaxlr(*n, *k, v, *ldv));
-        const int lastc = Eigen::internal::ilaxlr(*m, lastv, c, *ldc);
-        if (lastc == 0) return;
-
         MatrixType W(work, lastc, *k, *ldwork);
         MatrixType C1(c, lastc, *k, *ldc);
         ConstMatrixType V1(v, *k, *k, *ldv);
@@ -454,13 +451,7 @@ EIGEN_LAPACK_FUNC(larfb)
         C1.noalias() -= W;
       }
     } else {
-      // The unit triangle of V lies in its last k rows, whose implicit unit diagonal the caller need not store, so
-      // trimming V to its last nonzero row would misplace the triangle. Reference LAPACK does not trim V either.
       if (applyleft) {
-        const int lastv = *m;
-        const int lastc = Eigen::internal::ilaxlc(lastv, *n, c, *ldc);
-        if (lastc == 0) return;
-
         MatrixType W(work, lastc, *k, *ldwork);
         MatrixType C2(&c[lastv - *k], *k, lastc, *ldc);
         ConstMatrixType V2(&v[lastv - *k], *k, *k, *ldv);
@@ -480,10 +471,6 @@ EIGEN_LAPACK_FUNC(larfb)
         apply_triangular_right_upper_adjoint<true>(W, V2);
         C2.noalias() -= W.adjoint();
       } else {
-        const int lastv = *n;
-        const int lastc = Eigen::internal::ilaxlr(*m, lastv, c, *ldc);
-        if (lastc == 0) return;
-
         MatrixType W(work, lastc, *k, *ldwork);
         MatrixType C2(&c[(lastv - *k) * Eigen::Index(*ldc)], lastc, *k, *ldc);
         ConstMatrixType V2(&v[lastv - *k], *k, *k, *ldv);
@@ -507,10 +494,6 @@ EIGEN_LAPACK_FUNC(larfb)
   } else {
     if (forward) {
       if (applyleft) {
-        const int lastv = Eigen::numext::maxi(*k, Eigen::internal::ilaxlc(*k, *m, v, *ldv));
-        const int lastc = Eigen::internal::ilaxlc(lastv, *n, c, *ldc);
-        if (lastc == 0) return;
-
         MatrixType W(work, lastc, *k, *ldwork);
         MatrixType C1(c, *k, lastc, *ldc);
         ConstMatrixType V1(v, *k, *k, *ldv);
@@ -530,10 +513,6 @@ EIGEN_LAPACK_FUNC(larfb)
         apply_triangular_right_upper<true>(W, V1);
         C1.noalias() -= W.adjoint();
       } else {
-        const int lastv = Eigen::numext::maxi(*k, Eigen::internal::ilaxlc(*k, *n, v, *ldv));
-        const int lastc = Eigen::internal::ilaxlr(*m, lastv, c, *ldc);
-        if (lastc == 0) return;
-
         MatrixType W(work, lastc, *k, *ldwork);
         MatrixType C1(c, lastc, *k, *ldc);
         ConstMatrixType V1(v, *k, *k, *ldv);
@@ -554,12 +533,7 @@ EIGEN_LAPACK_FUNC(larfb)
         C1.noalias() -= W;
       }
     } else {
-      // The unit triangle of V lies in its last k columns; see the column-wise backward case.
       if (applyleft) {
-        const int lastv = *m;
-        const int lastc = Eigen::internal::ilaxlc(lastv, *n, c, *ldc);
-        if (lastc == 0) return;
-
         MatrixType W(work, lastc, *k, *ldwork);
         MatrixType C2(&c[lastv - *k], *k, lastc, *ldc);
         ConstMatrixType V2(&v[(lastv - *k) * Eigen::Index(*ldv)], *k, *k, *ldv);
@@ -579,10 +553,6 @@ EIGEN_LAPACK_FUNC(larfb)
         apply_triangular_right_lower<true>(W, V2);
         C2.noalias() -= W.adjoint();
       } else {
-        const int lastv = *n;
-        const int lastc = Eigen::internal::ilaxlr(*m, lastv, c, *ldc);
-        if (lastc == 0) return;
-
         MatrixType W(work, lastc, *k, *ldwork);
         MatrixType C2(&c[(lastv - *k) * Eigen::Index(*ldc)], lastc, *k, *ldc);
         ConstMatrixType V2(&v[(lastv - *k) * Eigen::Index(*ldv)], *k, *k, *ldv);

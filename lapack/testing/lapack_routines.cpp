@@ -30,10 +30,11 @@ void larfb(const char* side, const char* trans, const char* direct, const char* 
 }
 
 // xLARFB applies H = I - V T V^H, or H^H, where V has an implicit unit triangle: in its first k rows (DIRECT = 'F') or
-// its last k rows (DIRECT = 'B'). The diagonal of that triangle and the cells beyond it are not referenced, so this
-// stores zeros there, as QL or RQ leaves them when a reflector is trivial, and compares with H formed explicitly.
+// its last k rows (DIRECT = 'B'). The diagonal of that triangle and the cells beyond it are not referenced. This stores
+// `unreferenced` there and compares with H formed explicitly. Zeros there, as QL or RQ leaves them for a trivial
+// reflector, once made xLARFB misplace the triangle; a NaN there shows any read of those cells.
 template <typename Scalar>
-void check_larfb(char side, char trans, char direct, char storev) {
+void check_larfb(char side, char trans, char direct, char storev, const Scalar& unreferenced) {
   using Mat = Matrix<Scalar, Dynamic, Dynamic>;
   int k = internal::random<int>(1, 4);
   int len = k + internal::random<int>(0, 5);
@@ -50,7 +51,8 @@ void check_larfb(char side, char trans, char direct, char storev) {
   Mat V = colwise ? Mat(V_eff) : Mat(V_eff.adjoint());
   for (int j = 0; j < k; ++j) {
     const int pivot = forward ? j : len - k + j;
-    (colwise ? V(pivot, j) : V(j, pivot)) = Scalar(0);
+    for (int i = forward ? 0 : pivot; i <= (forward ? pivot : len - 1); ++i)
+      (colwise ? V(i, j) : V(j, i)) = unreferenced;
   }
   Mat T = Mat::Random(k, k), C = Mat::Random(m, n);
   const Mat T_eff = forward ? Mat(T.template triangularView<Upper>()) : Mat(T.template triangularView<Lower>());
@@ -68,35 +70,81 @@ void check_larfb(char side, char trans, char direct, char storev) {
 template <typename Scalar>
 void test_larfb() {
   const char trans_adj = NumTraits<Scalar>::IsComplex ? 'C' : 'T';
-  for (char side : {'L', 'R'})
-    for (char trans : {'N', trans_adj})
-      for (char direct : {'F', 'B'})
-        for (char storev : {'C', 'R'}) check_larfb<Scalar>(side, trans, direct, storev);
+  for (const Scalar unreferenced : {Scalar(0), Scalar(std::numeric_limits<double>::quiet_NaN())})
+    for (char side : {'L', 'R'})
+      for (char trans : {'N', trans_adj})
+        for (char direct : {'F', 'B'})
+          for (char storev : {'C', 'R'}) check_larfb<Scalar>(side, trans, direct, storev, unreferenced);
+}
+
+// Like the reference, xLARFB applies H to all of C: a NaN in a row of C that V does not reach still spreads through
+// W = C^H V to the whole column.
+void test_larfb_nan_propagation() {
+  int m = 4, n = 2, k = 1, ldv = 4, ldt = 1, ldc = 4, ldwork = 2;
+  MatrixXd V(4, 1), T(1, 1), C = MatrixXd::Ones(4, 2), work(2, 1);
+  V << 1, 0.5, 0.5, 0;
+  T << 1;
+  C(3, 0) = std::numeric_limits<double>::quiet_NaN();
+  BLASFUNC(dlarfb)
+  ("L", "N", "F", "C", &m, &n, &k, V.data(), &ldv, T.data(), &ldt, C.data(), &ldc, work.data(), &ldwork);
+  VERIFY(C.col(0).array().isNaN().all());
+  VERIFY(C.col(1).allFinite());
 }
 
 void test_ladiv() {
-  // Smith's algorithm without scaling overflows to (NaN, 0) here.
+  const double eps = NumTraits<double>::epsilon();
+  // Smith's algorithm without scaling overflows to (NaN, 0) here, since c + d (d / c) = 2e308.
   double big = 1e308, p, q;
   BLASFUNC(dladiv)(&big, &big, &big, &big, &p, &q);
   VERIFY_IS_APPROX(p, 1.0);
-  VERIFY_IS_EQUAL(q, 0.0);
+  VERIFY(q == 0 && !(numext::signbit)(q));
   double zx[2] = {big, big}, zy[2] = {big, big};
   const eigen_lapack_complex_double z = BLASFUNC(zladiv)(zx, zy);
   VERIFY_IS_APPROX(z.r, 1.0);
-  VERIFY_IS_EQUAL(z.i, 0.0);
+  VERIFY(z.i == 0 && !(numext::signbit)(z.i));
+  float bigf = 3e38f, pf, qf;
+  BLASFUNC(sladiv)(&bigf, &bigf, &bigf, &bigf, &pf, &qf);
+  VERIFY_IS_APPROX(pf, 1.0f);
+  VERIFY(qf == 0 && !(numext::signbit)(qf));
 
   // ... and underflows to (0, 0) here: (1 + i) / (c + ic) = 1 / c, which is subnormal.
   double one = 1, c = 1.5e308;
   BLASFUNC(dladiv)(&one, &one, &c, &c, &p, &q);
-  VERIFY(p > 0);
-  VERIFY(numext::abs(p - 1 / c) <= 4 * NumTraits<double>::epsilon() * (1 / c));
-  VERIFY_IS_EQUAL(q, 0.0);
+  VERIFY(numext::abs(p - 1 / c) <= 4 * eps * (1 / c) + 4 * eps * (std::numeric_limits<double>::min)());
+  VERIFY(q == 0 && !(numext::signbit)(q));
 
+  // The hard cases of M. Baudin and R. L. Smith, "A Robust Complex Division in Scilab", arXiv:1210.4539 (2012), with
+  // their exact quotients: (a + ib) / (c + id) = p + iq. They reach the scaling, the swap for |d| > |c|, and the
+  // branches for an underflowing d / c or b d / c.
+  const double hard[][6] = {
+      {1, 1, 1, std::ldexp(1.0, 1023), std::ldexp(1.0, -1023), -std::ldexp(1.0, -1023)},
+      {1, 1, std::ldexp(1.0, -1023), std::ldexp(1.0, -1023), std::ldexp(1.0, 1023), 0},
+      {std::ldexp(1.0, 1023), std::ldexp(1.0, -1023), std::ldexp(1.0, 677), std::ldexp(1.0, -677), std::ldexp(1.0, 346),
+       -std::ldexp(1.0, -1008)},
+      {std::ldexp(1.0, 1023), std::ldexp(1.0, 1023), 1, 1, std::ldexp(1.0, 1023), 0},
+      {std::ldexp(1.0, 1020), std::ldexp(1.0, -844), std::ldexp(1.0, 656), std::ldexp(1.0, -780), std::ldexp(1.0, 364),
+       -std::ldexp(1.0, -1072)},
+      {std::ldexp(1.0, -71), std::ldexp(1.0, 1021), std::ldexp(1.0, 1001), std::ldexp(1.0, -323),
+       std::ldexp(1.0, -1072), std::ldexp(1.0, 20)},
+      {std::ldexp(1.0, -347), std::ldexp(1.0, -54), std::ldexp(1.0, -1037), std::ldexp(1.0, -1058),
+       3.898125604559113300e289, 8.174961907852353577e295},
+      {std::ldexp(1.0, -1074), std::ldexp(1.0, -1074), std::ldexp(1.0, -1073), std::ldexp(1.0, -1074), 0.6, 0.2},
+      {std::ldexp(1.0, 1015), std::ldexp(1.0, -989), std::ldexp(1.0, 1023), std::ldexp(1.0, 1023), 0.001953125,
+       -0.001953125},
+      {std::ldexp(1.0, -622), std::ldexp(1.0, -1071), std::ldexp(1.0, -343), std::ldexp(1.0, -798),
+       1.02951151789360578e-84, 6.97145987515076231e-220},
+  };
+  for (const auto& h : hard) {
+    BLASFUNC(dladiv)(&h[0], &h[1], &h[2], &h[3], &p, &q);
+    VERIFY(numext::hypot(p - h[4], q - h[5]) <= 4 * eps * numext::hypot(h[4], h[5]));
+  }
+
+  // For operands of moderate size, both this and std::complex division err by a few eps normwise.
   for (int i = 0; i < 1000; ++i) {
     const complex<double> x = internal::random<complex<double> >(), y = internal::random<complex<double> >();
     const double xr = x.real(), xi = x.imag(), yr = y.real(), yi = y.imag();
     BLASFUNC(dladiv)(&xr, &xi, &yr, &yi, &p, &q);
-    VERIFY(numext::abs(complex<double>(p, q) - x / y) <= 8 * NumTraits<double>::epsilon() * numext::abs(x / y));
+    VERIFY(numext::abs(complex<double>(p, q) - x / y) <= 8 * eps * numext::abs(x / y));
   }
 }
 
@@ -149,7 +197,47 @@ void test_potrf_info() {
   }
 }
 
-// Reference DGESDD and ZGESDD return INFO = -4 for a NaN in A.
+// The same in a matrix large enough for the blocked kernel, with the NaN pivot in the first or a later block. The NaN
+// must spread through the block solve and the trailing update for the scan of the diagonal to find it.
+template <typename Scalar>
+void test_potrf_info_blocked() {
+  using Mat = Matrix<Scalar, Dynamic, Dynamic>;
+  const int size = 100;
+  const Scalar nan(std::numeric_limits<double>::quiet_NaN());
+  const Mat spd = Mat::Constant(size, size, Scalar(1)) + Scalar(size) * Mat::Identity(size, size);
+  struct Case {
+    int i;
+    Scalar value;
+    int info;
+  };
+  const Case cases[] = {{-1, Scalar(0), 0}, {5, nan, 6}, {64, nan, 65}, {80, Scalar(-1000), 81}};
+  for (const Case& cs : cases) {
+    for (char uplo : {'L', 'U'}) {
+      Mat a = spd;
+      if (cs.i >= 0) a(cs.i, cs.i) = cs.value;
+      if (cs.info == 6) a(80, 80) = Scalar(-1000);  // a later non-positive pivot must not mask the NaN
+      int n = size, lda = size, info = -1;
+      potrf(&uplo, &n, a.data(), &lda, &info);
+      VERIFY_IS_EQUAL(info, cs.info);
+    }
+  }
+}
+
+// ZPOTRF uses only the real part of a diagonal entry, so a NaN imaginary part there is not a NaN pivot.
+void test_potrf_imaginary_nan() {
+  const int size = 100;
+  MatrixXcd a = MatrixXcd::Constant(size, size, 1) + double(size) * MatrixXcd::Identity(size, size);
+  a(2, 2) = complex<double>(size + 1, std::numeric_limits<double>::quiet_NaN());
+  a(70, 70) = complex<double>(size + 1, std::numeric_limits<double>::quiet_NaN());
+  for (char uplo : {'L', 'U'}) {
+    MatrixXcd factor = a;
+    int n = size, lda = size, info = -1;
+    potrf(&uplo, &n, factor.data(), &lda, &info);
+    VERIFY_IS_EQUAL(info, 0);
+  }
+}
+
+// Reference xGESDD documents INFO = -4 for a NaN in A.
 void test_gesdd_nan() {
   const char jobz = 'A';
   int m = 3, n = 2, lda = 3, ldu = 3, ldvt = 2, lwork = 64, info = 0;
@@ -188,10 +276,14 @@ EIGEN_DECLARE_TEST(lapack_routines) {
     CALL_SUBTEST(test_larfb<double>());
     CALL_SUBTEST(test_larfb<complex<double> >());
   }
+  CALL_SUBTEST(test_larfb_nan_propagation());
   CALL_SUBTEST(test_ladiv());
   CALL_SUBTEST(test_lapy2());
   CALL_SUBTEST(test_potrf_info<double>());
   CALL_SUBTEST(test_potrf_info<complex<double> >());
+  CALL_SUBTEST(test_potrf_info_blocked<double>());
+  CALL_SUBTEST(test_potrf_info_blocked<complex<double> >());
+  CALL_SUBTEST(test_potrf_imaginary_nan());
   CALL_SUBTEST(test_gesdd_nan());
   CALL_SUBTEST(test_lacgv());
 }
