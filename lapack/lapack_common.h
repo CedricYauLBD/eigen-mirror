@@ -19,4 +19,14 @@
 
 using PivotsType = Eigen::Map<Eigen::Transpositions<Eigen::Dynamic, Eigen::Dynamic, int> >;
 
+namespace {
+// WORK(1) for a workspace size: RealScalar(lwork), rounded up where RealScalar cannot represent lwork, as the
+// reference's xROUNDUP_LWORK does, so that a caller allocating INT(WORK(1)) passes the LWORK check.
+inline RealScalar roundup_lwork(Eigen::Index lwork) {
+  RealScalar work = RealScalar(lwork);
+  if (static_cast<Eigen::Index>(work) < lwork) work *= RealScalar(1) + Eigen::NumTraits<RealScalar>::epsilon();
+  return work;
+}
+}  // namespace
+
 #endif  // EIGEN_LAPACK_COMMON_H

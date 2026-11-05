@@ -90,7 +90,7 @@ EIGEN_LAPACK_FUNC(getri)(int *n, RealScalar *pa, int *lda, int *ipiv, RealScalar
   constexpr Eigen::Index kNbMin = 2;
   *info = 0;
   Scalar *work = reinterpret_cast<Scalar *>(pwork);
-  work[0] = Scalar(RealScalar(std::max<Eigen::Index>(1, Eigen::Index(*n) * kGetriBlockSize)));
+  work[0] = Scalar(roundup_lwork(std::max<Eigen::Index>(1, Eigen::Index(*n) * kGetriBlockSize)));
   const bool query = *lwork == -1;
   if (*n < 0)
     *info = -1;
@@ -150,5 +150,5 @@ EIGEN_LAPACK_FUNC(getri)(int *n, RealScalar *pa, int *lda, int *ipiv, RealScalar
     const Eigen::Index jp = ipiv[j] - 1;
     if (jp != j) A.col(j).swap(A.col(jp));
   }
-  work[0] = Scalar(RealScalar(iws));
+  work[0] = Scalar(roundup_lwork(iws));
 }
