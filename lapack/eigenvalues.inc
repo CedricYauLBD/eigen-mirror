@@ -63,7 +63,7 @@ EIGEN_LAPACK_FUNC(syev)
   const char jobz_upper = static_cast<char>(std::toupper(static_cast<unsigned char>(*jobz)));
   *info = check_ev_args(jobz_upper, *uplo, *n, *lda, *lwork, 3);
   // As in the reference, WORK(1) is set once every argument before LWORK checks out.
-  if (*info == 0 || *info == -8) work[0] = RealScalar(std::max(1, 3 * *n - 1));
+  if (*info == 0 || *info == -8) work[0] = roundup_lwork(std::max(1, 3 * *n - 1));
   if (*info != 0) {
     int e = -*info;
     return xerbla_(SCALAR_SUFFIX_UP "SYEV ", &e, kBlasNameLength);
@@ -80,7 +80,7 @@ EIGEN_LAPACK_FUNC(heev)
  RealScalar* /*rwork*/, int* info) {
   const char jobz_upper = static_cast<char>(std::toupper(static_cast<unsigned char>(*jobz)));
   *info = check_ev_args(jobz_upper, *uplo, *n, *lda, *lwork, 2);
-  if (*info == 0 || *info == -8) *reinterpret_cast<Scalar*>(work) = Scalar(RealScalar(std::max(1, 2 * *n - 1)));
+  if (*info == 0 || *info == -8) *reinterpret_cast<Scalar*>(work) = Scalar(roundup_lwork(std::max(1, 2 * *n - 1)));
   if (*info != 0) {
     int e = -*info;
     return xerbla_(SCALAR_SUFFIX_UP "HEEV ", &e, kBlasNameLength);
