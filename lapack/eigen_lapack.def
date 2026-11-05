@@ -59,6 +59,10 @@ EXPORTS
     cgetrs_
     zgetrf_
     zgetrs_
+    sgetri_
+    dgetri_
+    cgetri_
+    zgetri_
 
     ; Cholesky
     spotrf_
@@ -83,6 +87,24 @@ EXPORTS
     chetrs_
     zhetrf_
     zhetrs_
+    spotri_
+    dpotri_
+    cpotri_
+    zpotri_
+
+    ; Triangular
+    strtri_
+    dtrtri_
+    ctrtri_
+    ztrtri_
+    slauum_
+    dlauum_
+    clauum_
+    zlauum_
+    strtrs_
+    dtrtrs_
+    ctrtrs_
+    ztrtrs_
 
     ; SVD
     sgesdd_

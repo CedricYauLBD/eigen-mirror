@@ -366,3 +366,26 @@ EIGEN_LAPACK_FUNC(sytrs)
   bunch_kaufman_solve(uplo, n, nrhs, pa, lda, ipiv, pb, ldb, info, SCALAR_SUFFIX_UP "SYTRS");
 }
 #endif
+
+// POTRI computes the inverse of a symmetric (Hermitian) positive definite matrix from its Cholesky factor computed by
+// POTRF: inv(A) = inv(U) * inv(U)**H (UPLO = 'U') or inv(L)**H * inv(L) (UPLO = 'L'), stored in the same triangle.
+// INFO = i > 0 means the factor's diagonal entry (i,i) is zero, and the inverse is not computed.
+EIGEN_LAPACK_FUNC(potri)(const char *uplo, int *n, RealScalar *pa, int *lda, int *info) {
+  *info = 0;
+  if (UPLO(*uplo) == INVALID)
+    *info = -1;
+  else if (*n < 0)
+    *info = -2;
+  else if (*lda < std::max(1, *n))
+    *info = -4;
+  if (*info != 0) {
+    int e = -*info;
+    return xerbla_(SCALAR_SUFFIX_UP "POTRI", &e, kBlasNameLength);
+  }
+
+  if (*n == 0) return;
+
+  EIGEN_BLAS_FUNC_NAME(trtri)(uplo, "N", n, pa, lda, info);
+  if (*info > 0) return;
+  EIGEN_BLAS_FUNC_NAME(lauum)(uplo, n, pa, lda, info);
+}

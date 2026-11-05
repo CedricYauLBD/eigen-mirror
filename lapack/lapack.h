@@ -61,6 +61,10 @@ EIGEN_LAPACK_API void BLASFUNC(ssytrs)(const char *, int *, int *, float *, int 
 EIGEN_LAPACK_API void BLASFUNC(dsytrs)(const char *, int *, int *, double *, int *, int *, double *, int *, int *);
 EIGEN_LAPACK_API void BLASFUNC(chetrs)(const char *, int *, int *, float *, int *, int *, float *, int *, int *);
 EIGEN_LAPACK_API void BLASFUNC(zhetrs)(const char *, int *, int *, double *, int *, int *, double *, int *, int *);
+EIGEN_LAPACK_API void BLASFUNC(spotri)(const char *, int *, float *, int *, int *);
+EIGEN_LAPACK_API void BLASFUNC(dpotri)(const char *, int *, double *, int *, int *);
+EIGEN_LAPACK_API void BLASFUNC(cpotri)(const char *, int *, float *, int *, int *);
+EIGEN_LAPACK_API void BLASFUNC(zpotri)(const char *, int *, double *, int *, int *);
 
 // Eigenvalues.
 EIGEN_LAPACK_API void BLASFUNC(ssyev)(const char *, const char *, int *, float *, int *, float *, float *, int *,
@@ -78,6 +82,31 @@ EIGEN_LAPACK_API void BLASFUNC(sgetrs)(const char *, int *, int *, float *, int 
 EIGEN_LAPACK_API void BLASFUNC(dgetrs)(const char *, int *, int *, double *, int *, int *, double *, int *, int *);
 EIGEN_LAPACK_API void BLASFUNC(cgetrs)(const char *, int *, int *, float *, int *, int *, float *, int *, int *);
 EIGEN_LAPACK_API void BLASFUNC(zgetrs)(const char *, int *, int *, double *, int *, int *, double *, int *, int *);
+
+EIGEN_LAPACK_API void BLASFUNC(sgetri)(int *, float *, int *, int *, float *, int *, int *);
+EIGEN_LAPACK_API void BLASFUNC(dgetri)(int *, double *, int *, int *, double *, int *, int *);
+EIGEN_LAPACK_API void BLASFUNC(cgetri)(int *, float *, int *, int *, float *, int *, int *);
+EIGEN_LAPACK_API void BLASFUNC(zgetri)(int *, double *, int *, int *, double *, int *, int *);
+
+// Triangular.
+EIGEN_LAPACK_API void BLASFUNC(strtri)(const char *, const char *, int *, float *, int *, int *);
+EIGEN_LAPACK_API void BLASFUNC(dtrtri)(const char *, const char *, int *, double *, int *, int *);
+EIGEN_LAPACK_API void BLASFUNC(ctrtri)(const char *, const char *, int *, float *, int *, int *);
+EIGEN_LAPACK_API void BLASFUNC(ztrtri)(const char *, const char *, int *, double *, int *, int *);
+
+EIGEN_LAPACK_API void BLASFUNC(slauum)(const char *, int *, float *, int *, int *);
+EIGEN_LAPACK_API void BLASFUNC(dlauum)(const char *, int *, double *, int *, int *);
+EIGEN_LAPACK_API void BLASFUNC(clauum)(const char *, int *, float *, int *, int *);
+EIGEN_LAPACK_API void BLASFUNC(zlauum)(const char *, int *, double *, int *, int *);
+
+EIGEN_LAPACK_API void BLASFUNC(strtrs)(const char *, const char *, const char *, int *, int *, float *, int *, float *,
+                                       int *, int *);
+EIGEN_LAPACK_API void BLASFUNC(dtrtrs)(const char *, const char *, const char *, int *, int *, double *, int *,
+                                       double *, int *, int *);
+EIGEN_LAPACK_API void BLASFUNC(ctrtrs)(const char *, const char *, const char *, int *, int *, float *, int *, float *,
+                                       int *, int *);
+EIGEN_LAPACK_API void BLASFUNC(ztrtrs)(const char *, const char *, const char *, int *, int *, double *, int *,
+                                       double *, int *, int *);
 
 // SVD.
 EIGEN_LAPACK_API void BLASFUNC(sgesdd)(const char *, int *, int *, float *, int *, float *, float *, int *, float *,

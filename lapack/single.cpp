@@ -14,6 +14,7 @@
 #define ISCOMPLEX 0
 
 #include "cholesky.inc"
+#include "triangular.inc"
 #include "lu.inc"
 #include "eigenvalues.inc"
 #include "svd.inc"
