@@ -92,7 +92,7 @@ here by purpose.
 | Vector operations | `xLACGV` | C, Z | Conjugates a vector |
 | Machine parameters | `xLAMCH` | S, D | Floating-point parameters: machine epsilon, safe minimum, ... |
 | | `xLAMC3` | S, D | `a + b`, forced through memory |
-| Version | `ILAVER` | – | The LAPACK version, which it reports as 3.4.1 |
+| Version | `ILAVER` | – | The reference LAPACK release that the routines follow, 3.12.1 |
 | Timing | `SECOND`, `DSECND` | – | Process CPU time in seconds |
 
 These routines are written directly to the reference LAPACK specification

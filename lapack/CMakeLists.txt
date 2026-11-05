@@ -38,14 +38,26 @@ set(EigenLapack_SRCS
   ilaver.cpp
 )
 
+# The reference LAPACK release that the routines follow: ILAVER reports it, and the tests build its sources.
+set(EIGEN_LAPACK_REFERENCE_VERSION 3.12.1)
+set(EIGEN_LAPACK_REFERENCE_SHA256 2ca6407a001a474d4d4d35f3a61550156050c48016d949f0da0529c0aa052422)
+string(REPLACE "." ";" eigen_lapack_version "${EIGEN_LAPACK_REFERENCE_VERSION}")
+list(GET eigen_lapack_version 0 eigen_lapack_version_major)
+list(GET eigen_lapack_version 1 eigen_lapack_version_minor)
+list(GET eigen_lapack_version 2 eigen_lapack_version_patch)
+set_property(SOURCE ilaver.cpp APPEND PROPERTY COMPILE_DEFINITIONS
+  EIGEN_LAPACK_VERSION_MAJOR=${eigen_lapack_version_major}
+  EIGEN_LAPACK_VERSION_MINOR=${eigen_lapack_version_minor}
+  EIGEN_LAPACK_VERSION_PATCH=${eigen_lapack_version_patch})
+
 set(EIGEN_LAPACK_DEF "eigen_lapack.def")
 
 if(EIGEN_ENABLE_LAPACK_TESTS)
 
   include(FetchContent)
   FetchContent_Declare(eigen_lapack_reference
-    URL https://codeload.github.com/Reference-LAPACK/lapack/tar.gz/refs/tags/v3.12.1
-    URL_HASH SHA256=2ca6407a001a474d4d4d35f3a61550156050c48016d949f0da0529c0aa052422
+    URL https://codeload.github.com/Reference-LAPACK/lapack/tar.gz/refs/tags/v${EIGEN_LAPACK_REFERENCE_VERSION}
+    URL_HASH SHA256=${EIGEN_LAPACK_REFERENCE_SHA256}
     TLS_VERIFY ON)
   FetchContent_GetProperties(eigen_lapack_reference)
   if(NOT eigen_lapack_reference_POPULATED)
@@ -138,8 +150,8 @@ if(EIGEN_ENABLE_LAPACK_TESTS)
   set(LAPACK_LIBRARIES eigen_lapack_static)
   set(BLAS_LIBRARIES eigen_blas_static)
   set(TMGLIB tmglib)
-  set(LAPACK_VERSION 3.12.1)
-  set(LAPACK_MAJOR_VERSION 3)
+  set(LAPACK_VERSION ${EIGEN_LAPACK_REFERENCE_VERSION})
+  set(LAPACK_MAJOR_VERSION ${eigen_lapack_version_major})
   # Upstream's test libraries are build-only dependencies.
   function(lapack_install_library target)
   endfunction()
