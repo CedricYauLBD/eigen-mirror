@@ -17,7 +17,7 @@
 #     -t registry.gitlab.com/libeigen/eigen/alpine-lint:latest \
 #     --push ci/lint/
 
-ARG ALPINE_VERSION=3.24.3
+ARG ALPINE_VERSION=3.24.4
 
 FROM alpine:${ALPINE_VERSION} AS clang-format
 
