@@ -2040,7 +2040,8 @@ template <typename Scalar, typename LhsScalar, typename LhsMapper, bool Conjugat
           typename RhsScalar, typename RhsMapper, bool ConjugateRhs, bool RhsIsReal, typename ResScalar>
 EIGEN_STRONG_INLINE void gemv_complex_col(Index rows, Index cols, const LhsMapper& alhs, const RhsMapper& rhs,
                                           ResScalar* res, Index resIncr, ResScalar alpha) {
-  using Traits = gemv_traits<LhsScalar, RhsScalar>;
+  // This kernel expands real packets itself rather than using the generic mixed-packet loaders.
+  using Traits = gemv_traits<LhsScalar, RhsScalar, GEBPPacketFull, false>;
 
   using LhsPacket = typename Traits::LhsPacket;
   using RhsPacket = typename Traits::RhsPacket;
@@ -2713,7 +2714,8 @@ template <typename Scalar, typename LhsScalar, typename LhsMapper, bool Conjugat
           typename RhsScalar, typename RhsMapper, bool ConjugateRhs, bool RhsIsReal, typename ResScalar>
 EIGEN_STRONG_INLINE void gemv_complex_row(Index rows, Index cols, const LhsMapper& alhs, const RhsMapper& rhs,
                                           ResScalar* res, Index resIncr, ResScalar alpha) {
-  using Traits = gemv_traits<LhsScalar, RhsScalar>;
+  // This kernel expands real packets itself rather than using the generic mixed-packet loaders.
+  using Traits = gemv_traits<LhsScalar, RhsScalar, GEBPPacketFull, false>;
 
   using LhsPacket = typename Traits::LhsPacket;
   using RhsPacket = typename Traits::RhsPacket;
