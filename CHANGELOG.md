@@ -56,6 +56,7 @@ Other changes:
   build-group target were renamed accordingly: `Unsupported` → `Contrib`,
   `BuildUnsupported` → `BuildContrib`.
 - Removed the `demos/` directory, including its two Qt GUI demos, and the `EIGEN_BUILD_DEMOS` and `EIGEN_TEST_NOQT` CMake options. The sparse tutorial example no longer needs Qt; it writes a PGM image. [!3413]
+- The in-place inverse of an upper triangular matrix (`TriangularView::inverseInPlace()`, and so `LLT::inverse()` with `Upper`) runs the column recurrence of LAPACK's `xTRTRI` instead of the lower kernel on the transpose. Like `xTRTRI`, it bounds the right residual `|X U - I|`, which inverses built from it, as in `xPOTRI` and `xGETRI`, rely on; on `triu(randn(n))` that residual shrinks by up to three orders of magnitude, while the left residual `|U X - I|` grows within `xTRTRI`'s bound. `LLT<Upper>::inverse()` thus bounds `|X_U U - I|`, the left residual of `L = U^*`, and `LLT<Lower>::inverse()` bounds `|X_L L - I|`, as `DPOTRI` 'U' and 'L' do. Intermediate products now overflow in the order of `xTRTRI`: a column-graded `U` such as `[[2^-600, 2^600], [0, 2^600]]` can overflow to infinity where the exact inverse is finite, and a row-graded `U` such as `[[2^600, 2^600], [0, 2^-600]]`, which used to overflow, is now inverted exactly.
 
 ## [5.0.1] - 2025-11-11
 
