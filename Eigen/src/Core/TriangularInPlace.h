@@ -24,9 +24,9 @@ namespace internal {
 
 // Each triangle runs its column recurrence from xTRTI2/xTRTRI, which bounds the right residual
 // |X T - I| <= c_n u |X||T| (Higham, ASNA 2nd ed., 14.2-14.3). Inverses built from it, as in xPOTRI and
-// xGETRI, rely on that bound. For LLT<Upper>, |X U - I| is the left residual of L = U^*,
-// as in DPOTRI 'U'. Intermediate products overflow in the order of the recurrence, as in xTRTRI. The self-adjoint
-// square exists only for the lower triangle; the upper one runs it on V = U^T, since V^* V = conj(U U^*) = (U U^*)^T.
+// xGETRI, rely on that bound. For LLT<Upper>, |X U - I| is the left residual of L = U^*, as in xPOTRI 'U'.
+// Intermediate products overflow in the order of the recurrence, as in xTRTRI. The self-adjoint square exists only
+// for the lower triangle; the upper one runs it on V = U^T, since V^* V = conj(U U^*) = (U U^*)^T.
 
 // Both kernels have the panel-times-trailing-block shape of the Cholesky factorization, so the block
 // size tracks llt_inplace::blocked(), but each has its own floor and its own size below which the

@@ -131,6 +131,10 @@ EIGEN_DEVICE_FUNC void MatrixBase<Derived>::makeHouseholderInPlace(Scalar& tau, 
  * \param tau the scaling factor of the Householder transformation
  * \param beta the result of H * \c *this
  *
+ * The conventions are those of LAPACK's xLARFG, whose \c tau is the conjugate of this one:
+ * beta = -copysign(||*this||, real(c0)), with c0 = coeff(0); \c tau = 0 when the tail is exactly zero and
+ * c0 is real; and a NaN or an infinity propagates as in xLARFG.
+ *
  * \sa MatrixBase::makeHouseholderInPlace(), MatrixBase::applyHouseholderOnTheLeft(),
  *     MatrixBase::applyHouseholderOnTheRight()
  */

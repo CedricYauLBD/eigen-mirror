@@ -841,7 +841,7 @@ void selfadjoint_imaginary_diagonal_check(const SelfAdjointEigenSolver<MatrixTyp
   const RealScalar tolerance = RealScalar(16 * clean.rows()) * NumTraits<RealScalar>::epsilon();
   VERIFY_IS_EQUAL(solver.info(), Success);
   VERIFY((solver.eigenvalues() - expected).norm() <= tolerance * expected.norm());
-  if (options == ComputeEigenvectors) {
+  if ((options & ComputeEigenvectors) != 0) {
     const auto& vectors = solver.eigenvectors();
     VERIFY((clean * vectors - vectors * solver.eigenvalues().asDiagonal()).norm() <= tolerance * clean.norm());
     VERIFY((vectors.adjoint() * vectors - MatrixType::Identity(clean.rows(), clean.cols())).norm() <= tolerance);
