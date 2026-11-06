@@ -22,7 +22,7 @@ Eigen's C++ API does not use it.
   own.
 - The driver routines allocate their own workspace. They use `WORK` only to
   answer a workspace query (`LWORK = -1`). `xSYEV` still requires
-  `LWORK >= max(1, 3*N-1)`.
+  `LWORK >= max(1, 3*N-1)`, and `xHEEV` `LWORK >= max(1, 2*N-1)`.
 
 ## Building
 
@@ -58,6 +58,7 @@ lists the prefixes that exist:
 | Problem | Routine | Precisions | Computes | Implemented with |
 |---|---|---|---|---|
 | Symmetric eigenproblem (SEP) | `xSYEV` | S, D | All eigenvalues and, optionally, the eigenvectors of a symmetric matrix | `SelfAdjointEigenSolver` |
+| | `xHEEV` | C, Z | The same for a Hermitian matrix; the imaginary part of its diagonal is ignored | `SelfAdjointEigenSolver` |
 | Singular value decomposition (SVD) | `xGESVD` | S, D, C, Z | `A = U Σ V^H`: the singular values and, optionally, the left and right singular vectors | `JacobiSVD` (two-sided Jacobi, not bidiagonal QR iteration) |
 | | `xGESDD` | S, D, C, Z | The same, by divide and conquer | `BDCSVD` |
 
@@ -67,7 +68,6 @@ The library has no driver for any other problem class in §2.3:
 - Linear least squares, and generalized linear least squares.
 - Nonsymmetric eigenproblems.
 - Generalized eigenvalue and singular value problems.
-- The Hermitian eigenproblem (`CHEEV`, `ZHEEV`).
 
 ### Computational routines (Users' Guide §2.4)
 
@@ -75,12 +75,25 @@ The library has no driver for any other problem class in §2.3:
 |---|---|---|---|---|
 | Linear equations (§2.4.1), general matrix | `xGETRF` | S, D, C, Z | LU factorization with partial pivoting, `A = P L U` | `PartialPivLU`'s blocked kernel |
 | | `xGETRS` | S, D, C, Z | Solves `A X = B`, `A^T X = B` or `A^H X = B` with the factors from `xGETRF` | Triangular solves |
+| | `xGETRI` | S, D, C, Z | `inv(A) = inv(U) inv(L) P^T` from the factors of `xGETRF`, blocked over `WORK` | `xTRTRI` and triangular solves |
 | Linear equations (§2.4.1), symmetric or Hermitian positive definite matrix | `xPOTRF` | S, D, C, Z | Cholesky factorization, `A = U^H U` or `A = L L^H` | `LLT`'s blocked kernel |
 | | `xPOTRS` | S, D, C, Z | Solves `A X = B` with the factor from `xPOTRF` | Triangular solves |
+| | `xPOTRI` | S, D, C, Z | `inv(A)` from the factor of `xPOTRF` | `xTRTRI`, then `xLAUUM` |
+| Linear equations (§2.4.1), symmetric or Hermitian positive semidefinite matrix | `xPSTRF` | S, D, C, Z | Cholesky factorization with complete pivoting, `P^T A P = U^H U` or `L L^H`, stopping at the numerical rank | `LDLT`'s panel kernel, pivoting on the largest diagonal entry |
+| Linear equations (§2.4.1), symmetric indefinite matrix | `xSYTRF` | S, D | Bunch-Kaufman factorization `A = U D U^T` or `L D L^T`, `D` with 1x1 and 2x2 blocks | `BunchKaufman`'s blocked kernel |
+| | `xSYTRS` | S, D | Solves `A X = B` with the factorization from `xSYTRF` | Triangular solves |
+| Linear equations (§2.4.1), Hermitian indefinite matrix | `xHETRF` | C, Z | Bunch-Kaufman factorization `A = U D U^H` or `L D L^H` | `BunchKaufman`'s blocked kernel |
+| | `xHETRS` | C, Z | Solves `A X = B` with the factorization from `xHETRF` | Triangular solves |
+| Linear equations (§2.4.1), triangular matrix | `xTRTRS` | S, D, C, Z | Solves `op(A) X = B`, checking for a zero diagonal entry | Triangular solves |
+| | `xTRTRI` | S, D, C, Z | `inv(A)` in place | `TriangularView::inverseInPlace()` |
+| Orthogonal factorizations (§2.4.2) | `xGEQRF` | S, D, C, Z | QR factorization `A = Q R`, `Q` as Householder reflectors | `HouseholderQR`'s blocked kernel |
+| | `xORGQR`, `xUNGQR` | S, D (ORGQR); C, Z (UNGQR) | Forms the leading columns of `Q` | Block Householder kernels |
+| | `xORMQR`, `xUNMQR` | S, D (ORMQR); C, Z (UNMQR) | `Q C`, `Q^H C`, `C Q` or `C Q^H` | Block Householder kernels |
 
-The library has no routines from §2.4.2 through §2.4.9. Those sections cover
-orthogonal factorizations and their generalized forms, the symmetric,
-nonsymmetric and generalized eigenproblems, the SVD, and the generalized SVD.
+Of §2.4.2 the library has only the QR factorization. It has no routines from
+§2.4.3 through §2.4.9, which cover generalized orthogonal factorizations, the
+symmetric, nonsymmetric and generalized eigenproblems, the SVD, and the
+generalized SVD.
 
 ### Auxiliary routines (Users' Guide, Index of Auxiliary Routines)
 
@@ -93,6 +106,7 @@ here by purpose.
 | | `xLARF` | S, D, C, Z | `H C` or `C H` for `H = I - τ v v^H` |
 | | `xLARFT` | S, D, C, Z | The triangular factor `T` of a block reflector `H = I - V T V^H` |
 | | `xLARFB` | S, D, C, Z | `H C`, `H^H C`, `C H` or `C H^H` for a block reflector `H` |
+| Triangular products | `xLAUUM` | S, D, C, Z | `U U^H` or `L^H L` in place, keeping a complex diagonal real |
 | Matrix scanning | `ILAxLR`, `ILAxLC` | S, D, C, Z | Index of the last nonzero row or column |
 | Scalar arithmetic | `xLAPY2`, `xLAPY3` | S, D | `sqrt(x^2 + y^2)` and `sqrt(x^2 + y^2 + z^2)` without unnecessary overflow |
 | | `xLADIV` | S, D, C, Z | Complex division without unnecessary overflow. S and D pass real and imaginary parts as separate arguments. |
