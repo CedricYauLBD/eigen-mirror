@@ -848,18 +848,12 @@ void selfadjoint_imaginary_diagonal_check(const SelfAdjointEigenSolver<MatrixTyp
   }
 }
 
-// The input of solver equals that of reference once the imaginary parts of the diagonals are dropped, so the
-// decompositions are identical.
-template <typename MatrixType>
-void selfadjoint_imaginary_diagonal_check_identical(const SelfAdjointEigenSolver<MatrixType>& solver, int options,
-                                                    const SelfAdjointEigenSolver<MatrixType>& reference) {
-  VERIFY_IS_EQUAL(solver.info(), Success);
-  VERIFY_IS_EQUAL(solver.eigenvalues(), reference.eigenvalues());
-  if ((options & ComputeEigenvectors) != 0) VERIFY_IS_EQUAL(solver.eigenvectors(), reference.eigenvectors());
-}
-
 // A selfadjoint matrix has a real diagonal, and only its real part is read: the imaginary part of a diagonal
 // coefficient must neither set the scale nor turn the result into NaN or NoConvergence.
+//
+// The checks below take a tolerance even where two solvers see bit-identical input: GCC can version a vectorized loop
+// on the distance between two heap buffers, and the versions contract FMAs differently, so the results can differ in
+// the last bit from one allocation to the next.
 template <typename Scalar>
 void selfadjointeigensolver_imaginary_diagonal() {
   using RealScalar = typename NumTraits<Scalar>::Real;
@@ -898,8 +892,8 @@ void selfadjointeigensolver_imaginary_diagonal() {
         SelfAdjointEigenSolver<MatrixType> constructed(input, options);
         SelfAdjointEigenSolver<MatrixType> computed(n);
         computed.compute(input, options);
-        selfadjoint_imaginary_diagonal_check_identical(constructed, options, reference);
-        selfadjoint_imaginary_diagonal_check_identical(computed, options, reference);
+        selfadjoint_imaginary_diagonal_check(constructed, options, clean, expected);
+        selfadjoint_imaginary_diagonal_check(computed, options, clean, expected);
       }
     }
   }
@@ -972,6 +966,23 @@ void generalizedselfadjointeigensolver_imaginary_diagonal() {
           const VectorType& expected = type == Ax_lBx ? expectedAxLBx : expectedProduct;
           VERIFY((reference.eigenvalues() - expected).norm() <= tolerance * expected.norm());
         }
+        const auto check = [&](const auto& solver) {
+          VERIFY_IS_EQUAL(solver.info(), Success);
+          VERIFY((solver.eigenvalues() - reference.eigenvalues()).norm() <= tolerance * reference.eigenvalues().norm());
+          if (vectors == ComputeEigenvectors) {
+            // Residual of the eigenpairs against the matrices with real diagonals.
+            const MatrixType V = solver.eigenvectors();
+            const MatrixType VD = V * solver.eigenvalues().asDiagonal();
+            const RealScalar scale = A.norm() * B.norm() * V.norm() + VD.norm();
+            if (type == Ax_lBx) {
+              VERIFY((A * V - B * VD).norm() <= tolerance * scale);
+            } else if (type == ABx_lx) {
+              VERIFY((A * (B * V) - VD).norm() <= tolerance * scale);
+            } else {
+              VERIFY((B * (A * V) - VD).norm() <= tolerance * scale);
+            }
+          }
+        };
         for (RealScalar y : imaginaryParts) {
           MatrixType poisonedA = realDiagonalA, poisonedB = B;
           poisonedA.diagonal().imag().setConstant(y);
@@ -982,24 +993,9 @@ void generalizedselfadjointeigensolver_imaginary_diagonal() {
           // The in-place form reads the lower triangle of A and the Cholesky factor is taken from B in place.
           MatrixType inPlaceA = poisonedA, inPlaceB = poisonedB;
           GeneralizedSelfAdjointEigenSolver<Ref<MatrixType>> inPlace(inPlaceA, inPlaceB, options);
-          selfadjoint_imaginary_diagonal_check_identical(constructed, options, reference);
-          selfadjoint_imaginary_diagonal_check_identical(computed, options, reference);
-          VERIFY_IS_EQUAL(inPlace.info(), Success);
-          VERIFY((inPlace.eigenvalues() - reference.eigenvalues()).norm() <=
-                 tolerance * reference.eigenvalues().norm());
-          if (vectors == ComputeEigenvectors) {
-            // Residual of the eigenpairs against the matrices with real diagonals.
-            const MatrixType& V = inPlace.eigenvectors();
-            const MatrixType VD = V * inPlace.eigenvalues().asDiagonal();
-            const RealScalar scale = A.norm() * B.norm() * V.norm() + VD.norm();
-            if (type == Ax_lBx) {
-              VERIFY((A * V - B * VD).norm() <= tolerance * scale);
-            } else if (type == ABx_lx) {
-              VERIFY((A * (B * V) - VD).norm() <= tolerance * scale);
-            } else {
-              VERIFY((B * (A * V) - VD).norm() <= tolerance * scale);
-            }
-          }
+          check(constructed);
+          check(computed);
+          check(inPlace);
         }
       }
     }
