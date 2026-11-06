@@ -59,6 +59,7 @@ EIGEN_BLAS_INT solve_selfadjoint_ev(bool compute_vectors, char uplo, EIGEN_BLAS_
 
 #if !ISCOMPLEX
 
+// SYEV computes all eigenvalues and, optionally, the eigenvectors of a real symmetric matrix A.
 EIGEN_LAPACK_FUNC(syev)
 (const char* jobz, const char* uplo, EIGEN_BLAS_INT* n, RealScalar* a, EIGEN_BLAS_INT* lda, RealScalar* w,
  RealScalar* work, EIGEN_BLAS_INT* lwork, EIGEN_BLAS_INT* info) {
@@ -77,6 +78,7 @@ EIGEN_LAPACK_FUNC(syev)
 
 #else
 
+// HEEV computes all eigenvalues and, optionally, the eigenvectors of a complex Hermitian matrix A.
 EIGEN_LAPACK_FUNC(heev)
 (const char* jobz, const char* uplo, EIGEN_BLAS_INT* n, RealScalar* ra, EIGEN_BLAS_INT* lda, RealScalar* w,
  RealScalar* work, EIGEN_BLAS_INT* lwork, RealScalar* /*rwork*/, EIGEN_BLAS_INT* info) {
@@ -90,11 +92,11 @@ EIGEN_LAPACK_FUNC(heev)
   }
   if (*lwork == -1) return;
 
-  // xHETRD replaces A(i,i) by real(A(i,i)). SelfAdjointEigenSolver ignores imag(A(i,i)) except in its scaling, where a
-  // NaN or huge imaginary part would corrupt the result, so it is dropped here first; the reference destroys A anyway.
-  Scalar* a = reinterpret_cast<Scalar*>(ra);
-  for (EIGEN_BLAS_INT i = 0; i < *n; ++i) a[i + i * *lda] = Scalar(Eigen::numext::real(a[i + i * *lda]));
-  *info = solve_selfadjoint_ev(jobz_upper == 'V', *uplo, *n, a, *lda, w);
+  // A(i,i) := real(A(i,i)), as xHETRD does. SelfAdjointEigenSolver ignores imag(A(i,i)) itself, so this changes only
+  // what A holds on exit for JOBZ = 'N', which the reference destroys.
+  MatrixType A(reinterpret_cast<Scalar*>(ra), *n, *n, *lda);
+  A.diagonal() = A.diagonal().real();
+  *info = solve_selfadjoint_ev(jobz_upper == 'V', *uplo, *n, A.data(), *lda, w);
 }
 
 #endif  // !ISCOMPLEX

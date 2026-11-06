@@ -17,7 +17,8 @@
 
 #define EIGEN_LAPACK_FUNC(FUNC) EIGEN_BLAS_FUNC(FUNC)
 
-using PivotsType = Eigen::Map<Eigen::Transpositions<Eigen::Dynamic, Eigen::Dynamic, EIGEN_BLAS_INT> >;
+using TranspositionsType = Eigen::Transpositions<Eigen::Dynamic, Eigen::Dynamic, EIGEN_BLAS_INT>;
+using PivotsType = Eigen::Map<TranspositionsType>;
 
 namespace {
 // WORK(1) for a workspace size: RealScalar(lwork), rounded up where RealScalar cannot represent lwork, as the

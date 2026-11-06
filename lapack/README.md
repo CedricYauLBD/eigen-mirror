@@ -116,14 +116,18 @@ here by purpose.
 | Version | `ILAVER` | – | The reference LAPACK release that the routines follow, 3.12.1 |
 | Timing | `SECOND`, `DSECND` | – | Process CPU time in seconds |
 
-These routines are written directly to the reference LAPACK specification
-rather than built on Eigen's decompositions. The Householder routines support
-every combination of `SIDE`, `TRANS`, `DIRECT` and `STOREV`.
+Except for `xLAUUM`, which shares its kernel with `LLT::inverse()`, these
+routines are written directly to the reference LAPACK specification rather
+than built on Eigen's decompositions. The Householder routines support every
+combination of `SIDE`, `TRANS`, `DIRECT` and `STOREV`.
 
 ## Tests
 
-`lapack_routines`, built with Eigen's other tests (`EIGEN_BUILD_TESTING`),
-checks Eigen's routines directly from C++ and needs no Fortran compiler.
+`lapack_routines` and `lapack_wrappers`, built with Eigen's other tests
+(`EIGEN_BUILD_TESTING`), check Eigen's routines directly from C++ and need no
+Fortran compiler. `lapack_wrappers` covers the cases reference LAPACK's tests
+leave out, such as rank-deficient `xPSTRF` and arguments left untouched when
+`INFO > 0`.
 
 The optional numerical tests (`EIGEN_ENABLE_LAPACK_TESTS`) require a Fortran
 compiler. CMake downloads the unmodified reference LAPACK release that
@@ -139,8 +143,8 @@ into the test-only `eigen_lapack_reference` library, which is never installed.
 `LAPACK_Test_Symbols` checks the split: Eigen defines every routine the `.def`
 file lists, defines no Fortran-callable routine it omits, and shares none with
 the reference library. On ELF platforms it also checks that the shared library
-exports every listed routine. `buildtests_lapack` builds the drivers and
-`lapack_routines`, and `buildtests_blas` the tests under `blas/testing`.
+exports every listed routine. `buildtests_lapack` builds the drivers and the
+`lapack_*` C++ tests, and `buildtests_blas` the tests under `blas/testing`.
 
 The tests and their summary run through CMake/CTest without Python.
 `LAPACK_Test_Summary` waits for the drivers and combines their output files into
