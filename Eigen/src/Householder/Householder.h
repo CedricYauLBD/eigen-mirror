@@ -132,8 +132,10 @@ EIGEN_DEVICE_FUNC void MatrixBase<Derived>::makeHouseholderInPlace(Scalar& tau, 
  * \param beta the result of H * \c *this
  *
  * The conventions are those of LAPACK's xLARFG, whose \c tau is the conjugate of this one:
- * beta = -copysign(||*this||, real(c0)), with c0 = coeff(0); \c tau = 0 when the tail is exactly zero and
- * c0 is real; and a NaN or an infinity propagates as in xLARFG.
+ * when a reflector is formed, beta = -copysign(||*this||, real(c0)), with c0 = coeff(0); otherwise, when the tail is
+ * exactly zero and c0 is real, \c tau = 0 and beta = c0. A NaN or an infinity propagates as in xLARFG, with one
+ * deliberate deviation: a complex c0 with an infinite imaginary part gives a zero essential part, where ZLARFG's
+ * ZLADIV gives NaN.
  *
  * \sa MatrixBase::makeHouseholderInPlace(), MatrixBase::applyHouseholderOnTheLeft(),
  *     MatrixBase::applyHouseholderOnTheRight()
@@ -152,6 +154,9 @@ EIGEN_DEVICE_FUNC void MatrixBase<Derived>::makeHouseholder(EssentialPart& essen
   // Whether the direct construction's abs2(c0) + tailSqNorm would exceed the range. Integer scalars keep the direct
   // path they have always taken; the scaled path divides by a component maximum, which does not apply to them.
   bool unscaledSqNormOverflows = false;
+  // Whether a tail component is infinite. Only an overflowed tailSqNorm can mean that, so the ordinary path never
+  // scans.
+  bool tailHasInfinity = false;
   EIGEN_IF_CONSTEXPR (!NumTraits<RealScalar>::IsInteger) {
     const RealScalar precision = RealScalar(NumTraits<RealScalar>::epsilon());
     // With flush-to-zero arithmetic, every tail component square below tol can be lost. Account for every component
@@ -170,14 +175,17 @@ EIGEN_DEVICE_FUNC void MatrixBase<Derived>::makeHouseholder(EssentialPart& essen
     const RealScalar componentBound = numext::sqrt<RealScalar>(sqNormBound / RealScalar(2));
     const RealScalar c0Max = numext::maxi(numext::abs(numext::real(c0)), numext::abs(numext::imag(c0)));
     unscaledSqNormOverflows = !(c0Max <= componentBound) || !(tailSqNorm <= sqNormBound);
+    if (unscaledSqNormOverflows) tailHasInfinity = !tail.unwind().realView().allFinite();
   }
 
   // The scaled path forms the reflector from ratios of the largest component and never squares an unscaled
   // coefficient, so it is also the path for inputs the direct construction cannot square. A NaN tail, which the
   // overflow test above counts as overflow, takes the direct construction instead: it propagates the NaN into beta,
-  // tau, and the essential part, as xLARFG does, whereas the component maxima below can skip it.
-  const bool scaledCandidate =
-      (tailSqNorm <= unscaledNormThreshold || unscaledSqNormOverflows) && !(numext::isnan)(tailSqNorm);
+  // tau, and the essential part, as xLARFG does, whereas the component maxima below can skip it. So does a tail with
+  // an infinite component, whose scale would be infinite and every ratio NaN: the direct construction gives
+  // xLARFG's beta = -copysign(inf, real(c0)), tau = NaN, and NaN only where the tail is infinite.
+  const bool scaledCandidate = (tailSqNorm <= unscaledNormThreshold || unscaledSqNormOverflows) &&
+                               !(numext::isnan)(tailSqNorm) && !tailHasInfinity;
   // A head with a NaN or infinite component cannot be scaled by the component maximum: c0 / scale would be NaN. The
   // direct construction then gives xLARFG's result, which is NaN throughout for a NaN head, and
   // beta = -sign(Re(c0)) * inf, tau = NaN, and a zero essential part for an infinite one. The exception is a real head

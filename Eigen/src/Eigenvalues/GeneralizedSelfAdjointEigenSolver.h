@@ -230,7 +230,8 @@ GeneralizedSelfAdjointEigenSolver<MatrixType>& GeneralizedSelfAdjointEigenSolver
   if (type == 0) type = Ax_lBx;
 
   // A selfadjoint matrix has a real diagonal. Drop the imaginary part now: the products and solves below would
-  // spread it into the off-diagonal of C, which the base solver cannot undo. LLT already ignores that of B.
+  // spread it into the off-diagonal of C, which the base solver cannot undo. The LLT factor of B ignores that of B,
+  // but LLT's rcond estimate does not.
   EIGEN_IF_CONSTEXPR (NumTraits<typename MatrixType::Scalar>::IsComplex) {
     m_matC.diagonal() = m_matC.diagonal().real();
   }

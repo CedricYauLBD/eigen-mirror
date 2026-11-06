@@ -1196,6 +1196,56 @@ void verify_householder_negligible_tail(Index m) {
   }
 }
 
+// A tail with an infinite component gives xLARFG's reflector: beta = -copysign(inf, real(alpha)), tau = NaN, and an
+// essential part that is NaN where the tail is infinite (inf / inf) and zero elsewhere (finite / inf). Neither a
+// finite nor an overflowing head changes it.
+template <typename Scalar>
+void verify_householder_infinite_tail(const std::vector<std::pair<long double, long double>>& tailValues,
+                                      long double headReal, const bool* tailIsInfinite) {
+  using Real = typename NumTraits<Scalar>::Real;
+  using Vector = Matrix<Scalar, Dynamic, 1>;
+  const Index m = static_cast<Index>(tailValues.size());
+  Vector x(m + 1);
+  x[0] = householder_make<Scalar>(headReal);
+  for (Index i = 0; i < m; ++i) x[i + 1] = householder_make<Scalar>(tailValues[i].first, tailValues[i].second);
+  Vector essential(m);
+  Scalar tau;
+  Real beta;
+  x.makeHouseholder(essential, tau, beta);
+  VERIFY((numext::isinf)(beta));
+  VERIFY(householder_is_negative(beta) == !householder_is_negative(numext::real(x[0])));
+  VERIFY((numext::isnan)(tau));
+  for (Index i = 0; i < m; ++i) {
+    if (tailIsInfinite[i]) {
+      VERIFY((numext::isnan)(essential[i]));
+    } else {
+      VERIFY(numext::is_exactly_zero(essential[i]));
+    }
+  }
+}
+
+template <typename Scalar>
+void verify_householder_infinite_tails() {
+  const long double inf = std::numeric_limits<long double>::infinity();
+  using Entries = std::vector<std::pair<long double, long double>>;
+  using Real = typename NumTraits<Scalar>::Real;
+  for (int exponent : {0, householder_exponents<Real>::kHuge}) {
+    const long double scale = std::ldexp(1.0L, exponent);
+    for (long double head : {1.0L * scale, 0.0L, -1.0L * scale}) {
+      bool second[] = {true};
+      bool middle[] = {false, true, false};
+      verify_householder_infinite_tail<Scalar>(Entries{{inf, 0}}, head, second);
+      verify_householder_infinite_tail<Scalar>(Entries{{-inf, 0}}, head, second);
+      verify_householder_infinite_tail<Scalar>(Entries{{1, 0}, {inf, 0}, {2, 0}}, head, middle);
+      if (NumTraits<Scalar>::IsComplex) {
+        verify_householder_infinite_tail<Scalar>(Entries{{0, inf}}, head, second);
+        verify_householder_infinite_tail<Scalar>(Entries{{0, -inf}}, head, second);
+        verify_householder_infinite_tail<Scalar>(Entries{{1, 1}, {0, inf}, {2, -1}}, head, middle);
+      }
+    }
+  }
+}
+
 template <typename Scalar>
 void householder_xlarfg_special_values() {
   using Real = typename NumTraits<Scalar>::Real;
@@ -1218,7 +1268,8 @@ void householder_xlarfg_special_values() {
     verify_householder_infinite_head<Scalar>(m);
     verify_householder_negligible_tail<Scalar>(m);
   }
-  // No tail: xLARFG with N = 1 returns tau = 0 whatever alpha is.
+  verify_householder_infinite_tails<Scalar>();
+  // No tail: a real alpha gives tau = 0 and beta = alpha whatever it is, as xLARFG does with N = 1.
   Real beta;
   Scalar tau;
   Matrix<Scalar, 1, 1> head;
@@ -1230,6 +1281,14 @@ void householder_xlarfg_special_values() {
     head.makeHouseholder(none, tau, beta);
     VERIFY(!(numext::isfinite)(beta));
     VERIFY(numext::is_exactly_zero(tau));
+  }
+  if (NumTraits<Scalar>::IsComplex) {
+    // A complex alpha with a nonzero imaginary part is reflected, as zlarfg does with N = 1:
+    // beta = -|alpha|, tau = (1, -Im(alpha) / beta) = (1, 1), and Eigen's tau is its conjugate.
+    head[0] = householder_make<Scalar>(0, 2);
+    head.makeHouseholder(none, tau, beta);
+    VERIFY_IS_EQUAL(beta, Real(-2));
+    VERIFY_IS_EQUAL(tau, householder_make<Scalar>(1, -1));
   }
 }
 

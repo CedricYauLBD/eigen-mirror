@@ -11,10 +11,11 @@
 #include "main.h"
 #include "product_test_helpers.h"
 
-// The kernels run the column recurrences of xTRTI2/xTRTRI. Their left residual obeys ||T X - I|| <=
-// c*n*eps*||T||*||X|| (Higham, ASNA 2nd ed., 14.1-14.2), c absorbed below. Over 2000 seeds of the families here,
-// n <= 65, ||T X - I|| / (n*eps*||T||*||X||) peaks at 1.05 (complex) and 0.5 (real), both at n = 1, and stays
-// below 0.35 for larger n.
+// The kernels run the column recurrences of xTRTI2/xTRTRI, whose right residual obeys the componentwise bound below.
+// The left residual follows only through T X - I = T (X T - I) T^-1, which carries cond(T), so kResidualFactor is
+// empirical: ||T X - I|| / (n*eps*||T||*||X||) over 20 seeds x 50 repeats of the families here, n <= 256, peaks at
+// 1.10 (n = 1, complex) and 0.35 for 2 <= n <= 65; the non-normal family reaches 0.62 at n = 128 and 0.40 at n = 256
+// (real), Kahan 0.06.
 static constexpr int kResidualFactor = 16;
 // Forward error against the reference solve, bounded by the residual bound times cond(T) <= |T|*|X|.
 static constexpr int kForwardFactor = 16;
@@ -304,8 +305,8 @@ void triangular_inverse_graded() {
   x.triangularView<Upper>().inverseInPlace();
   VERIFY_IS_EQUAL(x(0, 0), big);
   VERIFY_IS_EQUAL(x(1, 1), small);
-  // The exact entry is -big. The reference overflows to -inf in X11 * U12; either outcome is accepted.
-  VERIFY(x(0, 1) == -big || !(numext::isfinite)(x(0, 1)));
+  // The exact entry is -big. As in xTRTI2, the recurrence forms X11 * U12 = inf first and scales it by -small.
+  VERIFY_IS_EQUAL(x(0, 1), -std::numeric_limits<double>::infinity());
 }
 
 EIGEN_DECLARE_TEST(triangular_in_place) {
