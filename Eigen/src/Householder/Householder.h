@@ -169,8 +169,26 @@ EIGEN_DEVICE_FUNC void MatrixBase<Derived>::makeHouseholder(EssentialPart& essen
   }
 
   // The scaled path forms the reflector from ratios of the largest component and never squares an unscaled
-  // coefficient, so it is also the path for inputs the direct construction cannot square.
-  if ((tailSqNorm <= unscaledNormThreshold || unscaledSqNormOverflows) && !(numext::isnan)(c0)) {
+  // coefficient, so it is also the path for inputs the direct construction cannot square. A NaN tail, which the
+  // overflow test above counts as overflow, takes the direct construction instead: it propagates the NaN into beta,
+  // tau, and the essential part, as xLARFG does, whereas the component maxima below can skip it.
+  const bool scaledCandidate =
+      (tailSqNorm <= unscaledNormThreshold || unscaledSqNormOverflows) && !(numext::isnan)(tailSqNorm);
+  // A head with a NaN or infinite component cannot be scaled by the component maximum: c0 / scale would be NaN. The
+  // direct construction then gives xLARFG's result, which is NaN throughout for a NaN head, and
+  // beta = -sign(Re(c0)) * inf, tau = NaN, and a zero essential part for an infinite one. The exception is a real head
+  // over an exactly zero tail, for which xLARFG returns tau = 0 and beta = alpha whatever alpha is.
+  // Short-circuited on scaledCandidate, so the ordinary direct path does no extra work.
+  const bool headIsFinite =
+      scaledCandidate && (numext::isfinite)(numext::real(c0)) && (numext::isfinite)(numext::imag(c0));
+  if (scaledCandidate && !headIsFinite && numext::is_exactly_zero(numext::imag(c0)) &&
+      (size() == 1 || numext::is_exactly_zero(tail.unwind().realView().cwiseAbs().maxCoeff()))) {
+    tau = RealScalar(0);
+    beta = numext::real(c0);
+    essential.setZero();
+    return;
+  }
+  if (scaledCandidate && headIsFinite) {
     using Accumulator = typename internal::householder_norm_accumulator<RealScalar>::type;
     const auto tailView = tail.unwind();
     const auto tailComponents = tailView.realView();
@@ -199,7 +217,8 @@ EIGEN_DEVICE_FUNC void MatrixBase<Derived>::makeHouseholder(EssentialPart& essen
       const Accumulator scaledReal = Accumulator(numext::real(c0)) / scale;
       const Accumulator scaledImag = Accumulator(numext::imag(c0)) / scale;
       RealScalar scaledBeta = RealScalar(numext::hypot(scaledReal, scaledImag));
-      if (numext::real(c0) >= RealScalar(0)) scaledBeta = -scaledBeta;
+      // xLARFG's beta = -SIGN(norm, alpha) takes the sign bit of alpha, so a head of -0 gives beta = +norm.
+      scaledBeta = -numext::copysign(scaledBeta, numext::real(c0));
       beta = RealScalar(scale * Accumulator(scaledBeta));
       essential.setZero();
       tau = internal::householder_rescale<Scalar, Accumulator>::zero_tail_tau(scaledReal, scaledImag, scaledBeta);
@@ -213,23 +232,17 @@ EIGEN_DEVICE_FUNC void MatrixBase<Derived>::makeHouseholder(EssentialPart& essen
     } else {
       scaledTailSqNorm = (tailComponents.template cast<Accumulator>().array() / scale).matrix().squaredNorm();
     }
-    if (numext::is_exactly_zero(RealScalar(tailMax / scale)) && numext::is_exactly_zero(numext::imag(c0))) {
-      tau = RealScalar(0);
-      beta = numext::real(c0);
-      essential.setZero();
-      return;
-    }
     const Scalar scaledC0 = internal::householder_rescale<Scalar, Accumulator>::run(c0, scale);
     RealScalar scaledBeta =
         RealScalar(numext::hypot(Accumulator(numext::abs(scaledC0)), numext::sqrt(scaledTailSqNorm)));
-    if (numext::real(c0) >= RealScalar(0)) scaledBeta = -scaledBeta;
+    scaledBeta = -numext::copysign(scaledBeta, numext::real(c0));
     beta = RealScalar(scale * Accumulator(scaledBeta));
     internal::householder_rescale<Scalar, Accumulator>::run(essential, tailView, scale, scaledC0 - scaledBeta);
     tau = numext::conj(Scalar(RealScalar(1)) - scaledC0 / scaledBeta);
     return;
   }
   beta = numext::sqrt<RealScalar>(numext::abs2(c0) + tailSqNorm);
-  if (numext::real(c0) >= RealScalar(0)) beta = -beta;
+  beta = -numext::copysign(beta, numext::real(c0));
   essential = tail.unwind() / (c0 - beta);
   tau = numext::conj((beta - c0) / beta);
 }
