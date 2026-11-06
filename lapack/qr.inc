@@ -79,24 +79,25 @@ void qr_generate_q(MatrixType& A, const QrConstVector& tau) {
 }
 
 // ORGQR / UNGQR.
-void qr_generate_entry(const char* name, int* m, int* n, int* k, RealScalar* pa, int* lda, RealScalar* ptau,
-                       RealScalar* pwork, int* lwork, int* info) {
+void qr_generate_entry(const char* name, EIGEN_BLAS_INT* m, EIGEN_BLAS_INT* n, EIGEN_BLAS_INT* k, RealScalar* pa,
+                       EIGEN_BLAS_INT* lda, RealScalar* ptau, RealScalar* pwork, EIGEN_BLAS_INT* lwork,
+                       EIGEN_BLAS_INT* info) {
   Scalar* work = reinterpret_cast<Scalar*>(pwork);
   const bool query = *lwork == -1;
   *info = 0;
-  work[0] = Scalar(roundup_lwork(std::max(1, *n)));
+  work[0] = Scalar(roundup_lwork(std::max<EIGEN_BLAS_INT>(1, *n)));
   if (*m < 0)
     *info = -1;
   else if (*n < 0 || *n > *m)
     *info = -2;
   else if (*k < 0 || *k > *n)
     *info = -3;
-  else if (*lda < std::max(1, *m))
+  else if (*lda < std::max<EIGEN_BLAS_INT>(1, *m))
     *info = -5;
-  else if (*lwork < std::max(1, *n) && !query)
+  else if (*lwork < std::max<EIGEN_BLAS_INT>(1, *n) && !query)
     *info = -8;
   if (*info != 0) {
-    int e = -*info;
+    EIGEN_BLAS_INT e = -*info;
     return xerbla_(name, &e, kBlasNameLength);
   }
   if (query) return;
@@ -105,13 +106,14 @@ void qr_generate_entry(const char* name, int* m, int* n, int* k, RealScalar* pa,
 }
 
 // ORMQR / UNMQR.
-void qr_multiply_entry(const char* name, const char* side, const char* trans, int* m, int* n, int* k, RealScalar* pa,
-                       int* lda, RealScalar* ptau, RealScalar* pc, int* ldc, RealScalar* pwork, int* lwork, int* info) {
+void qr_multiply_entry(const char* name, const char* side, const char* trans, EIGEN_BLAS_INT* m, EIGEN_BLAS_INT* n,
+                       EIGEN_BLAS_INT* k, RealScalar* pa, EIGEN_BLAS_INT* lda, RealScalar* ptau, RealScalar* pc,
+                       EIGEN_BLAS_INT* ldc, RealScalar* pwork, EIGEN_BLAS_INT* lwork, EIGEN_BLAS_INT* info) {
   Scalar* work = reinterpret_cast<Scalar*>(pwork);
   const bool query = *lwork == -1;
   const bool left = SIDE(*side) == LEFT;
-  const int nq = left ? *m : *n;
-  const int nw = std::max(1, left ? *n : *m);
+  const EIGEN_BLAS_INT nq = left ? *m : *n;
+  const EIGEN_BLAS_INT nw = std::max<EIGEN_BLAS_INT>(1, left ? *n : *m);
   const bool notrans = OP(*trans) == NOTR;
   const bool adjoint = OP(*trans) == (ISCOMPLEX ? ADJ : TR);
   *info = 0;
@@ -125,14 +127,14 @@ void qr_multiply_entry(const char* name, const char* side, const char* trans, in
     *info = -4;
   else if (*k < 0 || *k > nq)
     *info = -5;
-  else if (*lda < std::max(1, nq))
+  else if (*lda < std::max<EIGEN_BLAS_INT>(1, nq))
     *info = -7;
-  else if (*ldc < std::max(1, *m))
+  else if (*ldc < std::max<EIGEN_BLAS_INT>(1, *m))
     *info = -10;
   else if (*lwork < nw && !query)
     *info = -12;
   if (*info != 0) {
-    int e = -*info;
+    EIGEN_BLAS_INT e = -*info;
     return xerbla_(name, &e, kBlasNameLength);
   }
   work[0] = Scalar(roundup_lwork(nw));
@@ -154,20 +156,21 @@ void qr_multiply_entry(const char* name, const char* side, const char* trans, in
 
 // GEQRF computes A = Q R of a general M-by-N matrix, R on and above the diagonal, the reflectors below it.
 EIGEN_LAPACK_FUNC(geqrf)
-(int* m, int* n, RealScalar* pa, int* lda, RealScalar* ptau, RealScalar* pwork, int* lwork, int* info) {
-  const int k = std::min(*m, *n);
+(EIGEN_BLAS_INT* m, EIGEN_BLAS_INT* n, RealScalar* pa, EIGEN_BLAS_INT* lda, RealScalar* ptau, RealScalar* pwork,
+ EIGEN_BLAS_INT* lwork, EIGEN_BLAS_INT* info) {
+  const EIGEN_BLAS_INT k = std::min(*m, *n);
   const bool query = *lwork == -1;
   *info = 0;
   if (*m < 0)
     *info = -1;
   else if (*n < 0)
     *info = -2;
-  else if (*lda < std::max(1, *m))
+  else if (*lda < std::max<EIGEN_BLAS_INT>(1, *m))
     *info = -4;
-  else if (!query && (*lwork <= 0 || (*m > 0 && *lwork < std::max(1, *n))))
+  else if (!query && (*lwork <= 0 || (*m > 0 && *lwork < std::max<EIGEN_BLAS_INT>(1, *n))))
     *info = -7;
   if (*info != 0) {
-    int e = -*info;
+    EIGEN_BLAS_INT e = -*info;
     return xerbla_(SCALAR_SUFFIX_UP "GEQRF", &e, kBlasNameLength);
   }
 
@@ -189,14 +192,16 @@ EIGEN_LAPACK_FUNC(geqrf)
 
 // UNGQR generates the first N columns of the product of K reflectors of GEQRF.
 EIGEN_LAPACK_FUNC(ungqr)
-(int* m, int* n, int* k, RealScalar* pa, int* lda, RealScalar* ptau, RealScalar* pwork, int* lwork, int* info) {
+(EIGEN_BLAS_INT* m, EIGEN_BLAS_INT* n, EIGEN_BLAS_INT* k, RealScalar* pa, EIGEN_BLAS_INT* lda, RealScalar* ptau,
+ RealScalar* pwork, EIGEN_BLAS_INT* lwork, EIGEN_BLAS_INT* info) {
   qr_generate_entry(SCALAR_SUFFIX_UP "UNGQR", m, n, k, pa, lda, ptau, pwork, lwork, info);
 }
 
 // UNMQR multiplies C by Q or Q^* from the reflectors of GEQRF.
 EIGEN_LAPACK_FUNC(unmqr)
-(const char* side, const char* trans, int* m, int* n, int* k, RealScalar* pa, int* lda, RealScalar* ptau,
- RealScalar* pc, int* ldc, RealScalar* pwork, int* lwork, int* info) {
+(const char* side, const char* trans, EIGEN_BLAS_INT* m, EIGEN_BLAS_INT* n, EIGEN_BLAS_INT* k, RealScalar* pa,
+ EIGEN_BLAS_INT* lda, RealScalar* ptau, RealScalar* pc, EIGEN_BLAS_INT* ldc, RealScalar* pwork, EIGEN_BLAS_INT* lwork,
+ EIGEN_BLAS_INT* info) {
   qr_multiply_entry(SCALAR_SUFFIX_UP "UNMQR", side, trans, m, n, k, pa, lda, ptau, pc, ldc, pwork, lwork, info);
 }
 
@@ -204,14 +209,16 @@ EIGEN_LAPACK_FUNC(unmqr)
 
 // ORGQR generates the first N columns of the product of K reflectors of GEQRF.
 EIGEN_LAPACK_FUNC(orgqr)
-(int* m, int* n, int* k, RealScalar* pa, int* lda, RealScalar* ptau, RealScalar* pwork, int* lwork, int* info) {
+(EIGEN_BLAS_INT* m, EIGEN_BLAS_INT* n, EIGEN_BLAS_INT* k, RealScalar* pa, EIGEN_BLAS_INT* lda, RealScalar* ptau,
+ RealScalar* pwork, EIGEN_BLAS_INT* lwork, EIGEN_BLAS_INT* info) {
   qr_generate_entry(SCALAR_SUFFIX_UP "ORGQR", m, n, k, pa, lda, ptau, pwork, lwork, info);
 }
 
 // ORMQR multiplies C by Q or Q^T from the reflectors of GEQRF.
 EIGEN_LAPACK_FUNC(ormqr)
-(const char* side, const char* trans, int* m, int* n, int* k, RealScalar* pa, int* lda, RealScalar* ptau,
- RealScalar* pc, int* ldc, RealScalar* pwork, int* lwork, int* info) {
+(const char* side, const char* trans, EIGEN_BLAS_INT* m, EIGEN_BLAS_INT* n, EIGEN_BLAS_INT* k, RealScalar* pa,
+ EIGEN_BLAS_INT* lda, RealScalar* ptau, RealScalar* pc, EIGEN_BLAS_INT* ldc, RealScalar* pwork, EIGEN_BLAS_INT* lwork,
+ EIGEN_BLAS_INT* info) {
   qr_multiply_entry(SCALAR_SUFFIX_UP "ORMQR", side, trans, m, n, k, pa, lda, ptau, pc, ldc, pwork, lwork, info);
 }
 

@@ -15,19 +15,21 @@ namespace {
 
 // Returns INFO. LWORK must be at least max(1, k*N - 1), the minimum of the reference xSYEV (k = 3) and xHEEV (k = 2),
 // and a workspace query returns that bound. Eigen allocates its own workspace, so WORK is referenced only for WORK(1).
-int check_ev_args(char jobz, char uplo, int n, int lda, int lwork, int k) {
+EIGEN_BLAS_INT check_ev_args(char jobz, char uplo, EIGEN_BLAS_INT n, EIGEN_BLAS_INT lda, EIGEN_BLAS_INT lwork,
+                             EIGEN_BLAS_INT k) {
   if (jobz != 'N' && jobz != 'V') return -1;
   if (UPLO(uplo) == INVALID) return -2;
   if (n < 0) return -3;
-  if (lda < std::max(1, n)) return -5;
-  if (lwork != -1 && lwork < std::max(1, k * n - 1)) return -8;
+  if (lda < std::max<EIGEN_BLAS_INT>(1, n)) return -5;
+  if (lwork != -1 && lwork < std::max<EIGEN_BLAS_INT>(1, k * n - 1)) return -8;
   return 0;
 }
 
 // Returns INFO; INFO = 1 on NoConvergence stands for "at least one", where the reference counts the unconverged
 // off-diagonals. Reads only the UPLO triangle of A, whose diagonal must be real. For N = 1 the reference returns
 // W(1) = real(A(1,1)) with INFO = 0 even when it is not finite, which SelfAdjointEigenSolver reports as NoConvergence.
-int solve_selfadjoint_ev(bool compute_vectors, char uplo, int n, Scalar* a, int lda, RealScalar* w) {
+EIGEN_BLAS_INT solve_selfadjoint_ev(bool compute_vectors, char uplo, EIGEN_BLAS_INT n, Scalar* a, EIGEN_BLAS_INT lda,
+                                    RealScalar* w) {
   if (n == 0) return 0;
   if (n == 1) {
     w[0] = Eigen::numext::real(a[0]);
@@ -36,7 +38,7 @@ int solve_selfadjoint_ev(bool compute_vectors, char uplo, int n, Scalar* a, int 
   }
 
   Eigen::SelfAdjointEigenSolver<PlainMatrixType> eig(n);
-  const int options = compute_vectors ? Eigen::ComputeEigenvectors : Eigen::EigenvaluesOnly;
+  const EIGEN_BLAS_INT options = compute_vectors ? Eigen::ComputeEigenvectors : Eigen::EigenvaluesOnly;
   if (UPLO(uplo) == UP)
     eig.compute(matrix(a, n, n, lda).adjoint(), options);
   else
@@ -58,14 +60,14 @@ int solve_selfadjoint_ev(bool compute_vectors, char uplo, int n, Scalar* a, int 
 #if !ISCOMPLEX
 
 EIGEN_LAPACK_FUNC(syev)
-(const char* jobz, const char* uplo, int* n, RealScalar* a, int* lda, RealScalar* w, RealScalar* work, int* lwork,
- int* info) {
+(const char* jobz, const char* uplo, EIGEN_BLAS_INT* n, RealScalar* a, EIGEN_BLAS_INT* lda, RealScalar* w,
+ RealScalar* work, EIGEN_BLAS_INT* lwork, EIGEN_BLAS_INT* info) {
   const char jobz_upper = static_cast<char>(std::toupper(static_cast<unsigned char>(*jobz)));
   *info = check_ev_args(jobz_upper, *uplo, *n, *lda, *lwork, 3);
   // As in the reference, WORK(1) is set once every argument before LWORK checks out.
-  if (*info == 0 || *info == -8) work[0] = roundup_lwork(std::max(1, 3 * *n - 1));
+  if (*info == 0 || *info == -8) work[0] = roundup_lwork(std::max<EIGEN_BLAS_INT>(1, 3 * *n - 1));
   if (*info != 0) {
-    int e = -*info;
+    EIGEN_BLAS_INT e = -*info;
     return xerbla_(SCALAR_SUFFIX_UP "SYEV ", &e, kBlasNameLength);
   }
   if (*lwork == -1) return;
@@ -76,13 +78,14 @@ EIGEN_LAPACK_FUNC(syev)
 #else
 
 EIGEN_LAPACK_FUNC(heev)
-(const char* jobz, const char* uplo, int* n, RealScalar* ra, int* lda, RealScalar* w, RealScalar* work, int* lwork,
- RealScalar* /*rwork*/, int* info) {
+(const char* jobz, const char* uplo, EIGEN_BLAS_INT* n, RealScalar* ra, EIGEN_BLAS_INT* lda, RealScalar* w,
+ RealScalar* work, EIGEN_BLAS_INT* lwork, RealScalar* /*rwork*/, EIGEN_BLAS_INT* info) {
   const char jobz_upper = static_cast<char>(std::toupper(static_cast<unsigned char>(*jobz)));
   *info = check_ev_args(jobz_upper, *uplo, *n, *lda, *lwork, 2);
-  if (*info == 0 || *info == -8) *reinterpret_cast<Scalar*>(work) = Scalar(roundup_lwork(std::max(1, 2 * *n - 1)));
+  if (*info == 0 || *info == -8)
+    *reinterpret_cast<Scalar*>(work) = Scalar(roundup_lwork(std::max<EIGEN_BLAS_INT>(1, 2 * *n - 1)));
   if (*info != 0) {
-    int e = -*info;
+    EIGEN_BLAS_INT e = -*info;
     return xerbla_(SCALAR_SUFFIX_UP "HEEV ", &e, kBlasNameLength);
   }
   if (*lwork == -1) return;
@@ -90,7 +93,7 @@ EIGEN_LAPACK_FUNC(heev)
   // xHETRD replaces A(i,i) by real(A(i,i)). SelfAdjointEigenSolver ignores imag(A(i,i)) except in its scaling, where a
   // NaN or huge imaginary part would corrupt the result, so it is dropped here first; the reference destroys A anyway.
   Scalar* a = reinterpret_cast<Scalar*>(ra);
-  for (int i = 0; i < *n; ++i) a[i + i * *lda] = Scalar(Eigen::numext::real(a[i + i * *lda]));
+  for (EIGEN_BLAS_INT i = 0; i < *n; ++i) a[i + i * *lda] = Scalar(Eigen::numext::real(a[i + i * *lda]));
   *info = solve_selfadjoint_ev(jobz_upper == 'V', *uplo, *n, a, *lda, w);
 }
 

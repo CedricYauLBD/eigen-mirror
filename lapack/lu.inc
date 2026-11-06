@@ -12,27 +12,30 @@
 #include <Eigen/LU>
 
 // GETRF computes an LU factorization of a general M-by-N matrix A using partial pivoting with row interchanges.
-EIGEN_LAPACK_FUNC(getrf)(int *m, int *n, RealScalar *pa, int *lda, int *ipiv, int *info) {
+EIGEN_LAPACK_FUNC(getrf)
+(EIGEN_BLAS_INT *m, EIGEN_BLAS_INT *n, RealScalar *pa, EIGEN_BLAS_INT *lda, EIGEN_BLAS_INT *ipiv,
+ EIGEN_BLAS_INT *info) {
   *info = 0;
   if (*m < 0)
     *info = -1;
   else if (*n < 0)
     *info = -2;
-  else if (*lda < std::max(1, *m))
+  else if (*lda < std::max<EIGEN_BLAS_INT>(1, *m))
     *info = -4;
   if (*info != 0) {
-    int e = -*info;
+    EIGEN_BLAS_INT e = -*info;
     return xerbla_(SCALAR_SUFFIX_UP "GETRF", &e, kBlasNameLength);
   }
 
   if (*m == 0 || *n == 0) return;
 
   Scalar *a = reinterpret_cast<Scalar *>(pa);
-  int nb_transpositions;
-  int ret = int(Eigen::internal::partial_lu_impl<Scalar, Eigen::ColMajor, int>::blocked_lu(*m, *n, a, *lda, ipiv,
-                                                                                           nb_transpositions));
+  EIGEN_BLAS_INT nb_transpositions;
+  EIGEN_BLAS_INT ret =
+      EIGEN_BLAS_INT(Eigen::internal::partial_lu_impl<Scalar, Eigen::ColMajor, EIGEN_BLAS_INT>::blocked_lu(
+          *m, *n, a, *lda, ipiv, nb_transpositions));
 
-  for (int i = 0; i < std::min(*m, *n); ++i) ipiv[i]++;
+  for (EIGEN_BLAS_INT i = 0; i < std::min(*m, *n); ++i) ipiv[i]++;
 
   if (ret >= 0) *info = ret + 1;
 }
@@ -40,7 +43,8 @@ EIGEN_LAPACK_FUNC(getrf)(int *m, int *n, RealScalar *pa, int *lda, int *ipiv, in
 // GETRS solves op(A) * X = B, where op(A) is A, A**T or A**H, with a general N-by-N matrix A using the LU
 // factorization computed by GETRF.
 EIGEN_LAPACK_FUNC(getrs)
-(const char *trans, int *n, int *nrhs, RealScalar *pa, int *lda, int *ipiv, RealScalar *pb, int *ldb, int *info) {
+(const char *trans, EIGEN_BLAS_INT *n, EIGEN_BLAS_INT *nrhs, RealScalar *pa, EIGEN_BLAS_INT *lda, EIGEN_BLAS_INT *ipiv,
+ RealScalar *pb, EIGEN_BLAS_INT *ldb, EIGEN_BLAS_INT *info) {
   *info = 0;
   if (OP(*trans) == INVALID)
     *info = -1;
@@ -48,12 +52,12 @@ EIGEN_LAPACK_FUNC(getrs)
     *info = -2;
   else if (*nrhs < 0)
     *info = -3;
-  else if (*lda < std::max(1, *n))
+  else if (*lda < std::max<EIGEN_BLAS_INT>(1, *n))
     *info = -5;
-  else if (*ldb < std::max(1, *n))
+  else if (*ldb < std::max<EIGEN_BLAS_INT>(1, *n))
     *info = -8;
   if (*info != 0) {
-    int e = -*info;
+    EIGEN_BLAS_INT e = -*info;
     return xerbla_(SCALAR_SUFFIX_UP "GETRS", &e, kBlasNameLength);
   }
 
@@ -65,8 +69,8 @@ EIGEN_LAPACK_FUNC(getrs)
   using Eigen::UnitLower;
   using Eigen::Upper;
   // IPIV is input-only (and may be shared by concurrent solves): convert to 0-based indices in a copy.
-  Eigen::Transpositions<Eigen::Dynamic, Eigen::Dynamic, int> pivots(*n);
-  for (int i = 0; i < *n; ++i) pivots.indices()(i) = ipiv[i] - 1;
+  Eigen::Transpositions<Eigen::Dynamic, Eigen::Dynamic, EIGEN_BLAS_INT> pivots(*n);
+  for (EIGEN_BLAS_INT i = 0; i < *n; ++i) pivots.indices()(i) = ipiv[i] - 1;
   if (OP(*trans) == NOTR) {
     B = pivots * B;
     lu.triangularView<UnitLower>().solveInPlace(B);
@@ -85,7 +89,9 @@ EIGEN_LAPACK_FUNC(getrs)
 // GETRI computes the inverse of a matrix using the LU factorization computed by GETRF: inv(A) is found by solving
 // inv(A) * L = inv(U). WORK(1) returns the optimal LWORK on a workspace query (LWORK = -1) and the workspace used
 // otherwise; LWORK >= N suffices, and LWORK >= 64 * N lets the solve run on block columns.
-EIGEN_LAPACK_FUNC(getri)(int *n, RealScalar *pa, int *lda, int *ipiv, RealScalar *pwork, int *lwork, int *info) {
+EIGEN_LAPACK_FUNC(getri)
+(EIGEN_BLAS_INT *n, RealScalar *pa, EIGEN_BLAS_INT *lda, EIGEN_BLAS_INT *ipiv, RealScalar *pwork, EIGEN_BLAS_INT *lwork,
+ EIGEN_BLAS_INT *info) {
   constexpr Eigen::Index kGetriBlockSize = 64;
   constexpr Eigen::Index kNbMin = 2;
   *info = 0;
@@ -94,12 +100,12 @@ EIGEN_LAPACK_FUNC(getri)(int *n, RealScalar *pa, int *lda, int *ipiv, RealScalar
   const bool query = *lwork == -1;
   if (*n < 0)
     *info = -1;
-  else if (*lda < std::max(1, *n))
+  else if (*lda < std::max<EIGEN_BLAS_INT>(1, *n))
     *info = -3;
-  else if (*lwork < std::max(1, *n) && !query)
+  else if (*lwork < std::max<EIGEN_BLAS_INT>(1, *n) && !query)
     *info = -6;
   if (*info != 0) {
-    int e = -*info;
+    EIGEN_BLAS_INT e = -*info;
     return xerbla_(SCALAR_SUFFIX_UP "GETRI", &e, kBlasNameLength);
   }
   if (query || *n == 0) return;
