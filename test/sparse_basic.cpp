@@ -1398,6 +1398,29 @@ void bug1105() {
   }
 }
 
+// A short StorageIndex bounds the number of stored entries, not the outer dimension, which exceeds its range here.
+template <int Options>
+void sparse_insert_narrow_index() {
+  using SpMat = SparseMatrix<double, Options, short>;
+  const Index highest = NumTraits<short>::highest();
+  const Index n = highest + 1000;
+  SpMat m(SpMat::IsRowMajor ? n : 4, SpMat::IsRowMajor ? 4 : n);
+  // The first insertion reserves the storage, so it goes into an empty matrix; the rest go below and above it.
+  const Index outers[] = {n - 1, 0, n / 2, highest + 1, 1};
+  for (Index k = 0; k < 5; ++k) {
+    const Index outer = outers[k], inner = k % 4;
+    (SpMat::IsRowMajor ? m.insert(outer, inner) : m.insert(inner, outer)) = double(k + 1);
+  }
+  for (int compressed = 0; compressed < 2; ++compressed) {
+    if (compressed) m.makeCompressed();
+    VERIFY_IS_EQUAL(m.nonZeros(), 5);
+    for (Index k = 0; k < 5; ++k) {
+      const Index outer = outers[k], inner = k % 4;
+      VERIFY_IS_EQUAL(SpMat::IsRowMajor ? m.coeff(outer, inner) : m.coeff(inner, outer), double(k + 1));
+    }
+  }
+}
+
 #ifndef EIGEN_SPARSE_TEST_INCLUDED_FROM_SPARSE_EXTRA
 
 EIGEN_DECLARE_TEST(sparse_basic) {
@@ -1434,6 +1457,8 @@ EIGEN_DECLARE_TEST(sparse_basic) {
   CALL_SUBTEST_5((big_sparse_triplet<SparseMatrix<double, ColMajor, long int>>(10000, 10000, 0.125)));
 
   CALL_SUBTEST_5(bug1105<0>());
+  CALL_SUBTEST_2((sparse_insert_narrow_index<ColMajor>()));
+  CALL_SUBTEST_2((sparse_insert_narrow_index<RowMajor>()));
   CALL_SUBTEST_1((sparse_isapprox_extreme_scales<float, ColMajor>()));
   CALL_SUBTEST_1((sparse_isapprox_extreme_scales<double, RowMajor>()));
   CALL_SUBTEST_1((sparse_isapprox_extreme_scales<std::complex<double>, ColMajor>()));

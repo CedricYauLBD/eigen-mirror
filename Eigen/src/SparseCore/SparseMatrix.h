@@ -1720,16 +1720,16 @@ SparseMatrix<Scalar_, Options_, StorageIndex_>::insertUncompressedAtByOuterInner
   // record offset as outerIndexPtr will change
   Index dst_offset = dst - internal::convert_index<Index>(m_outerIndex[outer]);
   // allocate space for random insertion
-  if (m_data.allocatedSize() == 0) {
+  // StorageIndex can be wider than Index (long long with a 32-bit Index), so clamp its maximum to Index's.
+  using WideIndex = typename std::common_type<Index, StorageIndex>::type;
+  const Index maxSize =
+      static_cast<Index>(numext::mini<WideIndex>(NumTraits<StorageIndex>::highest(), NumTraits<Index>::highest()));
+  if (m_data.allocatedSize() == 0 && m_outerSize <= maxSize) {
     // fast method to allocate space for one element per vector in empty matrix
     m_data.resize(m_outerSize);
     std::iota(m_outerIndex, m_outerIndex + m_outerSize + 1, StorageIndex(0));
   } else {
     // check for integer overflow: if maxReserveSize == 0, insertion is not possible
-    // StorageIndex can be wider than Index (long long with a 32-bit Index), so clamp its maximum to Index's.
-    using WideIndex = typename std::common_type<Index, StorageIndex>::type;
-    const Index maxSize =
-        static_cast<Index>(numext::mini<WideIndex>(NumTraits<StorageIndex>::highest(), NumTraits<Index>::highest()));
     Index maxReserveSize = maxSize - m_data.allocatedSize();
     eigen_assert(maxReserveSize > 0);
     if (m_outerSize <= maxReserveSize) {
