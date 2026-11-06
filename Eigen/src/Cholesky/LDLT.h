@@ -446,7 +446,8 @@ struct ldlt_inplace<Lower> {
     for (Index k = k0; k < k0 + kb; ++k) {
       Index index_of_biggest_in_corner;
       EIGEN_IF_CONSTEXPR (PivotOnLargestValue) {
-        temp.tail(size - k).real().maxCoeff(&index_of_biggest_in_corner);
+        // NaNs are skipped, as xPSTRF's MAXLOC skips them; an all-NaN tail still yields a NaN pivot.
+        temp.tail(size - k).real().template maxCoeff<PropagateNumbers>(&index_of_biggest_in_corner);
       } else {
         temp.tail(size - k).real().cwiseAbs().maxCoeff(&index_of_biggest_in_corner);
       }
