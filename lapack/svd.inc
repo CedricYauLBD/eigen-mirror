@@ -17,6 +17,39 @@
 #define EIGEN_LAPACK_ARG_IF_COMPLEX(X)
 #endif
 
+namespace {
+// Writes the singular values of `svd` to s, U to u and V^H to vt, skipping a null destination, and returns INFO.
+// Eigen's SVDs fill no output for a non-finite A (InvalidInput) or after a numerical failure (NumericalIssue).
+// Reference xGESDD and xGESVD scale an Inf in A into NaN singular values, with finite but meaningless vectors, and
+// return INFO = 0. Here NaN goes to every requested output instead, so that no vector reads as a result. INFO = 1
+// reports a failure other than a non-finite A, as INFO > 0 reports a failure to converge in the reference.
+template <typename SVD>
+int store_svd(const SVD &svd, int diag_size, RealScalar *s, Scalar *u, int ldu, Scalar *vt, int ldvt) {
+  const Eigen::ComputationInfo status = svd.info();
+  const bool unfilled = status != Eigen::Success && status != Eigen::NoConvergence;
+  const Scalar nan(Eigen::NumTraits<RealScalar>::quiet_NaN());
+  if (unfilled)
+    make_vector(s, diag_size).setConstant(Eigen::numext::real(nan));
+  else
+    make_vector(s, diag_size) = svd.singularValues().head(diag_size);
+  if (u != nullptr) {
+    auto dst = matrix(u, svd.matrixU().rows(), svd.matrixU().cols(), ldu);
+    if (unfilled)
+      dst.setConstant(nan);
+    else
+      dst = svd.matrixU();
+  }
+  if (vt != nullptr) {
+    auto dst = matrix(vt, svd.matrixV().cols(), svd.matrixV().rows(), ldvt);
+    if (unfilled)
+      dst.setConstant(nan);
+    else
+      dst = svd.matrixV().adjoint();
+  }
+  return status == Eigen::Success || status == Eigen::InvalidInput ? 0 : 1;
+}
+}  // namespace
+
 // GESDD computes the singular values and vectors of a general M-by-N matrix A by divide and conquer.
 EIGEN_LAPACK_FUNC(gesdd)
 (const char *jobz, int *m, int *n, RealScalar *ra, int *lda, RealScalar *s, RealScalar *ru, int *ldu, RealScalar *rvt,
@@ -69,26 +102,19 @@ EIGEN_LAPACK_FUNC(gesdd)
 
   if (*jobz == 'A') {
     Eigen::BDCSVD<PlainMatrixType, Eigen::ComputeFullU | Eigen::ComputeFullV> svd(mat);
-    make_vector(s, diag_size) = svd.singularValues().head(diag_size);
-    matrix(u, *m, *m, *ldu) = svd.matrixU();
-    matrix(vt, *n, *n, *ldvt) = svd.matrixV().adjoint();
+    *info = store_svd(svd, diag_size, s, u, *ldu, vt, *ldvt);
   } else if (*jobz == 'N') {
     Eigen::BDCSVD<PlainMatrixType> svd(mat);
-    make_vector(s, diag_size) = svd.singularValues().head(diag_size);
+    *info = store_svd(svd, diag_size, s, nullptr, 0, nullptr, 0);
   } else {
     // JOBZ = 'S' or 'O'; 'O' overwrites A with U if M >= N and with V^H otherwise.
     Eigen::BDCSVD<PlainMatrixType, Eigen::ComputeThinU | Eigen::ComputeThinV> svd(mat);
-    make_vector(s, diag_size) = svd.singularValues().head(diag_size);
-    if (*jobz == 'S') {
-      matrix(u, *m, diag_size, *ldu) = svd.matrixU();
-      matrix(vt, diag_size, *n, *ldvt) = svd.matrixV().adjoint();
-    } else if (*m >= *n) {
-      matrix(a, *m, *n, *lda) = svd.matrixU();
-      matrix(vt, *n, *n, *ldvt) = svd.matrixV().adjoint();
-    } else {
-      matrix(u, *m, *m, *ldu) = svd.matrixU();
-      matrix(a, diag_size, *n, *lda) = svd.matrixV().adjoint();
-    }
+    if (*jobz == 'S')
+      *info = store_svd(svd, diag_size, s, u, *ldu, vt, *ldvt);
+    else if (*m >= *n)
+      *info = store_svd(svd, diag_size, s, a, *lda, vt, *ldvt);
+    else
+      *info = store_svd(svd, diag_size, s, u, *ldu, a, *lda);
   }
 }
 
@@ -151,19 +177,10 @@ EIGEN_LAPACK_FUNC(gesvd)
 
   Eigen::JacobiSVD<PlainMatrixType> svd(mat, option);
 
-  make_vector(s, diag_size) = svd.singularValues().head(diag_size);
-  if (*jobu == 'A')
-    matrix(u, *m, *m, *ldu) = svd.matrixU();
-  else if (*jobu == 'S')
-    matrix(u, *m, diag_size, *ldu) = svd.matrixU();
-  else if (*jobu == 'O')
-    matrix(a, *m, diag_size, *lda) = svd.matrixU();
-  if (*jobv == 'A')
-    matrix(vt, *n, *n, *ldvt) = svd.matrixV().adjoint();
-  else if (*jobv == 'S')
-    matrix(vt, diag_size, *n, *ldvt) = svd.matrixV().adjoint();
-  else if (*jobv == 'O')
-    matrix(a, diag_size, *n, *lda) = svd.matrixV().adjoint();
+  // 'O' overwrites A with U or V^H.
+  Scalar *u_dst = *jobu == 'N' ? nullptr : *jobu == 'O' ? a : u;
+  Scalar *vt_dst = *jobv == 'N' ? nullptr : *jobv == 'O' ? a : vt;
+  *info = store_svd(svd, diag_size, s, u_dst, *jobu == 'O' ? *lda : *ldu, vt_dst, *jobv == 'O' ? *lda : *ldvt);
 }
 
 #undef EIGEN_LAPACK_ARG_IF_COMPLEX
