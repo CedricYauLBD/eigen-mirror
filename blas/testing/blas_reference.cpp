@@ -189,6 +189,14 @@ std::vector<T> strided_vector(Index n, Index inc) {
   return v;
 }
 
+// An output vector of n elements with increment inc; all NaN when beta == 0, where BLAS must not read it.
+template <typename T>
+std::vector<T> output_vector(Index n, Index inc, const T& beta) {
+  std::vector<T> y = strided_vector<T>(n, inc);
+  if (beta == T(0)) std::fill(y.begin(), y.end(), nan_value<T>());
+  return y;
+}
+
 const Index kSizes1[] = {0, 1, 2, 5, 17};
 const Index kIncs1[] = {1, 2, -1, -3, 0};
 
@@ -335,8 +343,6 @@ void check_rot(Pair<F> f) {
         R c = std::cos(angle), s = std::sin(angle);
         BlasInt bn = n, bx = incx, by = incy;
         std::vector<T> xe = strided_vector<T>(n, incx), xr = xe, ye = strided_vector<T>(n, incy), yr = ye;
-        // An infinite real part must leave the imaginary parts finite: the rotation is real.
-        if (n > 1) xe[0] = xr[0] = T(std::numeric_limits<R>::infinity()) + (xe[0] - T(numext::real(xe[0])));
         f.eig(&bn, rp(xe), &bx, rp(ye), &by, &c, &s);
         f.ref(&bn, rp(xr), &bx, rp(yr), &by, &c, &s);
         verify_same(xe, xr, 2, "rot", BLAS_ARGS(BLAS_ARG(n), BLAS_ARG(incx), BLAS_ARG(incy)));
@@ -484,10 +490,8 @@ void check_gemv_gbmv(Pair<Fgemv> gemv, Pair<Fgbmv> gbmv) {
                 const Index lx = trans == 'N' ? n : m, ly = trans == 'N' ? m : n;
                 Dense<T> a(m, n);
                 if (alpha == T(0)) a.fill_nan();
-                std::vector<T> x = strided_vector<T>(lx, incx), ye = strided_vector<T>(ly, incy);
+                std::vector<T> x = strided_vector<T>(lx, incx), ye = output_vector(ly, incy, beta);
                 if (alpha == T(0)) std::fill(x.begin(), x.end(), nan_value<T>());
-                if (beta == T(0))
-                  for (Index i = 0; i < ly; ++i) ye[i * incy] = nan_value<T>();
                 std::vector<T> yr = ye;
                 BlasInt bm = m, bn = n, ld = a.ld, bx = incx, by = incy;
                 const std::string args = BLAS_ARGS(BLAS_ARG(trans), BLAS_ARG(m), BLAS_ARG(n), BLAS_ARG(incx),
@@ -499,9 +503,7 @@ void check_gemv_gbmv(Pair<Fgemv> gemv, Pair<Fgbmv> gbmv) {
                 for (Index kl : {0, 2})
                   for (Index ku : {1, 3}) {
                     Index lb;
-                    std::vector<T> ab = band(a, kl, ku, lb), ybe = strided_vector<T>(ly, incy);
-                    if (beta == T(0))
-                      for (Index i = 0; i < ly; ++i) ybe[i * incy] = nan_value<T>();
+                    std::vector<T> ab = band(a, kl, ku, lb), ybe = output_vector(ly, incy, beta);
                     std::vector<T> ybr = ybe;
                     BlasInt bkl = kl, bku = ku, bld = lb;
                     gbmv.eig(&trans, &bm, &bn, &bkl, &bku, rp(&alpha), rp(ab), &bld, rp(x), &bx, rp(&beta), rp(ybe),
@@ -527,22 +529,16 @@ void check_symmetric_mv(Pair<Fsy> symv, Pair<Fsb> sbmv, Pair<Fsp> spmv, bool her
               if (alpha == T(0)) a.fill_nan();
               std::vector<T> x = strided_vector<T>(n, incx);
               if (alpha == T(0)) std::fill(x.begin(), x.end(), nan_value<T>());
-              auto fresh_y = [&] {
-                std::vector<T> y = strided_vector<T>(n, incy);
-                if (beta == T(0))
-                  for (T& v : y) v = nan_value<T>();
-                return y;
-              };
               BlasInt bn = n, ld = a.ld, bx = incx, by = incy;
               const std::string args = BLAS_ARGS(BLAS_ARG(uplo), BLAS_ARG(n), BLAS_ARG(incx), BLAS_ARG(incy),
                                                  BLAS_ARG(alpha), BLAS_ARG(beta));
-              std::vector<T> ye = fresh_y(), yr = ye;
+              std::vector<T> ye = output_vector(n, incy, beta), yr = ye;
               symv.eig(&uplo, &bn, rp(&alpha), rp(a.data), &ld, rp(x), &bx, rp(&beta), rp(ye), &by);
               symv.ref(&uplo, &bn, rp(&alpha), rp(a.data), &ld, rp(x), &bx, rp(&beta), rp(yr), &by);
               verify_same(ye, yr, n, hermitian ? "hemv" : "symv", args);
 
               std::vector<T> ap = packed(a, uplo);
-              ye = fresh_y(), yr = ye;
+              ye = output_vector(n, incy, beta), yr = ye;
               spmv.eig(&uplo, &bn, rp(&alpha), rp(ap), rp(x), &bx, rp(&beta), rp(ye), &by);
               spmv.ref(&uplo, &bn, rp(&alpha), rp(ap), rp(x), &bx, rp(&beta), rp(yr), &by);
               verify_same(ye, yr, n, hermitian ? "hpmv" : "spmv", args);
@@ -551,7 +547,7 @@ void check_symmetric_mv(Pair<Fsy> symv, Pair<Fsb> sbmv, Pair<Fsp> spmv, bool her
                 Index lb;
                 std::vector<T> ab = band(a, uplo == 'U' ? 0 : k, uplo == 'U' ? k : 0, lb);
                 BlasInt bk = k, bld = lb;
-                ye = fresh_y(), yr = ye;
+                ye = output_vector(n, incy, beta), yr = ye;
                 sbmv.eig(&uplo, &bn, &bk, rp(&alpha), rp(ab), &bld, rp(x), &bx, rp(&beta), rp(ye), &by);
                 sbmv.ref(&uplo, &bn, &bk, rp(&alpha), rp(ab), &bld, rp(x), &bx, rp(&beta), rp(yr), &by);
                 verify_same(ye, yr, 2 * k + 1, hermitian ? "hbmv" : "sbmv", args + BLAS_ARGS(BLAS_ARG(k)));
@@ -663,12 +659,11 @@ void check_symmetric_updates(Pair<Fr1> syr, Pair<Fp1> spr, Pair<Fr2> syr2, Pair<
 
 const Index kSizes3[] = {0, 1, 4, 9, 33};
 
+// An m-by-n output matrix; all NaN when beta == 0, where BLAS must not read it.
 template <typename T>
 Dense<T> output_matrix(Index m, Index n, const T& beta) {
   Dense<T> c(m, n);
-  if (beta == T(0))
-    for (Index j = 0; j < n; ++j)
-      for (Index i = 0; i < m; ++i) c.at(i, j) = nan_value<T>();
+  if (beta == T(0)) c.fill_nan();
   return c;
 }
 
@@ -750,9 +745,11 @@ void check_symm(Pair<F> f, bool hermitian) {
 // syrk and syr2k, or herk and her2k (real alpha and beta for herk, real beta for her2k) when hermitian.
 template <typename T, typename S, typename Frk, typename Fr2k>
 void check_rank_k(Pair<Frk> rk, Pair<Fr2k> r2k, bool hermitian) {
-  const std::vector<char> transes = hermitian                 ? std::vector<char>{'N', 'C'}
-                                    : NumTraits<T>::IsComplex ? std::vector<char>{'N', 'T'}
-                                                              : std::vector<char>{'N', 'T', 'C'};
+  std::vector<char> transes = {'N', 'T', 'C'};
+  if (hermitian)
+    transes = {'N', 'C'};
+  else if (NumTraits<T>::IsComplex)
+    transes = {'N', 'T'};
   for (Index n : kSizes3)
     for (Index k : {0, 1, 9})
       for (char uplo : kUplo)
@@ -765,11 +762,6 @@ void check_rank_k(Pair<Frk> rk, Pair<Fr2k> r2k, bool hermitian) {
               if (a2 == T(0)) a.fill_nan(), b.fill_nan();
               Dense<T> ce = output_matrix(n, n, T(beta));
               ce.triangle(uplo, 'N', hermitian);
-              // A real beta scales each component: an infinite real part leaves the imaginary part finite.
-              if (hermitian && n > 1 && b2 != T(0) && b2 != T(1)) {
-                T& cij = uplo == 'U' ? ce.at(0, 1) : ce.at(1, 0);
-                cij = T(std::numeric_limits<Real<T>>::infinity()) + (cij - T(numext::real(cij)));
-              }
               Dense<T> cr = ce;
               BlasInt bn = n, bk = k, lda = a.ld, ldb = b.ld, ldc = ce.ld;
               const std::string args =
@@ -799,10 +791,7 @@ void check_triangular_mm(Pair<F> trmm, Pair<F> trsm) {
                 Dense<T> a(ka, ka);
                 a.triangle(uplo, diag == 'U' ? 'U' : 'D', false);
                 if (alpha == T(0)) a.fill_nan();
-                Dense<T> be(m, n);
-                if (alpha == T(0))
-                  for (Index j = 0; j < n; ++j)
-                    for (Index i = 0; i < m; ++i) be.at(i, j) = nan_value<T>();
+                Dense<T> be = output_matrix(m, n, alpha);
                 Dense<T> br = be;
                 BlasInt bm = m, bn = n, lda = a.ld, ldb = be.ld;
                 const std::string args = BLAS_ARGS(BLAS_ARG(side), BLAS_ARG(uplo), BLAS_ARG(trans), BLAS_ARG(diag),
@@ -829,6 +818,26 @@ void check_trsm_scaling(Pair<F> f) {
     f.ref(&side, &uplo, &trans, &diag, &one, &one, &alpha, &a, &one, &br, &one);
     verify_same(be, br, 2, "trsm", BLAS_ARGS(BLAS_ARG(side), BLAS_ARG(alpha)));
   }
+}
+
+// A real factor scales each component of a complex number, so an infinite real part leaves the imaginary part finite.
+// Netlib built with gfortran promotes the factor to complex and returns NaN here, so Eigen is checked on its own.
+template <typename T, typename Frot, typename Fherk>
+void check_real_factors(Frot rot, Fherk herk) {
+  using R = Real<T>;
+  const R inf = std::numeric_limits<R>::infinity();
+  BlasInt one = 1, two = 2, zero = 0;
+  R c = R(0.6), s = R(0.8);
+  T x(inf, 1), y(0, 0);
+  rot(&one, rp(&x), &one, rp(&y), &one, &c, &s);
+  VERIFY_IS_EQUAL(numext::imag(x), c);
+  VERIFY_IS_EQUAL(numext::imag(y), -s);
+
+  char uplo = 'U', trans = 'N';
+  R alpha = 1, beta = R(0.5);
+  T a(0, 0), cmat[4] = {T(1, 0), T(0, 0), T(inf, 1), T(2, 0)};
+  herk(&uplo, &trans, &two, &zero, &alpha, rp(&a), &two, &beta, rp(cmat), &two);
+  VERIFY_IS_EQUAL(cmat[2], T(inf, beta));
 }
 
 #define BOTH(f) pair(f##_, f)
@@ -896,6 +905,7 @@ EIGEN_DECLARE_TEST(blas_reference) {
                 check_rank_k<cf, float>(BOTH(cherk), BOTH(cher2k), true),
                 check_rank_k<cd, double>(BOTH(zherk), BOTH(zher2k), true)));
   CALL_SUBTEST(check_trsm_scaling(BOTH(dtrsm)));
+  CALL_SUBTEST((check_real_factors<cf>(csrot_, cherk_), check_real_factors<cd>(zdrot_, zherk_)));
   CALL_SUBTEST((check_triangular_mm<float>(BOTH(strmm), BOTH(strsm)),
                 check_triangular_mm<double>(BOTH(dtrmm), BOTH(dtrsm)),
                 check_triangular_mm<cf>(BOTH(ctrmm), BOTH(ctrsm)), check_triangular_mm<cd>(BOTH(ztrmm), BOTH(ztrsm))));
