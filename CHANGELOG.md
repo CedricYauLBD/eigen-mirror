@@ -9,7 +9,7 @@ New features:
 - `ArrayBase::logicalShiftRight<N>()`, a zero-filling right shift, alongside `arithmeticShiftRight<N>()` and `logicalShiftLeft<N>()` as the spelled-out names for the existing shift operators [!2816]
 - Support building Eigen's in-tree BLAS library with 64-bit (`ILP64`) integers (`eigen_blas_ilp64` and `eigen_blas_ilp64_static`, controlled by `EIGEN_BUILD_BLAS_ILP64`)
 - Support building Eigen's in-tree LAPACK library with 64-bit (`ILP64`) integers (`eigen_lapack_ilp64` and `eigen_lapack_ilp64_static`, controlled by `EIGEN_BUILD_LAPACK_ILP64`), which link against the ILP64 BLAS library
-- `SSYTRF`/`DSYTRF`, `CHETRF`/`ZHETRF` and their `xSYTRS`/`xHETRS` solves in Eigen's LAPACK library, computed by `BunchKaufman`
+- `SSYTRF`/`DSYTRF`, `CHETRF`/`ZHETRF` and their `xSYTRS`/`xHETRS` solves in Eigen's LAPACK library, computed by `BunchKaufman`'s kernel with reference LAPACK's choice of pivots
 - `xPSTRF` in Eigen's LAPACK library, computed by `LDLT`'s complete diagonal pivoting, which stops at the numerical rank
 - `xGETRI`, `xPOTRI`, `xTRTRI`, `xLAUUM` and `xTRTRS` in Eigen's LAPACK library, built on `TriangularView::inverseInPlace()`, the triangular product kernel of `LLT::inverse()` and the blocked triangular solves
 - `CHEEV` and `ZHEEV` in Eigen's LAPACK library, the complex Hermitian counterparts of `SSYEV` and `DSYEV`
