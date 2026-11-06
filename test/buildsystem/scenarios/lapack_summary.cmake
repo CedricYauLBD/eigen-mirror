@@ -222,7 +222,8 @@ endforeach()
 set(dmd "${WORK_DIR}/ddmd.out")
 set(dmd_passed " >>>> Z - U*V test PASSED.\n >>>> A*U test PASSED. \n >>>> Rezidual computation test PASSED.\n >>>> DGEDMD :: ALL TESTS PASSED.\n >>>> DGEDMD and DGEDMDQ computed singular values test PASSED.\n >>>> F - Q*R test PASSED.\n >>>> Rezidual computation test PASSED.\n >>>>>>> DGEDMDQ :: ALL TESTS PASSED.\n")
 file(WRITE "${manifest}" "${dmd}\n")
-foreach(case passed check singular_values run)
+set(dmd_case " FAILED! Something was wrong with the run.\n")
+foreach(case passed check singular_values run summarized stopped)
   set(contents "${dmd_passed}")
   set(result FAILURE)
   if(case STREQUAL "passed")
@@ -237,9 +238,21 @@ foreach(case passed check singular_values run)
                    " DGEDMD and DGEDMDQ discrepancies in the singular values unacceptable            2  times. Test FAILED.\n"
                    contents "${contents}")
     set(expected "6 tests, 2 numerical errors, 0 other errors")
-  else()
-    string(PREPEND contents " FAILED! Something was wrong with the run.\n")
+  elseif(case STREQUAL "run")
+    # A per-case failure line that the summary does not count.
+    string(PREPEND contents "${dmd_case}")
     set(expected "6 tests, 0 numerical errors, 1 other errors")
+  elseif(case STREQUAL "summarized")
+    # Per-case failure lines for the singular-value and F - Q*R checks, which the summary counts again.
+    string(REPLACE " >>>> DGEDMD and DGEDMDQ computed singular values test PASSED.\n >>>> F - Q*R test PASSED.\n"
+                   " DGEDMD and DGEDMDQ discrepancies in the singular values unacceptable            1  times. Test FAILED.\n F - Q*R test FAILED            1  time(s)\n"
+                   contents "${contents}")
+    string(PREPEND contents "${dmd_case}${dmd_case}")
+    set(expected "6 tests, 2 numerical errors, 0 other errors")
+  else()
+    # The driver stopped before its summary.
+    set(contents "${dmd_case}")
+    set(expected "ddmd.out: 0 tests, 0 numerical errors, 1 other errors")
   endif()
   file(WRITE "${dmd}" "${contents}")
   bs_run(WHAT "LAPACK DMD summary: ${case}" EXPECT_RESULT ${result} OUTPUT_VARIABLE output

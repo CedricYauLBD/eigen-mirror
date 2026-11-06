@@ -72,8 +72,15 @@ a warning. When you report on an `nvhpc-tests` run, read the failing tests in th
 
 The job `test:linux:lapack` also sits outside the tiers. It runs reference LAPACK's test drivers and the Fortran BLAS
 tests against Eigen's BLAS and LAPACK libraries, and it is the only job with a Fortran compiler. It runs on schedules,
-web pipelines and default-branch pushes. It also runs on merge requests that change `lapack/`, `blas/`,
-`Eigen/src/Core/products`, the decompositions and triangular inverse the libraries wrap, or the job itself. When a
+web pipelines and default-branch pushes. In the `libeigen` project, it also runs on merge requests that change any of
+these:
+
+- `lapack/`, `blas/`, or `Eigen/src/Core/products`;
+- the decompositions the libraries wrap, and the QR factorizations inside the SVD drivers;
+- the triangular solves, and the in-place triangular inverse in `TriangularInPlace.h`;
+- the job itself.
+
+Merge request pipelines in a fork do not get the job, because a fork need not offer the 2xlarge runner it uses. When a
 merge request changes numerics that reach those libraries from another path, such as a packet kernel, recommend the
 `lapack-tests` label. The job fails on any failure beyond `lapack/testing_allowed_failures.txt`;
 [`lapack/README.md`](../lapack/README.md) records how to update that file.

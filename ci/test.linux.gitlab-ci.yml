@@ -1018,8 +1018,10 @@ test:linux:lapack:
     paths:
       - ${EIGEN_CI_BUILDDIR}/JUnitTestResults_*.xml
       - ${EIGEN_CI_BUILDDIR}/lapack/TESTING/testing_*.txt
+  # Both merge-request entries are namespace-guarded: the job keeps the
+  # 2xlarge runner tag of .test:linux, which a fork's runners need not offer.
   rules:
-    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event" && $CI_PROJECT_NAMESPACE == "libeigen"
       changes:
         - lapack/**/*
         - blas/**/*
@@ -1028,13 +1030,16 @@ test:linux:lapack:
         - Eigen/src/Householder/**/*
         - Eigen/src/Jacobi/**/*
         - Eigen/src/LU/**/*
+        - Eigen/src/QR/**/*
         - Eigen/src/SVD/**/*
         - Eigen/src/Core/products/**/*
+        - Eigen/src/Core/SolveTriangular.h
+        - Eigen/src/Core/TriangularMatrix.h
         - Eigen/src/Core/TriangularInPlace.h
         - ci/test.linux.gitlab-ci.yml
         - ci/scripts/build.linux.script.sh
         - ci/scripts/test.linux.script.sh
-    - if: $CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_LABELS =~ "/(lapack|all)-tests/"
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event" && $CI_PROJECT_NAMESPACE == "libeigen" && $CI_MERGE_REQUEST_LABELS =~ "/(lapack|all)-tests/"
     - !reference [.rules:libeigen:gpu-schedule-guard, rules]
     - if: $CI_PIPELINE_SOURCE == "schedule" && $CI_PROJECT_NAMESPACE == "libeigen"
     - if: $CI_PIPELINE_SOURCE == "web" && $CI_PROJECT_NAMESPACE == "libeigen"

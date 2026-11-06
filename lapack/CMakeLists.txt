@@ -241,7 +241,8 @@ if(EIGEN_ENABLE_LAPACK_TESTS)
 
   if(CMAKE_NM)
     set(symbols_args "")
-    if(TARGET eigen_lapack AND UNIX AND NOT APPLE)
+    # ELF only: Cygwin is UNIX but builds PE DLLs, which nm -D cannot read.
+    if(TARGET eigen_lapack AND UNIX AND NOT APPLE AND NOT CYGWIN)
       set(symbols_args "-DEIGEN_LAPACK_SHARED=$<TARGET_FILE:eigen_lapack>"
                        "-DEIGEN_BLAS_SHARED=$<TARGET_FILE:eigen_blas>")
       add_dependencies(buildtests_lapack eigen_lapack)
