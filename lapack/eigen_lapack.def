@@ -46,6 +46,20 @@ EXPORTS
     clarfb_
     zlarfb_
 
+    ; QR
+    sgeqrf_
+    dgeqrf_
+    cgeqrf_
+    zgeqrf_
+    sorgqr_
+    dorgqr_
+    cungqr_
+    zungqr_
+    sormqr_
+    dormqr_
+    cunmqr_
+    zunmqr_
+
     ; Eigenvalues
     ssyev_
     dsyev_

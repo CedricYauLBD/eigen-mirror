@@ -20,4 +20,5 @@
 #include "eigenvalues.inc"
 #include "svd.inc"
 #include "householder.inc"
+#include "qr.inc"
 #include "utilities.inc"

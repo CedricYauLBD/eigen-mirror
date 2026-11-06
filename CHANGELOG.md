@@ -21,6 +21,7 @@ New features:
 - `LLT::inverse()` and `TriangularView::inverseInPlace()`, which invert in place by the recurrences of LAPACK's `xPOTRI` and `xTRTRI`: each triangle bounds the right residual `|X T - I|` as `xTRTRI` does, so `LLT<Lower>::inverse()` bounds `|X_L L - I|` and `LLT<Upper>::inverse()` the left residual of `L = U^*`, as `xPOTRI` 'L' and 'U' do. Intermediate products overflow in the order of `xTRTRI`'s recurrence: a column-graded `U` such as `[[2^-600, 2^600], [0, 2^600]]` can overflow where the exact inverse is finite [!2977]
 - Eigen's LAPACK library implements `xGETRI`, `xPOTRI`, `xTRTRI`, `xLAUUM` and `xTRTRS` for `s`, `d`, `c` and `z`, on top of `TriangularView::inverseInPlace()` and the blocked triangular solves
 - LAPACK shim routines `CHEEV` and `ZHEEV`, the complex Hermitian counterparts of `SSYEV` and `DSYEV`
+- `xGEQRF`, `xORGQR`/`xUNGQR` and `xORMQR`/`xUNMQR` (`s`, `d`, `c`, `z`) in Eigen's LAPACK library, built on Eigen's blocked Householder QR and block-reflector kernels
 
 Bug fixes:
 - `SelfAdjointEigenSolver` and `GeneralizedSelfAdjointEigenSolver` with complex scalars let the imaginary part of the diagonal of the input, which a selfadjoint matrix does not have, affect the result: an infinite or NaN imaginary part gave `NoConvergence`, a huge one gave wrong eigenvalues with `Success`, and in the generalized solver any nonzero one spread into the off-diagonal of the reduced matrix; they now ignore that part, as LAPACK's `xHEEV` and `xHEGV` do [!3503]
