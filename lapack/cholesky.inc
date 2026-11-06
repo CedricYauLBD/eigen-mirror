@@ -81,7 +81,6 @@ EIGEN_LAPACK_FUNC(potrs)
 
 namespace {
 
-using LapackTranspositions = Eigen::Transpositions<Eigen::Dynamic, Eigen::Dynamic, EIGEN_BLAS_INT>;
 using ScalarVector = Eigen::Matrix<Scalar, Eigen::Dynamic, 1>;
 
 // LAPACK factors A = U D U^* from its last column, which is the lower factorization of J A J, J the reversal, with
@@ -92,7 +91,7 @@ EIGEN_BLAS_INT reversed_pivot(EIGEN_BLAS_INT p, EIGEN_BLAS_INT n) { return p > 0
 // only, so later interchanges are undone on earlier columns, last block first. IPIV(k) = p: 1x1 block, rows k, p
 // swapped. IPIV(k) = IPIV(k+1) = -p: 2x2 block, rows k+1, p swapped, D(k+1,k) in A(k+1,k). Returns xSYTRF's INFO.
 template <typename Mat>
-EIGEN_BLAS_INT bunch_kaufman_to_lapack(Mat &A, const LapackTranspositions &transpositions, const ScalarVector &subdiag,
+EIGEN_BLAS_INT bunch_kaufman_to_lapack(Mat &A, const TranspositionsType &transpositions, const ScalarVector &subdiag,
                                        EIGEN_BLAS_INT *ipiv) {
   const EIGEN_BLAS_INT n = EIGEN_BLAS_INT(A.rows());
   EIGEN_BLAS_INT info = 0;
@@ -117,9 +116,9 @@ EIGEN_BLAS_INT bunch_kaufman_to_lapack(Mat &A, const LapackTranspositions &trans
   return info;
 }
 
-void bunch_kaufman_factor(const char *uplo, EIGEN_BLAS_INT *n, RealScalar *pa, EIGEN_BLAS_INT *lda,
-                          EIGEN_BLAS_INT *ipiv, RealScalar *pwork, EIGEN_BLAS_INT *lwork, EIGEN_BLAS_INT *info,
-                          const char *name) {
+// SYTRF / HETRF.
+void bunch_kaufman_factor(const char *name, const char *uplo, EIGEN_BLAS_INT *n, RealScalar *pa, EIGEN_BLAS_INT *lda,
+                          EIGEN_BLAS_INT *ipiv, RealScalar *pwork, EIGEN_BLAS_INT *lwork, EIGEN_BLAS_INT *info) {
   *info = 0;
   const bool query = *lwork == -1;
   if (UPLO(*uplo) == INVALID)
@@ -140,7 +139,7 @@ void bunch_kaufman_factor(const char *uplo, EIGEN_BLAS_INT *n, RealScalar *pa, E
   if (query || *n == 0) return;
 
   MatrixType A(reinterpret_cast<Scalar *>(pa), *n, *n, *lda);
-  LapackTranspositions transpositions(*n);
+  TranspositionsType transpositions(*n);
   ScalarVector subdiag(*n);
   PlainMatrixType workspace;
   if (UPLO(*uplo) == LO) {
@@ -159,9 +158,10 @@ void bunch_kaufman_factor(const char *uplo, EIGEN_BLAS_INT *n, RealScalar *pa, E
   }
 }
 
-void bunch_kaufman_solve(const char *uplo, EIGEN_BLAS_INT *n, EIGEN_BLAS_INT *nrhs, RealScalar *pa, EIGEN_BLAS_INT *lda,
-                         EIGEN_BLAS_INT *ipiv, RealScalar *pb, EIGEN_BLAS_INT *ldb, EIGEN_BLAS_INT *info,
-                         const char *name) {
+// SYTRS / HETRS.
+void bunch_kaufman_solve(const char *name, const char *uplo, EIGEN_BLAS_INT *n, EIGEN_BLAS_INT *nrhs, RealScalar *pa,
+                         EIGEN_BLAS_INT *lda, EIGEN_BLAS_INT *ipiv, RealScalar *pb, EIGEN_BLAS_INT *ldb,
+                         EIGEN_BLAS_INT *info) {
   *info = 0;
   if (UPLO(*uplo) == INVALID)
     *info = -1;
@@ -195,7 +195,7 @@ void bunch_kaufman_solve(const char *uplo, EIGEN_BLAS_INT *n, EIGEN_BLAS_INT *nr
     L.triangularView<Eigen::Lower>() = A;
     pivots = Eigen::Map<const Eigen::Matrix<EIGEN_BLAS_INT, Eigen::Dynamic, 1>>(ipiv, size);
   }
-  LapackTranspositions transpositions(size);
+  TranspositionsType transpositions(size);
   ScalarVector subdiag = ScalarVector::Zero(size);
   for (EIGEN_BLAS_INT k = 0; k < size;) {
     const bool block2 = pivots(k) < 0;
@@ -254,7 +254,7 @@ template <typename Mat>
 EIGEN_BLAS_INT pivoted_cholesky_lower(Mat &mat, RealScalar dstop, EIGEN_BLAS_INT *piv) {
   using Eigen::Index;
   const Index size = mat.rows();
-  LapackTranspositions transpositions(size);
+  TranspositionsType transpositions(size);
   ScalarVector temp = mat.diagonal().real().template cast<Scalar>();
   PlainMatrixType workspace;
   Eigen::internal::SignMatrix sign = Eigen::internal::ZeroSign;
@@ -349,35 +349,35 @@ EIGEN_LAPACK_FUNC(pstrf)
 #if ISCOMPLEX
 // HETRF computes the Bunch-Kaufman factorization A = U D U^H or L D L^H of a complex Hermitian matrix.
 EIGEN_LAPACK_FUNC(hetrf)
-(const char *uplo, EIGEN_BLAS_INT *n, RealScalar *pa, EIGEN_BLAS_INT *lda, EIGEN_BLAS_INT *ipiv, RealScalar *work,
+(const char *uplo, EIGEN_BLAS_INT *n, RealScalar *pa, EIGEN_BLAS_INT *lda, EIGEN_BLAS_INT *ipiv, RealScalar *pwork,
  EIGEN_BLAS_INT *lwork, EIGEN_BLAS_INT *info) {
-  bunch_kaufman_factor(uplo, n, pa, lda, ipiv, work, lwork, info, SCALAR_SUFFIX_UP "HETRF");
+  bunch_kaufman_factor(SCALAR_SUFFIX_UP "HETRF", uplo, n, pa, lda, ipiv, pwork, lwork, info);
 }
 
 // HETRS solves A X = B with the factorization computed by HETRF.
 EIGEN_LAPACK_FUNC(hetrs)
 (const char *uplo, EIGEN_BLAS_INT *n, EIGEN_BLAS_INT *nrhs, RealScalar *pa, EIGEN_BLAS_INT *lda, EIGEN_BLAS_INT *ipiv,
  RealScalar *pb, EIGEN_BLAS_INT *ldb, EIGEN_BLAS_INT *info) {
-  bunch_kaufman_solve(uplo, n, nrhs, pa, lda, ipiv, pb, ldb, info, SCALAR_SUFFIX_UP "HETRS");
+  bunch_kaufman_solve(SCALAR_SUFFIX_UP "HETRS", uplo, n, nrhs, pa, lda, ipiv, pb, ldb, info);
 }
 #else
 // SYTRF computes the Bunch-Kaufman factorization A = U D U^T or L D L^T of a real symmetric matrix.
 EIGEN_LAPACK_FUNC(sytrf)
-(const char *uplo, EIGEN_BLAS_INT *n, RealScalar *pa, EIGEN_BLAS_INT *lda, EIGEN_BLAS_INT *ipiv, RealScalar *work,
+(const char *uplo, EIGEN_BLAS_INT *n, RealScalar *pa, EIGEN_BLAS_INT *lda, EIGEN_BLAS_INT *ipiv, RealScalar *pwork,
  EIGEN_BLAS_INT *lwork, EIGEN_BLAS_INT *info) {
-  bunch_kaufman_factor(uplo, n, pa, lda, ipiv, work, lwork, info, SCALAR_SUFFIX_UP "SYTRF");
+  bunch_kaufman_factor(SCALAR_SUFFIX_UP "SYTRF", uplo, n, pa, lda, ipiv, pwork, lwork, info);
 }
 
 // SYTRS solves A X = B with the factorization computed by SYTRF.
 EIGEN_LAPACK_FUNC(sytrs)
 (const char *uplo, EIGEN_BLAS_INT *n, EIGEN_BLAS_INT *nrhs, RealScalar *pa, EIGEN_BLAS_INT *lda, EIGEN_BLAS_INT *ipiv,
  RealScalar *pb, EIGEN_BLAS_INT *ldb, EIGEN_BLAS_INT *info) {
-  bunch_kaufman_solve(uplo, n, nrhs, pa, lda, ipiv, pb, ldb, info, SCALAR_SUFFIX_UP "SYTRS");
+  bunch_kaufman_solve(SCALAR_SUFFIX_UP "SYTRS", uplo, n, nrhs, pa, lda, ipiv, pb, ldb, info);
 }
 #endif
 
 // POTRI computes the inverse of a symmetric (Hermitian) positive definite matrix from its Cholesky factor computed by
-// POTRF: inv(A) = inv(U) * inv(U)**H (UPLO = 'U') or inv(L)**H * inv(L) (UPLO = 'L'), stored in the same triangle.
+// POTRF: inv(A) = inv(U) inv(U)^H (UPLO = 'U') or inv(L)^H inv(L) (UPLO = 'L'), stored in the same triangle.
 // INFO = i > 0 means the factor's diagonal entry (i,i) is zero, and the inverse is not computed.
 EIGEN_LAPACK_FUNC(potri)
 (const char *uplo, EIGEN_BLAS_INT *n, RealScalar *pa, EIGEN_BLAS_INT *lda, EIGEN_BLAS_INT *info) {

@@ -98,11 +98,20 @@ XerblaRecord g_xerbla;
 void reset_xerbla() { g_xerbla = XerblaRecord(); }
 
 // Exactly one call, with this routine name and positive argument number; consumes it.
-void verify_xerbla(const char* name, int info) {
+void verify_xerbla(const std::string& name, int info) {
   VERIFY_IS_EQUAL(g_xerbla.calls, 1);
   VERIFY_IS_EQUAL(g_xerbla.info, info);
   VERIFY(g_xerbla.name == name);
   reset_xerbla();
+}
+
+// The name that the routine of Scalar's precision passes to XERBLA, given the name without its precision prefix for
+// real and for complex Scalar.
+template <typename Scalar>
+std::string xerbla_name(const char* real_name, const char* complex_name) {
+  const bool single = sizeof(RealOf<Scalar>) == sizeof(float);
+  if (NumTraits<Scalar>::IsComplex) return std::string(single ? "C" : "Z") + complex_name;
+  return std::string(single ? "S" : "D") + real_name;
 }
 
 }  // namespace
@@ -454,9 +463,7 @@ void test_bunch_kaufman_singular() {
   reset_xerbla();
   Lapack<Scalar>::bktrf("L", &n, rp(A.data()), &lda, ipiv, rp(&work), &lwork, &info);
   VERIFY_IS_EQUAL(info, -7);
-  verify_xerbla(NumTraits<Scalar>::IsComplex ? (sizeof(Real) == 4 ? "CHETRF" : "ZHETRF")
-                                             : (sizeof(Real) == 4 ? "SSYTRF" : "DSYTRF"),
-                7);
+  verify_xerbla(xerbla_name<Scalar>("SYTRF", "HETRF"), 7);
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -549,9 +556,11 @@ void test_trtrs() {
           VERIFY(same_bits(A, A_before));
           // ||op(T) X - B|| <= c n eps ||T|| ||X||: a triangular solve is backward stable, componentwise.
           const Mat<Scalar> Teff = triangle(T, uplo, unit);
-          const Mat<Scalar> op = trans == 'N'   ? Teff
-                                 : trans == 'T' ? Mat<Scalar>(Teff.transpose())
-                                                : Mat<Scalar>(Teff.adjoint());
+          Mat<Scalar> op = Teff;
+          if (trans == 'T')
+            op = Teff.transpose();
+          else if (trans == 'C')
+            op = Teff.adjoint();
           const Real err = (op * X - B).norm();
           VERIFY(err <= 8 * n * eps * Teff.norm() * X.norm());
         }
@@ -651,9 +660,8 @@ void test_getri() {
       reset_xerbla();
       Lapack<Scalar>::getri(&nn, rp(X.data()), &lda, ipiv.data(), rp(work.data()), &lwork, &info);
       VERIFY_IS_EQUAL(info, -6);
-      VERIFY_IS_EQUAL(g_xerbla.info, 6);
+      verify_xerbla(xerbla_name<Scalar>("GETRI", "GETRI"), 6);
       VERIFY(same_bits(X, lu_before));
-      reset_xerbla();
     }
   }
 
@@ -679,7 +687,7 @@ constexpr int ev_workspace_factor() {
   return NumTraits<Scalar>::IsComplex ? 2 : 3;  // minimum LWORK is factor * N - 1
 }
 
-// JOBZ = 'N' or 'V' on a symmetric/Hermitian A0 of order n; sets A to the eigenvectors for 'V'.
+// Query, then JOBZ = 'N' or 'V' on a symmetric or Hermitian A, which holds the eigenvectors after 'V'. Returns INFO.
 template <typename Scalar>
 int call_ev(char jobz, char uplo, Mat<Scalar>& A, RealOf<Scalar>* w) {
   int n = int(A.rows()), lda = n, lwork = -1, info = -99;
@@ -781,8 +789,7 @@ template <typename Scalar>
 void test_ev_work_one() {
   using Real = RealOf<Scalar>;
   const int n = 5, min_lwork = ev_workspace_factor<Scalar>() * n - 1;
-  const char* name =
-      NumTraits<Scalar>::IsComplex ? (sizeof(Real) == 4 ? "CHEEV" : "ZHEEV") : (sizeof(Real) == 4 ? "SSYEV" : "DSYEV");
+  const std::string name = xerbla_name<Scalar>("SYEV", "HEEV");
   Vec<Scalar> work = Vec<Scalar>::Constant(2 * min_lwork, Scalar(-7));
   Vec<Real> w(n);
   char jobz = 'V', uplo = 'L';
@@ -942,10 +949,7 @@ void test_ormqr(int nq) {
 // with C untouched.
 template <typename Scalar>
 void test_ormqr_wrong_trans() {
-  using Real = RealOf<Scalar>;
   const char wrong = NumTraits<Scalar>::IsComplex ? 'T' : 'C';
-  const char* name = NumTraits<Scalar>::IsComplex ? (sizeof(Real) == 4 ? "CUNMQR" : "ZUNMQR")
-                                                  : (sizeof(Real) == 4 ? "SORMQR" : "DORMQR");
   Mat<Scalar> A = Mat<Scalar>::Random(5, 3);
   Vec<Scalar> tau;
   geqrf(A, tau, 3);
@@ -958,9 +962,22 @@ void test_ormqr_wrong_trans() {
     Lapack<Scalar>::qrmul(&side, &wrong, &m, &n, &k, rp(A.data()), &lda, rp(tau.data()), rp(C.data()), &ldc,
                           rp(work.data()), &lwork, &info);
     VERIFY_IS_EQUAL(info, -2);
-    verify_xerbla(name, 2);
+    verify_xerbla(xerbla_name<Scalar>("ORMQR", "UNMQR"), 2);
     VERIFY(same_bits(C, before));
   }
+}
+
+template <typename Scalar>
+void test_qr_all() {
+  const struct {
+    int m, n;
+  } shapes[] = {{1, 1}, {6, 4}, {4, 6}, {5, 5}, {1, 5}, {5, 1}, {150, 100}, {100, 150}, {130, 130}};
+  for (const auto& s : shapes) {
+    test_qr_factor<Scalar>(s.m, s.n);
+    test_orgqr_fewer_reflectors<Scalar>(s.m, (std::min)(s.m, s.n));
+  }
+  for (int nq : {5, 40, 150}) test_ormqr<Scalar>(nq);
+  test_ormqr_wrong_trans<Scalar>();
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -1040,19 +1057,6 @@ void test_workspace_query_rounding() {
     VERIFY_IS_EQUAL(info, 0);
     VERIFY(as_integer(work2[0]) >= 64LL * n);
   }
-}
-
-template <typename Scalar>
-void test_qr_all() {
-  const struct {
-    int m, n;
-  } shapes[] = {{1, 1}, {6, 4}, {4, 6}, {5, 5}, {1, 5}, {5, 1}, {150, 100}, {100, 150}, {130, 130}};
-  for (const auto& s : shapes) {
-    test_qr_factor<Scalar>(s.m, s.n);
-    test_orgqr_fewer_reflectors<Scalar>(s.m, (std::min)(s.m, s.n));
-  }
-  for (int nq : {5, 40, 150}) test_ormqr<Scalar>(nq);
-  test_ormqr_wrong_trans<Scalar>();
 }
 
 void test_no_stray_xerbla() { VERIFY_IS_EQUAL(g_xerbla.calls, 0); }

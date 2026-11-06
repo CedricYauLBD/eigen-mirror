@@ -9,7 +9,11 @@ New features:
 - `ArrayBase::logicalShiftRight<N>()`, a zero-filling right shift, alongside `arithmeticShiftRight<N>()` and `logicalShiftLeft<N>()` as the spelled-out names for the existing shift operators [!2816]
 - Support building Eigen's in-tree BLAS library with 64-bit (`ILP64`) integers (`eigen_blas_ilp64` and `eigen_blas_ilp64_static`, controlled by `EIGEN_BUILD_BLAS_ILP64`)
 - Support building Eigen's in-tree LAPACK library with 64-bit (`ILP64`) integers (`eigen_lapack_ilp64` and `eigen_lapack_ilp64_static`, controlled by `EIGEN_BUILD_LAPACK_ILP64`), which link against the ILP64 BLAS library
-- Eigen's in-tree LAPACK library adds `SSYTRF`/`DSYTRF`, `CHETRF`/`ZHETRF` and their `xSYTRS`/`xHETRS` solves, computed by `BunchKaufman`, and `xPSTRF`, computed by `LDLT`'s complete diagonal pivoting, which stops at the numerical rank
+- `SSYTRF`/`DSYTRF`, `CHETRF`/`ZHETRF` and their `xSYTRS`/`xHETRS` solves in Eigen's LAPACK library, computed by `BunchKaufman`
+- `xPSTRF` in Eigen's LAPACK library, computed by `LDLT`'s complete diagonal pivoting, which stops at the numerical rank
+- `xGETRI`, `xPOTRI`, `xTRTRI`, `xLAUUM` and `xTRTRS` in Eigen's LAPACK library, built on `TriangularView::inverseInPlace()`, the triangular product kernel of `LLT::inverse()` and the blocked triangular solves
+- `CHEEV` and `ZHEEV` in Eigen's LAPACK library, the complex Hermitian counterparts of `SSYEV` and `DSYEV`
+- `xGEQRF`, `xORGQR`/`xUNGQR` and `xORMQR`/`xUNMQR` in Eigen's LAPACK library, built on Eigen's blocked Householder QR and block-reflector kernels
 - `PreconditionSquareMatrix` option, which applies JacobiSVD's QR preconditioners to square matrices. BDCSVD forwards this option to JacobiSVD for matrices smaller than the switch size [!3212]
 - `DenseBase::replicate` and `VectorwiseOp::replicate` accept `Eigen::fix<N>` factors [!3262, !3282]
 - `SelfAdjointView::applyPermutation()` and `SelfAdjointView::applyTransposition()`, which replace the viewed matrix `S` by `P S P^T` in place, reading and writing only the stored triangle [#3174, !3395]
@@ -18,9 +22,6 @@ New features:
 - A matrix-matrix product whose operand is a cast of a real matrix with direct access, such as `A.cast<float>() * B.cast<float>()` or `A * B.cast<float>()`, converts that operand while packing it instead of materializing the cast, unless `EIGEN_USE_BLAS` is defined or SME is enabled [!3454]
 - `LLT::inverse()` and `TriangularView::inverseInPlace()`, which invert in place by the recurrences of LAPACK's `xPOTRI` and `xTRTRI`: each triangle bounds the right residual `|X T - I|` as `xTRTRI` does, so `LLT<Lower>::inverse()` bounds `|X_L L - I|` and `LLT<Upper>::inverse()` the left residual of `L = U^*`, as `xPOTRI` 'L' and 'U' do on the POTRI path; for a real `n` below `EIGEN_LLT_INVERSE_POTRI_THRESHOLD` and a separate destination, `LLT::inverse()` solves against the identity instead. Intermediate products overflow in the order of `xTRTRI`'s recurrence: a column-graded `U` such as `[[2^-600, 2^600], [0, 2^600]]` can overflow where the exact inverse is finite [!2977]
 - `LLT::inverse()` and `TriangularView::inverseInPlace()`, which invert in place by the recurrences of LAPACK's `xPOTRI` and `xTRTRI`: each triangle bounds the right residual `|X T - I|` as `xTRTRI` does, so `LLT<Lower>::inverse()` bounds `|X_L L - I|` and `LLT<Upper>::inverse()` the left residual of `L = U^*`, as `xPOTRI` 'L' and 'U' do. Intermediate products overflow in the order of `xTRTRI`'s recurrence: a column-graded `U` such as `[[2^-600, 2^600], [0, 2^600]]` can overflow where the exact inverse is finite [!2977]
-- Eigen's LAPACK library implements `xGETRI`, `xPOTRI`, `xTRTRI`, `xLAUUM` and `xTRTRS` for `s`, `d`, `c` and `z`, on top of `TriangularView::inverseInPlace()` and the blocked triangular solves
-- LAPACK shim routines `CHEEV` and `ZHEEV`, the complex Hermitian counterparts of `SSYEV` and `DSYEV`
-- `xGEQRF`, `xORGQR`/`xUNGQR` and `xORMQR`/`xUNMQR` (`s`, `d`, `c`, `z`) in Eigen's LAPACK library, built on Eigen's blocked Householder QR and block-reflector kernels
 
 Bug fixes:
 - `SelfAdjointEigenSolver` and `GeneralizedSelfAdjointEigenSolver` with complex scalars let the imaginary part of the diagonal of the input, which a selfadjoint matrix does not have, affect the result: an infinite or NaN imaginary part gave `NoConvergence`, a huge one gave wrong eigenvalues with `Success`, and in the generalized solver any nonzero one spread into the off-diagonal of the reduced matrix; they now ignore that part, as LAPACK's `xHEEV` and `xHEGV` do

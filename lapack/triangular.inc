@@ -14,7 +14,7 @@ EIGEN_BLAS_INT first_zero_diagonal_entry(const MatrixType &A) {
   return 0;
 }
 
-// Solves op(T) * X = B in place, where op(T) is T (NOTR), T**T (TR) or T**H (ADJ).
+// Solves op(T) X = B in place, where op(T) is T (NOTR), T^T (TR) or T^H (ADJ).
 template <typename TriangularViewType>
 void triangular_solve_in_place(TriangularViewType T, EIGEN_BLAS_INT op, MatrixType &B) {
   if (op == NOTR)
@@ -48,8 +48,7 @@ EIGEN_LAPACK_FUNC(trtri)
 
   if (*n == 0) return;
 
-  Scalar *a = reinterpret_cast<Scalar *>(pa);
-  MatrixType A(a, *n, *n, *lda);
+  MatrixType A(reinterpret_cast<Scalar *>(pa), *n, *n, *lda);
   const bool unit = DIAG(*diag) == UNIT;
   if (!unit) {
     *info = first_zero_diagonal_entry(A);
@@ -69,7 +68,7 @@ EIGEN_LAPACK_FUNC(trtri)
   }
 }
 
-// LAUUM computes the product U * U**H (UPLO = 'U') or L**H * L (UPLO = 'L'), overwriting the triangular factor
+// LAUUM computes the product U U^H (UPLO = 'U') or L^H L (UPLO = 'L'), overwriting the triangular factor
 // stored in the same triangle of A with the corresponding triangle of the Hermitian result. The other triangle is
 // not referenced. The computed diagonal is real.
 EIGEN_LAPACK_FUNC(lauum)
@@ -88,15 +87,14 @@ EIGEN_LAPACK_FUNC(lauum)
 
   if (*n == 0) return;
 
-  Scalar *a = reinterpret_cast<Scalar *>(pa);
-  MatrixType A(a, *n, *n, *lda);
+  MatrixType A(reinterpret_cast<Scalar *>(pa), *n, *n, *lda);
   if (UPLO(*uplo) == UP)
     Eigen::internal::triangular_adjoint_square_in_place<Eigen::Upper>(A);
   else
     Eigen::internal::triangular_adjoint_square_in_place<Eigen::Lower>(A);
 }
 
-// TRTRS solves op(A) * X = B with a triangular matrix A, where op(A) is A, A**T or A**H, overwriting B with X.
+// TRTRS solves op(A) X = B with a triangular matrix A, where op(A) is A, A^T or A^H, overwriting B with X.
 // INFO = i > 0 means A(i,i) is exactly zero (DIAG = 'N'); B is then not modified.
 EIGEN_LAPACK_FUNC(trtrs)
 (const char *uplo, const char *trans, const char *diag, EIGEN_BLAS_INT *n, EIGEN_BLAS_INT *nrhs, RealScalar *pa,
@@ -123,10 +121,8 @@ EIGEN_LAPACK_FUNC(trtrs)
 
   if (*n == 0) return;
 
-  Scalar *a = reinterpret_cast<Scalar *>(pa);
-  Scalar *b = reinterpret_cast<Scalar *>(pb);
-  MatrixType A(a, *n, *n, *lda);
-  MatrixType B(b, *n, *nrhs, *ldb);
+  MatrixType A(reinterpret_cast<Scalar *>(pa), *n, *n, *lda);
+  MatrixType B(reinterpret_cast<Scalar *>(pb), *n, *nrhs, *ldb);
   const bool unit = DIAG(*diag) == UNIT;
   if (!unit) {
     *info = first_zero_diagonal_entry(A);

@@ -40,7 +40,7 @@ EIGEN_LAPACK_FUNC(getrf)
   if (ret >= 0) *info = ret + 1;
 }
 
-// GETRS solves op(A) * X = B, where op(A) is A, A**T or A**H, with a general N-by-N matrix A using the LU
+// GETRS solves op(A) X = B, where op(A) is A, A^T or A^H, with a general N-by-N matrix A using the LU
 // factorization computed by GETRF.
 EIGEN_LAPACK_FUNC(getrs)
 (const char *trans, EIGEN_BLAS_INT *n, EIGEN_BLAS_INT *nrhs, RealScalar *pa, EIGEN_BLAS_INT *lda, EIGEN_BLAS_INT *ipiv,
@@ -69,7 +69,7 @@ EIGEN_LAPACK_FUNC(getrs)
   using Eigen::UnitLower;
   using Eigen::Upper;
   // IPIV is input-only (and may be shared by concurrent solves): convert to 0-based indices in a copy.
-  Eigen::Transpositions<Eigen::Dynamic, Eigen::Dynamic, EIGEN_BLAS_INT> pivots(*n);
+  TranspositionsType pivots(*n);
   for (EIGEN_BLAS_INT i = 0; i < *n; ++i) pivots.indices()(i) = ipiv[i] - 1;
   if (OP(*trans) == NOTR) {
     B = pivots * B;
@@ -87,7 +87,7 @@ EIGEN_LAPACK_FUNC(getrs)
 }
 
 // GETRI computes the inverse of a matrix using the LU factorization computed by GETRF: inv(A) is found by solving
-// inv(A) * L = inv(U). WORK(1) returns the optimal LWORK on a workspace query (LWORK = -1) and the workspace used
+// inv(A) L = inv(U). WORK(1) returns the optimal LWORK on a workspace query (LWORK = -1) and the workspace used
 // otherwise; LWORK >= N suffices, and LWORK >= 64 * N lets the solve run on block columns.
 EIGEN_LAPACK_FUNC(getri)
 (EIGEN_BLAS_INT *n, RealScalar *pa, EIGEN_BLAS_INT *lda, EIGEN_BLAS_INT *ipiv, RealScalar *pwork, EIGEN_BLAS_INT *lwork,
@@ -115,8 +115,7 @@ EIGEN_LAPACK_FUNC(getri)
   if (*info > 0) return;
 
   const Eigen::Index size = *n;
-  Scalar *a = reinterpret_cast<Scalar *>(pa);
-  MatrixType A(a, size, size, *lda);
+  MatrixType A(reinterpret_cast<Scalar *>(pa), size, size, *lda);
   Eigen::Index nb = kGetriBlockSize;
   Eigen::Index iws = size;
   if (nb < size) {
@@ -124,7 +123,7 @@ EIGEN_LAPACK_FUNC(getri)
     if (*lwork < iws) nb = *lwork / size;
   }
 
-  // Column j of inv(A) is column j of inv(U) minus inv(A)(:, j+1:n) * L(j+1:n, j), with the strictly lower part of L
+  // Column j of inv(A) is column j of inv(U) minus inv(A)(:, j+1:n) L(j+1:n, j), with the strictly lower part of L
   // copied to WORK and zeroed in A so that the columns to the right already hold inv(A) when they are used.
   // Block columns of width nb take the same step with a GEMM and a unit-lower right triangular solve.
   if (nb < kNbMin || nb >= size) {
@@ -151,7 +150,7 @@ EIGEN_LAPACK_FUNC(getri)
     }
   }
 
-  // inv(A) = inv(U) * inv(L) * P**T, where A = P * L * U.
+  // inv(A) = inv(U) inv(L) P^T, where A = P L U.
   for (Eigen::Index j = size - 2; j >= 0; --j) {
     const Eigen::Index jp = ipiv[j] - 1;
     if (jp != j) A.col(j).swap(A.col(jp));
