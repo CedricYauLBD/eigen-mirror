@@ -1046,6 +1046,51 @@ test:linux:lapack:
     - if: $CI_PIPELINE_SOURCE == "web" && $CI_PROJECT_NAMESPACE == "libeigen"
     - if: $CI_PIPELINE_SOURCE == "push" && $CI_PROJECT_NAMESPACE == "libeigen" && $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
 
+# Eigen's BLAS library against netlib's: the netlib test drivers (LP64 and
+# ILP64), and blas_reference, which runs every routine of both libraries on the
+# same inputs.  Builds its own tree because the drivers need gfortran, which no
+# build job installs.
+test:linux:blas:
+  extends: .test:linux
+  needs: []
+  variables:
+    EIGEN_CI_TARGET_ARCH: x86_64
+    EIGEN_CI_CROSS_TARGET_TRIPLE: x86_64-linux-gnu
+    EIGEN_CI_C_COMPILER: gcc-13
+    EIGEN_CI_CXX_COMPILER: g++-13
+    EIGEN_CI_INSTALL: gcc-13 g++-13 gfortran-13
+    EIGEN_CI_ADDITIONAL_ARGS: >-
+      -DCMAKE_BUILD_TYPE=Release
+      -DCMAKE_Fortran_COMPILER=gfortran-13
+      -DEIGEN_TEST_BLAS_REFERENCE=ON
+    EIGEN_CI_BUILD_TARGET: buildtests_blas
+    EIGEN_CI_CTEST_LABEL: blas
+    EIGEN_CI_CTEST_ARGS: --no-tests=error
+    EIGEN_CI_TEST_CACHE: "off"
+    EIGEN_CI_CTEST_REPEAT: "1"
+  script:
+    - . ci/scripts/build.linux.script.sh
+    - . ci/scripts/test.linux.script.sh
+  tags:
+    - saas-linux-large-amd64
+  cache: []
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      changes:
+        - blas/**/*
+        - Eigen/Core
+        - Eigen/Jacobi
+        - Eigen/src/Core/**/*
+        - Eigen/src/Jacobi/**/*
+        - ci/test.linux.gitlab-ci.yml
+        - ci/scripts/build.linux.script.sh
+        - ci/scripts/test.linux.script.sh
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_LABELS =~ "/all-tests/"
+    - !reference [.rules:libeigen:gpu-schedule-guard, rules]
+    - if: $CI_PIPELINE_SOURCE == "schedule" && $CI_PROJECT_NAMESPACE == "libeigen"
+    - if: $CI_PIPELINE_SOURCE == "web" && $CI_PROJECT_NAMESPACE == "libeigen"
+    - if: $CI_PIPELINE_SOURCE == "push" && $CI_PROJECT_NAMESPACE == "libeigen" && $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+
 ##### MR Affected Tests ########################################################
 # Paired with the affected build jobs.  No CTest label is set: the regex from
 # select:tests is the only filter, so a selection spanning Official and
