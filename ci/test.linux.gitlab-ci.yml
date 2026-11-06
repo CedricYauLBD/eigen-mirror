@@ -955,6 +955,7 @@ test:linux:buildsystem:
         - Eigen/Version
         - blas/CMakeLists.txt
         - lapack/CMakeLists.txt
+        - lapack/*.cmake
         - contrib/**/CMakeLists.txt
         - unsupported/**/CMakeLists.txt
         - doc/CMakeLists.txt
@@ -986,7 +987,9 @@ test:linux:buildsystem:
 # job installs, and the summary reads files the drivers write, so a build/test
 # pair would only add an artifact round trip.  It stays off the pass cache: a
 # skipped driver would leave the summary without its output.  The drivers are
-# deterministic, so a failure is not retried.
+# deterministic, so EIGEN_CI_CTEST_REPEAT allows one retry rather than three.
+# Retrying LAPACK_Test_Summary reruns every driver through its fixture, and a
+# retry that passes exits 42, which .test:linux allows to fail.
 test:linux:lapack:
   extends: .test:linux
   needs: []
