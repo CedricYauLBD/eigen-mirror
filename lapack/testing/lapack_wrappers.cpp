@@ -323,6 +323,29 @@ void test_pstrf() {
       VERIFY_IS_EQUAL(piv[0], 1);
       VERIFY_IS_EQUAL(A(0, 0), Scalar(1));
     }
+
+    // NaN diagonal entries. The pivot search skips them, as MAXLOC does: diag(4, NaN, 1) takes 4 and 1 and stops at
+    // the NaN. A NaN in A(1,1) stops the real routines before anything is factored (their first scan starts there),
+    // while the complex ones' MAXLOC skips it.
+    {
+      const Real nan = std::numeric_limits<Real>::quiet_NaN();
+      for (int nan_first = 0; nan_first < 2; ++nan_first) {
+        Mat<Scalar> A = Mat<Scalar>::Zero(3, 3);
+        if (nan_first)
+          A.diagonal() << Scalar(nan), Scalar(4), Scalar(1);
+        else
+          A.diagonal() << Scalar(4), Scalar(nan), Scalar(1);
+        std::vector<int> piv;
+        int rank = -1;
+        VERIFY_IS_EQUAL(call_pstrf(uplo, A, piv, rank, Real(-1)), 1);
+        const int expected_rank = (nan_first && !NumTraits<Scalar>::IsComplex) ? 0 : 2;
+        VERIFY_IS_EQUAL(rank, expected_rank);
+        if (expected_rank == 2) {
+          VERIFY_IS_EQUAL(numext::real(A(0, 0)), Real(2));
+          VERIFY_IS_EQUAL(numext::real(A(1, 1)), Real(1));
+        }
+      }
+    }
   }
 }
 
