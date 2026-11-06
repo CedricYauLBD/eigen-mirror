@@ -87,6 +87,22 @@ using ScalarVector = Eigen::Matrix<Scalar, Eigen::Dynamic, 1>;
 // U = J L J. IPIV entry i of one is entry n-1-i of the other, its index p mapped to n+1-p and its sign kept.
 EIGEN_BLAS_INT reversed_pivot(EIGEN_BLAS_INT p, EIGEN_BLAS_INT n) { return p > 0 ? n + 1 - p : -(n + 1 + p); }
 
+// Solves D_k x = b for D_k = [a conj(c); c b] in rows i < j of B, scaled by c as xSYTRS/xHETRS do: denom =
+// det(D_k) / |c|^2 stays O(1) where det(D_k) itself over- or underflows.
+template <typename Mat>
+void solve_block_2x2(Mat &B, Eigen::Index i, Eigen::Index j, RealScalar a, RealScalar b, const Scalar &c) {
+  const Scalar conj_c = Eigen::numext::conj(c);
+  const Scalar akm1 = Eigen::numext::divide(Scalar(a), conj_c);
+  const Scalar ak = Eigen::numext::divide(Scalar(b), c);
+  const RealScalar denom = Eigen::numext::real(akm1 * ak) - RealScalar(1);
+  for (Eigen::Index col = 0; col < B.cols(); ++col) {
+    const Scalar bkm1 = Eigen::numext::divide(B(i, col), conj_c);
+    const Scalar bk = Eigen::numext::divide(B(j, col), c);
+    B(i, col) = (ak * bkm1 - bk) / denom;
+    B(j, col) = (akm1 * bk - bkm1) / denom;
+  }
+}
+
 // Eigen's P A P^T = L D L^* -> xSYTRF's A = (P_1 L_1) ... (P_m L_m) D (...)^*, whose interchange s acts on rows s:n
 // only, so later interchanges are undone on earlier columns, last block first. IPIV(k) = p: 1x1 block, rows k, p
 // swapped. IPIV(k) = IPIV(k+1) = -p: 2x2 block, rows k+1, p swapped, D(k+1,k) in A(k+1,k). Returns xSYTRF's INFO.
@@ -143,17 +159,20 @@ void bunch_kaufman_factor(const char *name, const char *uplo, EIGEN_BLAS_INT *n,
   ScalarVector subdiag(*n);
   PlainMatrixType workspace;
   if (UPLO(*uplo) == LO) {
-    Eigen::internal::bunch_kaufman<Eigen::Lower>::blocked(A, transpositions, subdiag, workspace);
+    Eigen::internal::bunch_kaufman<Eigen::Lower>::blocked<Eigen::internal::BunchKaufmanPivotCabs1>(A, transpositions,
+                                                                                                   subdiag, workspace);
     *info = bunch_kaufman_to_lapack(A, transpositions, subdiag, ipiv);
   } else {
-    PlainMatrixType reversed = PlainMatrixType::Zero(*n, *n);
-    reversed.triangularView<Eigen::Lower>() = A.reverse();
-    Eigen::internal::bunch_kaufman<Eigen::Lower>::blocked(reversed, transpositions, subdiag, workspace);
-    Eigen::Matrix<EIGEN_BLAS_INT, Eigen::Dynamic, 1> reversed_ipiv(*n);
-    const EIGEN_BLAS_INT reversed_info =
-        bunch_kaufman_to_lapack(reversed, transpositions, subdiag, reversed_ipiv.data());
-    A.triangularView<Eigen::Upper>() = reversed.reverse();
-    for (EIGEN_BLAS_INT i = 0; i < *n; ++i) ipiv[*n - 1 - i] = reversed_pivot(reversed_ipiv(i), *n);
+    // J A J in place: the upper triangle becomes the lower one that the kernel factors, and the strictly lower
+    // triangle, which the kernel does not touch, returns to its place when the reversal is undone.
+    A.reverseInPlace();
+    Eigen::internal::bunch_kaufman<Eigen::Lower>::blocked<Eigen::internal::BunchKaufmanPivotCabs1 |
+                                                          Eigen::internal::BunchKaufmanPivotLastOnTies>(
+        A, transpositions, subdiag, workspace);
+    const EIGEN_BLAS_INT reversed_info = bunch_kaufman_to_lapack(A, transpositions, subdiag, ipiv);
+    A.reverseInPlace();
+    std::reverse(ipiv, ipiv + *n);
+    for (EIGEN_BLAS_INT i = 0; i < *n; ++i) ipiv[i] = reversed_pivot(ipiv[i], *n);
     *info = reversed_info == 0 ? 0 : *n + 1 - reversed_info;
   }
 }
@@ -179,77 +198,63 @@ void bunch_kaufman_solve(const char *name, const char *uplo, EIGEN_BLAS_INT *n, 
   }
   if (*n == 0 || *nrhs == 0) return;
 
+  // The blocks of xSYTRF's product form one at a time, as xSYTRS does, without workspace:
+  // A = (P_1 L_1) ... D ... (P_1 L_1)^* for UPLO = 'L', blocks first to last; A = (P_n U_n) ... for 'U', last to first.
   const EIGEN_BLAS_INT size = *n;
   ConstMatrixType A(reinterpret_cast<const Scalar *>(pa), size, size, *lda);
   MatrixType B(reinterpret_cast<Scalar *>(pb), size, *nrhs, *ldb);
-  const bool upper = UPLO(*uplo) == UP;
-
-  // Back to Eigen's form P A P^T = L D L^* (of J A J for UPLO = 'U'), the inverse of bunch_kaufman_to_lapack(), so
-  // that L^{-1} is one triangular solve rather than an update per block, as in xSYTRS2.
-  PlainMatrixType L(size, size);
-  Eigen::Matrix<EIGEN_BLAS_INT, Eigen::Dynamic, 1> pivots(size);
-  if (upper) {
-    L.triangularView<Eigen::Lower>() = A.reverse();
-    for (EIGEN_BLAS_INT i = 0; i < size; ++i) pivots(i) = reversed_pivot(ipiv[size - 1 - i], size);
+  const auto swap_rows = [&B](EIGEN_BLAS_INT i, EIGEN_BLAS_INT j) {
+    if (i != j) B.row(i).swap(B.row(j));
+  };
+  const auto scale_row = [&A, &B](EIGEN_BLAS_INT k) { B.row(k) *= RealScalar(1) / Eigen::numext::real(A(k, k)); };
+  if (UPLO(*uplo) == LO) {
+    // B <- D^-1 L^-1 B.
+    for (EIGEN_BLAS_INT k = 0; k < size;) {
+      const EIGEN_BLAS_INT s = ipiv[k] > 0 ? 1 : 2, tail = size - k - s;
+      swap_rows(k + s - 1, std::abs(ipiv[k]) - 1);
+      B.bottomRows(tail).noalias() -= A.block(k + s, k, tail, s) * B.middleRows(k, s);
+      if (s == 1)
+        scale_row(k);
+      else
+        solve_block_2x2(B, k, k + 1, Eigen::numext::real(A(k, k)), Eigen::numext::real(A(k + 1, k + 1)), A(k + 1, k));
+      k += s;
+    }
+    // B <- L^-* B.
+    for (EIGEN_BLAS_INT k = size - 1; k >= 0;) {
+      const EIGEN_BLAS_INT s = ipiv[k] > 0 ? 1 : 2, first = k - s + 1, tail = size - k - 1;
+      B.middleRows(first, s).noalias() -= A.block(k + 1, first, tail, s).adjoint() * B.bottomRows(tail);
+      swap_rows(k, std::abs(ipiv[k]) - 1);
+      k -= s;
+    }
   } else {
-    L.triangularView<Eigen::Lower>() = A;
-    pivots = Eigen::Map<const Eigen::Matrix<EIGEN_BLAS_INT, Eigen::Dynamic, 1>>(ipiv, size);
-  }
-  TranspositionsType transpositions(size);
-  ScalarVector subdiag = ScalarVector::Zero(size);
-  for (EIGEN_BLAS_INT k = 0; k < size;) {
-    const bool block2 = pivots(k) < 0;
-    const EIGEN_BLAS_INT last = block2 ? k + 1 : k;
-    const EIGEN_BLAS_INT p = std::abs(pivots(k)) - 1;
-    transpositions.indices()(k) = block2 ? k : p;
-    if (block2) {
-      transpositions.indices()(k + 1) = p;
-      subdiag(k) = L(k + 1, k);
-      L(k + 1, k) = Scalar(0);
+    // B <- D^-1 U^-1 B.
+    for (EIGEN_BLAS_INT k = size - 1; k >= 0;) {
+      const EIGEN_BLAS_INT s = ipiv[k] > 0 ? 1 : 2, first = k - s + 1;
+      swap_rows(first, std::abs(ipiv[k]) - 1);
+      B.topRows(first).noalias() -= A.block(0, first, first, s) * B.middleRows(first, s);
+      if (s == 1)
+        scale_row(k);
+      else
+        solve_block_2x2(B, first, k, Eigen::numext::real(A(first, first)), Eigen::numext::real(A(k, k)),
+                        Eigen::numext::conj(A(first, k)));
+      k -= s;
     }
-    if (p != last) L.row(last).head(k).swap(L.row(p).head(k));
-    k = last + 1;
-  }
-
-  PlainMatrixType X = upper ? PlainMatrixType(B.colwise().reverse()) : PlainMatrixType(B);
-  X = transpositions * X;
-  L.triangularView<Eigen::UnitLower>().solveInPlace(X);
-  for (EIGEN_BLAS_INT k = 0; k < size;) {
-    if (pivots(k) < 0) {
-      // D_k = [d11 conj(d21); d21 d22] is inverted scaled by d21, as in xSYTRS/xHETRS: denom = det(D_k) / |d21|^2
-      // stays O(1) where det(D_k) itself over- or underflows.
-      const RealScalar d11 = Eigen::numext::real(L(k, k));
-      const RealScalar d22 = Eigen::numext::real(L(k + 1, k + 1));
-      const Scalar d21 = subdiag(k);
-      const Scalar conj_d21 = Eigen::numext::conj(d21);
-      const Scalar ak = Eigen::numext::divide(d22, d21);
-      const Scalar akm1 = Eigen::numext::divide(d11, conj_d21);
-      const RealScalar inv_denom = RealScalar(1) / (Eigen::numext::real(ak * akm1) - RealScalar(1));
-      for (Eigen::Index j = 0; j < X.cols(); ++j) {
-        const Scalar bk = Eigen::numext::divide(X(k + 1, j), d21);
-        const Scalar bkm1 = Eigen::numext::divide(X(k, j), conj_d21);
-        X(k, j) = inv_denom * (ak * bkm1 - bk);
-        X(k + 1, j) = inv_denom * (akm1 * bk - bkm1);
-      }
-      k += 2;
-    } else {
-      X.row(k) /= Eigen::numext::real(L(k, k));
-      k += 1;
+    // B <- U^-* B.
+    for (EIGEN_BLAS_INT k = 0; k < size;) {
+      const EIGEN_BLAS_INT s = ipiv[k] > 0 ? 1 : 2;
+      B.middleRows(k, s).noalias() -= A.block(0, k, k, s).adjoint() * B.topRows(k);
+      swap_rows(k, std::abs(ipiv[k]) - 1);
+      k += s;
     }
   }
-  L.triangularView<Eigen::UnitLower>().adjoint().solveInPlace(X);
-  X = transpositions.transpose() * X;
-  if (upper)
-    B = X.colwise().reverse();
-  else
-    B = X;
 }
 
 // P A P^T = L L^* from LDLT's panel kernel, pivoting on max diag(S_k) as xPSTRF does. Unlike
 // ldlt_inplace<Lower>::blocked() it stops after the panel holding the first pivot d_k <= dstop or NaN, k > 0 (the
 // first pivot is the positive max diag(A), taken whatever dstop): O(n^2 (r + nb)) for rank r. L = l sqrt(d) is formed
 // from LDLT's l = w / d, which underflows where xPSTRF's w / sqrt(d) does not only if diag(A) spans the exponent
-// range. Returns rank = that k, and applies the interchanges to piv, which holds 1..n on entry.
+// range, and is NaN where an infinite pivot makes xPSTRF's zero. Returns rank = that k, and applies the interchanges to
+// piv, which holds 1..n on entry.
 template <typename Mat>
 EIGEN_BLAS_INT pivoted_cholesky_lower(Mat &mat, RealScalar dstop, EIGEN_BLAS_INT *piv) {
   using Eigen::Index;

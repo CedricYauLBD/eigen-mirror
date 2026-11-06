@@ -80,10 +80,10 @@ The library has no driver for any other problem class in §2.3:
 | | `xPOTRS` | S, D, C, Z | Solves `A X = B` with the factor from `xPOTRF` | Triangular solves |
 | | `xPOTRI` | S, D, C, Z | `inv(A)` from the factor of `xPOTRF` | `xTRTRI`, then `xLAUUM` |
 | Linear equations (§2.4.1), symmetric or Hermitian positive semidefinite matrix | `xPSTRF` | S, D, C, Z | Cholesky factorization with complete pivoting, `P^T A P = U^H U` or `L L^H`, stopping at the numerical rank | `LDLT`'s panel kernel, pivoting on the largest diagonal entry |
-| Linear equations (§2.4.1), symmetric indefinite matrix | `xSYTRF` | S, D | Bunch-Kaufman factorization `A = U D U^T` or `L D L^T`, `D` with 1x1 and 2x2 blocks | `BunchKaufman`'s blocked kernel |
-| | `xSYTRS` | S, D | Solves `A X = B` with the factorization from `xSYTRF` | Triangular solves |
-| Linear equations (§2.4.1), Hermitian indefinite matrix | `xHETRF` | C, Z | Bunch-Kaufman factorization `A = U D U^H` or `L D L^H` | `BunchKaufman`'s blocked kernel |
-| | `xHETRS` | C, Z | Solves `A X = B` with the factorization from `xHETRF` | Triangular solves |
+| Linear equations (§2.4.1), symmetric indefinite matrix | `xSYTRF` | S, D | Bunch-Kaufman factorization `A = U D U^T` or `L D L^T`, `D` with 1x1 and 2x2 blocks | `BunchKaufman`'s blocked kernel, with LAPACK's pivot search |
+| | `xSYTRS` | S, D | Solves `A X = B` with the factorization from `xSYTRF` | One block of the factorization at a time, without workspace, as reference LAPACK does |
+| Linear equations (§2.4.1), Hermitian indefinite matrix | `xHETRF` | C, Z | Bunch-Kaufman factorization `A = U D U^H` or `L D L^H` | `BunchKaufman`'s blocked kernel, with LAPACK's pivot search |
+| | `xHETRS` | C, Z | Solves `A X = B` with the factorization from `xHETRF` | One block of the factorization at a time, without workspace, as reference LAPACK does |
 | Linear equations (§2.4.1), triangular matrix | `xTRTRS` | S, D, C, Z | Solves `op(A) X = B`, checking for a zero diagonal entry | Triangular solves |
 | | `xTRTRI` | S, D, C, Z | `inv(A)` in place | `TriangularView::inverseInPlace()` |
 | Orthogonal factorizations (§2.4.2) | `xGEQRF` | S, D, C, Z | QR factorization `A = Q R`, `Q` as Householder reflectors | `HouseholderQR`'s blocked kernel |
@@ -125,9 +125,10 @@ combination of `SIDE`, `TRANS`, `DIRECT` and `STOREV`.
 
 `lapack_routines` and `lapack_wrappers`, built with Eigen's other tests
 (`EIGEN_BUILD_TESTING`), check Eigen's routines directly from C++ and need no
-Fortran compiler. `lapack_wrappers` covers the cases reference LAPACK's tests
-leave out, such as rank-deficient `xPSTRF` and arguments left untouched when
-`INFO > 0`.
+Fortran compiler. `lapack_wrappers` adds what reference LAPACK's tests leave
+out, such as NaN and infinite input, arguments left untouched when `INFO > 0`
+and the pivots reference LAPACK chooses; `lapack_wrappers_ilp64` runs it
+against the ILP64 library.
 
 The optional numerical tests (`EIGEN_ENABLE_LAPACK_TESTS`) require a Fortran
 compiler. CMake downloads the unmodified reference LAPACK release that
