@@ -22,8 +22,9 @@ using std::complex;
 
 template <typename Scalar>
 using RealOf = typename NumTraits<Scalar>::Real;
+// Column-major whatever EIGEN_DEFAULT_TO_ROW_MAJOR says: the routines read data() with a leading dimension.
 template <typename Scalar>
-using Mat = Matrix<Scalar, Dynamic, Dynamic>;
+using Mat = Matrix<Scalar, Dynamic, Dynamic, ColMajor>;
 template <typename Scalar>
 using Vec = Matrix<Scalar, Dynamic, 1>;
 
