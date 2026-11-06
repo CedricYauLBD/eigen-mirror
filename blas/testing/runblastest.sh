@@ -2,46 +2,38 @@
 # SPDX-FileCopyrightText: The Eigen Authors
 # SPDX-License-Identifier: MPL-2.0
 
-black='\E[30m'
-red='\E[31m'
-green='\E[32m'
-yellow='\E[33m'
-blue='\E[34m'
-magenta='\E[35m'
-cyan='\E[36m'
-white='\E[37m'
+# Usage: runblastest.sh <driver> [<input.dat>]. The netlib drivers exit 0 even when a test fails, so the
+# verdict comes from their reports: xBLAT1's stdout, and the <driver>.summ file xBLAT2/3 write.
 
-if [ -f $2 ]; then
-  data=$2
-  if [ -f $1.summ ]; then rm $1.summ; fi
-  if [ -f $1.snap ]; then rm $1.snap; fi
-else
-  data=$1
-fi
+driver=$1
+data=$2
+out="${driver}.out"
+summ="${driver}.summ"
 
-if ! ./$1 < $data > /dev/null 2> .runtest.log ; then
-  echo -e  $red Test $1 failed: $black
-  echo -e $blue
-  cat .runtest.log
-  echo -e $black
-  exit 1
-else
-  if [ -f $1.summ ]; then
-    if [ `grep "FATAL ERROR" $1.summ | wc -l` -gt 0 ]; then
-      echo -e  $red "Test $1 failed (FATAL ERROR, read the file $1.summ for details)" $black
-      echo -e $blue
-      cat .runtest.log
-      echo -e $black
-      exit 1;
+fail() {
+  echo "Test ${driver} failed: $1"
+  for f in "${out}" "${summ}"; do
+    if [ -s "$f" ]; then
+      echo "----- $f -----"
+      cat "$f"
     fi
+  done
+  exit 1
+}
 
-    if [ `grep "FAILED THE TESTS OF ERROR-EXITS" $1.summ | wc -l` -gt 0 ]; then
-      echo -e  $red "Test $1 failed (FAILED THE TESTS OF ERROR-EXITS, read the file $1.summ for details)" $black
-      echo -e $blue
-      cat .runtest.log
-      echo -e $black
-      exit 1;
-    fi      
+rm -f "${out}" "${summ}" "${driver}.snap"
+if [ -n "${data}" ] && [ -f "${data}" ]; then
+  ./"${driver}" < "${data}" > "${out}" 2>&1 || fail "exit status $?"
+  [ -f "${summ}" ] || fail "no summary file ${summ}"
+  if grep -E -q "FATAL ERROR|FAILED|SUSPECT" "${summ}"; then
+    fail "the summary reports a failure"
   fi
-  echo -e $green Test $1 passed$black
+  grep -q "PASSED THE COMPUTATIONAL TESTS" "${summ}" || fail "no routine passed"
+else
+  ./"${driver}" < /dev/null > "${out}" 2>&1 || fail "exit status $?"
+  if grep -w -q "FAIL" "${out}"; then
+    fail "a case reports FAIL"
+  fi
+  grep -q "PASS" "${out}" || fail "no case passed"
 fi
+echo "Test ${driver} passed"
