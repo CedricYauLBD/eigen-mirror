@@ -146,6 +146,15 @@ if(EIGEN_BUILD_TESTING)
   endif()
   add_test(NAME lapack_routines COMMAND lapack_routines)
   add_dependencies(buildtests lapack_routines)
+
+  add_executable(lapack_wrappers testing/lapack_wrappers.cpp)
+  target_include_directories(lapack_wrappers PRIVATE "${Eigen_SOURCE_DIR}/test")
+  target_link_libraries(lapack_wrappers eigen_lapack_static)
+  if(NOT EIGEN_LEAVE_TEST_IN_ALL_TARGET)
+    set_target_properties(lapack_wrappers PROPERTIES EXCLUDE_FROM_ALL ON)
+  endif()
+  add_test(NAME lapack_wrappers COMMAND lapack_wrappers)
+  add_dependencies(buildtests lapack_wrappers)
 endif()
 
 
