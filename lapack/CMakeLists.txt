@@ -94,6 +94,34 @@ if (EIGEN_BUILD_SHARED_LIBS)
   list(APPEND EIGEN_LAPACK_TARGETS eigen_lapack)
 endif()
 
+# The 64-bit integer (ILP64) library exports the same symbol names as the 32-bit one, with EIGEN_BLAS_INT
+# (blas/blas.h) as the integer type, as eigen_blas_ilp64 does; it links against eigen_blas_ilp64.
+if(EIGEN_BUILD_BLAS_ILP64)
+  option(EIGEN_BUILD_LAPACK_ILP64 "Toggles the building of the 64-bit integer (ILP64) Eigen Lapack library" ON)
+else()
+  set(EIGEN_BUILD_LAPACK_ILP64 OFF)
+endif()
+
+if(EIGEN_BUILD_LAPACK_ILP64)
+  add_library(eigen_lapack_ilp64_static STATIC ${EigenLapack_SRCS})
+  target_compile_definitions(eigen_lapack_ilp64_static PUBLIC "EIGEN_64BIT_BLAS")
+  target_link_libraries(eigen_lapack_ilp64_static eigen_blas_ilp64_static)
+  list(APPEND EIGEN_LAPACK_TARGETS eigen_lapack_ilp64_static)
+
+  if(EIGEN_BUILD_SHARED_LIBS)
+    add_library(eigen_lapack_ilp64 SHARED ${EigenLapack_SRCS} ${EIGEN_LAPACK_DEF})
+    # EIGEN_LAPACK_BUILD_DLL stays private, as EIGEN_BLAS_BUILD_DLL does for eigen_blas_ilp64.
+    target_compile_definitions(eigen_lapack_ilp64
+      PUBLIC "EIGEN_BLAS_LINK_DLL" "EIGEN_64BIT_BLAS"
+      PRIVATE "EIGEN_LAPACK_BUILD_DLL")
+    target_link_libraries(eigen_lapack_ilp64 eigen_blas_ilp64)
+    set_target_properties(eigen_lapack_ilp64 PROPERTIES CXX_VISIBILITY_PRESET hidden
+      VERSION ${EIGEN_VERSION_NUMBER}
+      SOVERSION ${EIGEN_MAJOR_VERSION})
+    list(APPEND EIGEN_LAPACK_TARGETS eigen_lapack_ilp64)
+  endif()
+endif()
+
 foreach(target IN LISTS EIGEN_LAPACK_TARGETS)
   if(EIGEN_STANDARD_LIBRARIES_TO_LINK_TO)
     target_link_libraries(${target} ${EIGEN_STANDARD_LIBRARIES_TO_LINK_TO})

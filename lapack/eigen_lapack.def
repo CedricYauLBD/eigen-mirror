@@ -1,6 +1,7 @@
-; Definition file for eigen_lapack.dll.
+; Definition file for eigen_lapack.dll and eigen_lapack_ilp64.dll.
+; No LIBRARY statement: the linker names each DLL after its /OUT file, so the
+; ILP64 import library does not resolve to eigen_lapack.dll.
 
-LIBRARY eigen_lapack
 EXPORTS
     ; Utilities
     xerbla_

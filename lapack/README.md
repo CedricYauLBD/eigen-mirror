@@ -11,7 +11,8 @@ Eigen's C++ API does not use it.
   trailing underscore (`dgetrf_`), every argument passed by pointer,
   column-major matrices with a leading dimension, and complex numbers stored as
   (real, imaginary) pairs. Dimensions, pivot indices and `INFO` are 32-bit
-  `int`. Unlike Eigen's BLAS library, this library has no ILP64 build.
+  `int`, or 64-bit in the ILP64 build (`eigen_lapack_ilp64`), which exports the
+  same names and links Eigen's ILP64 BLAS library.
 - In a routine with an `INFO` argument, an invalid `i`-th argument makes the
   routine call `XERBLA` and return `INFO = -i`, as in reference LAPACK. The
   auxiliary routines have no `INFO` argument and do not check their arguments.
@@ -30,7 +31,10 @@ The library is enabled with `EIGEN_BUILD_LAPACK` and requires
 project. The `lapack` target builds `eigen_lapack_static`, which links
 `eigen_blas_static`. Where the platform supports shared libraries
 (`EIGEN_BUILD_SHARED_LIBS`), it also builds `eigen_lapack`, which links
-`eigen_blas`. `EIGEN_INSTALL` installs both.
+`eigen_blas`. With `EIGEN_BUILD_LAPACK_ILP64`, which defaults to
+`EIGEN_BUILD_BLAS_ILP64`, it builds the same pair with 64-bit integers,
+`eigen_lapack_ilp64_static` and `eigen_lapack_ilp64`, which link Eigen's ILP64
+BLAS libraries. `EIGEN_INSTALL` installs them all.
 
 ## Routines
 
