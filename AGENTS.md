@@ -125,8 +125,10 @@ alongside them. "Contrib" does not imply low impact: Tensor is a foundational Te
 umbrella header is the source of truth for which internals the module exports.
 
 The LAPACK tests build unmodified netlib LAPACK sources, which CMake downloads from the release that
-`lapack/CMakeLists.txt` pins by version and SHA-256 hash. Do not copy those sources into the tree or patch them, because
-the tests check Eigen's routines against that release. Flag a merge request that changes the pinned release.
+`lapack/CMakeLists.txt` pins by version and SHA-256 hash. Do not copy the reference routines or test drivers into the
+tree or patch them, because the tests check Eigen's routines against that release. The one exception is the test inputs
+`lapack/testing/[sdcz]test_large.in`, which derive from the release's `TESTING/[sdcz]test.in` and keep its license in
+`REUSE.toml`. Flag a merge request that changes the pinned release.
 
 `.git-blame-ignore-revs` lists the commits that ran clang-format or added SPDX tags across the whole tree. To see the
 history beneath them, pass that file to `git blame` with `--ignore-revs-file`.

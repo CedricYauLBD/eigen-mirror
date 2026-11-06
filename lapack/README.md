@@ -12,10 +12,13 @@ Eigen's C++ API does not use it.
   column-major matrices with a leading dimension, and complex numbers stored as
   (real, imaginary) pairs. Dimensions, pivot indices and `INFO` are 32-bit
   `int`. Unlike Eigen's BLAS library, this library has no ILP64 build.
-- An invalid `i`-th argument makes the routine call `XERBLA` and return
-  `INFO = -i`, as in reference LAPACK. Eigen's BLAS library provides `XERBLA`
-  as a weak symbol that prints the error and returns, where reference `XERBLA`
-  stops the program.
+- In a routine with an `INFO` argument, an invalid `i`-th argument makes the
+  routine call `XERBLA` and return `INFO = -i`, as in reference LAPACK. The
+  auxiliary routines have no `INFO` argument and do not check their arguments.
+- Eigen's BLAS library provides an `XERBLA` that prints the error and returns,
+  where reference `XERBLA` stops the program. With GNU-compatible compilers
+  other than MinGW and Cygwin it is a weak symbol, so a program can define its
+  own.
 - The driver routines allocate their own workspace. They use `WORK` only to
   answer a workspace query (`LWORK = -1`). `xSYEV` still requires
   `LWORK >= max(1, 3*N-1)`.
