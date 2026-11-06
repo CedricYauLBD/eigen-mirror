@@ -17,7 +17,9 @@
 #     -t registry.gitlab.com/libeigen/eigen/alpine-lint:latest \
 #     --push ci/lint/
 
-FROM alpine:3.24.3 AS clang-format
+ARG ALPINE_VERSION=3.24.3
+
+FROM alpine:${ALPINE_VERSION} AS clang-format
 
 ARG LLVM_VERSION=17.0.6
 # SHA-256 of the release tarball; its SHA-512 matches Alpine's llvm17 APKBUILD.
@@ -49,7 +51,7 @@ RUN cmake -S llvm -B build -G Ninja \
     && install -D -m 755 build/bin/clang-format /out/clang-format \
     && install -D -m 755 clang/tools/clang-format/git-clang-format /out/git-clang-format
 
-FROM alpine:3.24.3
+FROM alpine:${ALPINE_VERSION}
 
 COPY requirements.txt /tmp/
 
