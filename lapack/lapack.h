@@ -131,6 +131,26 @@ EIGEN_LAPACK_API void BLASFUNC(cgesvd)(const char *, const char *, int *, int *,
 EIGEN_LAPACK_API void BLASFUNC(zgesvd)(const char *, const char *, int *, int *, double *, int *, double *, double *,
                                        int *, double *, int *, double *, int *, double *, int *);
 
+// QR.
+EIGEN_LAPACK_API void BLASFUNC(sgeqrf)(int *, int *, float *, int *, float *, float *, int *, int *);
+EIGEN_LAPACK_API void BLASFUNC(dgeqrf)(int *, int *, double *, int *, double *, double *, int *, int *);
+EIGEN_LAPACK_API void BLASFUNC(cgeqrf)(int *, int *, float *, int *, float *, float *, int *, int *);
+EIGEN_LAPACK_API void BLASFUNC(zgeqrf)(int *, int *, double *, int *, double *, double *, int *, int *);
+
+EIGEN_LAPACK_API void BLASFUNC(sorgqr)(int *, int *, int *, float *, int *, float *, float *, int *, int *);
+EIGEN_LAPACK_API void BLASFUNC(dorgqr)(int *, int *, int *, double *, int *, double *, double *, int *, int *);
+EIGEN_LAPACK_API void BLASFUNC(cungqr)(int *, int *, int *, float *, int *, float *, float *, int *, int *);
+EIGEN_LAPACK_API void BLASFUNC(zungqr)(int *, int *, int *, double *, int *, double *, double *, int *, int *);
+
+EIGEN_LAPACK_API void BLASFUNC(sormqr)(const char *, const char *, int *, int *, int *, float *, int *, float *,
+                                       float *, int *, float *, int *, int *);
+EIGEN_LAPACK_API void BLASFUNC(dormqr)(const char *, const char *, int *, int *, int *, double *, int *, double *,
+                                       double *, int *, double *, int *, int *);
+EIGEN_LAPACK_API void BLASFUNC(cunmqr)(const char *, const char *, int *, int *, int *, float *, int *, float *,
+                                       float *, int *, float *, int *, int *);
+EIGEN_LAPACK_API void BLASFUNC(zunmqr)(const char *, const char *, int *, int *, int *, double *, int *, double *,
+                                       double *, int *, double *, int *, int *);
+
 // Time.
 EIGEN_LAPACK_API float BLASFUNC(second)();
 EIGEN_LAPACK_API double BLASFUNC(dsecnd)();
