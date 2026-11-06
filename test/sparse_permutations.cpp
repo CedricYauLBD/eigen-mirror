@@ -219,6 +219,36 @@ void sparse_permutations(const SparseMatrixType& ref) {
   VERIFY(res.isApprox(res_d) && "lower selfadjoint twisted to full");
 }
 
+// A narrow StorageIndex bounds the stored indices, not the dimensions: n exceeds its range, while every stored index
+// fits. The storage-order copy and both selfadjoint copies visit all n outer vectors.
+template <int SrcOrder, int DstOrder>
+void sparse_permutations_narrow_index() {
+  using StorageIndex = short;
+  using DstMatrix = SparseMatrix<double, DstOrder, StorageIndex>;
+  const Index n = Index(NumTraits<StorageIndex>::highest()) + 1000;
+  const std::vector<Triplet<double, StorageIndex>> entries = {{1, 1, 1.0}, {3, 1, 2.0}};
+  SparseMatrix<double, SrcOrder, StorageIndex> lower(n, n);
+  lower.setFromTriplets(entries.begin(), entries.end());
+
+  const DstMatrix copy = lower;
+  VERIFY_IS_EQUAL(copy.nonZeros(), 2);
+  VERIFY_IS_EQUAL(copy.coeff(1, 1), 1.0);
+  VERIFY_IS_EQUAL(copy.coeff(3, 1), 2.0);
+
+  const DstMatrix full = lower.template selfadjointView<Lower>();
+  VERIFY_IS_EQUAL(full.nonZeros(), 3);
+  VERIFY_IS_EQUAL(full.coeff(1, 1), 1.0);
+  VERIFY_IS_EQUAL(full.coeff(3, 1), 2.0);
+  VERIFY_IS_EQUAL(full.coeff(1, 3), 2.0);
+  VERIFY(is_sorted(full));
+
+  DstMatrix upper(n, n);
+  upper.template selfadjointView<Upper>() = lower.template selfadjointView<Lower>();
+  VERIFY_IS_EQUAL(upper.nonZeros(), 2);
+  VERIFY_IS_EQUAL(upper.coeff(1, 1), 1.0);
+  VERIFY_IS_EQUAL(upper.coeff(1, 3), 2.0);
+}
+
 template <typename Scalar>
 void sparse_permutations_all(int size) {
   CALL_SUBTEST((sparse_permutations<ColMajor>(SparseMatrix<Scalar, ColMajor>(size, size))));
@@ -233,6 +263,10 @@ EIGEN_DECLARE_TEST(sparse_permutations) {
     CALL_SUBTEST_1((sparse_permutations_all<double>(s)));
     CALL_SUBTEST_2((sparse_permutations_all<std::complex<double> >(s)));
   }
+  CALL_SUBTEST_1((sparse_permutations_narrow_index<ColMajor, ColMajor>()));
+  CALL_SUBTEST_1((sparse_permutations_narrow_index<ColMajor, RowMajor>()));
+  CALL_SUBTEST_1((sparse_permutations_narrow_index<RowMajor, ColMajor>()));
+  CALL_SUBTEST_1((sparse_permutations_narrow_index<RowMajor, RowMajor>()));
 
   VERIFY((std::is_same<
           internal::permutation_matrix_product<SparseMatrix<double>, OnTheRight, false, SparseShape>::ReturnType,

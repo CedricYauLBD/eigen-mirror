@@ -533,12 +533,12 @@ void permute_symm_to_symm(const MatrixType& mat,
   VectorI count(size);
   count.setZero();
   dest.resize(size, size);
-  for (StorageIndex j = 0; j < size; ++j) {
-    StorageIndex jp = perm ? perm[j] : j;
-    for (MatIterator it(matEval, internal::convert_index<Index>(j)); it; ++it) {
+  for (Index j = 0; j < size; ++j) {
+    for (MatIterator it(matEval, j); it; ++it) {
       StorageIndex i = it.index();
       if ((int(SrcMode) == int(Lower) && i < j) || (int(SrcMode) == int(Upper) && i > j)) continue;
 
+      StorageIndex jp = perm ? perm[j] : internal::convert_index<StorageIndex>(j);
       StorageIndex ip = perm ? perm[i] : i;
       count[internal::convert_index<Index>(int(DstMode) == int(Lower) ? (std::min)(ip, jp) : (std::max)(ip, jp))]++;
     }
@@ -548,12 +548,12 @@ void permute_symm_to_symm(const MatrixType& mat,
   dest.resizeNonZeros(internal::convert_index<Index>(dest.outerIndexPtr()[size]));
   for (Index j = 0; j < size; ++j) count[j] = dest.outerIndexPtr()[j];
 
-  for (StorageIndex j = 0; j < size; ++j) {
-    for (MatIterator it(matEval, internal::convert_index<Index>(j)); it; ++it) {
+  for (Index j = 0; j < size; ++j) {
+    for (MatIterator it(matEval, j); it; ++it) {
       StorageIndex i = it.index();
       if ((int(SrcMode) == int(Lower) && i < j) || (int(SrcMode) == int(Upper) && i > j)) continue;
 
-      StorageIndex jp = perm ? perm[j] : j;
+      StorageIndex jp = perm ? perm[j] : internal::convert_index<StorageIndex>(j);
       StorageIndex ip = perm ? perm[i] : i;
 
       StorageIndex k =
