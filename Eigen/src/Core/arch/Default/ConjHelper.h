@@ -13,31 +13,36 @@
 #define EIGEN_ARCH_CONJ_HELPER_H
 
 #define EIGEN_MAKE_CONJ_HELPER_CPLX_REAL(PACKET_CPLX, PACKET_REAL)                                                  \
-  template <>                                                                                                       \
-  struct conj_helper<PACKET_REAL, PACKET_CPLX, false, false> {                                                      \
+  template <bool ConjLhs, bool ConjRhs>                                                                             \
+  struct conj_helper<PACKET_REAL, PACKET_CPLX, ConjLhs, ConjRhs> {                                                  \
     EIGEN_STRONG_INLINE PACKET_CPLX pmadd(const PACKET_REAL& x, const PACKET_CPLX& y, const PACKET_CPLX& c) const { \
-      return PACKET_CPLX(Eigen::internal::pmadd<PACKET_REAL>(x, y.v, c.v));                                         \
+      return PACKET_CPLX(Eigen::internal::pmadd<PACKET_REAL>(x, conj_if<ConjRhs>().pconj(y).v, c.v));               \
     }                                                                                                               \
     EIGEN_STRONG_INLINE PACKET_CPLX pmsub(const PACKET_REAL& x, const PACKET_CPLX& y, const PACKET_CPLX& c) const { \
-      return PACKET_CPLX(Eigen::internal::pmsub<PACKET_REAL>(x, y.v, c.v));                                         \
+      return PACKET_CPLX(Eigen::internal::pmsub<PACKET_REAL>(x, conj_if<ConjRhs>().pconj(y).v, c.v));               \
     }                                                                                                               \
     EIGEN_STRONG_INLINE PACKET_CPLX pmul(const PACKET_REAL& x, const PACKET_CPLX& y) const {                        \
-      return PACKET_CPLX(Eigen::internal::pmul<PACKET_REAL>(x, y.v));                                               \
+      return PACKET_CPLX(Eigen::internal::pmul<PACKET_REAL>(x, conj_if<ConjRhs>().pconj(y).v));                     \
     }                                                                                                               \
   };                                                                                                                \
                                                                                                                     \
   template <>                                                                                                       \
-  struct conj_helper<PACKET_CPLX, PACKET_REAL, false, false> {                                                      \
+  struct conj_helper<PACKET_REAL, PACKET_CPLX, true, true> : conj_helper<PACKET_REAL, PACKET_CPLX, false, true> {}; \
+                                                                                                                    \
+  template <bool ConjLhs, bool ConjRhs>                                                                             \
+  struct conj_helper<PACKET_CPLX, PACKET_REAL, ConjLhs, ConjRhs> {                                                  \
     EIGEN_STRONG_INLINE PACKET_CPLX pmadd(const PACKET_CPLX& x, const PACKET_REAL& y, const PACKET_CPLX& c) const { \
-      return PACKET_CPLX(Eigen::internal::pmadd<PACKET_REAL>(x.v, y, c.v));                                         \
+      return PACKET_CPLX(Eigen::internal::pmadd<PACKET_REAL>(conj_if<ConjLhs>().pconj(x).v, y, c.v));               \
     }                                                                                                               \
     EIGEN_STRONG_INLINE PACKET_CPLX pmsub(const PACKET_CPLX& x, const PACKET_REAL& y, const PACKET_CPLX& c) const { \
-      return PACKET_CPLX(Eigen::internal::pmsub<PACKET_REAL>(x.v, y, c.v));                                         \
+      return PACKET_CPLX(Eigen::internal::pmsub<PACKET_REAL>(conj_if<ConjLhs>().pconj(x).v, y, c.v));               \
     }                                                                                                               \
     EIGEN_STRONG_INLINE PACKET_CPLX pmul(const PACKET_CPLX& x, const PACKET_REAL& y) const {                        \
-      return PACKET_CPLX(Eigen::internal::pmul<PACKET_REAL>(x.v, y));                                               \
+      return PACKET_CPLX(Eigen::internal::pmul<PACKET_REAL>(conj_if<ConjLhs>().pconj(x).v, y));                     \
     }                                                                                                               \
-  };
+  };                                                                                                                \
+  template <>                                                                                                       \
+  struct conj_helper<PACKET_CPLX, PACKET_REAL, true, true> : conj_helper<PACKET_CPLX, PACKET_REAL, true, false> {};
 
 // IWYU pragma: private
 #include "../../InternalHeaderCheck.h"
