@@ -163,4 +163,3 @@ add_custom_target(buildtests_blas)
 get_property(blas_tests DIRECTORY PROPERTY BUILDSYSTEM_TARGETS)
 list(REMOVE_ITEM blas_tests buildtests_blas)
 add_dependencies(buildtests_blas ${blas_tests})
-

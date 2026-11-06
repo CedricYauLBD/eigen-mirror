@@ -8,7 +8,7 @@
 # Test 5 of xDRVEV and xDRGEV requires eigenvalues computed with and without eigenvectors to
 # agree bit for bit; the two code paths round differently.
 sed.out 44 0
-ced.out 12 0
+ced.out 10 0
 sgd.out 12 0
 cgd.out 5 0
 

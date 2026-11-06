@@ -57,14 +57,9 @@ if(EIGEN_ENABLE_LAPACK_TESTS)
   # The test drivers link Eigen's routines and reference LAPACK's remaining ones.
   # A reference source is left out when eigen_lapack.def exports its routine;
   # LAPACK_Test_Symbols checks that no routine is defined twice.
-  file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/${EIGEN_LAPACK_DEF}" eigen_lapack_exports
+  file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/${EIGEN_LAPACK_DEF}" EigenLapack_routines
        REGEX "^[ \t]*[a-z0-9_]+_[ \t]*$")
-  set(EigenLapack_routines "")
-  foreach(export IN LISTS eigen_lapack_exports)
-    string(STRIP "${export}" export)
-    string(REGEX REPLACE "_$" "" routine "${export}")
-    list(APPEND EigenLapack_routines "${routine}")
-  endforeach()
+  list(TRANSFORM EigenLapack_routines REPLACE "^[ \t]*([a-z0-9_]+)_[ \t]*$" "\\1")
   file(GLOB ReferenceLapack_candidates "${LAPACK_SOURCE_DIR}/SRC/*.f"
        "${LAPACK_SOURCE_DIR}/SRC/*.F" "${LAPACK_SOURCE_DIR}/SRC/*.f90"
        "${LAPACK_SOURCE_DIR}/SRC/*.F90"
@@ -209,6 +204,9 @@ if(EIGEN_ENABLE_LAPACK_TESTS)
   # TESTING/CMakeLists.txt, whose precision guards all hold here.
   file(STRINGS "${LAPACK_SOURCE_DIR}/TESTING/CMakeLists.txt" reference_tests
        REGEX "^[ \t]*add_lapack_test\\(")
+  if(NOT reference_tests)
+    message(FATAL_ERROR "No reference LAPACK tests were registered")
+  endif()
   foreach(reference_test IN LISTS reference_tests)
     if(NOT reference_test MATCHES
         "^[ \t]*add_lapack_test\\([ \t]*([^ \t)]+)[ \t]+([^ \t)]+)[ \t]+([^ \t)]+)[ \t]*\\)")
@@ -223,9 +221,6 @@ if(EIGEN_ENABLE_LAPACK_TESTS)
     add_lapack_test(${precision}test_large.out
                     "${CMAKE_CURRENT_SOURCE_DIR}/testing/${precision}test_large.in" xlintst${precision})
   endforeach()
-  if(NOT EIGEN_LAPACK_TEST_NAMES)
-    message(FATAL_ERROR "No reference LAPACK tests were registered")
-  endif()
 
   set(EIGEN_LAPACK_TEST_ALLOWED_FAILURES "${CMAKE_CURRENT_SOURCE_DIR}/testing_allowed_failures.txt"
       CACHE FILEPATH "Per-output failure counts that LAPACK_Test_Summary accepts; empty accepts none")

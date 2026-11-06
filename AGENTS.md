@@ -127,9 +127,9 @@ umbrella header is the source of truth for which internals the module exports.
 The LAPACK tests build unmodified netlib LAPACK sources, which CMake downloads from the release that
 `lapack/CMakeLists.txt` pins by version and SHA-256 hash. Do not copy those sources into the tree or patch them, because
 the tests check Eigen's routines against that release. Flag a merge request that changes the pinned release.
-`.git-blame-ignore-revs` lists the commits that ran
-clang-format or added SPDX tags across the whole tree. To see the history beneath them, pass that file to `git blame`
-with `--ignore-revs-file`.
+
+`.git-blame-ignore-revs` lists the commits that ran clang-format or added SPDX tags across the whole tree. To see the
+history beneath them, pass that file to `git blame` with `--ignore-revs-file`.
 
 Every new source file needs accurate REUSE metadata; [`.agents/conventions.md`](.agents/conventions.md) records the
 required header form and the `REUSE.toml` rules for files that cannot carry an inline tag.

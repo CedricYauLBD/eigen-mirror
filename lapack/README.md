@@ -101,9 +101,12 @@ every combination of `SIDE`, `TRANS`, `DIRECT` and `STOREV`.
 
 ## Tests
 
+`lapack_routines`, built with Eigen's other tests (`EIGEN_BUILD_TESTING`),
+checks Eigen's routines directly from C++ and needs no Fortran compiler.
+
 The optional numerical tests (`EIGEN_ENABLE_LAPACK_TESTS`) require a Fortran
 compiler. CMake downloads the unmodified reference LAPACK release that
-`CMakeLists.txt` pins by SHA-256 hash.
+`CMakeLists.txt` pins by version and SHA-256 hash.
 
 The tests run reference LAPACK's own drivers on every input that reference
 LAPACK's `TESTING/CMakeLists.txt` registers. They also run
@@ -115,8 +118,8 @@ into the test-only `eigen_lapack_reference` library, which is never installed.
 `LAPACK_Test_Symbols` checks the split: Eigen defines every routine the `.def`
 file lists, defines no Fortran-callable routine it omits, and shares none with
 the reference library. On ELF platforms it also checks that the shared library
-exports every listed routine. `buildtests_lapack` builds the drivers, and
-`buildtests_blas` the Fortran BLAS tests under `blas/testing`.
+exports every listed routine. `buildtests_lapack` builds the drivers and
+`lapack_routines`, and `buildtests_blas` the tests under `blas/testing`.
 
 The tests and their summary run through CMake/CTest without Python.
 `LAPACK_Test_Summary` waits for the drivers and combines their output files into
@@ -142,6 +145,3 @@ check such a configuration, set `EIGEN_LAPACK_TEST_ALLOWED_FAILURES` to a file o
 its own, or to an empty string to allow no failures. A change that alters the
 job's counts on purpose updates the file's entries from the job's
 `testing_failures.txt` artifact.
-
-`lapack_routines`, built with Eigen's other tests (`EIGEN_BUILD_TESTING`), checks Eigen's routines
-directly from C++ and needs no Fortran compiler. `buildtests_lapack` builds it as well.

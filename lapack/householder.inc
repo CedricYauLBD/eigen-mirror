@@ -291,11 +291,7 @@ EIGEN_LAPACK_FUNC(larft)
             T_mat(row, i) = sum;
           }
 
-          if (i < *k - 1) {
-            prevlastv = Eigen::numext::mini(prevlastv, lastv);
-          } else {
-            prevlastv = lastv;
-          }
+          prevlastv = Eigen::numext::mini(prevlastv, lastv);
         }
         T_mat(i, i) = tau[i];
       }
@@ -393,7 +389,6 @@ EIGEN_LAPACK_FUNC(larfb)
 
   const Scalar* v = reinterpret_cast<const Scalar*>(pv);
   Scalar* c = reinterpret_cast<Scalar*>(pc);
-  Scalar* work = reinterpret_cast<Scalar*>(pwork);
 
   const bool applyleft = (SIDE(*side) == LEFT);
   const bool notran = (OP(*trans) == NOTR);
@@ -408,11 +403,11 @@ EIGEN_LAPACK_FUNC(larfb)
   const int lastc = applyleft ? *n : *m;
 
   ConstMatrixType T_mat(reinterpret_cast<const Scalar*>(pt), *k, *k, *ldt);
+  MatrixType W(reinterpret_cast<Scalar*>(pwork), lastc, *k, *ldwork);
 
   if (colwise) {
     if (forward) {
       if (applyleft) {
-        MatrixType W(work, lastc, *k, *ldwork);
         MatrixType C1(c, *k, lastc, *ldc);
         ConstMatrixType V1(v, *k, *k, *ldv);
 
@@ -431,7 +426,6 @@ EIGEN_LAPACK_FUNC(larfb)
         apply_triangular_right_lower_adjoint<true>(W, V1);
         C1.noalias() -= W.adjoint();
       } else {
-        MatrixType W(work, lastc, *k, *ldwork);
         MatrixType C1(c, lastc, *k, *ldc);
         ConstMatrixType V1(v, *k, *k, *ldv);
 
@@ -452,7 +446,6 @@ EIGEN_LAPACK_FUNC(larfb)
       }
     } else {
       if (applyleft) {
-        MatrixType W(work, lastc, *k, *ldwork);
         MatrixType C2(&c[lastv - *k], *k, lastc, *ldc);
         ConstMatrixType V2(&v[lastv - *k], *k, *k, *ldv);
 
@@ -471,7 +464,6 @@ EIGEN_LAPACK_FUNC(larfb)
         apply_triangular_right_upper_adjoint<true>(W, V2);
         C2.noalias() -= W.adjoint();
       } else {
-        MatrixType W(work, lastc, *k, *ldwork);
         MatrixType C2(&c[(lastv - *k) * Eigen::Index(*ldc)], lastc, *k, *ldc);
         ConstMatrixType V2(&v[lastv - *k], *k, *k, *ldv);
 
@@ -494,7 +486,6 @@ EIGEN_LAPACK_FUNC(larfb)
   } else {
     if (forward) {
       if (applyleft) {
-        MatrixType W(work, lastc, *k, *ldwork);
         MatrixType C1(c, *k, lastc, *ldc);
         ConstMatrixType V1(v, *k, *k, *ldv);
 
@@ -513,7 +504,6 @@ EIGEN_LAPACK_FUNC(larfb)
         apply_triangular_right_upper<true>(W, V1);
         C1.noalias() -= W.adjoint();
       } else {
-        MatrixType W(work, lastc, *k, *ldwork);
         MatrixType C1(c, lastc, *k, *ldc);
         ConstMatrixType V1(v, *k, *k, *ldv);
 
@@ -534,7 +524,6 @@ EIGEN_LAPACK_FUNC(larfb)
       }
     } else {
       if (applyleft) {
-        MatrixType W(work, lastc, *k, *ldwork);
         MatrixType C2(&c[lastv - *k], *k, lastc, *ldc);
         ConstMatrixType V2(&v[(lastv - *k) * Eigen::Index(*ldv)], *k, *k, *ldv);
 
@@ -553,7 +542,6 @@ EIGEN_LAPACK_FUNC(larfb)
         apply_triangular_right_lower<true>(W, V2);
         C2.noalias() -= W.adjoint();
       } else {
-        MatrixType W(work, lastc, *k, *ldwork);
         MatrixType C2(&c[(lastv - *k) * Eigen::Index(*ldc)], lastc, *k, *ldc);
         ConstMatrixType V2(&v[(lastv - *k) * Eigen::Index(*ldv)], *k, *k, *ldv);
 
