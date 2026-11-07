@@ -295,12 +295,27 @@ void ComplexQZ<MatrixType_>::computeInPlace(bool computeQZ) {
   m_global_iter = 0;
   m_info = Success;
 
+  // Scale S and T separately by powers of two near their largest coefficients, as xGGES does, so that the iteration
+  // neither overflows nor underflows. The scaling is exact: it leaves Q and Z unchanged and is undone on S and T.
+  using Scaling = internal::safe_scaling<RealScalar>;
+  const RealScalar maxS =
+      m_n == 0 ? RealScalar(0)
+               : Scaling::recover_flushed_max_coeff(m_S, m_S.cwiseAbs().template maxCoeff<PropagateNaN>());
+  const RealScalar maxT =
+      m_n == 0 ? RealScalar(0)
+               : Scaling::recover_flushed_max_coeff(m_T, m_T.cwiseAbs().template maxCoeff<PropagateNaN>());
+  const internal::safe_scaling_factors<RealScalar> factorsS = Scaling::scale_in_place(m_S, maxS);
+  const internal::safe_scaling_factors<RealScalar> factorsT = Scaling::scale_in_place(m_T, maxT);
+
   // This will initialize m_Q and m_Z and bring m_S, m_T to hessenberg-triangular form
   hessenbergTriangular();
 
   // We assume that we already have that S is upper-Hessenberg and T is
   // upper-triangular. This is what the hessenbergTriangular(...) method does
   reduceHessenbergTriangular();
+
+  Scaling::unscale_in_place(m_S, maxS, factorsS);
+  Scaling::unscale_in_place(m_T, maxT, factorsT);
 }
 
 // This is basically taken from Eigen3::RealQZ
