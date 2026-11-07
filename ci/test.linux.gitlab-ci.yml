@@ -954,6 +954,7 @@ test:linux:buildsystem:
         - cmake/**/*
         - Eigen/Version
         - blas/CMakeLists.txt
+        - blas/testing/runblastest.sh
         - lapack/CMakeLists.txt
         - lapack/*.cmake
         - contrib/**/CMakeLists.txt
