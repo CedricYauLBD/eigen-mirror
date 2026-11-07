@@ -33,6 +33,7 @@ Bug fixes:
 - Constructing or assigning an `Affine` or `Isometry` `Transform` from a (Dim+1)x(Dim+1) matrix copied its last row verbatim; the last row is now set to `[0 ... 0 1]`, as for Dim x Dim and Dim x (Dim+1) inputs [#2715, !3412]
 - `LDLT` pivoted on the diagonal of its input rather than of the remaining Schur complement, so zero pivots of a semidefinite matrix could come before non-zero ones and report `NumericalIssue`, as for `[1 1 0; 1 1 0; 0 0 1]`; a NaN or infinite pivot reported `Success`. `LDLT` now also factors dynamic-size matrices larger than 96 in blocks, with a panel width that grows as sqrt(3 n): 1.7x faster at n = 128, 3.1x at n = 1024 and 6.2x at n = 3000 [!3423]
 - `IOFormat` could insert unwanted spaces between matrix rows when using custom row separators or prefixes.
+- Eigen's BLAS library departed from Reference BLAS on special values and zero increments: `?axpy` and `?gemmtr` read their operands when `alpha` is zero, so an infinite or NaN operand made the result NaN; `?copy` with `incy = 0`, and `?swap` and `?axpby` with a zero increment, did nothing; `?trsm` applied `alpha` after the solve and could overflow where the result does not; real `i?amax` returned an ISA-dependent index for vectors holding NaN; `crotg` and `zrotg` returned NaN for large representable inputs and used the conventions of Reference BLAS before 3.10; `csrot`, `zdrot`, `?herk` and `?her2k` applied their real factor through a complex multiplication, producing NaN from infinite components; and `?rotmg` could loop forever on infinite input [!3505]
 
 Breaking changes:
 - `PaStiXSupport` now requires PaStiX 6.x; version 5 is no longer supported. `FindPASTIX.cmake` uses pkg-config metadata
@@ -47,6 +48,8 @@ Deprecations:
 - The `Transform` conversions from and to Qt's `QMatrix` and `QTransform`, which `EIGEN_QT_SUPPORT` enables, in favor of copying the coefficients explicitly [!3413]
 
 Other changes:
+- `?syr2k` and `?her2k` in Eigen's BLAS library compute only the referenced triangle, without n-by-n temporaries, about twice as fast; unit-stride `?rot`, `csrot` and `zdrot` are vectorized [!3505]
+- CI tests Eigen's BLAS library against netlib's: the reference test drivers, refreshed to Reference-LAPACK 3.12.1 and now failing on any reported failure, and `blas_reference` (`EIGEN_TEST_BLAS_REFERENCE`), which compares every routine with netlib's reference BLAS. `ctest -L blas` runs the BLAS tests [!3505]
 - The top-level `unsupported/` directory was renamed to `contrib/`. Existing
   user code with `#include <unsupported/Eigen/...>` continues to compile
   unchanged via forwarding header shims. The CMake subproject label and
