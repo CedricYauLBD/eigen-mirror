@@ -971,7 +971,7 @@ void generalizedselfadjointeigensolver_imaginary_diagonal() {
           VERIFY((solver.eigenvalues() - reference.eigenvalues()).norm() <= tolerance * reference.eigenvalues().norm());
           if (vectors == ComputeEigenvectors) {
             // Residual of the eigenpairs against the matrices with real diagonals.
-            const MatrixType V = solver.eigenvectors();
+            const auto& V = solver.eigenvectors();
             const MatrixType VD = V * solver.eigenvalues().asDiagonal();
             const RealScalar scale = A.norm() * B.norm() * V.norm() + VD.norm();
             if (type == Ax_lBx) {
