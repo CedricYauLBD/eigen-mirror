@@ -324,6 +324,16 @@ void jacobi_makegivens_complex_subnormal() {
       check_complex_givens(turn(half, -half, up), turn(half, half, uq), half, false);
     }
   }
+
+  // q = 0 with p = 0 or p infinite gives c = 1, s = 0, r = p, as xLARTG does.
+  for (const Scalar p : {Scalar(0), Scalar(NumTraits<RealScalar>::infinity(), RealScalar(1))}) {
+    JacobiRotation<Scalar> rotation;
+    Scalar r;
+    rotation.makeGivens(p, Scalar(0), &r);
+    VERIFY_IS_EQUAL(rotation.c(), Scalar(1));
+    VERIFY_IS_EQUAL(rotation.s(), Scalar(0));
+    VERIFY_IS_EQUAL(r, p);
+  }
 }
 
 template <typename Scalar>

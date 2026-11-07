@@ -161,16 +161,16 @@ EIGEN_DEVICE_FUNC void JacobiRotation<Scalar>::makeGivens(const Scalar& p, const
 // specialization for complexes
 template <typename Scalar>
 EIGEN_DEVICE_FUNC void JacobiRotation<Scalar>::makeGivens(const Scalar& p, const Scalar& q, Scalar* r, std::true_type) {
-  // The formulas below need |p|_1 and |q|_1 to be normal and finite, unless p or q is zero. Where |p|_1 or |q|_1
-  // overflows, or is subnormal (or flushed to zero by FTZ/DAZ), makeGivensComplexScaled() scales p and q first. The
-  // zero tests read the representation, since under DAZ a comparison takes a subnormal for zero; they run only when
-  // p or q is not normal.
+  // The formulas below need |p|_1 and |q|_1 to be normal and finite. A 1-norm that compares equal to zero is an exact
+  // zero or, under FTZ/DAZ, below 2 min, which is below epsilon / 4 times the other 1-norm once that is at least
+  // `negligible`; so the zero branches need no look at the representation. All other inputs, including an exact zero
+  // next to a 1-norm below `negligible`, go out of line to makeGivensComplexScaled().
   const RealScalar p1 = numext::norm1(p);
   const RealScalar q1 = numext::norm1(q);
   const RealScalar normalMin = (std::numeric_limits<RealScalar>::min)();
-  const bool pIsNormal = p1 >= normalMin && p1 <= NumTraits<RealScalar>::highest();
-  const bool qIsNormal = q1 >= normalMin && q1 <= NumTraits<RealScalar>::highest();
-  if (EIGEN_PREDICT_TRUE(pIsNormal && qIsNormal)) {
+  const RealScalar highest = NumTraits<RealScalar>::highest();
+  const RealScalar negligible = RealScalar(8) * normalMin / NumTraits<RealScalar>::epsilon();
+  if (EIGEN_PREDICT_TRUE(p1 >= normalMin && p1 <= highest && q1 >= normalMin && q1 <= highest)) {
     if (p1 >= q1) {
       Scalar ps = p / p1;
       RealScalar p2 = numext::abs2(ps);
@@ -201,20 +201,20 @@ EIGEN_DEVICE_FUNC void JacobiRotation<Scalar>::makeGivens(const Scalar& p, const
       m_s = -numext::conj(phase) * (qs / u);
       if (r) *r = phase * (q1 * u);
     }
-  } else if (qIsNormal && numext::is_exactly_zero_no_flush(numext::real(p)) &&
-             numext::is_exactly_zero_no_flush(numext::imag(p))) {
-    // Scale by max(|Re q|, |Im q|) first: for a subnormal q, abs(q) has only a few bits and q / abs(q) is not
-    // unimodular. Unlike |q|_1, the max norm cannot overflow.
-    const Scalar qn = q / numext::maxi(numext::abs(numext::real(q)), numext::abs(numext::imag(q)));
+  } else if (p1 == RealScalar(0) && q1 >= negligible && q1 <= highest) {
+    // One component of qn = q / max(|Re q|, |Im q|) is +-1, so |qn|^2 = 1 + t^2 with |t| <= 1 is safe to form, and
+    // |q| = qMax |qn|.
+    const RealScalar qMax = numext::maxi(numext::abs(numext::real(q)), numext::abs(numext::imag(q)));
+    const Scalar qn = q / qMax;
+    const RealScalar qnAbs = numext::sqrt(numext::abs2(qn));
     m_c = 0;
-    m_s = -qn / numext::abs(qn);
-    if (r) *r = numext::abs(q);
-  } else if (numext::is_exactly_zero_no_flush(numext::real(q)) && numext::is_exactly_zero_no_flush(numext::imag(q)) &&
-             (pIsNormal || (numext::is_exactly_zero_no_flush(numext::real(p)) &&
-                            numext::is_exactly_zero_no_flush(numext::imag(p))))) {
-    m_c = numext::real(p) < 0 ? Scalar(-1) : Scalar(1);
+    m_s = -qn / qnAbs;
+    if (r) *r = qMax * qnAbs;
+  } else if (q1 == RealScalar(0) && p1 >= negligible) {
+    const bool negative = numext::real(p) < RealScalar(0);
+    m_c = negative ? Scalar(-1) : Scalar(1);
     m_s = 0;
-    if (r) *r = m_c * p;
+    if (r) *r = negative ? Scalar(-p) : p;
   } else {
     makeGivensComplexScaled(p, q, r);
   }
@@ -225,7 +225,16 @@ EIGEN_DEVICE_FUNC EIGEN_DONT_INLINE void JacobiRotation<Scalar>::makeGivensCompl
                                                                                          const Scalar& q, Scalar* r) {
   // Scale p and q by a common power of two such that their largest real or imaginary magnitude is about one; for
   // binary scalars, the scaling goes through integer significands, which FTZ/DAZ cannot flush. Then the larger of
-  // |p|_1 and |q|_1 is normal and finite, and the smaller one is negligible wherever it is subnormal or zero.
+  // |p|_1 and |q|_1 is normal and finite, and the smaller one is negligible wherever it is subnormal or zero. Only
+  // p = q = 0 needs its own branch; it is read from the representation, since under DAZ a subnormal compares equal to
+  // zero.
+  if (numext::is_exactly_zero_no_flush(numext::real(p)) && numext::is_exactly_zero_no_flush(numext::imag(p)) &&
+      numext::is_exactly_zero_no_flush(numext::real(q)) && numext::is_exactly_zero_no_flush(numext::imag(q))) {
+    m_c = Scalar(1);
+    m_s = Scalar(0);
+    if (r) *r = p;
+    return;
+  }
   using Scaling = internal::safe_scaling<RealScalar>;
   Matrix<Scalar, 2, 1> scaled(p, q);
   const RealScalar largest = numext::maxi(numext::maxi(numext::abs(numext::real(p)), numext::abs(numext::imag(p))),
