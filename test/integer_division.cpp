@@ -16,21 +16,21 @@
 // Truncating n / d by hardware division of the magnitudes. lowest() / -1 wraps to lowest(), as IntDivider documents.
 template <typename Scalar, typename Divisor>
 Scalar reference_quotient(Scalar n, Divisor d) {
-  const uint64_t abs_n = internal::int_div::unsigned_abs(n);
-  const uint64_t abs_d = internal::int_div::unsigned_abs(d);
-  const uint64_t abs_q = abs_n / abs_d;
-  const bool negative = internal::int_div::is_negative(n) != internal::int_div::is_negative(d);
+  uint64_t abs_n = internal::int_div::unsigned_abs(n);
+  uint64_t abs_d = internal::int_div::unsigned_abs(d);
+  uint64_t abs_q = abs_n / abs_d;
+  bool negative = internal::int_div::is_negative(n) != internal::int_div::is_negative(d);
   return static_cast<Scalar>(negative ? uint64_t(0) - abs_q : abs_q);
 }
 
 template <typename Scalar, typename Divisor>
 void verify_quotients(const Matrix<Scalar, Dynamic, 1>& numerators, Divisor d) {
-  const IntDivider<Scalar> by(d);
+  IntDivider<Scalar> by(d);
   // The expression takes the packet path where packet_traits<Scalar>::HasFastIntDiv; n / by takes the scalar path.
-  const Matrix<Scalar, Dynamic, 1> quotients = numerators / by;
+  Matrix<Scalar, Dynamic, 1> quotients = numerators / by;
   for (Index i = 0; i < numerators.size(); ++i) {
-    const Scalar n = numerators(i);
-    const Scalar expected = reference_quotient(n, d);
+    Scalar n = numerators(i);
+    Scalar expected = reference_quotient(n, d);
     VERIFY_IS_EQUAL(quotients(i), expected);
     VERIFY_IS_EQUAL(n / by, expected);
   }
@@ -42,7 +42,7 @@ std::vector<T> special_values() {
   constexpr int kBits = CHAR_BIT * sizeof(T);
   std::vector<T> values;
   for (int e = 0; e < kBits; ++e) {
-    const Unsigned p = static_cast<Unsigned>(Unsigned(1) << e);
+    Unsigned p = static_cast<Unsigned>(Unsigned(1) << e);
     for (Unsigned v : {p, static_cast<Unsigned>(p - 1), static_cast<Unsigned>(p + 1)}) {
       values.push_back(static_cast<T>(v));
       if (std::is_signed<T>::value) values.push_back(static_cast<T>(Unsigned(0) - v));
@@ -59,8 +59,18 @@ template <typename T>
 T random_magnitude() {
   using Unsigned = std::make_unsigned_t<T>;
   constexpr int kBits = CHAR_BIT * sizeof(T);
-  const Unsigned bits = internal::random<Unsigned>(0, NumTraits<Unsigned>::highest());
+  Unsigned bits = internal::random<Unsigned>(0, NumTraits<Unsigned>::highest());
   return static_cast<T>(bits >> internal::random<int>(0, kBits - 1));
+}
+
+// q * d + {-1, 0, 1} mod 2^k for a random q, in uint64_t: 16-bit operands would promote to int, where q * d can
+// overflow.
+template <typename Scalar, typename Divisor>
+Scalar boundary_numerator(Divisor d) {
+  using Unsigned = std::make_unsigned_t<Scalar>;
+  uint64_t q = static_cast<uint64_t>(static_cast<int64_t>(random_magnitude<Scalar>()));
+  uint64_t offset = static_cast<uint64_t>(internal::random<int>(-1, 1));
+  return static_cast<Scalar>(static_cast<Unsigned>(q * static_cast<uint64_t>(d) + offset));
 }
 
 // Numerators on both sides of each quotient boundary q * d, and the extremes.
@@ -68,17 +78,11 @@ template <typename Scalar, typename Divisor>
 Matrix<Scalar, Dynamic, 1> test_numerators(Divisor d, Index count) {
   using Unsigned = std::make_unsigned_t<Scalar>;
   Matrix<Scalar, Dynamic, 1> numerators(count);
-  const std::vector<Scalar> special = special_values<Scalar>();
+  std::vector<Scalar> special = special_values<Scalar>();
   Index i = 0;
   for (; i < Index(special.size()) && i < count; ++i) numerators(i) = special[i];
   for (; i < count; ++i) {
-    Scalar n = random_magnitude<Scalar>();
-    if (i % 2 == 0) {
-      // n = q * d + {-1, 0, 1} mod 2^k, in uint64_t: 16-bit operands would promote to int, where q * d can overflow.
-      const uint64_t q = static_cast<uint64_t>(static_cast<int64_t>(random_magnitude<Scalar>()));
-      const uint64_t offset = static_cast<uint64_t>(internal::random<int>(-1, 1));
-      n = static_cast<Scalar>(static_cast<Unsigned>(q * static_cast<uint64_t>(d) + offset));
-    }
+    Scalar n = i % 2 == 0 ? boundary_numerator<Scalar>(d) : random_magnitude<Scalar>();
     // -n mod 2^k, since -lowest() overflows.
     if (std::is_signed<Scalar>::value && internal::random<bool>()) {
       n = static_cast<Scalar>(Unsigned(0) - static_cast<Unsigned>(n));
@@ -121,13 +125,13 @@ void test_random_division() {
 template <typename Scalar, typename Divisor>
 void test_exhaustive_division() {
   using Unsigned = std::make_unsigned_t<Scalar>;
-  const Index count = Index(NumTraits<Unsigned>::highest()) + 1;
+  Index count = Index(NumTraits<Unsigned>::highest()) + 1;
   Matrix<Scalar, Dynamic, 1> numerators(count);
   for (Index i = 0; i < count; ++i) numerators(i) = static_cast<Scalar>(NumTraits<Scalar>::lowest() + i);
   constexpr int kDivisorBits = CHAR_BIT * sizeof(Divisor);
   constexpr bool kSignedDivisor = std::is_signed<Divisor>::value;
-  const int64_t lowest = kSignedDivisor ? -(int64_t(1) << (kDivisorBits - 1)) : 0;
-  const int64_t highest = (int64_t(1) << (kDivisorBits - int(kSignedDivisor))) - 1;
+  int64_t lowest = kSignedDivisor ? -(int64_t(1) << (kDivisorBits - 1)) : 0;
+  int64_t highest = (int64_t(1) << (kDivisorBits - int(kSignedDivisor))) - 1;
   for (int64_t d = lowest; d <= highest; ++d) {
     if (d == 0 || (!std::is_signed<Scalar>::value && d < 0)) continue;
     verify_quotients(numerators, static_cast<Divisor>(d));
@@ -138,21 +142,17 @@ void test_exhaustive_division() {
 // addend that is off by one shows.
 template <typename Scalar, typename Packet, typename Divisor>
 void verify_packet_kernel(Divisor d) {
-  using Unsigned = std::make_unsigned_t<Scalar>;
   constexpr int kSize = internal::unpacket_traits<Packet>::size;
-  const IntDivider<Scalar> by(d);
-  const std::vector<Scalar> special = special_values<Scalar>();
+  IntDivider<Scalar> by(d);
+  std::vector<Scalar> special = special_values<Scalar>();
   Scalar lanes[kSize];
   Scalar result[kSize];
   for (size_t next = 0; next < special.size(); next += kSize) {
     for (int i = 0; i < kSize; ++i) {
-      const size_t index = next + size_t(i);
+      size_t index = next + size_t(i);
       lanes[i] = index < special.size() ? special[index] : random_magnitude<Scalar>();
     }
-    // n = q * d + {-1, 0, 1} mod 2^k, in uint64_t: see test_numerators.
-    const uint64_t q = static_cast<uint64_t>(static_cast<int64_t>(random_magnitude<Scalar>()));
-    const uint64_t offset = static_cast<uint64_t>(internal::random<int>(-1, 1));
-    lanes[kSize - 1] = static_cast<Scalar>(static_cast<Unsigned>(q * static_cast<uint64_t>(d) + offset));
+    lanes[kSize - 1] = boundary_numerator<Scalar>(d);
     internal::pstoreu(result, by.functor().packetOp(internal::ploadu<Packet>(lanes)));
     for (int i = 0; i < kSize; ++i) VERIFY_IS_EQUAL(result[i], reference_quotient(lanes[i], d));
   }
@@ -174,8 +174,10 @@ void test_packet_kernel() {
     verify_packet_kernel<Scalar, Packet>(d);
   }
   // Divisors whose magnitude exceeds the numerators, where every quotient is 0.
-  for (uint64_t d : {uint64_t(1) << 32, (uint64_t(1) << 32) + 1, ~uint64_t(0), uint64_t(1) << 63}) {
-    if (sizeof(Scalar) < 8) verify_packet_kernel<Scalar, Packet>(d);
+  if (sizeof(Scalar) < 8) {
+    for (uint64_t d : {uint64_t(1) << 32, (uint64_t(1) << 32) + 1, ~uint64_t(0), uint64_t(1) << 63}) {
+      verify_packet_kernel<Scalar, Packet>(d);
+    }
   }
   if (sizeof(Scalar) < 4) {
     verify_packet_kernel<Scalar, Packet>(static_cast<uint32_t>(uint32_t(1) << (CHAR_BIT * sizeof(Scalar))));
@@ -200,26 +202,26 @@ void verify_coefficients(const DenseBase<Numerators>& numerators, const DenseBas
 // The quotient expression through dense types other than a plain vector.
 template <typename Scalar>
 void test_expressions() {
-  const Scalar d = static_cast<Scalar>(random_magnitude<Scalar>() | 1);
-  const IntDivider<Scalar> by(d);
+  Scalar d = static_cast<Scalar>(random_magnitude<Scalar>() | 1);
+  IntDivider<Scalar> by(d);
 
   using Array = Eigen::Array<Scalar, Dynamic, Dynamic>;
-  const Array a = Array::Random(37, 29);
-  const Array q = a / by;
-  const Array q_block = by.divide(a.block(1, 2, 33, 21));
+  Array a = Array::Random(37, 29);
+  Array q = a / by;
+  Array q_block = by.divide(a.block(1, 2, 33, 21));
   verify_coefficients(a, q, d);
   verify_coefficients(a.block(1, 2, 33, 21), q_block, d);
 
   using Matrix3 = Matrix<Scalar, 3, 3, RowMajor>;
-  const Matrix3 m = Matrix3::Random();
-  const Matrix3 qm = m.transpose() / by;
+  Matrix3 m = Matrix3::Random();
+  Matrix3 qm = m.transpose() / by;
   verify_coefficients(m.transpose(), qm, d);
 
   // Fixed sizes whose best packet is a half packet or none.
-  const Matrix<Scalar, 2, 1> v2 = Matrix<Scalar, 2, 1>::Random();
-  const Matrix<Scalar, 2, 1> q2 = v2 / by;
-  const Matrix<Scalar, 5, 1> v5 = Matrix<Scalar, 5, 1>::Random();
-  const Matrix<Scalar, 5, 1> q5 = v5 / by;
+  Matrix<Scalar, 2, 1> v2 = Matrix<Scalar, 2, 1>::Random();
+  Matrix<Scalar, 2, 1> q2 = v2 / by;
+  Matrix<Scalar, 5, 1> v5 = Matrix<Scalar, 5, 1>::Random();
+  Matrix<Scalar, 5, 1> q5 = v5 / by;
   verify_coefficients(v2, q2, d);
   verify_coefficients(v5, q5, d);
 

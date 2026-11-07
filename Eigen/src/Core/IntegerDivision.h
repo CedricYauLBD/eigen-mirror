@@ -86,9 +86,9 @@ EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE Unsigned umulhi(Unsigned a, Unsigned b) {
   return static_cast<Unsigned>((static_cast<__uint128_t>(a) * b) >> 64);
 #else
   // Hacker's Delight, 2nd ed., Fig. 8-2: with 32-bit digits, u and w stay below 2^64.
-  const Unsigned a0 = a & 0xffffffffu, a1 = a >> 32, b0 = b & 0xffffffffu, b1 = b >> 32;
-  const Unsigned u = a1 * b0 + ((a0 * b0) >> 32);
-  const Unsigned w = a0 * b1 + (u & 0xffffffffu);
+  Unsigned a0 = a & 0xffffffffu, a1 = a >> 32, b0 = b & 0xffffffffu, b1 = b >> 32;
+  Unsigned u = a1 * b0 + ((a0 * b0) >> 32);
+  Unsigned w = a0 * b1 + (u & 0xffffffffu);
   return a1 * b1 + (u >> 32) + (w >> 32);
 #endif
 }
@@ -106,7 +106,7 @@ EIGEN_DEVICE_FUNC Unsigned div_shifted(Unsigned r, Unsigned d) {
   // Restoring division, one quotient bit per step, keeping r < d.
   Unsigned q = 0;
   for (int i = 0; i < 64; ++i) {
-    const bool carry = (r >> 63) != 0;
+    bool carry = (r >> 63) != 0;
     r <<= 1;
     q <<= 1;
     if (carry || r >= d) {
@@ -134,7 +134,7 @@ EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE Unsigned umuladdhi(Unsigned a, Unsigned b,
 #if EIGEN_HAS_BUILTIN_INT128 && !defined(EIGEN_GPU_COMPILE_PHASE) && !defined(__SYCL_DEVICE_ONLY__)
   return static_cast<Unsigned>((static_cast<__uint128_t>(a) * b + c) >> 64);
 #else
-  const Unsigned low = a * b;
+  Unsigned low = a * b;
   return umulhi(a, b) + static_cast<Unsigned>(static_cast<Unsigned>(low + c) < low);
 #endif
 }
@@ -153,8 +153,8 @@ EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE Unsigned udiv(Unsigned a, Unsigned magic, 
 }
 template <typename Unsigned, std::enable_if_t<!use_multiply_add<Unsigned>::value, int> = 0>
 EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE Unsigned udiv(Unsigned a, Unsigned magic, Unsigned /*addend*/, int shift) {
-  const Unsigned t = umulhi(a, magic);
-  const int shift1 = shift > 0 ? 1 : 0;
+  Unsigned t = umulhi(a, magic);
+  int shift1 = shift > 0 ? 1 : 0;
   return (t + ((a - t) >> shift1)) >> (shift - shift1);
 }
 
@@ -172,19 +172,19 @@ struct params<Unsigned, true> {
     // A wider divisor type can hold d >= 2^k, which keeps the defaults above.
     if (d <= static_cast<UnsignedDivisor>(NumTraits<Unsigned>::highest())) {
       using Wide = std::conditional_t<(sizeof(Unsigned) < 4), uint32_t, Unsigned>;
-      const Unsigned du = static_cast<Unsigned>(d);
-      const int f = log_2_impl<Unsigned>::run_floor(du);
-      const Wide power = Wide(1) << f;
+      Unsigned du = static_cast<Unsigned>(d);
+      int f = log_2_impl<Unsigned>::run_floor(du);
+      Wide power = Wide(1) << f;
       if (du == 1) {
         magic = addend = NumTraits<Unsigned>::highest();
       } else if (Wide(du) == power) {
         magic = static_cast<Unsigned>(Wide(1) << (kBits - 1));
         shift = f - 1;
       } else {
-        const Unsigned q = div_shifted(static_cast<Unsigned>(power), du);
+        Unsigned q = div_shifted(static_cast<Unsigned>(power), du);
         // r = 2^(k+f) mod d = -q d mod 2^k, since r < d < 2^k.
-        const Unsigned r = static_cast<Unsigned>(Wide(0) - Wide(q) * Wide(du));
-        const bool round_up = Wide(du) - Wide(r) <= power;
+        Unsigned r = static_cast<Unsigned>(Wide(0) - Wide(q) * Wide(du));
+        bool round_up = Wide(du) - Wide(r) <= power;
         magic = static_cast<Unsigned>(q + (round_up ? 1 : 0));
         addend = round_up ? Unsigned(0) : q;
         shift = f;
@@ -207,10 +207,10 @@ struct params<Unsigned, false> {
     eigen_assert(d != 0 && "IntDivider: division by zero");
     // A wider divisor type can hold d >= 2^k, which keeps the defaults above.
     if (d <= static_cast<UnsignedDivisor>(NumTraits<Unsigned>::highest())) {
-      const Unsigned du = static_cast<Unsigned>(d);
+      Unsigned du = static_cast<Unsigned>(d);
       shift = log_2_impl<Unsigned>::run_ceil(du);
       // r = 2^l - d < d, reduced mod 2^k for l = k.
-      const Unsigned r =
+      Unsigned r =
           shift == kBits ? static_cast<Unsigned>(Unsigned(0) - du) : static_cast<Unsigned>((Unsigned(1) << shift) - du);
       magic = static_cast<Unsigned>(div_shifted(r, du) + 1);
     }
@@ -234,10 +234,10 @@ struct signed_params {
     eigen_assert(d != 0 && "IntDivider: division by zero");
     using Unsigned = std::make_unsigned_t<Scalar>;
     // Only a wider divisor type can hold d > 2^k - 1; 2^k gives the same quotients, all 0.
-    const bool fits = d <= static_cast<UnsignedDivisor>(NumTraits<Unsigned>::highest());
-    const uint64_t magnitude = fits ? static_cast<uint64_t>(d) : uint64_t(1) << kBits;
+    bool fits = d <= static_cast<UnsignedDivisor>(NumTraits<Unsigned>::highest());
+    uint64_t magnitude = fits ? static_cast<uint64_t>(d) : uint64_t(1) << kBits;
     shift = !fits ? kBits - 1 : numext::maxi(log_2_impl<Unsigned>::run_ceil(static_cast<Unsigned>(d)), 1) - 1;
-    const uint64_t full_magic = (uint64_t(1) << (kBits + shift)) / magnitude + 1;
+    uint64_t full_magic = (uint64_t(1) << (kBits + shift)) / magnitude + 1;
     magic = static_cast<uint32_t>(full_magic);
     total_shift = (full_magic >> 32) != 0 ? 0 : kBits + shift;
   }
@@ -254,20 +254,20 @@ struct signed_params {
 // signs.
 template <typename Scalar, std::enable_if_t<sizeof(Scalar) == 4, int> = 0>
 EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE Scalar sdiv(Scalar a, uint32_t magic, int total_shift, Scalar divisor_sign) {
-  const uint32_t a_sign = static_cast<uint32_t>(a >> 31);
-  const uint32_t abs_a = (static_cast<uint32_t>(a) ^ a_sign) - a_sign;
-  const uint32_t quotient = static_cast<uint32_t>((static_cast<uint64_t>(abs_a) * magic) >> total_shift);
-  const uint32_t sign = a_sign ^ static_cast<uint32_t>(divisor_sign);
+  uint32_t a_sign = static_cast<uint32_t>(a >> 31);
+  uint32_t abs_a = (static_cast<uint32_t>(a) ^ a_sign) - a_sign;
+  uint32_t quotient = static_cast<uint32_t>((static_cast<uint64_t>(abs_a) * magic) >> total_shift);
+  uint32_t sign = a_sign ^ static_cast<uint32_t>(divisor_sign);
   return static_cast<Scalar>((quotient ^ sign) - sign);
 }
 template <typename Scalar, std::enable_if_t<(sizeof(Scalar) < 4), int> = 0>
 EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE Scalar sdiv(Scalar a, uint32_t magic, int total_shift, Scalar divisor_sign) {
   using Unsigned = std::make_unsigned_t<Scalar>;
-  const int32_t wide = static_cast<int32_t>(a);
-  const int32_t product = static_cast<int32_t>(static_cast<uint32_t>(wide) * magic);
-  const Unsigned quotient =
+  int32_t wide = static_cast<int32_t>(a);
+  int32_t product = static_cast<int32_t>(static_cast<uint32_t>(wide) * magic);
+  Unsigned quotient =
       static_cast<Unsigned>(static_cast<Unsigned>(product >> total_shift) - static_cast<Unsigned>(wide >> 31));
-  const Unsigned sign = static_cast<Unsigned>(divisor_sign);
+  Unsigned sign = static_cast<Unsigned>(divisor_sign);
   return static_cast<Scalar>(static_cast<Unsigned>((quotient ^ sign) - sign));
 }
 
@@ -299,8 +299,8 @@ EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE Packet psdiv_magic(
     const Packet& a, std::make_unsigned_t<typename unpacket_traits<Packet>::type> magic,
     std::make_unsigned_t<typename unpacket_traits<Packet>::type> addend, int shift, const Packet& divisor_sign) {
   // For a real packet, pabs(lowest()) wraps to lowest(), whose unsigned reading is |lowest()|.
-  const Packet abs_quotient = pudiv_magic(pabs(a), magic, addend, shift);
-  const Packet quotient_sign = pxor(psignbit(a), divisor_sign);
+  Packet abs_quotient = pudiv_magic(pabs(a), magic, addend, shift);
+  Packet quotient_sign = pxor(psignbit(a), divisor_sign);
   return psub(pxor(abs_quotient, quotient_sign), quotient_sign);
 }
 
@@ -313,7 +313,7 @@ EIGEN_DEVICE_FUNC inline Packet psdiv_signed_magic(const Packet& a, uint32_t mag
                                                    const Packet& divisor_sign) {
   using Scalar = typename unpacket_traits<Packet>::type;
   constexpr int kSize = unpacket_traits<Packet>::size;
-  const Scalar sign = pfirst(divisor_sign);
+  Scalar sign = pfirst(divisor_sign);
   Scalar lanes[kSize];
   pstoreu(lanes, a);
   for (int i = 0; i < kSize; ++i) lanes[i] = int_div::sdiv(lanes[i], magic, total_shift, sign);
@@ -354,10 +354,9 @@ struct scalar_int_div_op<Scalar, true, false> : int_div::params<std::make_unsign
   // compilers (GCC 12 for AArch64) when numerator signs are random. The conversion back to Scalar is modular; only
   // lowest() / -1 wraps.
   EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE Scalar operator()(const Scalar& a) const {
-    const Unsigned abs_quotient = int_div::udiv(int_div::unsigned_abs(a), this->magic, this->addend, this->shift);
-    const Unsigned quotient_sign = static_cast<Unsigned>(
-        static_cast<Unsigned>(Unsigned(0) - static_cast<Unsigned>(a < 0)) ^ static_cast<Unsigned>(divisor_sign));
-    return static_cast<Scalar>(static_cast<Unsigned>((abs_quotient ^ quotient_sign) - quotient_sign));
+    Unsigned abs_quotient = int_div::udiv(int_div::unsigned_abs(a), this->magic, this->addend, this->shift);
+    Unsigned quotient_sign = (Unsigned(0) - Unsigned(a < 0)) ^ static_cast<Unsigned>(divisor_sign);
+    return static_cast<Scalar>((abs_quotient ^ quotient_sign) - quotient_sign);
   }
   template <typename Packet>
   EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE Packet packetOp(const Packet& a) const {

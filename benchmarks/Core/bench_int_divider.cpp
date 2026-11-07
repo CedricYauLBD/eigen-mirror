@@ -35,9 +35,9 @@ void Check(benchmark::State& state, const ArrayX<Scalar>& a, const ArrayX<Scalar
 // conversion to double.
 template <typename Scalar>
 void BM_Quotient(benchmark::State& state) {
-  const Index n = state.range(0);
-  const Scalar d = RuntimeDivisor<Scalar>(state);
-  const ArrayX<Scalar> a = Numerators<Scalar>(n);
+  Index n = state.range(0);
+  Scalar d = RuntimeDivisor<Scalar>(state);
+  ArrayX<Scalar> a = Numerators<Scalar>(n);
   ArrayX<Scalar> q(n);
   for (auto _ : state) {
     q = a / d;
@@ -49,11 +49,11 @@ void BM_Quotient(benchmark::State& state) {
 
 template <typename Scalar>
 void BM_IntDivider(benchmark::State& state) {
-  const Index n = state.range(0);
-  const Scalar d = RuntimeDivisor<Scalar>(state);
-  const ArrayX<Scalar> a = Numerators<Scalar>(n);
+  Index n = state.range(0);
+  Scalar d = RuntimeDivisor<Scalar>(state);
+  ArrayX<Scalar> a = Numerators<Scalar>(n);
   ArrayX<Scalar> q(n);
-  const IntDivider<Scalar> by(d);
+  IntDivider<Scalar> by(d);
   for (auto _ : state) {
     q = a / by;
     benchmark::DoNotOptimize(q.data());
@@ -65,11 +65,11 @@ void BM_IntDivider(benchmark::State& state) {
 // The scalar path of IntDivider, as a loop the compiler may vectorize on its own.
 template <typename Scalar>
 void BM_IntDividerLoop(benchmark::State& state) {
-  const Index n = state.range(0);
-  const Scalar d = RuntimeDivisor<Scalar>(state);
-  const ArrayX<Scalar> a = Numerators<Scalar>(n);
+  Index n = state.range(0);
+  Scalar d = RuntimeDivisor<Scalar>(state);
+  ArrayX<Scalar> a = Numerators<Scalar>(n);
   ArrayX<Scalar> q(n);
-  const IntDivider<Scalar> by(d);
+  IntDivider<Scalar> by(d);
   for (auto _ : state) {
     for (Index i = 0; i < n; ++i) q[i] = a[i] / by;
     benchmark::DoNotOptimize(q.data());
@@ -82,8 +82,8 @@ void BM_IntDividerLoop(benchmark::State& state) {
 // IntDivider with the divisor 7.
 template <typename Scalar>
 void BM_ConstantLoop(benchmark::State& state) {
-  const Index n = state.range(0);
-  const ArrayX<Scalar> a = Numerators<Scalar>(n);
+  Index n = state.range(0);
+  ArrayX<Scalar> a = Numerators<Scalar>(n);
   ArrayX<Scalar> q(n);
   for (auto _ : state) {
     for (Index i = 0; i < n; ++i) q[i] = a[i] / Scalar(7);

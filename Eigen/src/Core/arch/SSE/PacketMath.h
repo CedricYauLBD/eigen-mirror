@@ -2059,14 +2059,14 @@ EIGEN_STRONG_INLINE __m128i float2half(__m128 f) {
 
 // pudiv_magic (IntegerDivision.h) for 32-bit lanes. _mm_mul_epu32 multiplies the even lanes into 64-bit products.
 EIGEN_STRONG_INLINE __m128i pudiv_magic_epu32(const __m128i& a, uint32_t magic, uint32_t addend, int shift) {
-  const __m128i m = _mm_set1_epi32(static_cast<int>(magic));
-  const __m128i c = _mm_set1_epi64x(static_cast<long long>(addend));
-  const __m128i even = _mm_srli_epi64(_mm_add_epi64(_mm_mul_epu32(a, m), c), 32);
-  const __m128i odd = _mm_add_epi64(_mm_mul_epu32(_mm_srli_epi64(a, 32), m), c);
+  __m128i m = _mm_set1_epi32(static_cast<int>(magic));
+  __m128i c = _mm_set1_epi64x(static_cast<long long>(addend));
+  __m128i even = _mm_srli_epi64(_mm_add_epi64(_mm_mul_epu32(a, m), c), 32);
+  __m128i odd = _mm_add_epi64(_mm_mul_epu32(_mm_srli_epi64(a, 32), m), c);
 #ifdef EIGEN_VECTORIZE_SSE4_1
-  const __m128i t = _mm_blend_epi16(even, odd, 0xCC);
+  __m128i t = _mm_blend_epi16(even, odd, 0xCC);
 #else
-  const __m128i t = _mm_or_si128(even, _mm_and_si128(odd, _mm_set_epi32(-1, 0, -1, 0)));
+  __m128i t = _mm_or_si128(even, _mm_and_si128(odd, _mm_set_epi32(-1, 0, -1, 0)));
 #endif
   return _mm_srl_epi32(t, _mm_cvtsi32_si128(shift));
 }
@@ -2075,17 +2075,15 @@ EIGEN_STRONG_INLINE __m128i pudiv_magic_epu32(const __m128i& a, uint32_t magic, 
 // 2nd ed., Fig. 8-2. Each partial sum adds at most two terms below 2^32 to a product <= (2^32 - 1)^2, which stays
 // below 2^64.
 EIGEN_STRONG_INLINE __m128i pudiv_magic_epu64(const __m128i& a, uint64_t magic, uint64_t addend, int shift) {
-  const __m128i m_lo = _mm_set1_epi64x(static_cast<long long>(magic));
-  const __m128i m_hi = _mm_set1_epi64x(static_cast<long long>(magic >> 32));
-  const __m128i c_lo = _mm_set1_epi64x(static_cast<long long>(addend & 0xffffffffu));
-  const __m128i c_hi = _mm_set1_epi64x(static_cast<long long>(addend >> 32));
-  const __m128i a_hi = _mm_srli_epi64(a, 32);
-  const __m128i u0 = _mm_add_epi64(_mm_mul_epu32(a, m_lo), c_lo);
-  const __m128i u = _mm_add_epi64(_mm_mul_epu32(a_hi, m_lo), _mm_srli_epi64(u0, 32));
-  const __m128i w =
-      _mm_add_epi64(_mm_add_epi64(_mm_mul_epu32(a, m_hi), _mm_and_si128(u, _mm_set1_epi64x(0xffffffff))), c_hi);
-  const __m128i t =
-      _mm_add_epi64(_mm_add_epi64(_mm_mul_epu32(a_hi, m_hi), _mm_srli_epi64(u, 32)), _mm_srli_epi64(w, 32));
+  __m128i m_lo = _mm_set1_epi64x(static_cast<long long>(magic));
+  __m128i m_hi = _mm_set1_epi64x(static_cast<long long>(magic >> 32));
+  __m128i c_lo = _mm_set1_epi64x(static_cast<long long>(addend & 0xffffffffu));
+  __m128i c_hi = _mm_set1_epi64x(static_cast<long long>(addend >> 32));
+  __m128i a_hi = _mm_srli_epi64(a, 32);
+  __m128i u0 = _mm_add_epi64(_mm_mul_epu32(a, m_lo), c_lo);
+  __m128i u = _mm_add_epi64(_mm_mul_epu32(a_hi, m_lo), _mm_srli_epi64(u0, 32));
+  __m128i w = _mm_add_epi64(_mm_add_epi64(_mm_mul_epu32(a, m_hi), _mm_and_si128(u, _mm_set1_epi64x(0xffffffff))), c_hi);
+  __m128i t = _mm_add_epi64(_mm_add_epi64(_mm_mul_epu32(a_hi, m_hi), _mm_srli_epi64(u, 32)), _mm_srli_epi64(w, 32));
   return _mm_srl_epi64(t, _mm_cvtsi32_si128(shift));
 }
 
@@ -2094,11 +2092,11 @@ EIGEN_STRONG_INLINE __m128i pudiv_magic_epu64(const __m128i& a, uint64_t magic, 
 // _mm_mul_epi32 gives the signed high half: mulhs(M - 2^32, n) + n, for the M of every divisor.
 EIGEN_STRONG_INLINE __m128i psdiv_signed_magic_epi32(const __m128i& a, uint32_t magic, int shift, int /*total_shift*/,
                                                      const __m128i& divisor_sign) {
-  const __m128i m = _mm_set1_epi32(static_cast<int>(magic));
-  const __m128i even = _mm_srli_epi64(_mm_mul_epi32(a, m), 32);
-  const __m128i odd = _mm_mul_epi32(_mm_srli_epi64(a, 32), m);
-  const __m128i t = _mm_add_epi32(a, _mm_blend_epi16(even, odd, 0xCC));
-  const __m128i q = _mm_sub_epi32(_mm_sra_epi32(t, _mm_cvtsi32_si128(shift)), _mm_srai_epi32(a, 31));
+  __m128i m = _mm_set1_epi32(static_cast<int>(magic));
+  __m128i even = _mm_srli_epi64(_mm_mul_epi32(a, m), 32);
+  __m128i odd = _mm_mul_epi32(_mm_srli_epi64(a, 32), m);
+  __m128i t = _mm_add_epi32(a, _mm_blend_epi16(even, odd, 0xCC));
+  __m128i q = _mm_sub_epi32(_mm_sra_epi32(t, _mm_cvtsi32_si128(shift)), _mm_srai_epi32(a, 31));
   return _mm_sub_epi32(_mm_xor_si128(q, divisor_sign), divisor_sign);
 }
 #else
@@ -2106,14 +2104,14 @@ EIGEN_STRONG_INLINE __m128i psdiv_signed_magic_epi32(const __m128i& a, uint32_t 
 // fits in 32 bits, so the upper half of each shifted lane is 0.
 EIGEN_STRONG_INLINE __m128i psdiv_signed_magic_epi32(const __m128i& a, uint32_t magic, int /*shift*/, int total_shift,
                                                      const __m128i& divisor_sign) {
-  const __m128i m = _mm_set1_epi32(static_cast<int>(magic));
-  const __m128i count = _mm_cvtsi32_si128(total_shift);
-  const __m128i a_sign = _mm_srai_epi32(a, 31);
-  const __m128i abs_a = _mm_sub_epi32(_mm_xor_si128(a, a_sign), a_sign);
-  const __m128i even = _mm_srl_epi64(_mm_mul_epu32(abs_a, m), count);
-  const __m128i odd = _mm_srl_epi64(_mm_mul_epu32(_mm_srli_epi64(abs_a, 32), m), count);
-  const __m128i q = _mm_or_si128(even, _mm_slli_epi64(odd, 32));
-  const __m128i q_sign = _mm_xor_si128(a_sign, divisor_sign);
+  __m128i m = _mm_set1_epi32(static_cast<int>(magic));
+  __m128i count = _mm_cvtsi32_si128(total_shift);
+  __m128i a_sign = _mm_srai_epi32(a, 31);
+  __m128i abs_a = _mm_sub_epi32(_mm_xor_si128(a, a_sign), a_sign);
+  __m128i even = _mm_srl_epi64(_mm_mul_epu32(abs_a, m), count);
+  __m128i odd = _mm_srl_epi64(_mm_mul_epu32(_mm_srli_epi64(abs_a, 32), m), count);
+  __m128i q = _mm_or_si128(even, _mm_slli_epi64(odd, 32));
+  __m128i q_sign = _mm_xor_si128(a_sign, divisor_sign);
   return _mm_sub_epi32(_mm_xor_si128(q, q_sign), q_sign);
 }
 #endif
