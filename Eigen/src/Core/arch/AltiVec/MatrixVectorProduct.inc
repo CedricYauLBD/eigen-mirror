@@ -1245,10 +1245,7 @@ EIGEN_ALWAYS_INLINE Packet4f pload_real(const Packet4f& src) { return src; }
 EIGEN_ALWAYS_INLINE Packet2d pload_real(const Packet2d& src) { return src; }
 
 /** \internal load a vector from a real-only vector location */
-EIGEN_ALWAYS_INLINE Packet4f pload_real_full(float* src) {
-  Packet4f ret = ploadu<Packet4f>(src);
-  return vec_mergeh(ret, ret);
-}
+EIGEN_ALWAYS_INLINE Packet4f pload_real_full(float* src) { return ploaddup<Packet4f>(src); }
 
 EIGEN_ALWAYS_INLINE Packet2d pload_real_full(double* src) { return pload_real(src); }
 
