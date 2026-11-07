@@ -220,10 +220,12 @@ struct params<Unsigned, false> {
   int shift;
 };
 
-// The constants of signed division for k < 64.
+// The constants of signed division for k < 64. magic holds M modulo 2^32, which only |d| = 1 with k = 32 reduces. It is
+// not wider so that compilers see a 32 x 32 -> 64-bit product: GCC vectorizes a truncated 64-bit multiplier as a
+// 64 x 64-bit product, three times the multiplications. shift is l, and total_shift is k + l, or 0 for |d| = 1 with
+// k = 32, where the low bits of M are 1.
 template <typename Scalar>
 struct signed_params {
-  using Wide = double_width_t<Scalar>;
   static constexpr int kBits = CHAR_BIT * sizeof(Scalar);
 
   template <typename UnsignedDivisor>
@@ -234,23 +236,36 @@ struct signed_params {
     const bool fits = d <= static_cast<UnsignedDivisor>(NumTraits<Unsigned>::highest());
     const uint64_t magnitude = fits ? static_cast<uint64_t>(d) : uint64_t(1) << kBits;
     shift = !fits ? kBits - 1 : numext::maxi(log_2_impl<Unsigned>::run_ceil(static_cast<Unsigned>(d)), 1) - 1;
-    magic = static_cast<Wide>((uint64_t(1) << (kBits + shift)) / magnitude + 1);
+    const uint64_t full_magic = (uint64_t(1) << (kBits + shift)) / magnitude + 1;
+    magic = static_cast<uint32_t>(full_magic);
+    total_shift = (full_magic >> 32) != 0 ? 0 : kBits + shift;
   }
 
-  Wide magic;
+  uint32_t magic;
   int shift;
+  int total_shift;
 };
 
 // trunc(a / d) for the constants of signed_params and divisor_sign = -[d < 0]. lowest() / -1 wraps to lowest().
-template <typename Scalar, typename Wide>
-EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE Scalar sdiv(Scalar a, Wide magic, int shift, Scalar divisor_sign) {
+//
+// 32 bits: compilers vectorize a loop over this badly in the signed form, which needs a 64-bit arithmetic shift.
+// Multiply the magnitude and shift the whole product instead. The masks avoid a select, which mispredicts on random
+// signs.
+template <typename Scalar, std::enable_if_t<sizeof(Scalar) == 4, int> = 0>
+EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE Scalar sdiv(Scalar a, uint32_t magic, int total_shift, Scalar divisor_sign) {
+  const uint32_t a_sign = static_cast<uint32_t>(a >> 31);
+  const uint32_t abs_a = (static_cast<uint32_t>(a) ^ a_sign) - a_sign;
+  const uint32_t quotient = static_cast<uint32_t>((static_cast<uint64_t>(abs_a) * magic) >> total_shift);
+  const uint32_t sign = a_sign ^ static_cast<uint32_t>(divisor_sign);
+  return static_cast<Scalar>((quotient ^ sign) - sign);
+}
+template <typename Scalar, std::enable_if_t<(sizeof(Scalar) < 4), int> = 0>
+EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE Scalar sdiv(Scalar a, uint32_t magic, int total_shift, Scalar divisor_sign) {
   using Unsigned = std::make_unsigned_t<Scalar>;
-  using SignedWide = std::make_signed_t<Wide>;
-  const SignedWide wide = static_cast<SignedWide>(a);
-  const SignedWide product = static_cast<SignedWide>(static_cast<Wide>(wide) * magic);
+  const int32_t wide = static_cast<int32_t>(a);
+  const int32_t product = static_cast<int32_t>(static_cast<uint32_t>(wide) * magic);
   const Unsigned quotient =
-      static_cast<Unsigned>(static_cast<Unsigned>(product >> (CHAR_BIT * sizeof(Scalar) + shift)) -
-                            static_cast<Unsigned>(wide >> (CHAR_BIT * sizeof(Wide) - 1)));
+      static_cast<Unsigned>(static_cast<Unsigned>(product >> total_shift) - static_cast<Unsigned>(wide >> 31));
   const Unsigned sign = static_cast<Unsigned>(divisor_sign);
   return static_cast<Scalar>(static_cast<Unsigned>((quotient ^ sign) - sign));
 }
@@ -288,20 +303,19 @@ EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE Packet psdiv_magic(
   return psub(pxor(abs_quotient, quotient_sign), quotient_sign);
 }
 
-/** \internal \returns the truncated signed quotients lane-wise for the \a magic and \a shift of d computed by
- * int_div::signed_params. \a divisor_sign holds -1 in every lane for d < 0, else 0. lowest() / -1 wraps to lowest().
- * This lane-by-lane fallback keeps every packet type correct; backends specialize it where the instructions exist. */
+/** \internal \returns the truncated signed quotients lane-wise for the \a magic, \a shift and \a total_shift of d
+ * computed by int_div::signed_params. \a divisor_sign holds -1 in every lane for d < 0, else 0. lowest() / -1 wraps to
+ * lowest(). This lane-by-lane fallback keeps every packet type correct; backends specialize it where the instructions
+ * exist. */
 template <typename Packet>
-EIGEN_DEVICE_FUNC inline Packet psdiv_signed_magic(const Packet& a, uint64_t magic, int shift,
+EIGEN_DEVICE_FUNC inline Packet psdiv_signed_magic(const Packet& a, uint32_t magic, int /*shift*/, int total_shift,
                                                    const Packet& divisor_sign) {
   using Scalar = typename unpacket_traits<Packet>::type;
   constexpr int kSize = unpacket_traits<Packet>::size;
   const Scalar sign = pfirst(divisor_sign);
   Scalar lanes[kSize];
   pstoreu(lanes, a);
-  for (int i = 0; i < kSize; ++i) {
-    lanes[i] = int_div::sdiv(lanes[i], static_cast<int_div::double_width_t<Scalar>>(magic), shift, sign);
-  }
+  for (int i = 0; i < kSize; ++i) lanes[i] = int_div::sdiv(lanes[i], magic, total_shift, sign);
   return ploadu<Packet>(lanes);
 }
 
@@ -363,11 +377,11 @@ struct scalar_int_div_op<Scalar, true, true> : int_div::signed_params<Scalar> {
       : Base(int_div::unsigned_abs(d)), divisor_sign(int_div::is_negative(d) ? Scalar(-1) : Scalar(0)) {}
 
   EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE Scalar operator()(const Scalar& a) const {
-    return int_div::sdiv(a, this->magic, this->shift, divisor_sign);
+    return int_div::sdiv(a, this->magic, this->total_shift, divisor_sign);
   }
   template <typename Packet>
   EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE Packet packetOp(const Packet& a) const {
-    return psdiv_signed_magic(a, this->magic, this->shift, pset1<Packet>(divisor_sign));
+    return psdiv_signed_magic(a, this->magic, this->shift, this->total_shift, pset1<Packet>(divisor_sign));
   }
 
   Scalar divisor_sign;

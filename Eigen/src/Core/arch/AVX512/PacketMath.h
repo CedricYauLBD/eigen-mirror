@@ -3483,9 +3483,9 @@ inline void pstoreuSegment<Eigen::half, Packet8h>(Eigen::half* to, const Packet8
 
 // psdiv_signed_magic and pudiv_magic (IntegerDivision.h); see the kernels in SSE/PacketMath.h.
 template <>
-EIGEN_STRONG_INLINE Packet16i psdiv_signed_magic<Packet16i>(const Packet16i& a, uint64_t magic, int shift,
-                                                            const Packet16i& divisor_sign) {
-  const __m512i m = _mm512_set1_epi32(static_cast<int>(static_cast<uint32_t>(magic)));
+EIGEN_STRONG_INLINE Packet16i psdiv_signed_magic<Packet16i>(const Packet16i& a, uint32_t magic, int shift,
+                                                            int /*total_shift*/, const Packet16i& divisor_sign) {
+  const __m512i m = _mm512_set1_epi32(static_cast<int>(magic));
   const __m512i even = _mm512_shuffle_epi32(_mm512_mul_epi32(a, m), _MM_PERM_DDBB);
   const __m512i odd = _mm512_mul_epi32(_mm512_shuffle_epi32(a, _MM_PERM_DDBB), m);
   const __m512i t = _mm512_add_epi32(a, _mm512_mask_blend_epi32(0xAAAA, even, odd));

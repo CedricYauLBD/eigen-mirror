@@ -6141,9 +6141,9 @@ EIGEN_STRONG_INLINE Packet2ui pudiv_magic<Packet2ui>(const Packet2ui& a, uint32_
 }
 
 template <>
-EIGEN_STRONG_INLINE Packet4i psdiv_signed_magic<Packet4i>(const Packet4i& a, uint64_t magic, int shift,
-                                                          const Packet4i& divisor_sign) {
-  const int32x2_t m = vdup_n_s32(static_cast<int32_t>(static_cast<uint32_t>(magic)));
+EIGEN_STRONG_INLINE Packet4i psdiv_signed_magic<Packet4i>(const Packet4i& a, uint32_t magic, int shift,
+                                                          int /*total_shift*/, const Packet4i& divisor_sign) {
+  const int32x2_t m = vdup_n_s32(static_cast<int32_t>(magic));
   const int64x2_t lo = vmull_s32(vget_low_s32(a), m);
   const int64x2_t hi = vmull_s32(vget_high_s32(a), m);
 #if EIGEN_ARCH_ARM64
@@ -6155,9 +6155,9 @@ EIGEN_STRONG_INLINE Packet4i psdiv_signed_magic<Packet4i>(const Packet4i& a, uin
   return vsubq_s32(veorq_s32(q, divisor_sign), divisor_sign);
 }
 template <>
-EIGEN_STRONG_INLINE Packet2i psdiv_signed_magic<Packet2i>(const Packet2i& a, uint64_t magic, int shift,
-                                                          const Packet2i& divisor_sign) {
-  const int32x2_t t = vshrn_n_s64(vmull_s32(a, vdup_n_s32(static_cast<int32_t>(static_cast<uint32_t>(magic)))), 32);
+EIGEN_STRONG_INLINE Packet2i psdiv_signed_magic<Packet2i>(const Packet2i& a, uint32_t magic, int shift,
+                                                          int /*total_shift*/, const Packet2i& divisor_sign) {
+  const int32x2_t t = vshrn_n_s64(vmull_s32(a, vdup_n_s32(static_cast<int32_t>(magic))), 32);
   const int32x2_t q = vsub_s32(vshl_s32(vadd_s32(a, t), vdup_n_s32(-shift)), vshr_n_s32(a, 31));
   return vsub_s32(veor_s32(q, divisor_sign), divisor_sign);
 }

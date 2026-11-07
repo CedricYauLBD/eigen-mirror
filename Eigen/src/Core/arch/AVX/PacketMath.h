@@ -3129,9 +3129,9 @@ EIGEN_STRONG_INLINE __m256i pudiv_magic_epu32(const __m256i& a, uint32_t magic, 
   return _mm256_srlv_epi32(_mm256_blend_epi32(even, odd, 0xAA), _mm256_set1_epi32(shift));
 }
 
-EIGEN_STRONG_INLINE __m256i psdiv_signed_magic_epi32(const __m256i& a, uint64_t magic, int shift,
+EIGEN_STRONG_INLINE __m256i psdiv_signed_magic_epi32(const __m256i& a, uint32_t magic, int shift,
                                                      const __m256i& divisor_sign) {
-  const __m256i m = _mm256_set1_epi32(static_cast<int>(static_cast<uint32_t>(magic)));
+  const __m256i m = _mm256_set1_epi32(static_cast<int>(magic));
   const __m256i even = _mm256_shuffle_epi32(_mm256_mul_epi32(a, m), 0xF5);
   const __m256i odd = _mm256_mul_epi32(_mm256_shuffle_epi32(a, 0xF5), m);
   const __m256i t = _mm256_add_epi32(a, _mm256_blend_epi32(even, odd, 0xAA));
@@ -3146,18 +3146,19 @@ EIGEN_STRONG_INLINE __m256i pudiv_magic_epu32(const __m256i& a, uint32_t magic, 
   return _mm256_insertf128_si256(_mm256_castsi128_si256(lo), hi, 1);
 }
 
-EIGEN_STRONG_INLINE __m256i psdiv_signed_magic_epi32(const __m256i& a, uint64_t magic, int shift,
+EIGEN_STRONG_INLINE __m256i psdiv_signed_magic_epi32(const __m256i& a, uint32_t magic, int shift,
                                                      const __m256i& divisor_sign) {
   const __m128i sign = _mm256_castsi256_si128(divisor_sign);
-  const __m128i lo = psdiv_signed_magic_epi32(_mm256_castsi256_si128(a), magic, shift, sign);
-  const __m128i hi = psdiv_signed_magic_epi32(_mm256_extractf128_si256(a, 1), magic, shift, sign);
+  // AVX implies SSE4.1, whose kernel does not read the total shift.
+  const __m128i lo = psdiv_signed_magic_epi32(_mm256_castsi256_si128(a), magic, shift, 0, sign);
+  const __m128i hi = psdiv_signed_magic_epi32(_mm256_extractf128_si256(a, 1), magic, shift, 0, sign);
   return _mm256_insertf128_si256(_mm256_castsi128_si256(lo), hi, 1);
 }
 #endif
 
 template <>
-EIGEN_STRONG_INLINE Packet8i psdiv_signed_magic<Packet8i>(const Packet8i& a, uint64_t magic, int shift,
-                                                          const Packet8i& divisor_sign) {
+EIGEN_STRONG_INLINE Packet8i psdiv_signed_magic<Packet8i>(const Packet8i& a, uint32_t magic, int shift,
+                                                          int /*total_shift*/, const Packet8i& divisor_sign) {
   return psdiv_signed_magic_epi32(a, magic, shift, divisor_sign);
 }
 template <>
