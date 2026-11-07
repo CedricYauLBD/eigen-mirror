@@ -128,13 +128,7 @@ struct use_multiply_add : std::integral_constant<bool, (sizeof(Unsigned) < 8) ||
 template <typename Unsigned>
 using double_width_t = std::conditional_t<(sizeof(Unsigned) < 4), uint32_t, uint64_t>;
 
-// floor((a b + c) / 2^k), which fits in k bits for a, b, c < 2^k.
-template <typename Unsigned, std::enable_if_t<(sizeof(Unsigned) < 8), int> = 0>
-EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE Unsigned umuladdhi(Unsigned a, Unsigned b, Unsigned c) {
-  using Wide = double_width_t<Unsigned>;
-  return static_cast<Unsigned>((static_cast<Wide>(a) * static_cast<Wide>(b) + static_cast<Wide>(c)) >>
-                               (CHAR_BIT * sizeof(Unsigned)));
-}
+// floor((a b + c) / 2^64), which fits in 64 bits for a, b, c < 2^64.
 template <typename Unsigned, std::enable_if_t<sizeof(Unsigned) == 8, int> = 0>
 EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE Unsigned umuladdhi(Unsigned a, Unsigned b, Unsigned c) {
 #if EIGEN_HAS_BUILTIN_INT128 && !defined(EIGEN_GPU_COMPILE_PHASE) && !defined(__SYCL_DEVICE_ONLY__)
@@ -145,10 +139,17 @@ EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE Unsigned umuladdhi(Unsigned a, Unsigned b,
 #endif
 }
 
-// floor(a / d) for the constants of d computed by params.
-template <typename Unsigned, std::enable_if_t<use_multiply_add<Unsigned>::value, int> = 0>
+// floor(a / d) for the constants of d computed by params. Below 64 bits one shift of the whole sum: compilers that
+// vectorize this keep the lanes wide until the end, where narrowing to the high half first costs more shuffles.
+template <typename Unsigned, std::enable_if_t<(sizeof(Unsigned) < 8), int> = 0>
 EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE Unsigned udiv(Unsigned a, Unsigned magic, Unsigned addend, int shift) {
-  return static_cast<Unsigned>(umuladdhi(a, magic, addend) >> shift);
+  using Wide = double_width_t<Unsigned>;
+  return static_cast<Unsigned>((static_cast<Wide>(a) * static_cast<Wide>(magic) + static_cast<Wide>(addend)) >>
+                               (CHAR_BIT * sizeof(Unsigned) + shift));
+}
+template <typename Unsigned, std::enable_if_t<sizeof(Unsigned) == 8 && use_multiply_add<Unsigned>::value, int> = 0>
+EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE Unsigned udiv(Unsigned a, Unsigned magic, Unsigned addend, int shift) {
+  return umuladdhi(a, magic, addend) >> shift;
 }
 template <typename Unsigned, std::enable_if_t<!use_multiply_add<Unsigned>::value, int> = 0>
 EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE Unsigned udiv(Unsigned a, Unsigned magic, Unsigned /*addend*/, int shift) {
