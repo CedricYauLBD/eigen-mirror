@@ -210,7 +210,8 @@ class ComplexQZ {
 
   /** \brief Reports whether the last computation was successful.
    *
-   * \returns \c Success if computation was successful, \c NoConvergence otherwise.
+   * \returns \c NoConvergence if the QZ iteration did not converge within \c maxIters iterations, \c NumericalIssue if
+   * an entry that a reduction step should have eliminated was left above its threshold, and \c Success otherwise.
    */
   ComputationInfo info() const {
     eigen_assert(m_isInitialized && "ComplexQZ is not initialized.");
@@ -464,10 +465,8 @@ void ComplexQZ<MatrixType_>::reduceHessenbergTriangular() {
     }
   }
 
-  // Preserve NumericalIssue if set
-  if (m_info != NumericalIssue) {
-    m_info = (local_iter < m_maxIters) ? Success : NoConvergence;
-  }
+  // Part of the pencil is not reduced: that takes precedence over a NumericalIssue reported before.
+  if (l > 0) m_info = NoConvergence;
 }
 
 template <typename MatrixType_>

@@ -263,6 +263,36 @@ void complex_qz_jordan() {
   }
 }
 
+// info() reported an earlier NumericalIssue instead of NoConvergence when the iteration stopped before reducing the
+// pencil (#3212). On this graded complex<float> pencil, deflation reports NumericalIssue, and one iteration per
+// eigenvalue is not enough to reduce it. A 1x1 pencil needs no iteration, so maxIters = 0 still reduces it.
+void complex_qz_no_convergence_status() {
+  using cf = std::complex<float>;
+  MatrixXcf a(5, 5), b(5, 5);
+  a << cf(-1, -1), cf(-2, -2), cf(2, -2), cf(0, 1), cf(-2, -1),  //
+      cf(-2, 2), cf(2, 2), cf(2, 2), cf(-1, 2), cf(-1, -1),      //
+      cf(-1, 0), cf(-2, -2), cf(-1, -1), cf(0, -2), cf(1, 1),    //
+      cf(0, 2), cf(-2, -2), cf(1, 0), cf(1, 1), cf(-1, -1),      //
+      cf(-2, -2), cf(-1, 2), cf(1, 1), cf(2, -1), cf(-1, 1);
+  b << cf(1, -2), cf(-2, 2), cf(0, 0), cf(1, -2), cf(2, -1),   //
+      cf(-1, -1), cf(2, -2), cf(-2, 1), cf(-2, 2), cf(2, -1),  //
+      cf(-2, 1), cf(0, 1), cf(1, 0), cf(1, -2), cf(1, -2),     //
+      cf(0, 1), cf(2, -1), cf(2, -1), cf(-2, 1), cf(2, 0),     //
+      cf(1, 1), cf(1, -2), cf(2, 0), cf(2, 0), cf(0, 0);
+  const float grade[] = {1.f, 1e-2f, 1e-4f, 1e-6f, 1e-8f};
+  for (Index i = 0; i < 5; ++i) {
+    a.row(i) *= grade[i];
+    b.row(i) *= grade[i];
+  }
+  ComplexQZ<MatrixXcf> limited(a, b, true, 1);
+  VERIFY_IS_EQUAL(limited.info(), NoConvergence);
+  VERIFY((limited.matrixS().diagonal(-1).array() != cf(0)).any());
+
+  const MatrixXcf a1 = MatrixXcf::Constant(1, 1, cf(2)), b1 = MatrixXcf::Constant(1, 1, cf(1));
+  ComplexQZ<MatrixXcf> scalar(a1, b1, true, 0);
+  VERIFY_IS_EQUAL(scalar.info(), Success);
+}
+
 // Block Householder operations still allocate at larger sizes (issue #3163).
 template <typename MatrixType>
 void complex_qz_no_malloc() {
@@ -322,6 +352,7 @@ EIGEN_DECLARE_TEST(complex_qz) {
   CALL_SUBTEST_9((complex_qz_scaled<Matrix<std::complex<float>, Dynamic, Dynamic, RowMajor>>()));
   CALL_SUBTEST_10((complex_qz_scaled<Matrix<std::complex<double>, Dynamic, Dynamic, RowMajor>>()));
   CALL_SUBTEST_7((complex_qz_jordan<MatrixXcf>()));
+  CALL_SUBTEST_7(complex_qz_no_convergence_status());
   CALL_SUBTEST_8((complex_qz_jordan<MatrixXcd>()));
   CALL_SUBTEST_9((complex_qz_jordan<Matrix<std::complex<float>, Dynamic, Dynamic, RowMajor>>()));
   CALL_SUBTEST_10((complex_qz_jordan<Matrix<std::complex<double>, Dynamic, Dynamic, RowMajor>>()));
