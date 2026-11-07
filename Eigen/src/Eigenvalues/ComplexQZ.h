@@ -752,8 +752,9 @@ void ComplexQZ<MatrixType_>::push_down_zero_ST(Index k, Index l) {
 
   if (m_computeQZ) m_Z.applyOnTheLeft(l, l - 1, J.adjoint());
 
-  // Ensure postconditions
-  if (!is_negligible(m_T(l, l)) || !is_negligible(m_S(l, l - 1))) {
+  // Ensure postconditions, with the same thresholds relative to the norms as the deflation tests.
+  if (!is_negligible(m_T(l, l), m_normOfT * NumTraits<RealScalar>::epsilon()) ||
+      !is_negligible(m_S(l, l - 1), m_normOfS * NumTraits<RealScalar>::epsilon())) {
     m_info = ComputationInfo::NumericalIssue;
   } else {
     m_T(l, l) = Scalar(0);

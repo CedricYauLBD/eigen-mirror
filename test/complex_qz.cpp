@@ -263,6 +263,34 @@ void complex_qz_jordan() {
   }
 }
 
+// push_down_zero_ST checked the entries it leaves at T(l, l) and S(l, l - 1) against an absolute epsilon instead of
+// eps ||T|| and eps ||S||, so whether this graded pencil reported NumericalIssue depended on the scale of b (#3212).
+template <typename MatrixType>
+void complex_qz_push_down_scale() {
+  using Scalar = typename MatrixType::Scalar;
+  using RealScalar = typename MatrixType::RealScalar;
+  const int re[5][5] = {{0, -2, -1, -1, 2}, {1, -2, -2, 0, -2}, {1, 0, -1, 0, 0}, {-1, -1, 2, 0, -2}, {1, 2, 1, 1, 1}};
+  const int im[5][5] = {{0, -2, 2, 0, 1}, {2, 1, -1, 2, -2}, {-1, -2, 0, 2, 1}, {2, -2, 2, -1, -1}, {2, 2, -2, 1, 2}};
+  const int bre[5][5] = {
+      {0, -1, -1, -1, -1}, {-1, -2, 1, 2, -2}, {0, 0, -2, 2, -1}, {2, -1, -2, -2, 2}, {1, -2, 1, 2, -1}};
+  const int bim[5][5] = {{0, -1, 1, -2, 2}, {1, -2, -2, 1, -2}, {2, 0, 0, 1, 0}, {-2, 2, 1, 0, -2}, {1, 2, -1, -1, 2}};
+  // Rows graded by 10^-2 (float) or 10^-4 (double), so that T gets diagonal entries below eps ||T||.
+  const RealScalar step = NumTraits<RealScalar>::digits10() > 10 ? RealScalar(1e-4) : RealScalar(1e-2);
+  MatrixType a(5, 5), b(5, 5);
+  RealScalar grade = 1;
+  for (Index i = 0; i < 5; ++i, grade *= step) {
+    for (Index j = 0; j < 5; ++j) {
+      a(i, j) = Scalar(RealScalar(re[i][j]), RealScalar(im[i][j])) * grade;
+      b(i, j) = Scalar(RealScalar(bre[i][j]), RealScalar(bim[i][j])) * grade;
+    }
+  }
+  for (int e : {-10, 0, 10}) {
+    const MatrixType bs = b * std::ldexp(RealScalar(1), e);
+    ComplexQZ<MatrixType> qz(a, bs);
+    verify_complex_qz_convergence(a, bs, qz);
+  }
+}
+
 // Block Householder operations still allocate at larger sizes (issue #3163).
 template <typename MatrixType>
 void complex_qz_no_malloc() {
@@ -323,6 +351,8 @@ EIGEN_DECLARE_TEST(complex_qz) {
   CALL_SUBTEST_10((complex_qz_scaled<Matrix<std::complex<double>, Dynamic, Dynamic, RowMajor>>()));
   CALL_SUBTEST_7((complex_qz_jordan<MatrixXcf>()));
   CALL_SUBTEST_8((complex_qz_jordan<MatrixXcd>()));
+  CALL_SUBTEST_7((complex_qz_push_down_scale<MatrixXcf>()));
+  CALL_SUBTEST_8((complex_qz_push_down_scale<MatrixXcd>()));
   CALL_SUBTEST_9((complex_qz_jordan<Matrix<std::complex<float>, Dynamic, Dynamic, RowMajor>>()));
   CALL_SUBTEST_10((complex_qz_jordan<Matrix<std::complex<double>, Dynamic, Dynamic, RowMajor>>()));
   CALL_SUBTEST_9((complex_qz_exceptional_shift<Matrix<std::complex<float>, Dynamic, Dynamic, RowMajor>>()));
