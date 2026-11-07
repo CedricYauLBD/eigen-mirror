@@ -19,18 +19,38 @@ namespace Eigen {
 
 namespace internal {
 
-// Division of k-bit unsigned integers by an invariant divisor 1 <= d < 2^k, after Granlund and Montgomery, "Division
-// by invariant integers using multiplication", PLDI 1994, Fig. 4.1. With
+// Division of k-bit integers by an invariant divisor d != 0.
 //
-//   l = ceil(log2(d)),   m = floor(2^k (2^l - d) / d) + 1,   1 <= m < 2^k,
+// Unsigned, multiply-add (Robison, "N-Bit Unsigned Division Via N-Bit Multiply-Add", ARITH 2005). With
+// f = floor(log2(d)), q = floor(2^(k+f) / d) and e = d - (2^(k+f) mod d),
 //
-// every 0 <= n < 2^k satisfies, with t = floor(m n / 2^k),
+//   floor(n / d) = (m n + a) >> (k + s),   where
 //
-//   floor(n / d) = (t + n) >> l = (t + ((n - t) >> 1)) >> (l - 1).
+//   (m, a, s) = (2^k - 1, 2^k - 1, 0)   for d = 1,
+//               (2^(k-1), 0, f - 1)     for d = 2^f, f >= 1,
+//               (q + 1, 0, f)           for e <= 2^f,
+//               (q, q, f)               otherwise.
 //
-// The first form needs k + 1 bits; the second never overflows (t <= n) but needs l >= 1. Splitting the shift as
-// s1 = min(l, 1), s2 = l - s1 covers d = 1 too (l = 0, m = 1, t = 0), so one branch-free sequence serves every d.
-// A divisor d >= 2^k is stored as m = 1, l = k, for which both forms return 0.
+// m n + a <= (2^k - 1) 2^k, so the double-width sum cannot overflow. A divisor d >= 2^k is stored as (0, 0, 0).
+//
+// Unsigned, subtract (Granlund and Montgomery, "Division by invariant integers using multiplication", PLDI 1994,
+// Fig. 4.1). With l = ceil(log2(d)) and m = floor(2^k (2^l - d) / d) + 1, t = floor(m n / 2^k), s1 = min(l, 1):
+//
+//   floor(n / d) = (t + ((n - t) >> s1)) >> (l - s1).
+//
+// A divisor d >= 2^k is stored as m = 1, l = k. This needs only the high half of m n, where multiply-add also needs
+// the low half to see its carry. Double-width products up to 64 bits and x86's mul return both halves at once, so
+// those use multiply-add; 64-bit scalars elsewhere take the two halves from two multiplications, and use this form.
+//
+// Signed k < 64, after Granlund and Montgomery, Fig. 5.2. With D = |d|, l = max(ceil(log2(D)), 1) - 1 and
+// M = floor(2^(k+l) / D) + 1, every |n| <= 2^(k-1) satisfies
+//
+//   trunc(n / D) = (n M >> (k + l)) - (n >> (k - 1)),
+//
+// arithmetic shifts in double width. 2^(k-1) < M < 2^k for D >= 2 and M = 2^k + 1 for D = 1, so M - 2^k fits in k
+// signed bits and the high half of n M is n + mulhs(M - 2^k, n), one sequence for every d. Only n = lowest() with D = 1
+// wraps, in n M or in that sum; there l = 0, so no shift sees the wrapped sign and the result is exact modulo 2^k.
+// A divisor D > 2^k divides like D = 2^k: every quotient is 0.
 namespace int_div {
 
 template <typename T>
@@ -53,11 +73,7 @@ EIGEN_DEVICE_FUNC constexpr std::make_unsigned_t<T> unsigned_abs(const T& x) {
   return is_negative(x) ? static_cast<Unsigned>(Unsigned(0) - static_cast<Unsigned>(x)) : static_cast<Unsigned>(x);
 }
 
-// floor(a b / 2^k).
-template <typename Unsigned, std::enable_if_t<(sizeof(Unsigned) < 8), int> = 0>
-EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE Unsigned umulhi(Unsigned a, Unsigned b) {
-  return static_cast<Unsigned>((static_cast<uint64_t>(a) * static_cast<uint64_t>(b)) >> (CHAR_BIT * sizeof(Unsigned)));
-}
+// floor(a b / 2^64).
 template <typename Unsigned, std::enable_if_t<sizeof(Unsigned) == 8, int> = 0>
 EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE Unsigned umulhi(Unsigned a, Unsigned b) {
 #if defined(EIGEN_GPU_COMPILE_PHASE)
@@ -102,25 +118,91 @@ EIGEN_DEVICE_FUNC Unsigned div_shifted(Unsigned r, Unsigned d) {
 #endif
 }
 
-// floor(a / d) for the (magic, shift) = (m, l) of d: the first form in 64-bit arithmetic, else the second.
+// Whether k-bit division uses multiply-add: see above. Depends on the architecture alone, not on the vectorization
+// flags, so the constants of a divider mean the same in translation units compiled for different instruction sets.
+template <typename Unsigned>
+struct use_multiply_add : std::integral_constant<bool, (sizeof(Unsigned) < 8) || EIGEN_ARCH_i386_OR_x86_64> {};
+
+// The unsigned type holding the double-width product of k < 64 bit operands. It is never narrower than 32 bits: 16-bit
+// operands would promote to int, where the product can overflow.
+template <typename Unsigned>
+using double_width_t = std::conditional_t<(sizeof(Unsigned) < 4), uint32_t, uint64_t>;
+
+// floor((a b + c) / 2^k), which fits in k bits for a, b, c < 2^k.
 template <typename Unsigned, std::enable_if_t<(sizeof(Unsigned) < 8), int> = 0>
-EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE Unsigned udiv(Unsigned a, Unsigned magic, int shift) {
-  return static_cast<Unsigned>((static_cast<uint64_t>(umulhi(a, magic)) + a) >> shift);
+EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE Unsigned umuladdhi(Unsigned a, Unsigned b, Unsigned c) {
+  using Wide = double_width_t<Unsigned>;
+  return static_cast<Unsigned>((static_cast<Wide>(a) * static_cast<Wide>(b) + static_cast<Wide>(c)) >>
+                               (CHAR_BIT * sizeof(Unsigned)));
 }
 template <typename Unsigned, std::enable_if_t<sizeof(Unsigned) == 8, int> = 0>
-EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE Unsigned udiv(Unsigned a, Unsigned magic, int shift) {
+EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE Unsigned umuladdhi(Unsigned a, Unsigned b, Unsigned c) {
+#if EIGEN_HAS_BUILTIN_INT128 && !defined(EIGEN_GPU_COMPILE_PHASE) && !defined(__SYCL_DEVICE_ONLY__)
+  return static_cast<Unsigned>((static_cast<__uint128_t>(a) * b + c) >> 64);
+#else
+  const Unsigned low = a * b;
+  return umulhi(a, b) + static_cast<Unsigned>(static_cast<Unsigned>(low + c) < low);
+#endif
+}
+
+// floor(a / d) for the constants of d computed by params.
+template <typename Unsigned, std::enable_if_t<use_multiply_add<Unsigned>::value, int> = 0>
+EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE Unsigned udiv(Unsigned a, Unsigned magic, Unsigned addend, int shift) {
+  return static_cast<Unsigned>(umuladdhi(a, magic, addend) >> shift);
+}
+template <typename Unsigned, std::enable_if_t<!use_multiply_add<Unsigned>::value, int> = 0>
+EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE Unsigned udiv(Unsigned a, Unsigned magic, Unsigned /*addend*/, int shift) {
   const Unsigned t = umulhi(a, magic);
   const int shift1 = shift > 0 ? 1 : 0;
   return (t + ((a - t) >> shift1)) >> (shift - shift1);
 }
 
+template <typename Unsigned, bool MultiplyAdd = use_multiply_add<Unsigned>::value>
+struct params;
+
 template <typename Unsigned>
-struct params {
+struct params<Unsigned, true> {
   static_assert(std::is_unsigned<Unsigned>::value, "params takes the unsigned type of the numerators");
   static constexpr int kBits = CHAR_BIT * sizeof(Unsigned);
 
   template <typename UnsignedDivisor>
-  EIGEN_DEVICE_FUNC explicit params(UnsignedDivisor d) : magic(1), shift(kBits) {
+  EIGEN_DEVICE_FUNC explicit params(UnsignedDivisor d) : magic(0), addend(0), shift(0) {
+    eigen_assert(d != 0 && "IntDivider: division by zero");
+    // A wider divisor type can hold d >= 2^k, which keeps the defaults above.
+    if (d <= static_cast<UnsignedDivisor>(NumTraits<Unsigned>::highest())) {
+      using Wide = std::conditional_t<(sizeof(Unsigned) < 4), uint32_t, Unsigned>;
+      const Unsigned du = static_cast<Unsigned>(d);
+      const int f = log_2_impl<Unsigned>::run_floor(du);
+      const Wide power = Wide(1) << f;
+      if (du == 1) {
+        magic = addend = NumTraits<Unsigned>::highest();
+      } else if (Wide(du) == power) {
+        magic = static_cast<Unsigned>(Wide(1) << (kBits - 1));
+        shift = f - 1;
+      } else {
+        const Unsigned q = div_shifted(static_cast<Unsigned>(power), du);
+        // r = 2^(k+f) mod d = -q d mod 2^k, since r < d < 2^k.
+        const Unsigned r = static_cast<Unsigned>(Wide(0) - Wide(q) * Wide(du));
+        const bool round_up = Wide(du) - Wide(r) <= power;
+        magic = static_cast<Unsigned>(q + (round_up ? 1 : 0));
+        addend = round_up ? Unsigned(0) : q;
+        shift = f;
+      }
+    }
+  }
+
+  Unsigned magic;
+  Unsigned addend;
+  int shift;
+};
+
+template <typename Unsigned>
+struct params<Unsigned, false> {
+  static_assert(std::is_unsigned<Unsigned>::value, "params takes the unsigned type of the numerators");
+  static constexpr int kBits = CHAR_BIT * sizeof(Unsigned);
+
+  template <typename UnsignedDivisor>
+  EIGEN_DEVICE_FUNC explicit params(UnsignedDivisor d) : magic(1), addend(0), shift(kBits) {
     eigen_assert(d != 0 && "IntDivider: division by zero");
     // A wider divisor type can hold d >= 2^k, which keeps the defaults above.
     if (d <= static_cast<UnsignedDivisor>(NumTraits<Unsigned>::highest())) {
@@ -134,17 +216,54 @@ struct params {
   }
 
   Unsigned magic;
+  Unsigned addend;
   int shift;
 };
 
+// The constants of signed division for k < 64.
+template <typename Scalar>
+struct signed_params {
+  using Wide = double_width_t<Scalar>;
+  static constexpr int kBits = CHAR_BIT * sizeof(Scalar);
+
+  template <typename UnsignedDivisor>
+  EIGEN_DEVICE_FUNC explicit signed_params(UnsignedDivisor d) {
+    eigen_assert(d != 0 && "IntDivider: division by zero");
+    using Unsigned = std::make_unsigned_t<Scalar>;
+    // Only a wider divisor type can hold d > 2^k - 1; 2^k gives the same quotients, all 0.
+    const bool fits = d <= static_cast<UnsignedDivisor>(NumTraits<Unsigned>::highest());
+    const uint64_t magnitude = fits ? static_cast<uint64_t>(d) : uint64_t(1) << kBits;
+    shift = !fits ? kBits - 1 : numext::maxi(log_2_impl<Unsigned>::run_ceil(static_cast<Unsigned>(d)), 1) - 1;
+    magic = static_cast<Wide>((uint64_t(1) << (kBits + shift)) / magnitude + 1);
+  }
+
+  Wide magic;
+  int shift;
+};
+
+// trunc(a / d) for the constants of signed_params and divisor_sign = -[d < 0]. lowest() / -1 wraps to lowest().
+template <typename Scalar, typename Wide>
+EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE Scalar sdiv(Scalar a, Wide magic, int shift, Scalar divisor_sign) {
+  using Unsigned = std::make_unsigned_t<Scalar>;
+  using SignedWide = std::make_signed_t<Wide>;
+  const SignedWide wide = static_cast<SignedWide>(a);
+  const SignedWide product = static_cast<SignedWide>(static_cast<Wide>(wide) * magic);
+  const Unsigned quotient =
+      static_cast<Unsigned>(static_cast<Unsigned>(product >> (CHAR_BIT * sizeof(Scalar) + shift)) -
+                            static_cast<Unsigned>(wide >> (CHAR_BIT * sizeof(Wide) - 1)));
+  const Unsigned sign = static_cast<Unsigned>(divisor_sign);
+  return static_cast<Scalar>(static_cast<Unsigned>((quotient ^ sign) - sign));
+}
+
 }  // namespace int_div
 
-/** \internal \returns floor(a / d) lane-wise, the lanes of \a a read as unsigned integers, for the \a magic and
- * \a shift of d computed by int_div::params. This lane-by-lane fallback keeps every packet type correct; backends
- * specialize it where the instructions exist. */
+/** \internal \returns floor(a / d) lane-wise, the lanes of \a a read as unsigned integers, for the \a magic,
+ * \a addend and \a shift of d computed by int_div::params. This lane-by-lane fallback keeps every packet type correct;
+ * backends specialize it where the instructions exist. */
 template <typename Packet>
 EIGEN_DEVICE_FUNC inline Packet pudiv_magic(const Packet& a,
                                             std::make_unsigned_t<typename unpacket_traits<Packet>::type> magic,
+                                            std::make_unsigned_t<typename unpacket_traits<Packet>::type> addend,
                                             int shift) {
   using Scalar = typename unpacket_traits<Packet>::type;
   using Unsigned = std::make_unsigned_t<Scalar>;
@@ -152,7 +271,7 @@ EIGEN_DEVICE_FUNC inline Packet pudiv_magic(const Packet& a,
   Scalar lanes[kSize];
   pstoreu(lanes, a);
   for (int i = 0; i < kSize; ++i) {
-    lanes[i] = static_cast<Scalar>(int_div::udiv(static_cast<Unsigned>(lanes[i]), magic, shift));
+    lanes[i] = static_cast<Scalar>(int_div::udiv(static_cast<Unsigned>(lanes[i]), magic, addend, shift));
   }
   return ploadu<Packet>(lanes);
 }
@@ -160,16 +279,33 @@ EIGEN_DEVICE_FUNC inline Packet pudiv_magic(const Packet& a,
 /** \internal Truncating signed division: |q| = floor(|a| / |d|) with the sign of a * d. \a divisor_sign holds -1 in
  * every lane for d < 0, else 0. lowest() / -1 wraps to lowest(). */
 template <typename Packet>
-EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE Packet
-psdiv_magic(const Packet& a, std::make_unsigned_t<typename unpacket_traits<Packet>::type> magic, int shift,
-            const Packet& divisor_sign) {
-  // pabs(lowest()) wraps to lowest(), whose unsigned reading is |lowest()|.
-  const Packet abs_quotient = pudiv_magic(pabs(a), magic, shift);
+EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE Packet psdiv_magic(
+    const Packet& a, std::make_unsigned_t<typename unpacket_traits<Packet>::type> magic,
+    std::make_unsigned_t<typename unpacket_traits<Packet>::type> addend, int shift, const Packet& divisor_sign) {
+  // For a real packet, pabs(lowest()) wraps to lowest(), whose unsigned reading is |lowest()|.
+  const Packet abs_quotient = pudiv_magic(pabs(a), magic, addend, shift);
   const Packet quotient_sign = pxor(psignbit(a), divisor_sign);
   return psub(pxor(abs_quotient, quotient_sign), quotient_sign);
 }
 
-template <typename Scalar, bool IsSigned = std::is_signed<Scalar>::value>
+/** \internal \returns the truncated signed quotients lane-wise for the \a magic and \a shift of d computed by
+ * int_div::signed_params. \a divisor_sign holds -1 in every lane for d < 0, else 0. lowest() / -1 wraps to lowest().
+ * This lane-by-lane fallback keeps every packet type correct; backends specialize it where the instructions exist. */
+template <typename Packet>
+EIGEN_DEVICE_FUNC inline Packet psdiv_signed_magic(const Packet& a, uint64_t magic, int shift,
+                                                   const Packet& divisor_sign) {
+  using Scalar = typename unpacket_traits<Packet>::type;
+  constexpr int kSize = unpacket_traits<Packet>::size;
+  const Scalar sign = pfirst(divisor_sign);
+  Scalar lanes[kSize];
+  pstoreu(lanes, a);
+  for (int i = 0; i < kSize; ++i) {
+    lanes[i] = int_div::sdiv(lanes[i], static_cast<int_div::double_width_t<Scalar>>(magic), shift, sign);
+  }
+  return ploadu<Packet>(lanes);
+}
+
+template <typename Scalar, bool IsSigned = std::is_signed<Scalar>::value, bool SignedMultiply = (sizeof(Scalar) < 8)>
 struct scalar_int_div_op : int_div::params<Scalar> {
   using Base = int_div::params<Scalar>;
   using result_type = Scalar;
@@ -180,16 +316,17 @@ struct scalar_int_div_op : int_div::params<Scalar> {
   }
 
   EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE Scalar operator()(const Scalar& a) const {
-    return int_div::udiv(a, this->magic, this->shift);
+    return int_div::udiv(a, this->magic, this->addend, this->shift);
   }
   template <typename Packet>
   EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE Packet packetOp(const Packet& a) const {
-    return pudiv_magic(a, this->magic, this->shift);
+    return pudiv_magic(a, this->magic, this->addend, this->shift);
   }
 };
 
+// Signed 64-bit: there is no double-width type to multiply in, so divide the magnitudes.
 template <typename Scalar>
-struct scalar_int_div_op<Scalar, true> : int_div::params<std::make_unsigned_t<Scalar>> {
+struct scalar_int_div_op<Scalar, true, false> : int_div::params<std::make_unsigned_t<Scalar>> {
   using Unsigned = std::make_unsigned_t<Scalar>;
   using Base = int_div::params<Unsigned>;
   using result_type = Scalar;
@@ -202,21 +339,42 @@ struct scalar_int_div_op<Scalar, true> : int_div::params<std::make_unsigned_t<Sc
   // compilers (GCC 12 for AArch64) when numerator signs are random. The conversion back to Scalar is modular; only
   // lowest() / -1 wraps.
   EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE Scalar operator()(const Scalar& a) const {
-    const Unsigned abs_quotient = int_div::udiv(int_div::unsigned_abs(a), this->magic, this->shift);
+    const Unsigned abs_quotient = int_div::udiv(int_div::unsigned_abs(a), this->magic, this->addend, this->shift);
     const Unsigned quotient_sign = static_cast<Unsigned>(
         static_cast<Unsigned>(Unsigned(0) - static_cast<Unsigned>(a < 0)) ^ static_cast<Unsigned>(divisor_sign));
     return static_cast<Scalar>(static_cast<Unsigned>((abs_quotient ^ quotient_sign) - quotient_sign));
   }
   template <typename Packet>
   EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE Packet packetOp(const Packet& a) const {
-    return psdiv_magic(a, this->magic, this->shift, pset1<Packet>(divisor_sign));
+    return psdiv_magic(a, this->magic, this->addend, this->shift, pset1<Packet>(divisor_sign));
   }
 
   Scalar divisor_sign;
 };
 
-template <typename Scalar, bool IsSigned>
-struct functor_traits<scalar_int_div_op<Scalar, IsSigned>> {
+// Signed below 64 bits: one multiplication and no absolute value, for every divisor.
+template <typename Scalar>
+struct scalar_int_div_op<Scalar, true, true> : int_div::signed_params<Scalar> {
+  using Base = int_div::signed_params<Scalar>;
+  using result_type = Scalar;
+
+  template <typename Divisor>
+  EIGEN_DEVICE_FUNC explicit scalar_int_div_op(const Divisor& d)
+      : Base(int_div::unsigned_abs(d)), divisor_sign(int_div::is_negative(d) ? Scalar(-1) : Scalar(0)) {}
+
+  EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE Scalar operator()(const Scalar& a) const {
+    return int_div::sdiv(a, this->magic, this->shift, divisor_sign);
+  }
+  template <typename Packet>
+  EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE Packet packetOp(const Packet& a) const {
+    return psdiv_signed_magic(a, this->magic, this->shift, pset1<Packet>(divisor_sign));
+  }
+
+  Scalar divisor_sign;
+};
+
+template <typename Scalar, bool IsSigned, bool SignedMultiply>
+struct functor_traits<scalar_int_div_op<Scalar, IsSigned, SignedMultiply>> {
   static constexpr int Cost = 2 * NumTraits<Scalar>::MulCost + 5 * NumTraits<Scalar>::AddCost;
   static constexpr bool PacketAccess = packet_traits<Scalar>::HasFastIntDiv;
 };
@@ -232,8 +390,8 @@ struct functor_traits<scalar_int_div_op<Scalar, IsSigned>> {
  * \tparam Scalar_ the type of the numerators and quotients: a built-in integer type other than \c bool.
  *
  * The constructor precomputes a multiplier and a shift count from the divisor. Each quotient then costs a
- * double-width multiplication, an addition, a subtraction and two shifts, which on most hardware is several times
- * cheaper than an integer division, and vectorizes where hardware integer division does not exist. The quotients
+ * double-width multiplication, a few additions and subtractions and a shift or two, which on most hardware is several
+ * times cheaper than an integer division, and vectorizes where hardware integer division does not exist. The quotients
  * equal those of the built-in \c / operator, truncated toward zero:
  *
  * \code

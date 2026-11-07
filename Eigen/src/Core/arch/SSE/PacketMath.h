@@ -2058,46 +2058,79 @@ EIGEN_STRONG_INLINE __m128i float2half(__m128 f) {
 /*---------------- division by an invariant integer ----------------*/
 
 // pudiv_magic (IntegerDivision.h) for 32-bit lanes. _mm_mul_epu32 multiplies the even lanes into 64-bit products.
-EIGEN_STRONG_INLINE __m128i pudiv_magic_epu32(const __m128i& a, uint32_t magic, int shift) {
+EIGEN_STRONG_INLINE __m128i pudiv_magic_epu32(const __m128i& a, uint32_t magic, uint32_t addend, int shift) {
   const __m128i m = _mm_set1_epi32(static_cast<int>(magic));
-  const __m128i even = _mm_srli_epi64(_mm_mul_epu32(a, m), 32);
-  const __m128i odd = _mm_mul_epu32(_mm_srli_epi64(a, 32), m);
+  const __m128i c = _mm_set1_epi64x(static_cast<long long>(addend));
+  const __m128i even = _mm_srli_epi64(_mm_add_epi64(_mm_mul_epu32(a, m), c), 32);
+  const __m128i odd = _mm_add_epi64(_mm_mul_epu32(_mm_srli_epi64(a, 32), m), c);
 #ifdef EIGEN_VECTORIZE_SSE4_1
   const __m128i t = _mm_blend_epi16(even, odd, 0xCC);
 #else
   const __m128i t = _mm_or_si128(even, _mm_and_si128(odd, _mm_set_epi32(-1, 0, -1, 0)));
 #endif
-  const int shift1 = shift > 0 ? 1 : 0;
-  const __m128i sum = _mm_add_epi32(t, _mm_srl_epi32(_mm_sub_epi32(a, t), _mm_cvtsi32_si128(shift1)));
-  return _mm_srl_epi32(sum, _mm_cvtsi32_si128(shift - shift1));
+  return _mm_srl_epi32(t, _mm_cvtsi32_si128(shift));
 }
 
-// 64-bit lanes: the high half of the 128-bit product from four 32 x 32 -> 64-bit products, as in Hacker's Delight,
-// 2nd ed., Fig. 8-2, where the partial sums u and w stay below 2^64.
-EIGEN_STRONG_INLINE __m128i pudiv_magic_epu64(const __m128i& a, uint64_t magic, int shift) {
+// 64-bit lanes: the high half of the 128-bit sum m n + c from four 32 x 32 -> 64-bit products, as in Hacker's Delight,
+// 2nd ed., Fig. 8-2. Each partial sum adds at most two terms below 2^32 to a product <= (2^32 - 1)^2, which stays
+// below 2^64.
+EIGEN_STRONG_INLINE __m128i pudiv_magic_epu64(const __m128i& a, uint64_t magic, uint64_t addend, int shift) {
   const __m128i m_lo = _mm_set1_epi64x(static_cast<long long>(magic));
   const __m128i m_hi = _mm_set1_epi64x(static_cast<long long>(magic >> 32));
+  const __m128i c_lo = _mm_set1_epi64x(static_cast<long long>(addend & 0xffffffffu));
+  const __m128i c_hi = _mm_set1_epi64x(static_cast<long long>(addend >> 32));
   const __m128i a_hi = _mm_srli_epi64(a, 32);
-  const __m128i u = _mm_add_epi64(_mm_mul_epu32(a_hi, m_lo), _mm_srli_epi64(_mm_mul_epu32(a, m_lo), 32));
-  const __m128i w = _mm_add_epi64(_mm_mul_epu32(a, m_hi), _mm_and_si128(u, _mm_set1_epi64x(0xffffffff)));
+  const __m128i u0 = _mm_add_epi64(_mm_mul_epu32(a, m_lo), c_lo);
+  const __m128i u = _mm_add_epi64(_mm_mul_epu32(a_hi, m_lo), _mm_srli_epi64(u0, 32));
+  const __m128i w =
+      _mm_add_epi64(_mm_add_epi64(_mm_mul_epu32(a, m_hi), _mm_and_si128(u, _mm_set1_epi64x(0xffffffff))), c_hi);
   const __m128i t =
       _mm_add_epi64(_mm_add_epi64(_mm_mul_epu32(a_hi, m_hi), _mm_srli_epi64(u, 32)), _mm_srli_epi64(w, 32));
-  const int shift1 = shift > 0 ? 1 : 0;
-  const __m128i sum = _mm_add_epi64(t, _mm_srl_epi64(_mm_sub_epi64(a, t), _mm_cvtsi32_si128(shift1)));
-  return _mm_srl_epi64(sum, _mm_cvtsi32_si128(shift - shift1));
+  return _mm_srl_epi64(t, _mm_cvtsi32_si128(shift));
 }
 
+// psdiv_signed_magic (IntegerDivision.h) for 32-bit lanes. The kernels use only the low 32 bits of magic.
+#ifdef EIGEN_VECTORIZE_SSE4_1
+// _mm_mul_epi32 gives the signed high half: mulhs(M - 2^32, n) + n, for the M of every divisor.
+EIGEN_STRONG_INLINE __m128i psdiv_signed_magic_epi32(const __m128i& a, uint64_t magic, int shift,
+                                                     const __m128i& divisor_sign) {
+  const __m128i m = _mm_set1_epi32(static_cast<int>(static_cast<uint32_t>(magic)));
+  const __m128i even = _mm_srli_epi64(_mm_mul_epi32(a, m), 32);
+  const __m128i odd = _mm_mul_epi32(_mm_srli_epi64(a, 32), m);
+  const __m128i t = _mm_add_epi32(a, _mm_blend_epi16(even, odd, 0xCC));
+  const __m128i q = _mm_sub_epi32(_mm_sra_epi32(t, _mm_cvtsi32_si128(shift)), _mm_srai_epi32(a, 31));
+  return _mm_sub_epi32(_mm_xor_si128(q, divisor_sign), divisor_sign);
+}
+#else
+// No signed 32 x 32 -> 64-bit product: multiply the magnitude, at most 2^31. The 64-bit product shifted right by
+// 32 + shift is the quotient for |d| >= 2, where M < 2^32. For |d| = 1, M = 2^32 + 1 has low bits 1, and a shift by 0
+// leaves the quotient. It fits in 32 bits either way, so the upper half of each shifted lane is 0.
+EIGEN_STRONG_INLINE __m128i psdiv_signed_magic_epi32(const __m128i& a, uint64_t magic, int shift,
+                                                     const __m128i& divisor_sign) {
+  const __m128i m = _mm_set1_epi32(static_cast<int>(static_cast<uint32_t>(magic)));
+  const __m128i count = _mm_cvtsi32_si128(shift + 32 * (1 - static_cast<int>(magic >> 32)));
+  const __m128i a_sign = _mm_srai_epi32(a, 31);
+  const __m128i abs_a = _mm_sub_epi32(_mm_xor_si128(a, a_sign), a_sign);
+  const __m128i even = _mm_srl_epi64(_mm_mul_epu32(abs_a, m), count);
+  const __m128i odd = _mm_srl_epi64(_mm_mul_epu32(_mm_srli_epi64(abs_a, 32), m), count);
+  const __m128i q = _mm_or_si128(even, _mm_slli_epi64(odd, 32));
+  const __m128i q_sign = _mm_xor_si128(a_sign, divisor_sign);
+  return _mm_sub_epi32(_mm_xor_si128(q, q_sign), q_sign);
+}
+#endif
+
 template <>
-EIGEN_STRONG_INLINE Packet4i pudiv_magic<Packet4i>(const Packet4i& a, uint32_t magic, int shift) {
-  return pudiv_magic_epu32(a, magic, shift);
+EIGEN_STRONG_INLINE Packet4ui pudiv_magic<Packet4ui>(const Packet4ui& a, uint32_t magic, uint32_t addend, int shift) {
+  return pudiv_magic_epu32(a, magic, addend, shift);
 }
 template <>
-EIGEN_STRONG_INLINE Packet4ui pudiv_magic<Packet4ui>(const Packet4ui& a, uint32_t magic, int shift) {
-  return pudiv_magic_epu32(a, magic, shift);
+EIGEN_STRONG_INLINE Packet2l pudiv_magic<Packet2l>(const Packet2l& a, uint64_t magic, uint64_t addend, int shift) {
+  return pudiv_magic_epu64(a, magic, addend, shift);
 }
 template <>
-EIGEN_STRONG_INLINE Packet2l pudiv_magic<Packet2l>(const Packet2l& a, uint64_t magic, int shift) {
-  return pudiv_magic_epu64(a, magic, shift);
+EIGEN_STRONG_INLINE Packet4i psdiv_signed_magic<Packet4i>(const Packet4i& a, uint64_t magic, int shift,
+                                                          const Packet4i& divisor_sign) {
+  return psdiv_signed_magic_epi32(a, magic, shift, divisor_sign);
 }
 
 }  // end namespace internal
