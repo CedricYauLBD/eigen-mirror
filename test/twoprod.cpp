@@ -40,6 +40,34 @@ void check_doubleword_product(const Scalar (&data)[7], bool fast = false) {
   }
 }
 
+// Where scalar and packet pmadd are both fused, fast_twoprod takes the same path for both, so int_pow's scalar and
+// vectorized paths round alike.
+template <typename Scalar, typename Packet>
+void check_fast_twoprod_scalar_matches_packet(const Scalar (&data)[7]) {
+#ifdef EIGEN_VECTORIZE_FMA
+  if (!internal::is_fused_madd<Packet>::value) return;
+  constexpr Index size = internal::unpacket_traits<Packet>::size;
+  EIGEN_ALIGN_MAX Scalar hi[size], lo[size];
+  // Keep the operands runtime so constant folding cannot replace the arithmetic under test.
+  volatile Scalar operands[4] = {data[0], data[1], data[2], data[3]};
+  const Scalar x_hi = operands[0], x_lo = operands[1], y_hi = operands[2], y_lo = operands[3];
+  Scalar s_hi, s_lo;
+  internal::fast_twoprod<Scalar>(x_hi, x_lo, y_hi, y_lo, s_hi, s_lo);
+  const Packet px_hi = internal::pset1<Packet>(x_hi), px_lo = internal::pset1<Packet>(x_lo);
+  const Packet py_hi = internal::pset1<Packet>(y_hi), py_lo = internal::pset1<Packet>(y_lo);
+  Packet p_hi, p_lo;
+  internal::fast_twoprod(px_hi, px_lo, py_hi, py_lo, p_hi, p_lo);
+  internal::pstore(hi, p_hi);
+  internal::pstore(lo, p_lo);
+  for (Index i = 0; i < size; ++i) {
+    VERIFY_IS_EQUAL(hi[i], s_hi);
+    VERIFY_IS_EQUAL(lo[i], s_lo);
+  }
+#else
+  EIGEN_UNUSED_VARIABLE(data);
+#endif
+}
+
 EIGEN_DECLARE_TEST(twoprod) {
   using FloatPacket = internal::packet_traits<float>::type;
   using DoublePacket = internal::packet_traits<double>::type;
@@ -63,8 +91,8 @@ EIGEN_DECLARE_TEST(twoprod) {
   check_doubleword_product<double, DoublePacket>(double_data);
 
   // Worst cases found by search for fast_twoprod: a chain of fused pmadds, with error up to 5*u^2, and (where pmadd
-  // is not fused, and for scalars) Algorithm 10 of Joldes, Muller, & Popescu, which stays below 5*u^2 on these
-  // operands. An unfused pmadd chain reaches 6.9*u^2 on the "unfused" operands. References are decomposed as above.
+  // is not fused) Algorithm 10 of Joldes, Muller, & Popescu, which stays below 5*u^2 on these operands. An unfused
+  // pmadd chain reaches 6.9*u^2 on the "unfused" operands. References are decomposed as above.
   const float fast_float_data[][7] = {
       // fused general.
       {-0.250000864f, -1.48879558e-08f, -0.508609235f, -2.97569827e-08f, 0.127152771f, -7.35021777e-09f,
@@ -104,9 +132,11 @@ EIGEN_DECLARE_TEST(twoprod) {
   for (const auto& data : fast_float_data) {
     check_doubleword_product<float, float>(data, true);
     check_doubleword_product<float, FloatPacket>(data, true);
+    check_fast_twoprod_scalar_matches_packet<float, FloatPacket>(data);
   }
   for (const auto& data : fast_double_data) {
     check_doubleword_product<double, double>(data, true);
     check_doubleword_product<double, DoublePacket>(data, true);
+    check_fast_twoprod_scalar_matches_packet<double, DoublePacket>(data);
   }
 }
