@@ -222,6 +222,34 @@ void test_expressions() {
   const Matrix<Scalar, 5, 1> q5 = v5 / by;
   verify_coefficients(v2, q2, d);
   verify_coefficients(v5, q5, d);
+
+  // Compound assignment, and plain assignment over its own numerators.
+  Scalar n = a(0, 0);
+  VERIFY(&(n /= by) == &n);
+  VERIFY_IS_EQUAL(n, reference_quotient(a(0, 0), d));
+
+  Array in_place = a;
+  VERIFY(&(in_place /= by) == &in_place);
+  verify_coefficients(a, in_place, d);
+  Array self_assigned = a;
+  self_assigned = self_assigned / by;
+  verify_coefficients(a, self_assigned, d);
+
+  // Temporaries of the writable expressions, leaving the coefficients around them alone.
+  Array partial = a;
+  partial.block(1, 2, 33, 21) /= by;
+  verify_coefficients(a.block(1, 2, 33, 21), partial.block(1, 2, 33, 21), d);
+  VERIFY((partial.col(0) == a.col(0)).all());
+  VERIFY((partial.row(0) == a.row(0)).all());
+  VERIFY((partial.block(34, 2, 3, 21) == a.block(34, 2, 3, 21)).all());
+  VERIFY((partial.block(1, 23, 33, 6) == a.block(1, 23, 33, 6)).all());
+
+  Matrix3 m_in_place = m;
+  m_in_place.transpose() /= by;
+  verify_coefficients(m, m_in_place, d);
+  Matrix<Scalar, 5, 1> v5_in_place = v5;
+  v5_in_place /= by;
+  verify_coefficients(v5, v5_in_place, d);
 }
 
 void test_traits() {

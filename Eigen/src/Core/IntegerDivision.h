@@ -413,6 +413,8 @@ struct functor_traits<scalar_int_div_op<Scalar, IsSigned, SignedMultiply>> {
  * Eigen::IntDivider<int> by(d);           // d is known only at run time
  * int q = n / by;                         // == n / d
  * Eigen::ArrayXi Q = A / by;              // == A / d, coefficient-wise
+ * n /= by;                                // n = n / by
+ * A /= by;                                // A = A / by
  * \endcode
  *
  * The divisor may have any built-in integer type, and its magnitude may exceed the range of \c Scalar_. It must be
@@ -464,6 +466,14 @@ template <typename Scalar>
 EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE Scalar operator/(const typename IntDivider<Scalar>::Scalar& numerator,
                                                        const IntDivider<Scalar>& divider) {
   return divider.divide(numerator);
+}
+
+/** \relates IntDivider Divides \a numerator by the divisor of \a divider, truncated toward zero.
+ * \returns a reference to \a numerator. */
+template <typename Scalar>
+EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE Scalar& operator/=(Scalar& numerator, const IntDivider<Scalar>& divider) {
+  numerator = divider.divide(numerator);
+  return numerator;
 }
 
 /** \relates IntDivider \returns an expression of the coefficient-wise quotients of \a numerators by the divisor of
