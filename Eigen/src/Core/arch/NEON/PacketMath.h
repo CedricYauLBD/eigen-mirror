@@ -341,6 +341,7 @@ struct packet_traits<int32_t> : default_packet_traits {
     HasSub = 1,
     HasShift = 1,
     HasMul = 1,
+    HasFastIntDiv = 1,
     HasNegate = 1,
     HasAbs = 1,
     HasArg = 0,
@@ -366,6 +367,7 @@ struct packet_traits<uint32_t> : default_packet_traits {
     HasSub = 1,
     HasShift = 1,
     HasMul = 1,
+    HasFastIntDiv = 1,
     HasNegate = 0,
     HasAbs = 1,
     HasArg = 0,
@@ -6115,6 +6117,46 @@ EIGEN_STRONG_INLINE Packet8hf pisfinite<Packet8hf>(const Packet8hf& a) {
 #endif
 
 #endif  // end EIGEN_ARCH_ARM64 && EIGEN_HAS_ARM64_FP16
+
+/*---------------- division by an invariant integer ----------------*/
+
+// pudiv_magic (IntegerDivision.h) for 32-bit lanes. vshl by a negative count shifts right.
+EIGEN_STRONG_INLINE uint32x4_t pudiv_magic_u32(const uint32x4_t& a, uint32_t magic, int shift) {
+  const uint32x2_t m = vdup_n_u32(magic);
+  const uint64x2_t lo = vmull_u32(vget_low_u32(a), m);
+  const uint64x2_t hi = vmull_u32(vget_high_u32(a), m);
+#if EIGEN_ARCH_ARM64
+  const uint32x4_t t = vuzp2q_u32(vreinterpretq_u32_u64(lo), vreinterpretq_u32_u64(hi));
+#else
+  const uint32x4_t t = vcombine_u32(vshrn_n_u64(lo, 32), vshrn_n_u64(hi, 32));
+#endif
+  const int shift1 = shift > 0 ? 1 : 0;
+  const uint32x4_t sum = vaddq_u32(t, vshlq_u32(vsubq_u32(a, t), vdupq_n_s32(-shift1)));
+  return vshlq_u32(sum, vdupq_n_s32(shift1 - shift));
+}
+EIGEN_STRONG_INLINE uint32x2_t pudiv_magic_u32(const uint32x2_t& a, uint32_t magic, int shift) {
+  const uint32x2_t t = vshrn_n_u64(vmull_u32(a, vdup_n_u32(magic)), 32);
+  const int shift1 = shift > 0 ? 1 : 0;
+  const uint32x2_t sum = vadd_u32(t, vshl_u32(vsub_u32(a, t), vdup_n_s32(-shift1)));
+  return vshl_u32(sum, vdup_n_s32(shift1 - shift));
+}
+
+template <>
+EIGEN_STRONG_INLINE Packet4ui pudiv_magic<Packet4ui>(const Packet4ui& a, uint32_t magic, int shift) {
+  return pudiv_magic_u32(a, magic, shift);
+}
+template <>
+EIGEN_STRONG_INLINE Packet4i pudiv_magic<Packet4i>(const Packet4i& a, uint32_t magic, int shift) {
+  return vreinterpretq_s32_u32(pudiv_magic_u32(vreinterpretq_u32_s32(a), magic, shift));
+}
+template <>
+EIGEN_STRONG_INLINE Packet2ui pudiv_magic<Packet2ui>(const Packet2ui& a, uint32_t magic, int shift) {
+  return pudiv_magic_u32(a, magic, shift);
+}
+template <>
+EIGEN_STRONG_INLINE Packet2i pudiv_magic<Packet2i>(const Packet2i& a, uint32_t magic, int shift) {
+  return vreinterpret_s32_u32(pudiv_magic_u32(vreinterpret_u32_s32(a), magic, shift));
+}
 
 }  // end namespace internal
 
