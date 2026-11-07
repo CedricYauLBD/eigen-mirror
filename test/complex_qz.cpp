@@ -339,9 +339,9 @@ void complex_qz_norm_overflow() {
   verify_complex_qz_convergence(a40, b40, qz40);
 }
 
-// info() reported an earlier NumericalIssue instead of NoConvergence when the iteration stopped before reducing the
-// pencil (#3212). On this graded complex<float> pencil, deflation reports NumericalIssue, and one iteration per
-// eigenvalue is not enough to reduce it. A 1x1 pencil needs no iteration, so maxIters = 0 still reduces it.
+// One step per eigenvalue cannot reduce this graded complex<float> pencil, so info() must report NoConvergence. It
+// reported NumericalIssue instead (#3212), raised by the absolute-epsilon check that push_down_zero_ST then made. A 1x1
+// pencil needs no step, so maxIters = 0 still reduces it.
 void complex_qz_no_convergence_status() {
   using cf = std::complex<float>;
   MatrixXcf a(5, 5), b(5, 5);
@@ -367,6 +367,20 @@ void complex_qz_no_convergence_status() {
   const MatrixXcf a1 = MatrixXcf::Constant(1, 1, cf(2)), b1 = MatrixXcf::Constant(1, 1, cf(1));
   ComplexQZ<MatrixXcf> scalar(a1, b1, true, 0);
   VERIFY_IS_EQUAL(scalar.info(), Success);
+}
+
+// An exact zero on the subdiagonal of S did not deflate when |S(k-1, k-1)| + |S(k, k)| and ||S|| were both 0. With
+// A = 0 and n >= 3 the iteration made no progress: it returned NoConvergence with NaN in S and T for a nonzero B, and
+// did not return for B = 0. Both pencils are already in generalized Schur form.
+template <typename MatrixType>
+void complex_qz_zero_pencil() {
+  for (Index dim : {1, 2, 3, 5}) {
+    const MatrixType zero = MatrixType::Zero(dim, dim), random = MatrixType::Random(dim, dim);
+    for (const MatrixType* b : {&zero, &random}) {
+      ComplexQZ<MatrixType> qz(zero, *b);
+      verify_complex_qz_convergence(zero, *b, qz);
+    }
+  }
 }
 
 // Block Householder operations still allocate at larger sizes (issue #3163).
@@ -429,6 +443,8 @@ EIGEN_DECLARE_TEST(complex_qz) {
   CALL_SUBTEST_10((complex_qz_scaled<Matrix<std::complex<double>, Dynamic, Dynamic, RowMajor>>()));
   CALL_SUBTEST_7((complex_qz_jordan<MatrixXcf>()));
   CALL_SUBTEST_7(complex_qz_no_convergence_status());
+  CALL_SUBTEST_7((complex_qz_zero_pencil<MatrixXcf>()));
+  CALL_SUBTEST_8((complex_qz_zero_pencil<MatrixXcd>()));
   CALL_SUBTEST_8((complex_qz_jordan<MatrixXcd>()));
   CALL_SUBTEST_7((complex_qz_push_down_scale<MatrixXcf>()));
   CALL_SUBTEST_8((complex_qz_push_down_scale<MatrixXcd>()));

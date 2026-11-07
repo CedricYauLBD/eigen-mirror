@@ -210,8 +210,10 @@ class ComplexQZ {
 
   /** \brief Reports whether the last computation was successful.
    *
-   * \returns \c NoConvergence if the QZ iteration did not converge within \c maxIters iterations, \c NumericalIssue if
-   * an entry that a reduction step should have eliminated was left above its threshold, and \c Success otherwise.
+   * \returns \c NoConvergence if an eigenvalue was not deflated within \c maxIters steps (QZ steps, or chases of a zero
+   * on the diagonal of T), \c NumericalIssue if an entry that a reduction step should have eliminated was left above
+   * its threshold, and \c Success otherwise. \c maxIters bounds the steps between consecutive deflations, not their
+   * total; iterations() reports the total number of QZ steps.
    */
   ComputationInfo info() const {
     eigen_assert(m_isInitialized && "ComplexQZ is not initialized.");
@@ -472,6 +474,9 @@ void ComplexQZ<MatrixType_>::reduceHessenbergTriangular() {
       Index z = findSmallDiagEntry(f, l);
       if (z >= f) {
         push_down_zero_ST(z, l);
+        // Counted like a QZ step: every pass through the loop then deflates or counts towards maxIters, so the loop
+        // ends after at most n (maxIters + 1) passes even if a chase makes no progress.
+        local_iter++;
       } else {
         do_QZ_step(f, l, local_iter);
         local_iter++;
@@ -791,7 +796,8 @@ inline Index ComplexQZ<MatrixType_>::findSmallSubdiagEntry(Index iu) {
   while (res > 0) {
     RealScalar s = numext::abs(m_S.coeff(res - 1, res - 1)) + numext::abs(m_S.coeff(res, res));
     if (s == Scalar(0)) s = m_normOfS;
-    if (numext::abs(m_S.coeff(res, res - 1)) < NumTraits<RealScalar>::epsilon() * s) break;
+    // <=, so that an exact zero deflates also where s is 0, e.g. for S = 0.
+    if (numext::abs(m_S.coeff(res, res - 1)) <= NumTraits<RealScalar>::epsilon() * s) break;
     res--;
   }
   return res;
