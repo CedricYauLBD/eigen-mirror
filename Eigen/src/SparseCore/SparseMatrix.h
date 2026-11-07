@@ -1729,9 +1729,10 @@ SparseMatrix<Scalar_, Options_, StorageIndex_>::insertUncompressedAtByOuterInner
     m_data.resize(m_outerSize);
     std::iota(m_outerIndex, m_outerIndex + m_outerSize + 1, StorageIndex(0));
   } else {
-    // check for integer overflow: if maxReserveSize == 0, insertion is not possible
-    Index maxReserveSize = maxSize - m_data.allocatedSize();
-    eigen_assert(maxReserveSize > 0);
+    // The index range bounds the stored entries, m_data.size() here; setZero() and reserve() can leave
+    // allocatedSize() at the bound. A full matrix throws, as setFromTriplets() does.
+    Index maxReserveSize = maxSize - m_data.size();
+    if (maxReserveSize <= 0) internal::throw_std_bad_alloc();
     if (m_outerSize <= maxReserveSize) {
       // allocate space for one additional element per vector
       reserveInnerVectors(IndexVector::Constant(m_outerSize, 1));
