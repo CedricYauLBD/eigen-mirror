@@ -1737,11 +1737,13 @@ SparseMatrix<Scalar_, Options_, StorageIndex_>::insertUncompressedAtByOuterInner
       // allocate space for one additional element per vector
       reserveInnerVectors(IndexVector::Constant(m_outerSize, 1));
     } else {
-      // handle the edge case where StorageIndex is insufficient to reserve outerSize additional elements
-      // allocate space for one additional element in the interval [outer,maxReserveSize)
+      // StorageIndex cannot hold outerSize more entries. Double the storage instead, capped by the index range, and
+      // spread the new slots over the vectors from `outer` on. Reserving the whole range at once would allocate
+      // highest() entries on the first insert into an empty matrix with an outer size past highest().
+      Index reserveSize = numext::mini(maxReserveSize, numext::maxi<Index>(m_data.size(), 1));
       using ReserveSizesOp = internal::sparse_reserve_op<StorageIndex>;
       using ReserveSizesXpr = CwiseNullaryOp<ReserveSizesOp, IndexVector>;
-      ReserveSizesXpr reserveSizesXpr(m_outerSize, 1, ReserveSizesOp(outer, m_outerSize, maxReserveSize));
+      ReserveSizesXpr reserveSizesXpr(m_outerSize, 1, ReserveSizesOp(outer, m_outerSize, reserveSize));
       reserveInnerVectors(reserveSizesXpr);
     }
   }

@@ -1405,12 +1405,14 @@ void sparse_insert_narrow_index() {
   const Index highest = NumTraits<short>::highest();
   const Index n = highest + 1000;
   SpMat m(SpMat::IsRowMajor ? n : 4, SpMat::IsRowMajor ? 4 : n);
-  // The first insertion reserves the storage, so it goes into an empty matrix; the rest go below and above it.
+  // The first insertion goes into an empty matrix; the rest go below and above it.
   const Index outers[] = {n - 1, 0, n / 2, highest + 1, 1};
   for (Index k = 0; k < 5; ++k) {
     const Index outer = outers[k], inner = k % 4;
     (SpMat::IsRowMajor ? m.insert(outer, inner) : m.insert(inner, outer)) = double(k + 1);
   }
+  // The storage grows geometrically: five entries must not reserve the whole index range.
+  VERIFY(m.data().allocatedSize() < highest);
   for (int compressed = 0; compressed < 2; ++compressed) {
     if (compressed) m.makeCompressed();
     VERIFY_IS_EQUAL(m.nonZeros(), 5);
