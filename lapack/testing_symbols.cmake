@@ -15,11 +15,7 @@ foreach(variable NM DEF_FILE EIGEN_LAPACK EIGEN_BLAS REFERENCE)
     message(FATAL_ERROR "LAPACK symbol check needs -D${variable}")
   endif()
 endforeach()
-if(NOT DEFINED SYMBOL_PREFIX)
-  set(SYMBOL_PREFIX "")
-endif()
-
-# Fortran-callable global symbols that <library> defines, without SYMBOL_PREFIX.
+# Fortran-callable global symbols that <library> defines, without ABI decoration.
 function(fortran_symbols out library)
   if(NOT EXISTS "${library}")
     message(FATAL_ERROR "Missing library: ${library}")
@@ -30,8 +26,9 @@ function(fortran_symbols out library)
     message(FATAL_ERROR "${NM} failed on ${library}: ${errors}")
   endif()
   # Weak definitions count: Eigen's xerbla_ is weak so that a program can replace it.
-  string(REGEX MATCHALL "[ \t][TDRBWV][ \t]+${SYMBOL_PREFIX}[a-z][a-z0-9_]*_\r?\n" symbols "${listing}")
-  list(TRANSFORM symbols REPLACE "^[ \t][TDRBWV][ \t]+${SYMBOL_PREFIX}([a-z0-9_]+)[\r\n]*$" "\\1")
+  # Mach-O and 32-bit x86 PE add a leading underscore; Fortran identifiers start with a letter.
+  string(REGEX MATCHALL "[ \t][TDRBWV][ \t]+_?[a-z][a-z0-9_]*_\r?\n" symbols "${listing}")
+  list(TRANSFORM symbols REPLACE "^[ \t][TDRBWV][ \t]+_?([a-z][a-z0-9_]*_)[\r\n]*$" "\\1")
   list(REMOVE_DUPLICATES symbols)
   set(${out} "${symbols}" PARENT_SCOPE)
 endfunction()

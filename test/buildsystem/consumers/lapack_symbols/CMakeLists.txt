@@ -12,11 +12,12 @@ foreach(library lapack blas reference)
 endforeach()
 add_library(fake_reference_overlap STATIC symbols.cpp)
 target_compile_definitions(fake_reference_overlap PRIVATE FAKE_REFERENCE FAKE_OVERLAP)
+add_executable(fake_nm nm_output.cpp)
 
 # Shared stand-ins where lapack/CMakeLists.txt checks the shared libraries' exports.
 # Like eigen_lapack, they hide every symbol not marked for export.
 set(shared_libraries "")
-if(UNIX AND NOT APPLE)
+if(UNIX AND NOT APPLE AND NOT CYGWIN)
   add_library(fake_lapack_shared SHARED symbols.cpp)
   target_compile_definitions(fake_lapack_shared PRIVATE FAKE_LAPACK)
   add_library(fake_lapack_shared_hidden SHARED symbols.cpp)
@@ -35,7 +36,7 @@ endif()
 # The arguments lapack/CMakeLists.txt would pass to testing_symbols.cmake.
 file(GENERATE OUTPUT "${CMAKE_BINARY_DIR}/libraries-$<CONFIG>.cmake" CONTENT
      "set(NM \"${CMAKE_NM}\")
-set(SYMBOL_PREFIX \"$<$<PLATFORM_ID:Darwin>:_>\")
+set(FAKE_NM \"$<TARGET_FILE:fake_nm>\")
 set(EIGEN_LAPACK \"$<TARGET_FILE:fake_lapack>\")
 set(EIGEN_BLAS \"$<TARGET_FILE:fake_blas>\")
 set(REFERENCE \"$<TARGET_FILE:fake_reference>\")

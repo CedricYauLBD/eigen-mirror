@@ -255,7 +255,6 @@ if(EIGEN_ENABLE_LAPACK_TESTS)
               "-DEIGEN_LAPACK=$<TARGET_FILE:eigen_lapack_static>"
               "-DEIGEN_BLAS=$<TARGET_FILE:eigen_blas_static>"
               "-DREFERENCE=$<TARGET_FILE:eigen_lapack_reference>"
-              "-DSYMBOL_PREFIX=$<$<PLATFORM_ID:Darwin>:_>"
               ${symbols_args}
               -P "${CMAKE_CURRENT_SOURCE_DIR}/testing_symbols.cmake"
     )
