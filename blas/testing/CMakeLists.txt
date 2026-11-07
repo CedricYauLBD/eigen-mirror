@@ -97,14 +97,17 @@ if(EIGEN_TEST_BLAS_REFERENCE)
     message(FATAL_ERROR "EIGEN_TEST_BLAS_REFERENCE needs a Fortran compiler that accepts -fno-underscoring.")
   endif()
   include(FetchContent)
+  if(POLICY CMP0135)
+    cmake_policy(SET CMP0135 NEW)
+  endif()
+  # SOURCE_SUBDIR names a directory without a CMakeLists.txt, so FetchContent_MakeAvailable only downloads the
+  # release and does not add its own project to the build.
   FetchContent_Declare(eigen_reference_blas
     URL https://codeload.github.com/Reference-LAPACK/lapack/tar.gz/refs/tags/v3.12.1
     URL_HASH SHA256=2ca6407a001a474d4d4d35f3a61550156050c48016d949f0da0529c0aa052422
-    TLS_VERIFY ON)
-  FetchContent_GetProperties(eigen_reference_blas)
-  if(NOT eigen_reference_blas_POPULATED)
-    FetchContent_Populate(eigen_reference_blas)
-  endif()
+    TLS_VERIFY ON
+    SOURCE_SUBDIR no-cmake-project)
+  FetchContent_MakeAvailable(eigen_reference_blas)
   file(GLOB netlib_blas_sources "${eigen_reference_blas_SOURCE_DIR}/BLAS/SRC/*.f"
                                 "${eigen_reference_blas_SOURCE_DIR}/BLAS/SRC/*.f90")
   add_library(eigen_netlib_blas STATIC ${netlib_blas_sources})
