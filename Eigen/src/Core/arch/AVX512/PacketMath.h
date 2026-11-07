@@ -230,14 +230,14 @@ template <>
 struct packet_traits<int> : default_packet_traits {
   using type = Packet16i;
   using half = Packet8i;
-  enum { Vectorizable = 1, AlignedOnScalar = 1, HasCmp = 1, HasDiv = 1, size = 16 };
+  enum { Vectorizable = 1, AlignedOnScalar = 1, HasCmp = 1, HasDiv = 1, HasFastIntDiv = 1, size = 16 };
 };
 
 template <>
 struct packet_traits<int64_t> : default_packet_traits {
   using type = Packet8l;
   using half = Packet4l;
-  enum { Vectorizable = 1, AlignedOnScalar = 1, HasCmp = 1, size = 8 };
+  enum { Vectorizable = 1, AlignedOnScalar = 1, HasCmp = 1, HasFastIntDiv = 1, size = 8 };
 };
 
 template <>
@@ -3478,6 +3478,41 @@ inline void pstoreuSegment<Eigen::half, Packet8h>(Eigen::half* to, const Packet8
 #endif  // EIGEN_VECTORIZE_AVX512VL
 
 /*---------------- end load/store segment support ----------------*/
+
+/*---------------- division by an invariant integer ----------------*/
+
+// pudiv_magic (IntegerDivision.h); see pudiv_magic_epu32 and pudiv_magic_epu64 in SSE/PacketMath.h.
+EIGEN_STRONG_INLINE __m512i pudiv_magic_epu32(const __m512i& a, uint32_t magic, int shift) {
+  const __m512i m = _mm512_set1_epi32(static_cast<int>(magic));
+  const __m512i even = _mm512_shuffle_epi32(_mm512_mul_epu32(a, m), _MM_PERM_DDBB);
+  const __m512i odd = _mm512_mul_epu32(_mm512_shuffle_epi32(a, _MM_PERM_DDBB), m);
+  const __m512i t = _mm512_mask_blend_epi32(0xAAAA, even, odd);
+  const int shift1 = shift > 0 ? 1 : 0;
+  const __m512i sum = _mm512_add_epi32(t, _mm512_srlv_epi32(_mm512_sub_epi32(a, t), _mm512_set1_epi32(shift1)));
+  return _mm512_srlv_epi32(sum, _mm512_set1_epi32(shift - shift1));
+}
+
+EIGEN_STRONG_INLINE __m512i pudiv_magic_epu64(const __m512i& a, uint64_t magic, int shift) {
+  const __m512i m_lo = _mm512_set1_epi64(static_cast<long long>(magic));
+  const __m512i m_hi = _mm512_set1_epi64(static_cast<long long>(magic >> 32));
+  const __m512i a_hi = _mm512_srli_epi64(a, 32);
+  const __m512i u = _mm512_add_epi64(_mm512_mul_epu32(a_hi, m_lo), _mm512_srli_epi64(_mm512_mul_epu32(a, m_lo), 32));
+  const __m512i w = _mm512_add_epi64(_mm512_mul_epu32(a, m_hi), _mm512_maskz_mov_epi32(0x5555, u));
+  const __m512i t = _mm512_add_epi64(_mm512_add_epi64(_mm512_mul_epu32(a_hi, m_hi), _mm512_srli_epi64(u, 32)),
+                                     _mm512_srli_epi64(w, 32));
+  const int shift1 = shift > 0 ? 1 : 0;
+  const __m512i sum = _mm512_add_epi64(t, _mm512_srlv_epi64(_mm512_sub_epi64(a, t), _mm512_set1_epi64(shift1)));
+  return _mm512_srlv_epi64(sum, _mm512_set1_epi64(shift - shift1));
+}
+
+template <>
+EIGEN_STRONG_INLINE Packet16i pudiv_magic<Packet16i>(const Packet16i& a, uint32_t magic, int shift) {
+  return pudiv_magic_epu32(a, magic, shift);
+}
+template <>
+EIGEN_STRONG_INLINE Packet8l pudiv_magic<Packet8l>(const Packet8l& a, uint64_t magic, int shift) {
+  return pudiv_magic_epu64(a, magic, shift);
+}
 
 }  // end namespace internal
 
