@@ -75,7 +75,7 @@ Matrix<Scalar, Dynamic, 1> test_numerators(Divisor d, Index count) {
     Scalar n = random_magnitude<Scalar>();
     if (i % 2 == 0) {
       // n = q * d + {-1, 0, 1} mod 2^k, in uint64_t: 16-bit operands would promote to int, where q * d can overflow.
-      const uint64_t q = static_cast<uint64_t>(random_magnitude<Scalar>());
+      const uint64_t q = static_cast<uint64_t>(static_cast<int64_t>(random_magnitude<Scalar>()));
       const uint64_t offset = static_cast<uint64_t>(internal::random<int>(-1, 1));
       n = static_cast<Scalar>(static_cast<Unsigned>(q * static_cast<uint64_t>(d) + offset));
     }
@@ -150,7 +150,7 @@ void verify_packet_kernel(Divisor d) {
       lanes[i] = index < special.size() ? special[index] : random_magnitude<Scalar>();
     }
     // n = q * d + {-1, 0, 1} mod 2^k, in uint64_t: see test_numerators.
-    const uint64_t q = static_cast<uint64_t>(random_magnitude<Scalar>());
+    const uint64_t q = static_cast<uint64_t>(static_cast<int64_t>(random_magnitude<Scalar>()));
     const uint64_t offset = static_cast<uint64_t>(internal::random<int>(-1, 1));
     lanes[kSize - 1] = static_cast<Scalar>(static_cast<Unsigned>(q * static_cast<uint64_t>(d) + offset));
     internal::pstoreu(result, by.functor().packetOp(internal::ploadu<Packet>(lanes)));
