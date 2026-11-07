@@ -15,6 +15,7 @@ New features:
 - `SelfAdjointView::applyPermutation()` and `SelfAdjointView::applyTransposition()`, which replace the viewed matrix `S` by `P S P^T` in place, reading and writing only the stored triangle [#3174, !3395]
 - `DiscreteAlgebraicRiccatiSolver` in the new contrib module `Riccati`, for the stabilizing solution of the (generalized) discrete-time algebraic Riccati equation with real or complex scalars [!3403]
 - The new contrib module `GPU` (`#define EIGEN_USE_GPU`, then `#include <contrib/Eigen/GPU>`), which runs dense and sparse linear algebra on NVIDIA GPUs from host code through cuBLAS, cuSOLVER, cuSPARSE, cuFFT and cuDSS, and runs `ConjugateGradient` on device-resident vectors. Requires the CUDA Toolkit; see the manual page "Offloading linear algebra to a GPU with the GPU module" [!2412, !2413, !2414, !2415, !2476, !2681, !3130, !3135]
+- `IntDivider`, which divides integers by a divisor known only at run time with a multiplication and shifts in place of division instructions, for scalars (`n / IntDivider<int>(d)`) and coefficient-wise for dense expressions (`A / IntDivider<int>(d)`). The expression is vectorized for 32-bit integers with SSE2, AVX2, AVX-512 and NEON, and for 64-bit integers with AVX2 and AVX-512 [!2088]
 - A matrix-matrix product whose operand is a cast of a real matrix with direct access, such as `A.cast<float>() * B.cast<float>()` or `A * B.cast<float>()`, converts that operand while packing it instead of materializing the cast, unless `EIGEN_USE_BLAS` is defined or SME is enabled [!3454]
 
 Bug fixes:

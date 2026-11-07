@@ -243,6 +243,7 @@ struct packet_traits<int> : default_packet_traits {
 
     HasCmp = 1,
     HasDiv = 1,
+    HasFastIntDiv = 1,
     HasShift = 1,
   };
 };
@@ -257,6 +258,7 @@ struct packet_traits<uint32_t> : default_packet_traits {
 
     HasNegate = 0,
     HasCmp = 1,
+    HasFastIntDiv = 1,
     HasShift = 1,
   };
 };
@@ -2052,6 +2054,51 @@ EIGEN_STRONG_INLINE __m128i float2half(__m128 f) {
   return _mm_and_si128(o, _mm_set1_epi32(0xffff));
 }
 #endif
+
+/*---------------- division by an invariant integer ----------------*/
+
+// pudiv_magic (IntegerDivision.h) for 32-bit lanes. _mm_mul_epu32 multiplies the even lanes into 64-bit products.
+EIGEN_STRONG_INLINE __m128i pudiv_magic_epu32(const __m128i& a, uint32_t magic, int shift) {
+  const __m128i m = _mm_set1_epi32(static_cast<int>(magic));
+  const __m128i even = _mm_srli_epi64(_mm_mul_epu32(a, m), 32);
+  const __m128i odd = _mm_mul_epu32(_mm_srli_epi64(a, 32), m);
+#ifdef EIGEN_VECTORIZE_SSE4_1
+  const __m128i t = _mm_blend_epi16(even, odd, 0xCC);
+#else
+  const __m128i t = _mm_or_si128(even, _mm_and_si128(odd, _mm_set_epi32(-1, 0, -1, 0)));
+#endif
+  const int shift1 = shift > 0 ? 1 : 0;
+  const __m128i sum = _mm_add_epi32(t, _mm_srl_epi32(_mm_sub_epi32(a, t), _mm_cvtsi32_si128(shift1)));
+  return _mm_srl_epi32(sum, _mm_cvtsi32_si128(shift - shift1));
+}
+
+// 64-bit lanes: the high half of the 128-bit product from four 32 x 32 -> 64-bit products, as in Hacker's Delight,
+// 2nd ed., Fig. 8-2, where the partial sums u and w stay below 2^64.
+EIGEN_STRONG_INLINE __m128i pudiv_magic_epu64(const __m128i& a, uint64_t magic, int shift) {
+  const __m128i m_lo = _mm_set1_epi64x(static_cast<long long>(magic));
+  const __m128i m_hi = _mm_set1_epi64x(static_cast<long long>(magic >> 32));
+  const __m128i a_hi = _mm_srli_epi64(a, 32);
+  const __m128i u = _mm_add_epi64(_mm_mul_epu32(a_hi, m_lo), _mm_srli_epi64(_mm_mul_epu32(a, m_lo), 32));
+  const __m128i w = _mm_add_epi64(_mm_mul_epu32(a, m_hi), _mm_and_si128(u, _mm_set1_epi64x(0xffffffff)));
+  const __m128i t =
+      _mm_add_epi64(_mm_add_epi64(_mm_mul_epu32(a_hi, m_hi), _mm_srli_epi64(u, 32)), _mm_srli_epi64(w, 32));
+  const int shift1 = shift > 0 ? 1 : 0;
+  const __m128i sum = _mm_add_epi64(t, _mm_srl_epi64(_mm_sub_epi64(a, t), _mm_cvtsi32_si128(shift1)));
+  return _mm_srl_epi64(sum, _mm_cvtsi32_si128(shift - shift1));
+}
+
+template <>
+EIGEN_STRONG_INLINE Packet4i pudiv_magic<Packet4i>(const Packet4i& a, uint32_t magic, int shift) {
+  return pudiv_magic_epu32(a, magic, shift);
+}
+template <>
+EIGEN_STRONG_INLINE Packet4ui pudiv_magic<Packet4ui>(const Packet4ui& a, uint32_t magic, int shift) {
+  return pudiv_magic_epu32(a, magic, shift);
+}
+template <>
+EIGEN_STRONG_INLINE Packet2l pudiv_magic<Packet2l>(const Packet2l& a, uint64_t magic, int shift) {
+  return pudiv_magic_epu64(a, magic, shift);
+}
 
 }  // end namespace internal
 

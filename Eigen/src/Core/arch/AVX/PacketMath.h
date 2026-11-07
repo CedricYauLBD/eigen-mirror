@@ -234,7 +234,7 @@ template <>
 struct packet_traits<int> : default_packet_traits {
   using type = Packet8i;
   using half = Packet4i;
-  enum { Vectorizable = 1, AlignedOnScalar = 1, HasCmp = 1, HasDiv = 1, size = 8 };
+  enum { Vectorizable = 1, AlignedOnScalar = 1, HasCmp = 1, HasDiv = 1, HasFastIntDiv = 1, size = 8 };
 };
 template <>
 struct packet_traits<uint32_t> : default_packet_traits {
@@ -251,6 +251,7 @@ struct packet_traits<uint32_t> : default_packet_traits {
     HasCmp = 1,
     HasMin = 1,
     HasMax = 1,
+    HasFastIntDiv = 1,
     HasShift = 1
   };
 };
@@ -260,7 +261,7 @@ template <>
 struct packet_traits<int64_t> : default_packet_traits {
   using type = Packet4l;
   using half = Packet2l;
-  enum { Vectorizable = 1, AlignedOnScalar = 1, HasCmp = 1, size = 4 };
+  enum { Vectorizable = 1, AlignedOnScalar = 1, HasCmp = 1, HasFastIntDiv = 1, size = 4 };
 };
 template <>
 struct packet_traits<uint64_t> : default_packet_traits {
@@ -277,6 +278,7 @@ struct packet_traits<uint64_t> : default_packet_traits {
     HasTranspose = 0,
     HasNegate = 0,
     HasCmp = 1,
+    HasFastIntDiv = 1,
     HasShift = 1
   };
 };
@@ -3113,6 +3115,62 @@ inline void pstoreuSegment<uint64_t, Packet4ul>(uint64_t* to, const Packet4ul& f
 #endif  // EIGEN_VECTORIZE_AVX512VL
 
 /*---------------- end load/store segment support ----------------*/
+
+/*---------------- division by an invariant integer ----------------*/
+
+// pudiv_magic (IntegerDivision.h); see pudiv_magic_epu32 and pudiv_magic_epu64 in SSE/PacketMath.h.
+#ifdef EIGEN_VECTORIZE_AVX2
+EIGEN_STRONG_INLINE __m256i pudiv_magic_epu32(const __m256i& a, uint32_t magic, int shift) {
+  const __m256i m = _mm256_set1_epi32(static_cast<int>(magic));
+  const __m256i even = _mm256_shuffle_epi32(_mm256_mul_epu32(a, m), 0xF5);
+  const __m256i odd = _mm256_mul_epu32(_mm256_shuffle_epi32(a, 0xF5), m);
+  const __m256i t = _mm256_blend_epi32(even, odd, 0xAA);
+  // Per-lane shifts by broadcast counts: one uop, where a count in an xmm register costs two on Intel cores.
+  const int shift1 = shift > 0 ? 1 : 0;
+  const __m256i sum = _mm256_add_epi32(t, _mm256_srlv_epi32(_mm256_sub_epi32(a, t), _mm256_set1_epi32(shift1)));
+  return _mm256_srlv_epi32(sum, _mm256_set1_epi32(shift - shift1));
+}
+#else
+// AVX without AVX2 has no 256-bit integer arithmetic: divide the two 128-bit halves.
+EIGEN_STRONG_INLINE __m256i pudiv_magic_epu32(const __m256i& a, uint32_t magic, int shift) {
+  const __m128i lo = pudiv_magic_epu32(_mm256_castsi256_si128(a), magic, shift);
+  const __m128i hi = pudiv_magic_epu32(_mm256_extractf128_si256(a, 1), magic, shift);
+  return _mm256_insertf128_si256(_mm256_castsi128_si256(lo), hi, 1);
+}
+#endif
+
+template <>
+EIGEN_STRONG_INLINE Packet8i pudiv_magic<Packet8i>(const Packet8i& a, uint32_t magic, int shift) {
+  return pudiv_magic_epu32(a, magic, shift);
+}
+template <>
+EIGEN_STRONG_INLINE Packet8ui pudiv_magic<Packet8ui>(const Packet8ui& a, uint32_t magic, int shift) {
+  return pudiv_magic_epu32(a, magic, shift);
+}
+
+#ifdef EIGEN_VECTORIZE_AVX2
+EIGEN_STRONG_INLINE __m256i pudiv_magic_epu64(const __m256i& a, uint64_t magic, int shift) {
+  const __m256i m_lo = _mm256_set1_epi64x(static_cast<long long>(magic));
+  const __m256i m_hi = _mm256_set1_epi64x(static_cast<long long>(magic >> 32));
+  const __m256i a_hi = _mm256_srli_epi64(a, 32);
+  const __m256i u = _mm256_add_epi64(_mm256_mul_epu32(a_hi, m_lo), _mm256_srli_epi64(_mm256_mul_epu32(a, m_lo), 32));
+  const __m256i w = _mm256_add_epi64(_mm256_mul_epu32(a, m_hi), _mm256_blend_epi32(u, _mm256_setzero_si256(), 0xAA));
+  const __m256i t = _mm256_add_epi64(_mm256_add_epi64(_mm256_mul_epu32(a_hi, m_hi), _mm256_srli_epi64(u, 32)),
+                                     _mm256_srli_epi64(w, 32));
+  const int shift1 = shift > 0 ? 1 : 0;
+  const __m256i sum = _mm256_add_epi64(t, _mm256_srlv_epi64(_mm256_sub_epi64(a, t), _mm256_set1_epi64x(shift1)));
+  return _mm256_srlv_epi64(sum, _mm256_set1_epi64x(shift - shift1));
+}
+
+template <>
+EIGEN_STRONG_INLINE Packet4l pudiv_magic<Packet4l>(const Packet4l& a, uint64_t magic, int shift) {
+  return pudiv_magic_epu64(a, magic, shift);
+}
+template <>
+EIGEN_STRONG_INLINE Packet4ul pudiv_magic<Packet4ul>(const Packet4ul& a, uint64_t magic, int shift) {
+  return pudiv_magic_epu64(a, magic, shift);
+}
+#endif  // EIGEN_VECTORIZE_AVX2
 
 }  // end namespace internal
 
