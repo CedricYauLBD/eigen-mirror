@@ -159,16 +159,14 @@ void bunch_kaufman_factor(const char *name, const char *uplo, EIGEN_BLAS_INT *n,
   ScalarVector subdiag(*n);
   PlainMatrixType workspace;
   if (UPLO(*uplo) == LO) {
-    Eigen::internal::bunch_kaufman<Eigen::Lower>::blocked<Eigen::internal::BunchKaufmanPivotCabs1>(A, transpositions,
-                                                                                                   subdiag, workspace);
+    Eigen::internal::bunch_kaufman<Eigen::Lower>::blocked(A, transpositions, subdiag, workspace);
     *info = bunch_kaufman_to_lapack(A, transpositions, subdiag, ipiv);
   } else {
     // J A J in place: the upper triangle becomes the lower one that the kernel factors, and the strictly lower
-    // triangle, which the kernel does not touch, returns to its place when the reversal is undone.
+    // triangle, which the kernel does not touch, returns to its place when the reversal is undone. The last of equal
+    // pivot candidates in the reversed order is xSYTRF's first in the original order.
     A.reverseInPlace();
-    Eigen::internal::bunch_kaufman<Eigen::Lower>::blocked<Eigen::internal::BunchKaufmanPivotCabs1 |
-                                                          Eigen::internal::BunchKaufmanPivotLastOnTies>(
-        A, transpositions, subdiag, workspace);
+    Eigen::internal::bunch_kaufman<Eigen::Lower>::blocked</*LastOnTies=*/true>(A, transpositions, subdiag, workspace);
     const EIGEN_BLAS_INT reversed_info = bunch_kaufman_to_lapack(A, transpositions, subdiag, ipiv);
     A.reverseInPlace();
     std::reverse(ipiv, ipiv + *n);

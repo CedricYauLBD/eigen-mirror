@@ -516,9 +516,9 @@ void test_hetrf_ignores_imaginary_diagonal() {
   }
 }
 
-// Where Eigen's default search would pivot differently, the pivots reference LAPACK 3.12.1 takes: IxAMAX takes the
-// first of equal candidates, which is the last in the reversed order that UPLO = 'U' is factored in, and measures a
-// complex candidate by |re| + |im|, which prefers 2+2i to 3.
+// The pivots reference LAPACK 3.12.1 takes on inputs that pin down its search: IxAMAX
+// measures a complex candidate by |re| + |im|, which prefers 2+2i to 3, and takes the first of equal candidates,
+// which is the last in the reversed order that UPLO = 'U' is factored in.
 template <typename Scalar>
 void test_bunch_kaufman_reference_pivots() {
   using Real = RealOf<Scalar>;
