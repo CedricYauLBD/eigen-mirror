@@ -384,7 +384,7 @@ EIGEN_DONT_INLINE BDCSVD<MatrixType, Options>& BDCSVD<MatrixType, Options>::comp
   // A SIMD unit that flushes subnormal inputs reads an all-subnormal matrix as zero; recover its maximum from the
   // representation so that the scaling still brings it into the normal range.
   const RealScalar maxCoeff = internal::safe_scaling<RealScalar>::recover_flushed_max_coeff(
-      matrix.derived(), matrix.cwiseAbs().template maxCoeff<PropagateNaN>());
+      matrix.derived(), matrix.realView().cwiseAbs().template maxCoeff<PropagateNaN>());
   if (!(numext::isfinite)(maxCoeff)) {
     m_isInitialized = true;
     m_info = InvalidInput;

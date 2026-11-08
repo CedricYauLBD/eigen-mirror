@@ -523,7 +523,7 @@ EIGEN_DEVICE_FUNC SelfAdjointEigenSolver<MatrixType>& SelfAdjointEigenSolver<Mat
   // can underflow small blocks. Users with such matrices should tridiagonalize separately
   // and call computeFromTridiagonal(), which uses per-block scaling.
   const RealScalar maxCoeff = internal::safe_scaling<RealScalar>::recover_flushed_max_coeff(
-      mat, mat.cwiseAbs().template maxCoeff<PropagateNaN>());
+      mat, mat.realView().cwiseAbs().template maxCoeff<PropagateNaN>());
   if (!(numext::isfinite)(maxCoeff)) {
     // Input contains Inf or NaN.
     m_info = NoConvergence;
