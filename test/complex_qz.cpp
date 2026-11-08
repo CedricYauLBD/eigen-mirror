@@ -285,7 +285,7 @@ void complex_qz_push_down_scale() {
     }
   }
   for (int e : {-10, 0, 10}) {
-    const MatrixType bs = b * std::ldexp(RealScalar(1), e);
+    const MatrixType bs = b * numext::ldexp(RealScalar(1), e);
     ComplexQZ<MatrixType> qz(a, bs);
     verify_complex_qz_convergence(a, bs, qz);
   }
@@ -383,6 +383,27 @@ void complex_qz_zero_pencil() {
   }
 }
 
+// ComplexQZ returned Success with inf in S or T where Q^* A Z or Q^* B Z is not representable. For A or B = c 1 with
+// c = 0.9 highest, that triangular factor has rank one and Frobenius norm c n, so its nonzeros form a p x q block with
+// p + q <= n + 1, one of them at least 2 c n / (n + 1) > highest: info() must report NumericalIssue. For A = c Random,
+// the moduli of the coefficients overflowed and left the pencil unscaled, so the iteration did not converge.
+template <typename MatrixType>
+void complex_qz_unrepresentable() {
+  using Scalar = typename MatrixType::Scalar;
+  using RealScalar = typename MatrixType::RealScalar;
+  const Scalar c(RealScalar(0.9) * NumTraits<RealScalar>::highest());
+  for (Index n : {2, 10}) {
+    const MatrixType ones = MatrixType::Constant(n, n, c), random = MatrixType::Random(n, n);
+    ComplexQZ<MatrixType> qzA(ones, random), qzB(random, ones);
+    VERIFY_IS_EQUAL(qzA.info(), NumericalIssue);
+    VERIFY_IS_EQUAL(qzB.info(), NumericalIssue);
+    const MatrixType big = random * c;
+    ComplexQZ<MatrixType> qzBig(big, random);
+    VERIFY(qzBig.info() != NoConvergence);
+    VERIFY(qzBig.info() != Success || (qzBig.matrixS().allFinite() && qzBig.matrixT().allFinite()));
+  }
+}
+
 // Block Householder operations still allocate at larger sizes (issue #3163).
 template <typename MatrixType>
 void complex_qz_no_malloc() {
@@ -445,6 +466,8 @@ EIGEN_DECLARE_TEST(complex_qz) {
   CALL_SUBTEST_7(complex_qz_no_convergence_status());
   CALL_SUBTEST_7((complex_qz_zero_pencil<MatrixXcf>()));
   CALL_SUBTEST_8((complex_qz_zero_pencil<MatrixXcd>()));
+  CALL_SUBTEST_7((complex_qz_unrepresentable<MatrixXcf>()));
+  CALL_SUBTEST_8((complex_qz_unrepresentable<MatrixXcd>()));
   CALL_SUBTEST_8((complex_qz_jordan<MatrixXcd>()));
   CALL_SUBTEST_7((complex_qz_push_down_scale<MatrixXcf>()));
   CALL_SUBTEST_8((complex_qz_push_down_scale<MatrixXcd>()));
