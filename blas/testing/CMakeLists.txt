@@ -115,7 +115,10 @@ if(EIGEN_TEST_BLAS_REFERENCE)
 
   add_executable(blas_reference blas_reference.cpp)
   target_include_directories(blas_reference PRIVATE "${Eigen_SOURCE_DIR}" "${Eigen_SOURCE_DIR}/test")
-  target_link_libraries(blas_reference eigen_blas_static eigen_netlib_blas ${EIGEN_STANDARD_LIBRARIES_TO_LINK_TO})
+  # The shared library where there is one, as for lapack_routines in lapack/CMakeLists.txt: this test includes
+  # test/main.h, whose Eigen configuration differs from the library's.
+  target_link_libraries(blas_reference ${eigen_blas_lib} eigen_netlib_blas ${EIGEN_STANDARD_LIBRARIES_TO_LINK_TO})
+  set_target_properties(blas_reference PROPERTIES RUNTIME_OUTPUT_DIRECTORY "$<TARGET_FILE_DIR:${eigen_blas_lib}>")
   add_test(NAME blas_reference COMMAND blas_reference)
   set_property(TEST blas_reference PROPERTY LABELS blas)
   add_dependencies(buildtests blas_reference)
