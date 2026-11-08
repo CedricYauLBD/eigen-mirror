@@ -118,6 +118,59 @@ void generalized_eigensolver_assert() {
   VERIFY_RAISES_ASSERT(eig.betas());
 }
 
+// A complex pair's alpha and beta came from products such as p * p and T(i, i) * T(i + 1, i + 1), which overflow or
+// underflow once |S| |T| or |T|^2 leaves the exponent range, although alpha / beta is representable.
+template <typename MatrixType>
+void generalized_eigensolver_scaled_complex_pairs() {
+  using Scalar = typename MatrixType::Scalar;
+  using ComplexScalar = std::complex<Scalar>;
+  using ComplexVector = Matrix<ComplexScalar, Dynamic, 1>;
+  // QZ and the back substitution are backward stable: eta_k = O(n eps) for every eigenpair.
+  const auto verifyComplexEigenpairs = [](const MatrixType& a, const MatrixType& b) {
+    GeneralizedEigenSolver<MatrixType> eig(a, b);
+    VERIFY_IS_EQUAL(eig.info(), Success);
+    VERIFY((eig.eigenvalues().imag().array() != Scalar(0)).all());
+    const Scalar tolerance = Scalar(4 * a.rows()) * NumTraits<Scalar>::epsilon();
+    const Scalar normA = a.stableNorm(), normB = b.stableNorm();
+    for (Index k = 0; k < a.rows(); ++k) {
+      // eta_k = |(beta_k A - alpha_k B) v_k| / ((|beta_k| |A| + |alpha_k| |B|) |v_k|).
+      const ComplexScalar alpha = eig.alphas()(k);
+      const Scalar beta = eig.betas()(k);
+      const ComplexVector vk = eig.eigenvectors().col(k);
+      const ComplexVector residual =
+          (a.template cast<ComplexScalar>() * vk) * beta - (b.template cast<ComplexScalar>() * vk) * alpha;
+      const Scalar eta =
+          residual.stableNorm() / ((numext::abs(beta) * normA + numext::abs(alpha) * normB) * vk.stableNorm());
+      VERIFY(eta <= tolerance);
+    }
+  };
+
+  const Index dim = 6;
+  // A0 = U D V and B0 = U V with D = diag of blocks [c 1; -1 c], so every eigenvalue c +- i is complex.
+  MatrixType d = MatrixType::Zero(dim, dim);
+  for (Index k = 0; k < dim; k += 2) {
+    d(k, k) = d(k + 1, k + 1) = Scalar(k + 1);
+    d(k, k + 1) = Scalar(1);
+    d(k + 1, k) = Scalar(-1);
+  }
+  const MatrixType u = MatrixType::Random(dim, dim), v = MatrixType::Random(dim, dim);
+  const MatrixType a0 = u * d * v, b0 = u * v;
+  // |S| |T| above sqrt(highest) or below sqrt(lowest), and |T|^2 above highest. The squared eigenvalues stay normal,
+  // which RealQZ's own test for complex pairs needs.
+  const int emax = std::numeric_limits<Scalar>::max_exponent;
+  const int exponents[][2] = {{emax / 4 + 4, emax / 4 + 4}, {-emax / 4 - 4, -emax / 4 - 4}, {emax / 16, emax / 2 + 2}};
+  for (const auto& e : exponents)
+    verifyComplexEigenpairs(a0 * numext::ldexp(Scalar(1), e[0]), b0 * numext::ldexp(Scalar(1), e[1]));
+
+  // A nearly real pair 2^k +- i 2^((k - 10 + m) / 2), B = I: with S scaled by 2^-k, m01 m10 = 2^(m - k - 10) would
+  // underflow to zero and leave a zero pivot in the eigenvector.
+  const int k = 5 * emax / 16, m = -7 * emax / 8;
+  MatrixType a2(2, 2);
+  a2 << numext::ldexp(Scalar(1), k), numext::ldexp(Scalar(1), m), -numext::ldexp(Scalar(1), k - 10),
+      numext::ldexp(Scalar(1), k);
+  verifyComplexEigenpairs(a2, MatrixType::Identity(2, 2));
+}
+
 // Use an unbounded dynamic matrix below the block Householder threshold.
 template <typename MatrixType>
 void generalized_eigensolver_no_malloc() {
@@ -144,6 +197,8 @@ void generalized_eigensolver_no_malloc() {
 }
 
 EIGEN_DECLARE_TEST(eigensolver_generalized_real) {
+  CALL_SUBTEST_1(generalized_eigensolver_scaled_complex_pairs<MatrixXf>());
+  CALL_SUBTEST_1(generalized_eigensolver_scaled_complex_pairs<MatrixXd>());
   CALL_SUBTEST_2(generalized_eigensolver_no_malloc<MatrixXd>());
   CALL_SUBTEST_2((generalized_eigensolver_no_malloc<Matrix<double, Dynamic, Dynamic, RowMajor>>()));
   for (int i = 0; i < g_repeat; i++) {

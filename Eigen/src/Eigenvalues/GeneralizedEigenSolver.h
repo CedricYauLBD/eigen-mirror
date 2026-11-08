@@ -376,21 +376,36 @@ GeneralizedEigenSolver<MatrixType>& GeneralizedEigenSolver<MatrixType>::computeF
         }
         ++i;
       } else {
-        // We need to extract the generalized eigenvalues of the pair of a general 2x2 block S and a positive diagonal
-        // 2x2 block T Then taking beta=T_00*T_11, we can avoid any division, and alpha is the eigenvalues of A = (U^-1
-        // * S * U) * diag(T_11,T_00):
+        // The 2x2 pencil (S_i, T_i), T_i = diag(a, b), has the eigenvalues eig(S_i diag(b, a)) / (a b). With
+        // T_i = tau diag(a', b') and tau near max(|a|, |b|),
+        //   alpha = eig(M), M = S_i diag(b', a'),  beta = (tau a') b' = a b',
+        // so |alpha| ~ |S_i| and |beta| ~ min(|a|, |b|), as alpha = S(i, i) and beta = T(i, i) for a real eigenvalue;
+        // a b over- or underflows with |T_i|^2. The discriminant p^2 + m01 m10 is formed relative to its largest term,
+        // as in LAPACK's xLANV2. Scaling S_i instead could flush a small m01 or m10 and lose a nearly real pair's
+        // imaginary part.
+        using Scaling = internal::safe_scaling<RealScalar>;
+        // NOTE: using diagonal() instead of coeff(i,i) works around an MSVC bug.
+        const Matrix<RealScalar, 2, 1> diagT = mT.diagonal().template segment<2>(i);
+        Matrix<RealScalar, 2, 1> scaledT;
+        const internal::safe_scaling_factors<RealScalar> factorsT = Scaling::scale_to(
+            scaledT, diagT,
+            Scaling::recover_flushed_max_coeff(diagT, diagT.cwiseAbs().template maxCoeff<PropagateNaN>()));
+        const RealScalar aScaled = scaledT.coeff(0), bScaled = scaledT.coeff(1);
+        const RealScalar beta = m_betas.coeffRef(i) = m_betas.coeffRef(i + 1) = (factorsT.scale * aScaled) * bScaled;
 
-        // T =  [a 0]
-        //      [0 b]
-        RealScalar a = mT.diagonal().coeff(i), b = mT.diagonal().coeff(i + 1);
-        const RealScalar beta = m_betas.coeffRef(i) = m_betas.coeffRef(i + 1) = a * b;
-
-        // ^^ NOTE: using diagonal()(i) instead of coeff(i,i) workarounds a MSVC bug.
-        Matrix<RealScalar, 2, 2> S2 = mS.template block<2, 2>(i, i) * Matrix<Scalar, 2, 1>(b, a).asDiagonal();
-
-        Scalar p = Scalar(0.5) * (S2.coeff(0, 0) - S2.coeff(1, 1));
-        Scalar z = numext::sqrt(numext::abs(p * p + S2.coeff(1, 0) * S2.coeff(0, 1)));
-        const ComplexScalar alpha = ComplexScalar(S2.coeff(1, 1) + p, (beta > 0) ? z : -z);
+        const Matrix<RealScalar, 2, 2> M =
+            mS.template block<2, 2>(i, i) * Matrix<RealScalar, 2, 1>(bScaled, aScaled).asDiagonal();
+        const RealScalar p = RealScalar(0.5) * (M.coeff(0, 0) - M.coeff(1, 1));
+        const RealScalar m01 = M.coeff(0, 1), m10 = M.coeff(1, 0);
+        const RealScalar bcMax = numext::maxi(numext::abs(m01), numext::abs(m10));
+        const RealScalar bcMin = numext::mini(numext::abs(m01), numext::abs(m10));
+        const RealScalar scale = numext::maxi(numext::abs(p), bcMax);
+        RealScalar z(0);
+        if (!numext::is_exactly_zero(scale)) {
+          const RealScalar bcMinSigned = ((m01 < RealScalar(0)) == (m10 < RealScalar(0))) ? bcMin : -bcMin;
+          z = numext::sqrt(scale) * numext::sqrt(numext::abs((p / scale) * p + (bcMax / scale) * bcMinSigned));
+        }
+        const ComplexScalar alpha = ComplexScalar(M.coeff(1, 1) + p, (beta > 0) ? z : -z);
         m_alphas.coeffRef(i) = numext::conj(alpha);
         m_alphas.coeffRef(i + 1) = alpha;
 
