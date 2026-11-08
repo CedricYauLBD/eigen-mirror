@@ -14,8 +14,6 @@
 #include "main.h"
 #include "../lapack.h"
 
-#include <cstring>
-
 namespace {
 
 using std::complex;
@@ -140,15 +138,22 @@ void set_imag(complex<Real>& x, Real imag) {
   x = complex<Real>(x.real(), imag);
 }
 
-template <typename T>
-bool same_bits(const T& a, const T& b) {
-  return std::memcmp(&a, &b, sizeof(T)) == 0;
+// Bitwise equality, which tells signed zeros and NaN payloads apart.
+template <typename Real>
+bool same_bits(const Real& a, const Real& b) {
+  using Bits = typename numext::get_integer_by_size<sizeof(Real)>::unsigned_type;
+  return numext::bit_cast<Bits>(a) == numext::bit_cast<Bits>(b);
+}
+
+template <typename Real>
+bool same_bits(const complex<Real>& a, const complex<Real>& b) {
+  return same_bits(a.real(), b.real()) && same_bits(a.imag(), b.imag());
 }
 
 template <typename Scalar>
 bool same_bits(const Mat<Scalar>& a, const Mat<Scalar>& b) {
   return a.rows() == b.rows() && a.cols() == b.cols() &&
-         std::memcmp(a.data(), b.data(), size_t(a.size()) * sizeof(Scalar)) == 0;
+         a.binaryExpr(b, [](const Scalar& x, const Scalar& y) { return same_bits(x, y); }).all();
 }
 
 // NaN in the strict triangle of A that UPLO does not reference.
@@ -1237,11 +1242,14 @@ void test_no_stray_xerbla() { VERIFY_IS_EQUAL(g_xerbla.calls, 0); }
 }  // namespace
 
 EIGEN_DECLARE_TEST(lapack_wrappers) {
+// FUNC names a function template, so it cannot be parenthesized.
+// NOLINTBEGIN(bugprone-macro-parentheses)
 #define LW_FOR_ALL_SCALARS(FUNC)         \
   CALL_SUBTEST(FUNC<float>());           \
   CALL_SUBTEST(FUNC<double>());          \
   CALL_SUBTEST(FUNC<complex<float> >()); \
   CALL_SUBTEST(FUNC<complex<double> >())
+  // NOLINTEND(bugprone-macro-parentheses)
   for (Int i = 0; i < g_repeat; ++i) {
     LW_FOR_ALL_SCALARS(test_pstrf);
     LW_FOR_ALL_SCALARS(test_bunch_kaufman);
