@@ -420,6 +420,9 @@ struct functor_traits<scalar_int_div_op<Scalar, IsSigned, SignedMultiply>> {
  * nonzero, and it must be positive when \c Scalar_ is unsigned. Unlike the built-in operator, which has undefined
  * behavior there, \c lowest() divided by -1 wraps to \c lowest().
  *
+ * A default-constructed \c IntDivider divides by 1; compute() sets the divisor later, for example in a member that is
+ * initialized after construction.
+ *
  * Use \c IntDivider when one divisor that is not a compile-time constant divides many numerators: constructing it costs
  * about as much as a few divisions. For a constant divisor, write the constant; the compiler then derives a similar
  * sequence itself.
@@ -433,11 +436,23 @@ class IntDivider {
   using Scalar = Scalar_;
   using Functor = internal::scalar_int_div_op<Scalar>;
 
+  /** Default constructor: divides by 1 until compute() sets another divisor. */
+  EIGEN_DEVICE_FUNC IntDivider() : m_functor(Scalar(1)) {}
+
   /** Precomputes the division by \a divisor. */
   template <typename Divisor>
   EIGEN_DEVICE_FUNC explicit IntDivider(const Divisor& divisor) : m_functor(divisor) {
     EIGEN_STATIC_ASSERT((std::is_integral<Divisor>::value && !std::is_same<Divisor, bool>::value),
                         THE_DIVISOR_TYPE_MUST_BE_A_BUILT_IN_INTEGER)
+  }
+
+  /** Precomputes the division by \a divisor, replacing the previous divisor. \returns a reference to \c *this. */
+  template <typename Divisor>
+  EIGEN_DEVICE_FUNC IntDivider& compute(const Divisor& divisor) {
+    EIGEN_STATIC_ASSERT((std::is_integral<Divisor>::value && !std::is_same<Divisor, bool>::value),
+                        THE_DIVISOR_TYPE_MUST_BE_A_BUILT_IN_INTEGER)
+    m_functor = Functor(divisor);
+    return *this;
   }
 
   /** \returns \a numerator divided by the divisor, truncated toward zero. */

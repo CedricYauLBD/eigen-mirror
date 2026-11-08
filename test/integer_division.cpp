@@ -254,6 +254,26 @@ void test_expressions() {
   verify_coefficients(v5, v5_in_place, d);
 }
 
+// Default construction divides by 1; compute() replaces the divisor.
+template <typename Scalar>
+void test_compute() {
+  using Vector = Matrix<Scalar, Dynamic, 1>;
+  Vector a = Vector::Random(37);
+  IntDivider<Scalar> by;
+  VERIFY(Vector(a / by) == a);
+  for (int repeat = 0; repeat < g_repeat; ++repeat) {
+    Scalar d = static_cast<Scalar>(random_magnitude<Scalar>() | 1);
+    VERIFY(&by.compute(d) == &by);
+    verify_coefficients(a, Vector(a / by), d);
+    VERIFY_IS_EQUAL(a(0) / by, reference_quotient(a(0), d));
+  }
+  // A divisor of a wider type, beyond the range of Scalar.
+  if (sizeof(Scalar) < 8) {
+    by.compute(uint64_t(1) << 40);
+    VERIFY(Vector(a / by) == Vector::Zero(a.size()));
+  }
+}
+
 void test_traits() {
   // Types without a kernel stay on the scalar path; a vectorized expression would compute lane-wise fallbacks.
   STATIC_CHECK(!(internal::functor_traits<internal::scalar_int_div_op<int16_t>>::PacketAccess));
@@ -294,6 +314,8 @@ EIGEN_DECLARE_TEST(integer_division) {
   CALL_SUBTEST_4((test_packet_kernels<uint32_t>()));
   CALL_SUBTEST_4((test_packet_kernels<int32_t>()));
   CALL_SUBTEST_4((test_expressions<int32_t>()));
+  CALL_SUBTEST_4((test_compute<int32_t>()));
+  CALL_SUBTEST_4((test_compute<uint16_t>()));
   CALL_SUBTEST_5((test_random_division<uint64_t>()));
   CALL_SUBTEST_5((test_random_division<int64_t>()));
   CALL_SUBTEST_5((test_random_division<long long>()));
@@ -301,4 +323,6 @@ EIGEN_DECLARE_TEST(integer_division) {
   CALL_SUBTEST_5((test_packet_kernels<int64_t>()));
   CALL_SUBTEST_5((test_expressions<int64_t>()));
   CALL_SUBTEST_5((test_expressions<uint32_t>()));
+  CALL_SUBTEST_5((test_compute<int64_t>()));
+  CALL_SUBTEST_5((test_compute<uint64_t>()));
 }
