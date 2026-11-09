@@ -11,6 +11,9 @@
 #ifndef EIGEN_REAL_QZ_H
 #define EIGEN_REAL_QZ_H
 
+// For inverse_iteration_rng, which draws the exceptional shifts.
+#include "./TridiagonalInverseIteration.h"
+
 // IWYU pragma: private
 #include "./InternalHeaderCheck.h"
 
@@ -244,10 +247,11 @@ class RealQZ {
   void hessenbergTriangular();
   void computeNorms();
   Index findSmallSubdiagEntry(Index iu);
+  bool hasComplexEigenvalues(Index r) const;
   Index findSmallDiagEntry(Index f, Index l);
   void splitOffTwoRows(Index i);
   void pushDownZero(Index z, Index f, Index l);
-  void step(Index f, Index l, Index iter);
+  void step(Index f, Index l, Index iter, internal::inverse_iteration_rng* randomShift);
 
 };  // RealQZ
 
@@ -300,12 +304,33 @@ inline void RealQZ<MatrixType>::computeNorms() {
   m_normOfT = internal::triangular_abs_sum<Upper>(m_T);
 }
 
+/** \internal Whether the 2x2 block pencil (S, T)(r:r+1, r:r+1) has complex eigenvalues: det(S - lambda T) =
+ * c2 lambda^2 + c1 lambda + c0 with T upper triangular has c1^2 < 4 c2 c0. */
+template <typename MatrixType>
+inline bool RealQZ<MatrixType>::hasComplexEigenvalues(Index r) const {
+  const Scalar s00 = m_S.coeff(r, r), s01 = m_S.coeff(r, r + 1), s10 = m_S.coeff(r + 1, r),
+               s11 = m_S.coeff(r + 1, r + 1);
+  const Scalar t00 = m_T.coeff(r, r), t01 = m_T.coeff(r, r + 1), t11 = m_T.coeff(r + 1, r + 1);
+  const Scalar c1 = s10 * t01 - s00 * t11 - s11 * t00;
+  return c1 * c1 < Scalar(4) * (t00 * t11) * (s00 * s11 - s01 * s10);
+}
+
 /** \internal Look for single small sub-diagonal element S(res, res-1) and return res (or 0) */
 template <typename MatrixType>
 inline Index RealQZ<MatrixType>::findSmallSubdiagEntry(Index iu) {
   Index res = iu;
   while (res > 0) {
+    // The diagonal entries of a 2x2 block with complex eigenvalues a +- ib estimate only a. Between two such blocks, at
+    // r = res - 2 and r = res, the scale adds 2 min |b|, with |b| ~ sqrt(|S(r+1, r) S(r, r+1)|) as xLAQR3 measures a
+    // 2x2 block: between the blocks of a repeated pair +-i, a = 0, the diagonal entries are rounding noise, and a
+    // negligible S(res, res-1) would otherwise never deflate. The smaller block bounds the term, so a graded pencil
+    // keeps the relative accuracy of its small eigenvalues.
     Scalar s = numext::abs(m_S.coeff(res - 1, res - 1)) + numext::abs(m_S.coeff(res, res));
+    if (res > 1 && res + 1 < m_S.rows() && hasComplexEigenvalues(res - 2) && hasComplexEigenvalues(res))
+      s += Scalar(2) * numext::mini(numext::sqrt(numext::abs(m_S.coeff(res - 1, res - 2))) *
+                                        numext::sqrt(numext::abs(m_S.coeff(res - 2, res - 1))),
+                                    numext::sqrt(numext::abs(m_S.coeff(res + 1, res))) *
+                                        numext::sqrt(numext::abs(m_S.coeff(res, res + 1))));
     if (numext::is_exactly_zero(s)) s = m_normOfS;
     // <=, so that an exact zero deflates also where s is 0, e.g. for S = 0.
     if (numext::abs(m_S.coeff(res, res - 1)) <= NumTraits<Scalar>::epsilon() * s) break;
@@ -433,9 +458,9 @@ inline void RealQZ<MatrixType>::pushDownZero(Index z, Index f, Index l) {
   if (m_computeQZ) m_Z.applyOnTheLeft(l, l - 1, G.adjoint());
 }
 
-/** \internal QR-like iterative step for block f..l */
+/** \internal QR-like iterative step for block f..l, with a pseudo-random shift from \a randomShift if not null */
 template <typename MatrixType>
-inline void RealQZ<MatrixType>::step(Index f, Index l, Index iter) {
+inline void RealQZ<MatrixType>::step(Index f, Index l, Index iter, internal::inverse_iteration_rng* randomShift) {
   const Index dim = m_S.cols();
 
   // x, y, z
@@ -458,11 +483,11 @@ inline void RealQZ<MatrixType>::step(Index f, Index l, Index iter) {
         m_S.coeff(l, l - 1) * m_T.coeff(l - 1, l) / (m_T.coeff(l - 1, l - 1) * m_T.coeff(l, l));
     y = m_S.coeff(f + 1, f) / m_T.coeff(f, f);
     z = 0;
-  } else if (iter > 23 && !(iter % 8)) {
+  } else if (randomShift) {
     // extremely exceptional shift
-    x = internal::random<Scalar>(-1.0, 1.0);
-    y = internal::random<Scalar>(-1.0, 1.0);
-    z = internal::random<Scalar>(-1.0, 1.0);
+    x = Scalar(randomShift->next<double>());
+    y = Scalar(randomShift->next<double>());
+    z = Scalar(randomShift->next<double>());
   } else {
     // Compute the shifts: (x,y,z,0...) = (AB^-1 - l1 I) (AB^-1 - l2 I) e1
     // where l1 and l2 are the eigenvalues of the 2x2 matrix C = U V^-1 where
@@ -604,6 +629,12 @@ RealQZ<MatrixType>& RealQZ<MatrixType>::computeInPlace(bool computeQZ) {
   computeNorms();
 
   Index l = dim - 1, f, local_iter = 0;
+  // Pseudo-random shifts from a generator seeded per call, so that the result does not depend on global state. They
+  // are tried every 8 steps from the 24th on, but taken only while the iteration stagnates: while the smaller of the
+  // subdiagonal entries at which the bottom deflates has not shrunk 16-fold over the last 7 steps. A defective
+  // eigenvalue converges linearly, about 4-fold per step, and a random shift would restart it.
+  internal::inverse_iteration_rng shiftRng(1);
+  Scalar bottomAfterTry = NumTraits<Scalar>::highest();
 
   while (l > 0) {
     f = findSmallSubdiagEntry(l);
@@ -623,6 +654,9 @@ RealQZ<MatrixType>& RealQZ<MatrixType>::computeInPlace(bool computeQZ) {
       // The limit is checked before a step rather than before the deflation test, so a deflation the last allowed
       // step produces is still found.
       if (local_iter >= m_maxIters) break;
+      const Scalar bottom = numext::mini(numext::abs(m_S.coeff(l, l - 1)), numext::abs(m_S.coeff(l - 1, l - 2)));
+      const bool stagnating = local_iter >= 24 && local_iter % 8 == 0 && !(bottom < bottomAfterTry / Scalar(16));
+      if (local_iter % 8 == 1) bottomAfterTry = bottom;
       // if there's zero on diagonal of T, we can isolate an eigenvalue with Givens rotations
       Index z = findSmallDiagEntry(f, l);
       if (z >= f) {
@@ -632,7 +666,7 @@ RealQZ<MatrixType>& RealQZ<MatrixType>::computeInPlace(bool computeQZ) {
         // We are sure now that S.block(f,f, l-f+1,l-f+1) is unreduced upper-Hessenberg
         // and T.block(f,f, l-f+1,l-f+1) is invertible upper-triangular, which allows to
         // apply a QR-like iteration to rows and columns f..l.
-        step(f, l, local_iter);
+        step(f, l, local_iter, stagnating ? &shiftRng : nullptr);
         // count QR-like steps
         m_global_iter++;
       }

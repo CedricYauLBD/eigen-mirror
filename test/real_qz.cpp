@@ -326,6 +326,132 @@ void real_qz_no_malloc() {
   }
 }
 
+// Under random orthogonal equivalence, repeated +-i pairs and real Jordan blocks did not converge in double: the
+// subdiagonal entry between two 2x2 blocks of a +-i pair became negligible but did not deflate against diagonal entries
+// that are rounding noise, and a defective eigenvalue, which converges linearly, was restarted by a random shift every
+// 8 steps after the 24th. The backward error must be O(n eps), and the pencils (P R Z, P Z) equivalent to a normal
+// (R, I) must have their eigenvalues +- omega i to O(n eps).
+template <typename MatrixType>
+void real_qz_repeated_eigenvalues() {
+  using Scalar = typename MatrixType::Scalar;
+  // omega = 0 (R not normal) skips the eigenvalue check.
+  const auto verify = [](const MatrixType& a, const MatrixType& b, const Scalar& omega) {
+    const Index n = a.rows();
+    const Scalar tolerance = Scalar(128 * n) * NumTraits<Scalar>::epsilon();
+    const RealQZ<MatrixType> qz(a, b);
+    VERIFY_IS_EQUAL(qz.info(), Success);
+    VERIFY((a - qz.matrixQ() * qz.matrixS() * qz.matrixZ()).norm() <= tolerance * a.norm());
+    VERIFY((b - qz.matrixQ() * qz.matrixT() * qz.matrixZ()).norm() <= tolerance * b.norm());
+    VERIFY(qz.matrixQ().isUnitary(tolerance));
+    VERIFY(qz.matrixZ().isUnitary(tolerance));
+    // T upper triangular, S quasi-triangular with isolated 2x2 blocks.
+    VERIFY(qz.matrixT().isUpperTriangular(0));
+    for (Index j = 0; j + 2 < n; ++j) VERIFY(qz.matrixS().col(j).tail(n - j - 2).isZero(0));
+    for (Index i = 0; i + 2 < n; ++i)
+      VERIFY(numext::is_exactly_zero(qz.matrixS()(i + 1, i)) || numext::is_exactly_zero(qz.matrixS()(i + 2, i + 1)));
+    if (omega > Scalar(0)) {
+      // Once its 2x2 blocks converge, the pencil deflates between them at once: at most 7 steps in 1000 draws, against
+      // up to 136 while a negligible S(k, k-1) waited for a random shift.
+      VERIFY(qz.iterations() < 16);
+      const GeneralizedEigenSolver<MatrixType> eig(a, b, false);
+      VERIFY_IS_EQUAL(eig.info(), Success);
+      const auto lambda = eig.eigenvalues().eval();
+      for (Index i = 0; i < n; ++i) {
+        VERIFY(numext::abs(numext::real(lambda(i))) <= tolerance * omega);
+        VERIFY(numext::abs(numext::abs(numext::imag(lambda(i))) - omega) <= tolerance * omega);
+      }
+    }
+  };
+  const auto orthogonal = [](Index n) { return MatrixType(MatrixType::Random(n, n).householderQr().householderQ()); };
+  for (int repeat = 0; repeat < 20; ++repeat) {
+    // blockdiag(R, R), R = [0 -1; 1 0], and the same with the blocks coupled: +-i, defective in the second case.
+    MatrixType r = MatrixType::Zero(4, 4);
+    r(0, 1) = r(2, 3) = Scalar(-1);
+    r(1, 0) = r(3, 2) = Scalar(1);
+    const MatrixType p = orthogonal(4), z = orthogonal(4);
+    verify(MatrixType(p * r * z), MatrixType(p * z), Scalar(1));
+    r(0, 3) = Scalar(0.5);
+    verify(MatrixType(p * r * z), MatrixType(p * z), Scalar(0));
+    MatrixType r6 = MatrixType::Zero(6, 6);
+    for (Index k = 0; k < 3; ++k) {
+      r6(2 * k, 2 * k + 1) = Scalar(-2);
+      r6(2 * k + 1, 2 * k) = Scalar(2);
+    }
+    const MatrixType p6 = orthogonal(6), z6 = orthogonal(6);
+    verify(MatrixType(p6 * r6 * z6), MatrixType(p6 * z6), Scalar(2));
+    const Index n = 3 + repeat % 4;
+    MatrixType jordan = Scalar(0.5) * MatrixType::Identity(n, n);
+    jordan.diagonal(1).setOnes();
+    const MatrixType pn = orthogonal(n), zn = orthogonal(n);
+    verify(MatrixType(pn * jordan * zn), MatrixType(pn * zn), Scalar(0));
+  }
+}
+
+// A deflation scale wide enough for the +-i pairs above must not deflate a graded pencil early: with g = 2^-e,
+// g^2 < eps, the smallest eigenvalue keeps a relative error of O(n eps). Both pencils have T = I:
+//   a = D A0 D, D = diag(1, g, g^2): lambda_min = g^4 det(A0) / det(A0(0:1, 0:1)) (1 + O(g^2)),
+//   a = [0 -g g^2; g g^2 g^3; 0 g^3 g^4], whose top 2x2 block has complex eigenvalues: lambda_min = 2 g^4 (1 + O(g^4)).
+template <typename MatrixType>
+void real_qz_graded_accuracy() {
+  using Scalar = typename MatrixType::Scalar;
+  const Scalar eps = NumTraits<Scalar>::epsilon();
+  const Scalar g = numext::ldexp(Scalar(1), -((NumTraits<Scalar>::digits() + 3) / 2 + 2));
+  const Scalar g2 = g * g, g3 = g2 * g, g4 = g2 * g2;
+  const auto smallest = [](const MatrixType& a) {
+    const GeneralizedEigenSolver<MatrixType> eig(a, MatrixType::Identity(a.rows(), a.cols()), false);
+    VERIFY_IS_EQUAL(eig.info(), Success);
+    return eig.eigenvalues().cwiseAbs().minCoeff();
+  };
+  MatrixType a0(3, 3);
+  a0 << Scalar(0.7), Scalar(-0.3), Scalar(0.5), Scalar(0.4), Scalar(0.9), Scalar(-0.6), Scalar(-0.8), Scalar(0.2),
+      Scalar(0.3);
+  const MatrixType d = Matrix<Scalar, 3, 1>(Scalar(1), g, g2).asDiagonal();
+  const Scalar reference = g4 * a0.determinant() / a0.template topLeftCorner<2, 2>().determinant();
+  VERIFY(numext::abs(smallest(MatrixType(d * a0 * d)) - numext::abs(reference)) <=
+         Scalar(16 * 3) * eps * numext::abs(reference));
+  MatrixType complexPair(3, 3);
+  complexPair << Scalar(0), -g, g2, g, g2, g3, Scalar(0), g3, g4;
+  VERIFY(numext::abs(smallest(complexPair) - Scalar(2) * g4) <= Scalar(16 * 3) * eps * Scalar(2) * g4);
+}
+
+// RealQZ drew its exceptional shifts from the global std::rand() state (#3170): two compute() calls on one pencil could
+// differ, and compute() advanced the caller's sequence. The coupled +-i pencil took those shifts, and so do some graded
+// pencils (D A D, D B D) whose iteration stagnates (in double, 4 of the 32 below); their entries come from a generator
+// independent of std::rand().
+template <typename MatrixType>
+void real_qz_leaves_rand_alone() {
+  using Scalar = typename MatrixType::Scalar;
+  // Restored on exit, so that the subtests after this one still follow EIGEN_SEED.
+  const unsigned reseed = static_cast<unsigned>(std::rand());
+  const auto verifyUntouched = [](const MatrixType& a, const MatrixType& b) {
+    std::srand(1);
+    const RealQZ<MatrixType> qz(a, b);
+    const int next = std::rand();
+    std::srand(1);
+    VERIFY_IS_EQUAL(next, std::rand());
+    VERIFY_IS_EQUAL(qz.info(), Success);
+  };
+  MatrixType r = MatrixType::Zero(4, 4);
+  r(0, 1) = r(2, 3) = Scalar(-1);
+  r(1, 0) = r(3, 2) = Scalar(1);
+  r(0, 3) = Scalar(0.5);
+  const MatrixType p = MatrixType::Random(4, 4).householderQr().householderQ();
+  verifyUntouched(MatrixType(p * r * p.transpose()), MatrixType::Identity(4, 4));
+  for (numext::uint64_t seed = 1; seed <= 32; ++seed) {
+    internal::inverse_iteration_rng rng(seed);
+    const Index n = 5;
+    MatrixType a(n, n), b(n, n);
+    for (Index j = 0; j < n; ++j)
+      for (Index i = 0; i < n; ++i) {
+        const Scalar grade = numext::pow(Scalar(1e-3), Scalar(i + j));
+        a(i, j) = Scalar(rng.next<double>()) * grade;
+        b(i, j) = Scalar(rng.next<double>()) * grade;
+      }
+    verifyUntouched(a, b);
+  }
+  std::srand(reseed);
+}
+
 EIGEN_DECLARE_TEST(real_qz) {
   CALL_SUBTEST_2((real_qz_no_malloc<MatrixXd>()));
   CALL_SUBTEST_1((real_qz_extreme_scaling<MatrixXf>()));
@@ -344,6 +470,15 @@ EIGEN_DECLARE_TEST(real_qz) {
   CALL_SUBTEST_2((real_qz_iteration_limit<MatrixXd>()));
   CALL_SUBTEST_5((real_qz_no_malloc<Matrix<float, Dynamic, Dynamic, RowMajor>>()));
   CALL_SUBTEST_6((real_qz_no_malloc<Matrix<double, Dynamic, Dynamic, RowMajor>>()));
+  CALL_SUBTEST_1((real_qz_repeated_eigenvalues<MatrixXf>()));
+  CALL_SUBTEST_2((real_qz_repeated_eigenvalues<MatrixXd>()));
+  CALL_SUBTEST_7((real_qz_repeated_eigenvalues<Matrix<long double, Dynamic, Dynamic>>()));
+  CALL_SUBTEST_1((real_qz_graded_accuracy<MatrixXf>()));
+  CALL_SUBTEST_2((real_qz_graded_accuracy<MatrixXd>()));
+  CALL_SUBTEST_7((real_qz_graded_accuracy<Matrix<long double, Dynamic, Dynamic>>()));
+  CALL_SUBTEST_1((real_qz_leaves_rand_alone<MatrixXf>()));
+  CALL_SUBTEST_2((real_qz_leaves_rand_alone<MatrixXd>()));
+  CALL_SUBTEST_7((real_qz_leaves_rand_alone<Matrix<long double, Dynamic, Dynamic>>()));
 
   int s = 0;
   for (int i = 0; i < g_repeat; i++) {
