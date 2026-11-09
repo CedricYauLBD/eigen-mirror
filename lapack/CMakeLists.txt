@@ -128,6 +128,10 @@ foreach(target IN LISTS EIGEN_LAPACK_TARGETS)
     target_link_libraries(${target} ${EIGEN_STANDARD_LIBRARIES_TO_LINK_TO})
   endif()
   target_link_libraries(${target} Eigen3::Eigen)
+  if(MSVC)
+    # complex_single.cpp and complex_double.cpp exceed the COFF section limit (C1128).
+    target_compile_options(${target} PRIVATE "-bigobj")
+  endif()
   add_dependencies(lapack ${target})
   if(EIGEN_INSTALL)
     install(TARGETS ${target}
