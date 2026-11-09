@@ -304,9 +304,7 @@ void ComplexQZ<MatrixType_>::computeInPlace(bool computeQZ) {
   // finite coefficient can overflow, which would leave the pencil unscaled.
   using Scaling = internal::safe_scaling<RealScalar>;
   const auto largestPart = [](const MatrixType& m) {
-    const RealScalar re = m.real().cwiseAbs().template maxCoeff<PropagateNaN>();
-    const RealScalar im = m.imag().cwiseAbs().template maxCoeff<PropagateNaN>();
-    return ((numext::isnan)(re) || (numext::isnan)(im)) ? re + im : numext::maxi(re, im);
+    return m.realView().cwiseAbs().template maxCoeff<PropagateNaN>();
   };
   const RealScalar maxS = m_n == 0 ? RealScalar(0) : Scaling::recover_flushed_max_coeff(m_S, largestPart(m_S));
   const RealScalar maxT = m_n == 0 ? RealScalar(0) : Scaling::recover_flushed_max_coeff(m_T, largestPart(m_T));
