@@ -367,8 +367,7 @@ ComplexSchur<MatrixType>& ComplexSchur<MatrixType>::compute(const EigenBase<Inpu
   // scale above one underflows coefficients more than the exponent range below the largest one, a perturbation bounded
   // by the smallest subnormal relative to that largest coefficient. maxCoeff propagates NaN; a zero or non-finite
   // maxCoeff carries no usable exponent and is left unscaled.
-  const RealScalar maxCoeff = internal::safe_scaling<RealScalar>::recover_flushed_max_coeff(
-      matrix.derived(), matrix.derived().realView().cwiseAbs().template maxCoeff<PropagateNaN>());
+  const RealScalar maxCoeff = internal::safe_scaling<RealScalar>::max_abs_component(matrix.derived());
   const internal::safe_scaling_factors<RealScalar> factors = internal::safe_scaling<RealScalar>::with_scaled(
       matrix.derived(), maxCoeff, [&](const auto& scaled) { m_hess.run(*this, scaled, computeU); });
   computeFromHessenberg(m_matT, m_matU, computeU);
@@ -391,8 +390,7 @@ ComplexSchur<MatrixType>& ComplexSchur<MatrixType>::computeInPlace(bool computeU
     return *this;
   }
 
-  const RealScalar maxCoeff = internal::safe_scaling<RealScalar>::recover_flushed_max_coeff(
-      m_matT, m_matT.realView().cwiseAbs().template maxCoeff<PropagateNaN>());
+  const RealScalar maxCoeff = internal::safe_scaling<RealScalar>::max_abs_component(m_matT);
   const internal::safe_scaling_factors<RealScalar> factors =
       internal::safe_scaling<RealScalar>::scale_in_place(m_matT, maxCoeff);
   m_hess.runInPlace(*this, computeU);
