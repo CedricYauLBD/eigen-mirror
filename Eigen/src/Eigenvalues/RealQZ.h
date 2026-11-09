@@ -11,9 +11,6 @@
 #ifndef EIGEN_REAL_QZ_H
 #define EIGEN_REAL_QZ_H
 
-// For inverse_iteration_rng, which draws the exceptional shifts.
-#include "./TridiagonalInverseIteration.h"
-
 // IWYU pragma: private
 #include "./InternalHeaderCheck.h"
 
