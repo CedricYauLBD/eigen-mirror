@@ -237,7 +237,14 @@ template <>
 struct packet_traits<int64_t> : default_packet_traits {
   using type = Packet8l;
   using half = Packet4l;
-  enum { Vectorizable = 1, AlignedOnScalar = 1, HasCmp = 1, HasFastIntDiv = 1, size = 8 };
+  // The 64-bit kernel takes multiply-add constants.
+  enum {
+    Vectorizable = 1,
+    AlignedOnScalar = 1,
+    HasCmp = 1,
+    HasFastIntDiv = int_div::use_multiply_add<uint64_t>::value,
+    size = 8
+  };
 };
 
 template <>
@@ -3493,6 +3500,8 @@ EIGEN_STRONG_INLINE Packet16i psdiv_signed_magic<Packet16i>(const Packet16i& a, 
   return _mm512_sub_epi32(_mm512_xor_si512(q, divisor_sign), divisor_sign);
 }
 
+// The multiply-add form, as in SSE/PacketMath.h: x86 only.
+#if EIGEN_ARCH_i386_OR_x86_64
 template <>
 EIGEN_STRONG_INLINE Packet8l pudiv_magic<Packet8l>(const Packet8l& a, uint64_t magic, uint64_t addend, int shift) {
   __m512i m_lo = _mm512_set1_epi64(static_cast<long long>(magic));
@@ -3507,6 +3516,7 @@ EIGEN_STRONG_INLINE Packet8l pudiv_magic<Packet8l>(const Packet8l& a, uint64_t m
                                _mm512_srli_epi64(w, 32));
   return _mm512_srlv_epi64(t, _mm512_set1_epi64(shift));
 }
+#endif  // EIGEN_ARCH_i386_OR_x86_64
 
 }  // end namespace internal
 

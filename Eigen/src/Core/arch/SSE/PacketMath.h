@@ -2073,8 +2073,11 @@ EIGEN_STRONG_INLINE __m128i pudiv_magic_epu32(const __m128i& a, uint32_t magic, 
 
 // 64-bit lanes: the high half of the 128-bit sum m n + c from four 32 x 32 -> 64-bit products, as in Hacker's Delight,
 // 2nd ed., Fig. 8-2. Each partial sum adds at most two terms below 2^32 to a product <= (2^32 - 1)^2, which stays
-// below 2^64.
+// below 2^64. m and c are multiply-add constants, which int_div::params stores only where use_multiply_add<uint64_t>
+// holds: on x86, not under Emscripten, which also defines __SSE2__.
+#if EIGEN_ARCH_i386_OR_x86_64
 EIGEN_STRONG_INLINE __m128i pudiv_magic_epu64(const __m128i& a, uint64_t magic, uint64_t addend, int shift) {
+  static_assert(int_div::use_multiply_add<uint64_t>::value, "the 64-bit kernels take multiply-add constants");
   __m128i m_lo = _mm_set1_epi64x(static_cast<long long>(magic));
   __m128i m_hi = _mm_set1_epi64x(static_cast<long long>(magic >> 32));
   __m128i c_lo = _mm_set1_epi64x(static_cast<long long>(addend & 0xffffffffu));
@@ -2087,7 +2090,14 @@ EIGEN_STRONG_INLINE __m128i pudiv_magic_epu64(const __m128i& a, uint64_t magic, 
   return _mm_srl_epi64(t, _mm_cvtsi32_si128(shift));
 }
 
-// psdiv_signed_magic (IntegerDivision.h) for 32-bit lanes.
+template <>
+EIGEN_STRONG_INLINE Packet2l pudiv_magic<Packet2l>(const Packet2l& a, uint64_t magic, uint64_t addend, int shift) {
+  return pudiv_magic_epu64(a, magic, addend, shift);
+}
+#endif  // EIGEN_ARCH_i386_OR_x86_64
+
+// psdiv_signed_magic (IntegerDivision.h) for 32-bit lanes. Callers pass both shifts: the two kernels share one
+// mangled name, so a program that links translation units built with and without SSE4.1 may run either.
 #ifdef EIGEN_VECTORIZE_SSE4_1
 // _mm_mul_epi32 gives the signed high half: mulhs(M - 2^32, n) + n, for the M of every divisor.
 EIGEN_STRONG_INLINE __m128i psdiv_signed_magic_epi32(const __m128i& a, uint32_t magic, int shift, int /*total_shift*/,
@@ -2119,10 +2129,6 @@ EIGEN_STRONG_INLINE __m128i psdiv_signed_magic_epi32(const __m128i& a, uint32_t 
 template <>
 EIGEN_STRONG_INLINE Packet4ui pudiv_magic<Packet4ui>(const Packet4ui& a, uint32_t magic, uint32_t addend, int shift) {
   return pudiv_magic_epu32(a, magic, addend, shift);
-}
-template <>
-EIGEN_STRONG_INLINE Packet2l pudiv_magic<Packet2l>(const Packet2l& a, uint64_t magic, uint64_t addend, int shift) {
-  return pudiv_magic_epu64(a, magic, addend, shift);
 }
 template <>
 EIGEN_STRONG_INLINE Packet4i psdiv_signed_magic<Packet4i>(const Packet4i& a, uint32_t magic, int shift, int total_shift,

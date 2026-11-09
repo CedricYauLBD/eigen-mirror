@@ -261,7 +261,14 @@ template <>
 struct packet_traits<int64_t> : default_packet_traits {
   using type = Packet4l;
   using half = Packet2l;
-  enum { Vectorizable = 1, AlignedOnScalar = 1, HasCmp = 1, HasFastIntDiv = 1, size = 4 };
+  // The 64-bit kernels take multiply-add constants.
+  enum {
+    Vectorizable = 1,
+    AlignedOnScalar = 1,
+    HasCmp = 1,
+    HasFastIntDiv = int_div::use_multiply_add<uint64_t>::value,
+    size = 4
+  };
 };
 template <>
 struct packet_traits<uint64_t> : default_packet_traits {
@@ -278,7 +285,7 @@ struct packet_traits<uint64_t> : default_packet_traits {
     HasTranspose = 0,
     HasNegate = 0,
     HasCmp = 1,
-    HasFastIntDiv = 1,
+    HasFastIntDiv = int_div::use_multiply_add<uint64_t>::value,
     HasShift = 1
   };
 };
@@ -3129,7 +3136,7 @@ EIGEN_STRONG_INLINE __m256i pudiv_magic_epu32(const __m256i& a, uint32_t magic, 
   return _mm256_srlv_epi32(_mm256_blend_epi32(even, odd, 0xAA), _mm256_set1_epi32(shift));
 }
 
-EIGEN_STRONG_INLINE __m256i psdiv_signed_magic_epi32(const __m256i& a, uint32_t magic, int shift,
+EIGEN_STRONG_INLINE __m256i psdiv_signed_magic_epi32(const __m256i& a, uint32_t magic, int shift, int /*total_shift*/,
                                                      const __m256i& divisor_sign) {
   __m256i m = _mm256_set1_epi32(static_cast<int>(magic));
   __m256i even = _mm256_shuffle_epi32(_mm256_mul_epi32(a, m), 0xF5);
@@ -3146,27 +3153,27 @@ EIGEN_STRONG_INLINE __m256i pudiv_magic_epu32(const __m256i& a, uint32_t magic, 
   return _mm256_insertf128_si256(_mm256_castsi128_si256(lo), hi, 1);
 }
 
-EIGEN_STRONG_INLINE __m256i psdiv_signed_magic_epi32(const __m256i& a, uint32_t magic, int shift,
+EIGEN_STRONG_INLINE __m256i psdiv_signed_magic_epi32(const __m256i& a, uint32_t magic, int shift, int total_shift,
                                                      const __m256i& divisor_sign) {
   __m128i sign = _mm256_castsi256_si128(divisor_sign);
-  // AVX implies SSE4.1, whose kernel does not read the total shift.
-  __m128i lo = psdiv_signed_magic_epi32(_mm256_castsi256_si128(a), magic, shift, 0, sign);
-  __m128i hi = psdiv_signed_magic_epi32(_mm256_extractf128_si256(a, 1), magic, shift, 0, sign);
+  __m128i lo = psdiv_signed_magic_epi32(_mm256_castsi256_si128(a), magic, shift, total_shift, sign);
+  __m128i hi = psdiv_signed_magic_epi32(_mm256_extractf128_si256(a, 1), magic, shift, total_shift, sign);
   return _mm256_insertf128_si256(_mm256_castsi128_si256(lo), hi, 1);
 }
 #endif
 
 template <>
-EIGEN_STRONG_INLINE Packet8i psdiv_signed_magic<Packet8i>(const Packet8i& a, uint32_t magic, int shift,
-                                                          int /*total_shift*/, const Packet8i& divisor_sign) {
-  return psdiv_signed_magic_epi32(a, magic, shift, divisor_sign);
+EIGEN_STRONG_INLINE Packet8i psdiv_signed_magic<Packet8i>(const Packet8i& a, uint32_t magic, int shift, int total_shift,
+                                                          const Packet8i& divisor_sign) {
+  return psdiv_signed_magic_epi32(a, magic, shift, total_shift, divisor_sign);
 }
 template <>
 EIGEN_STRONG_INLINE Packet8ui pudiv_magic<Packet8ui>(const Packet8ui& a, uint32_t magic, uint32_t addend, int shift) {
   return pudiv_magic_epu32(a, magic, addend, shift);
 }
 
-#ifdef EIGEN_VECTORIZE_AVX2
+// The multiply-add form, as in SSE/PacketMath.h: x86 only.
+#if defined(EIGEN_VECTORIZE_AVX2) && EIGEN_ARCH_i386_OR_x86_64
 EIGEN_STRONG_INLINE __m256i pudiv_magic_epu64(const __m256i& a, uint64_t magic, uint64_t addend, int shift) {
   __m256i m_lo = _mm256_set1_epi64x(static_cast<long long>(magic));
   __m256i m_hi = _mm256_set1_epi64x(static_cast<long long>(magic >> 32));
@@ -3190,7 +3197,7 @@ template <>
 EIGEN_STRONG_INLINE Packet4ul pudiv_magic<Packet4ul>(const Packet4ul& a, uint64_t magic, uint64_t addend, int shift) {
   return pudiv_magic_epu64(a, magic, addend, shift);
 }
-#endif  // EIGEN_VECTORIZE_AVX2
+#endif  // EIGEN_VECTORIZE_AVX2 && EIGEN_ARCH_i386_OR_x86_64
 
 }  // end namespace internal
 

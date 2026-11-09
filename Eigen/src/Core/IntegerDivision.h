@@ -405,8 +405,9 @@ struct functor_traits<scalar_int_div_op<Scalar, IsSigned, SignedMultiply>> {
  *
  * The constructor precomputes a multiplier and a shift count from the divisor. Each quotient then costs a
  * double-width multiplication, a few additions and subtractions and a shift or two, which on most hardware is several
- * times cheaper than an integer division, and vectorizes where hardware integer division does not exist. The quotients
- * equal those of the built-in \c / operator, truncated toward zero:
+ * times cheaper than an integer division, and vectorizes where hardware integer division does not exist. Each quotient
+ * is the mathematical quotient truncated toward zero, which is what the built-in \c / operator computes when both
+ * operands have type \c Scalar_:
  *
  * \code
  * Eigen::IntDivider<int> by(d);           // d is known only at run time
@@ -416,9 +417,17 @@ struct functor_traits<scalar_int_div_op<Scalar, IsSigned, SignedMultiply>> {
  * A /= by;                                // A = A / by
  * \endcode
  *
- * The divisor may have any built-in integer type, and its magnitude may exceed the range of \c Scalar_. It must be
- * nonzero, and it must be positive when \c Scalar_ is unsigned. Unlike the built-in operator, which has undefined
- * behavior there, \c lowest() divided by -1 wraps to \c lowest().
+ * The divisor may have any built-in integer type, and its magnitude may exceed the range of \c Scalar_. Quotients use
+ * the divisor's mathematical value, without the built-in operator's usual arithmetic conversions, so a divisor of the
+ * other signedness can give a different quotient: an \c IntDivider of \c int constructed from \c 3u divides -6 to -2,
+ * while <tt>-6 / 3u</tt> is 1431655763. The divisor must be nonzero, and it must be positive when \c Scalar_ is
+ * unsigned. \c lowest() divided by -1 wraps to \c lowest(), where the built-in operator overflows for \c int and wider
+ * types.
+ *
+ * A scalar numerator of another integer type converts to \c Scalar_ first. Its type may be no wider than the wider of
+ * \c Scalar_ and \c int, so that literals and arithmetic promoted to \c int, such as <tt>(a + b) / by</tt>, divide by
+ * an \c IntDivider of a narrower type. A wider integer or a floating-point numerator does not compile, since it would
+ * be truncated.
  *
  * A default-constructed \c IntDivider divides by 1; compute() sets the divisor later, for example in a member that is
  * initialized after construction.
@@ -475,11 +484,17 @@ class IntDivider {
   Functor m_functor;
 };
 
-/** \relates IntDivider \returns \a numerator divided by the divisor of \a divider, truncated toward zero. */
-template <typename Scalar>
-EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE Scalar operator/(const typename IntDivider<Scalar>::Scalar& numerator,
-                                                       const IntDivider<Scalar>& divider) {
-  return divider.divide(numerator);
+/** \relates IntDivider \returns \a numerator divided by the divisor of \a divider, truncated toward zero.
+ *
+ * \a numerator is an integer no wider than the wider of \c Scalar and \c int, and converts to \c Scalar first. */
+template <typename Numerator, typename Scalar, std::enable_if_t<std::is_arithmetic<Numerator>::value, int> = 0>
+EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE Scalar operator/(const Numerator& numerator, const IntDivider<Scalar>& divider) {
+  // Conversions would truncate these silently: 7.5 / IntDivider<int>(2) == 3, (1LL << 40) / IntDivider<int>(1) == 0.
+  // int stays allowed for literals and integer promotion.
+  EIGEN_STATIC_ASSERT(
+      (std::is_integral<Numerator>::value && (sizeof(Numerator) <= sizeof(Scalar) || sizeof(Numerator) <= sizeof(int))),
+      THE_NUMERATOR_MUST_BE_AN_INTEGER_NO_WIDER_THAN_THE_DIVIDER_SCALAR_OR_INT)
+  return divider.divide(static_cast<Scalar>(numerator));
 }
 
 /** \relates IntDivider Divides \a numerator by the divisor of \a divider, truncated toward zero.

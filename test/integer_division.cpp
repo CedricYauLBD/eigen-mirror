@@ -138,23 +138,21 @@ void test_exhaustive_division() {
   }
 }
 
-// One packet of numerators through the kernel. The extremes and the quotient boundaries are where a multiplier or an
-// addend that is off by one shows.
+// Every special value, then at least as many quotient boundaries, through the kernel a packet at a time. The extremes
+// and the boundaries are where a multiplier or an addend that is off by one shows.
 template <typename Scalar, typename Packet, typename Divisor>
 void verify_packet_kernel(Divisor d) {
   constexpr int kSize = internal::unpacket_traits<Packet>::size;
   IntDivider<Scalar> by(d);
-  std::vector<Scalar> special = special_values<Scalar>();
-  Scalar lanes[kSize];
+  std::vector<Scalar> numerators = special_values<Scalar>();
+  size_t special_count = numerators.size();
+  while (numerators.size() < 2 * special_count || numerators.size() % kSize != 0) {
+    numerators.push_back(boundary_numerator<Scalar>(d));
+  }
   Scalar result[kSize];
-  for (size_t next = 0; next < special.size(); next += kSize) {
-    for (int i = 0; i < kSize; ++i) {
-      size_t index = next + size_t(i);
-      lanes[i] = index < special.size() ? special[index] : random_magnitude<Scalar>();
-    }
-    lanes[kSize - 1] = boundary_numerator<Scalar>(d);
-    internal::pstoreu(result, by.functor().packetOp(internal::ploadu<Packet>(lanes)));
-    for (int i = 0; i < kSize; ++i) VERIFY_IS_EQUAL(result[i], reference_quotient(lanes[i], d));
+  for (size_t next = 0; next < numerators.size(); next += kSize) {
+    internal::pstoreu(result, by.functor().packetOp(internal::ploadu<Packet>(numerators.data() + next)));
+    for (int i = 0; i < kSize; ++i) VERIFY_IS_EQUAL(result[i], reference_quotient(numerators[next + i], d));
   }
 }
 
@@ -281,20 +279,40 @@ void test_traits() {
 #if defined(EIGEN_VECTORIZE_SSE2) || defined(EIGEN_VECTORIZE_NEON)
   STATIC_CHECK((internal::functor_traits<internal::scalar_int_div_op<int32_t>>::PacketAccess));
 #endif
-#if defined(EIGEN_VECTORIZE_AVX2) || defined(EIGEN_VECTORIZE_AVX512)
+#if defined(EIGEN_VECTORIZE_AVX2) && EIGEN_ARCH_i386_OR_x86_64
   STATIC_CHECK((internal::functor_traits<internal::scalar_int_div_op<int64_t>>::PacketAccess));
 #endif
   // AVX-512 leaves the unsigned types unvectorized.
 #if (defined(EIGEN_VECTORIZE_SSE2) && !defined(EIGEN_VECTORIZE_AVX512)) || defined(EIGEN_VECTORIZE_NEON)
   STATIC_CHECK((internal::functor_traits<internal::scalar_int_div_op<uint32_t>>::PacketAccess));
 #endif
-#if defined(EIGEN_VECTORIZE_AVX2) && !defined(EIGEN_VECTORIZE_AVX512)
+#if defined(EIGEN_VECTORIZE_AVX2) && !defined(EIGEN_VECTORIZE_AVX512) && EIGEN_ARCH_i386_OR_x86_64
   STATIC_CHECK((internal::functor_traits<internal::scalar_int_div_op<uint64_t>>::PacketAccess));
 #endif
+  // The x86 64-bit kernels take multiply-add constants, which int_div::params stores only where use_multiply_add
+  // holds: on x86, not under Emscripten, which also defines the SSE and AVX2 macros.
+#if defined(EIGEN_VECTORIZE_SSE2) && !EIGEN_ARCH_i386_OR_x86_64
+  STATIC_CHECK(!(internal::functor_traits<internal::scalar_int_div_op<int64_t>>::PacketAccess));
+  STATIC_CHECK(!(internal::functor_traits<internal::scalar_int_div_op<uint64_t>>::PacketAccess));
+#endif
+}
+
+// A scalar numerator of another integer type converts to Scalar first; int is allowed for literals and promotion.
+// failtest/intdivider_float_numerator.cpp and intdivider_wide_numerator.cpp reject the truncating conversions.
+void test_scalar_numerators() {
+  IntDivider<int8_t> by7(7);
+  STATIC_CHECK((std::is_same<decltype(100 / by7), int8_t>::value));
+  VERIFY_IS_EQUAL(100 / by7, int8_t(14));
+  int8_t a = 50, b = 50;
+  VERIFY_IS_EQUAL((a + b) / by7, int8_t(14));
+  VERIFY_IS_EQUAL(int8_t(-128) / IntDivider<int64_t>(-3), int64_t(42));
+  VERIFY_IS_EQUAL(7u / IntDivider<uint16_t>(2), uint16_t(3));
+  VERIFY_IS_EQUAL(int16_t(-9) / IntDivider<int>(2), -4);
 }
 
 EIGEN_DECLARE_TEST(integer_division) {
   CALL_SUBTEST_1(test_traits());
+  CALL_SUBTEST_1(test_scalar_numerators());
   CALL_SUBTEST_1((test_exhaustive_division<uint8_t, uint8_t>()));
   CALL_SUBTEST_1((test_exhaustive_division<int8_t, int8_t>()));
   CALL_SUBTEST_1((test_exhaustive_division<uint8_t, uint16_t>()));
