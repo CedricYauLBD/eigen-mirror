@@ -377,25 +377,26 @@ GeneralizedEigenSolver<MatrixType>& GeneralizedEigenSolver<MatrixType>::computeF
         ++i;
       } else {
         // The 2x2 pencil (S_i, T_i), T_i = diag(a, b), has the eigenvalues eig(S_i diag(b, a)) / (a b). With
-        // T_i = tau diag(a', b') and tau near max(|a|, |b|),
-        //   alpha = eig(M), M = S_i diag(b', a'),  beta = (tau a') b' = a b',
-        // so |alpha| ~ |S_i| and |beta| ~ min(|a|, |b|), as alpha = S(i, i) and beta = T(i, i) for a real eigenvalue;
-        // a b over- or underflows with |T_i|^2. The discriminant p^2 + m01 m10 is formed relative to its largest term,
-        // as in LAPACK's xLANV2. Scaling S_i instead could flush a small m01 or m10 and lose a nearly real pair's
-        // imaginary part.
-        using Scaling = internal::safe_scaling<RealScalar>;
+        // T_i = 2^e diag(a', b'), 2^e the power of two at or above max(|a|, |b|),
+        //   alpha = eig(M), M = S_i diag(b', a'),  beta = (2^e a') b' = a b',
+        // so |a'|, |b'| <= 1, |M| <= |S_i|, |alpha| ~ |S_i| and |beta| ~ min(|a|, |b|), as alpha = S(i, i) and
+        // beta = T(i, i) for a real eigenvalue; a b over- or underflows with |T_i|^2. The discriminant p^2 + m01 m10
+        // is formed relative to its largest term, as in LAPACK's xLANV2. For a complex pair p^2 and m01 m10 have
+        // opposite signs, so p, z and m11 + p are at most |S_i|, and alpha is finite whenever S_i is.
         // NOTE: using diagonal() instead of coeff(i,i) works around an MSVC bug.
-        const Matrix<RealScalar, 2, 1> diagT = mT.diagonal().template segment<2>(i);
-        Matrix<RealScalar, 2, 1> scaledT;
-        const internal::safe_scaling_factors<RealScalar> factorsT = Scaling::scale_to(
-            scaledT, diagT,
-            Scaling::recover_flushed_max_coeff(diagT, diagT.cwiseAbs().template maxCoeff<PropagateNaN>()));
-        const RealScalar aScaled = scaledT.coeff(0), bScaled = scaledT.coeff(1);
-        const RealScalar beta = m_betas.coeffRef(i) = m_betas.coeffRef(i + 1) = (factorsT.scale * aScaled) * bScaled;
+        const RealScalar a = mT.diagonal().coeff(i), b = mT.diagonal().coeff(i + 1);
+        int e = 0;
+        const RealScalar maxT = internal::max_preserving_subnormals(internal::abs_preserving_subnormals(a),
+                                                                    internal::abs_preserving_subnormals(b));
+        if (numext::equal_strict(internal::frexp_preserving_subnormals(maxT, e), RealScalar(0.5))) --e;
+        const RealScalar aScaled = internal::ldexp_preserving_subnormals(a, -e);
+        const RealScalar bScaled = internal::ldexp_preserving_subnormals(b, -e);
+        const RealScalar beta = m_betas.coeffRef(i) = m_betas.coeffRef(i + 1) =
+            internal::ldexp_preserving_subnormals(aScaled, e) * bScaled;
 
         const Matrix<RealScalar, 2, 2> M =
             mS.template block<2, 2>(i, i) * Matrix<RealScalar, 2, 1>(bScaled, aScaled).asDiagonal();
-        const RealScalar p = RealScalar(0.5) * (M.coeff(0, 0) - M.coeff(1, 1));
+        const RealScalar p = RealScalar(0.5) * M.coeff(0, 0) - RealScalar(0.5) * M.coeff(1, 1);
         const RealScalar m01 = M.coeff(0, 1), m10 = M.coeff(1, 0);
         const RealScalar bcMax = numext::maxi(numext::abs(m01), numext::abs(m10));
         const RealScalar bcMin = numext::mini(numext::abs(m01), numext::abs(m10));
