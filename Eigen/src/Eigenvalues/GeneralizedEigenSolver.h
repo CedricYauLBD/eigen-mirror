@@ -382,9 +382,14 @@ GeneralizedEigenSolver<MatrixType>& GeneralizedEigenSolver<MatrixType>::computeF
     ComplexVectorType& cv = m_tmp;
     const MatrixType& mS = m_realQZ.matrixS();
     const MatrixType& mT = m_realQZ.matrixT();
-    // The back substitutions follow LAPACK's xTGEVC, with (alpha, beta) divided by t max|S| max|T|,
-    // t = max(|beta| / max|T|, |alpha| / max|S|, min), one factor at a time, so that |beta| |S(j, k)| <= 1 and
-    // |alpha| |T(j, k)| <= 1. A pivot beta S(j, j) - alpha T(j, j) of modulus below
+    // The back substitutions follow LAPACK's xTGEVC, with
+    //   (alpha, beta) -> (alpha / (t max|S|) * r / max|T|,  beta / (t max|T|) * r / max|S|),
+    //   t = max(|beta| / max|T|, |alpha| / max|S|, min),
+    //   r = max(1, min(max(max|S|, max|T|) min / eps, min(max|S|, max|T|) highest / 2)),
+    // so that |beta| |S(j, k)| <= r and |alpha| |T(j, k)| <= r. With r = 1, 1 / max|S| is subnormal for max|S| > 1 /
+    // min and flushes to 0 under FTZ. r / max|S| and r / max|T| are at most highest / 2 and, unless max|S| / max|T| or
+    // max|T| / max|S| exceeds highest eps / (2 min), at least min / eps, so the scaled beta underflows only where
+    // |beta| / (t max|T|) < eps, and likewise alpha. A pivot beta S(j, j) - alpha T(j, j) of modulus below
     //   smin_j = max(eps sum_k (|beta| |S(j, k)| + |alpha| |T(j, k)|), min),  k over the columns of the solve,
     // the larger of its two rows' for a 2x2 block, is replaced by smin_j: it is 0 where eigenvalue j repeats eigenvalue
     // i, or for beta = 0 = T(j, j). Unlike xTGEVC's floor eps ||.||, the row sums leave accurate small 1x1 pivots of a
@@ -400,6 +405,13 @@ GeneralizedEigenSolver<MatrixType>& GeneralizedEigenSolver<MatrixType>::computeF
     const RealScalar maxT = computeEigenvectors && size > 0
                                 ? numext::maxi(RealScalar(mT.cwiseAbs().maxCoeff()), smallestNormal)
                                 : smallestNormal;
+    // Compares against wanted / halfHighest rather than forming min(max|S|, max|T|) highest / 2, which overflows.
+    const RealScalar wanted = numext::maxi(maxS, maxT) * (smallestNormal / eps);
+    const RealScalar halfHighest = NumTraits<RealScalar>::highest() / RealScalar(2);
+    const RealScalar smaller = numext::mini(maxS, maxT);
+    const RealScalar bound =
+        numext::maxi(RealScalar(1), smaller < wanted / halfHighest ? RealScalar(smaller * halfHighest) : wanted);
+    const RealScalar scaleS = bound / maxS, scaleT = bound / maxT;
     const auto scaleDivisor = [&](const RealScalar& absAlpha, const RealScalar& absBeta) {
       return numext::maxi(numext::maxi(RealScalar(absBeta / maxT), RealScalar(absAlpha / maxS)), smallestNormal);
     };
@@ -423,7 +435,7 @@ GeneralizedEigenSolver<MatrixType>& GeneralizedEigenSolver<MatrixType>::computeF
           v.coeffRef(i) = Scalar(1.0);
           const Scalar alpha = numext::real(m_alphas.coeffRef(i)), beta = m_betas.coeffRef(i);
           const RealScalar divisor = scaleDivisor(numext::abs(alpha), numext::abs(beta));
-          const Scalar scaledAlpha = alpha / divisor / maxS / maxT, scaledBeta = beta / divisor / maxT / maxS;
+          const Scalar scaledAlpha = alpha / divisor / maxS * scaleT, scaledBeta = beta / divisor / maxT * scaleS;
           const RealScalar absAlpha = numext::abs(scaledAlpha), absBeta = numext::abs(scaledBeta);
           for (Index j = i - 1; j >= 0; j--) {
             const Index st = j + 1;
@@ -497,8 +509,8 @@ GeneralizedEigenSolver<MatrixType>& GeneralizedEigenSolver<MatrixType>::computeF
           cv.setZero();
           cv.coeffRef(i + 1) = Scalar(1.0);
           const RealScalar divisor = scaleDivisor(numext::abs(alpha), numext::abs(beta));
-          const ComplexScalar scaledAlpha = alpha / divisor / maxS / maxT;
-          const RealScalar scaledBeta = beta / divisor / maxT / maxS;
+          const ComplexScalar scaledAlpha = alpha / divisor / maxS * scaleT;
+          const RealScalar scaledBeta = beta / divisor / maxT * scaleS;
           const RealScalar absAlpha = numext::abs(scaledAlpha), absBeta = numext::abs(scaledBeta);
           // here, the "static_cast" works around expression template issues.
           cv.coeffRef(i) =

@@ -10,6 +10,7 @@
 
 #define EIGEN_RUNTIME_NO_MALLOC
 #include "main.h"
+#include "fp_control.h"
 #include <limits>
 #include <Eigen/Eigenvalues>
 #include <Eigen/LU>
@@ -203,9 +204,9 @@ void generalized_eigensolver_scaled_complex_pairs() {
 // repeats eigenvalue i, so even A = I, B = 2I returned NaN eigenvectors with Success. For an infinite eigenvalue it
 // returned e_i, which solves B v = 0 only where T(0:i-1, i) = 0. Every eigenpair must have a backward error of O(n
 // eps), also for (c A, c B) with c near the thresholds where the products in the back substitution under- or overflow,
-// and a Jordan block must not overflow the growth of 1 / eps per step that the perturbed pivots allow. Where repeated
-// eigenvalues do not couple in the Schur form, the eigenvectors stay orthonormal, and a graded pencil keeps the
-// accuracy of its small eigenvectors.
+// with or without flush to zero, and a Jordan block must not overflow the growth of 1 / eps per step that the perturbed
+// pivots allow. Where repeated eigenvalues do not couple in the Schur form, the eigenvectors stay orthonormal, and a
+// graded pencil keeps the accuracy of its small eigenvectors.
 template <typename MatrixType>
 void generalized_eigensolver_repeated_eigenvalues() {
   using Scalar = typename MatrixType::Scalar;
@@ -244,26 +245,43 @@ void generalized_eigensolver_repeated_eigenvalues() {
   close << Scalar(1), Scalar(1), Scalar(0), Scalar(1) + Scalar(1024) * eps;
   // c^2 below min (sqrt(min eps)) or above highest (sqrt(highest)) makes max|c A| max|c B| under- or overflow.
   const Scalar smallest = (std::numeric_limits<Scalar>::min)(), highest = NumTraits<Scalar>::highest();
-  for (const Scalar c : {Scalar(1), numext::sqrt(smallest / numext::sqrt(eps)), numext::sqrt(smallest * eps),
-                         numext::sqrt(highest / Scalar(128)), numext::sqrt(highest)}) {
-    const ComplexMatrix v3 = eigenvectors(identity3, identity3, c), v4 = eigenvectors(diagonal, identity4, c);
-    const ComplexMatrix w3 = eigenvectors(identity3, MatrixType(Scalar(2) * identity3), c);
-    if (c == Scalar(1)) {
-      verifyOrthonormal(v3);
-      verifyOrthonormal(v4);
-      verifyOrthonormal(w3);
-    }
-    eigenvectors(close, identity2, c);
-    for (Index n : {3, 8, 30}) {
-      MatrixType jordan = Scalar(2) * MatrixType::Identity(n, n);
-      jordan.diagonal(1).setOnes();
-      eigenvectors(jordan, MatrixType::Identity(n, n), c);
-    }
-  }
-  // The row sums of c [1 1; 0 1/2] overflow for c = 0.75 highest.
+  // The row sums of c [1 1; 0 1/2] overflow for c = 0.75 highest, and 1 / c is subnormal.
   MatrixType upper(2, 2);
   upper << Scalar(1), Scalar(1), Scalar(0), Scalar(0.5);
-  eigenvectors(upper, identity2, Scalar(0.75) * highest);
+  const auto scaledPencils = [&]() {
+    for (const Scalar c : {Scalar(1), numext::sqrt(smallest / numext::sqrt(eps)), numext::sqrt(smallest * eps),
+                           numext::sqrt(highest / Scalar(128)), numext::sqrt(highest)}) {
+      const ComplexMatrix v3 = eigenvectors(identity3, identity3, c), v4 = eigenvectors(diagonal, identity4, c);
+      const ComplexMatrix w3 = eigenvectors(identity3, MatrixType(Scalar(2) * identity3), c);
+      if (c == Scalar(1)) {
+        verifyOrthonormal(v3);
+        verifyOrthonormal(v4);
+        verifyOrthonormal(w3);
+      }
+      eigenvectors(close, identity2, c);
+      for (Index n : {3, 8, 30}) {
+        MatrixType jordan = Scalar(2) * MatrixType::Identity(n, n);
+        jordan.diagonal(1).setOnes();
+        eigenvectors(jordan, MatrixType::Identity(n, n), c);
+      }
+    }
+    eigenvectors(upper, identity2, Scalar(0.75) * highest);
+    // Only one of (c upper, I) and (I, c upper) is near overflow; both have the eigenvectors e_1 and (-2, 1) / sqrt(5).
+    const MatrixType scaledUpper = Scalar(0.75) * highest * upper;
+    for (bool scaleB : {false, true}) {
+      GeneralizedEigenSolver<MatrixType> eig(scaleB ? identity2 : scaledUpper, scaleB ? scaledUpper : identity2);
+      VERIFY_IS_EQUAL(eig.info(), Success);
+      const ComplexMatrix v = eig.eigenvectors();
+      const Index k = numext::abs(v(1, 0)) > numext::abs(v(1, 1)) ? 0 : 1;
+      VERIFY(numext::abs(v(0, k) + Scalar(2) * v(1, k)) <= Scalar(16) * eps);
+    }
+  };
+  scaledPencils();
+  {
+    // A scaling factor of (alpha, beta) of order 1 / max|S| must not flush to 0.
+    const ScopedFlushToZero flush(FlushToZeroMode::Both);
+    if (flush.isSupported()) scaledPencils();
+  }
 
   // A rotation by pi / 2 twice: the complex pair +-i is repeated.
   MatrixType rotations = MatrixType::Zero(4, 4);
