@@ -20,6 +20,36 @@
 
 namespace Eigen {
 
+namespace internal {
+
+// T_i = diag(a, b) = s diag(a', b') with |a'|, |b'| <= 1, for a complex pair; returns beta = (s a') b' = a b'. float
+// and double take s = 2^e, the power of two at or above max(|a|, |b|), through the representation, so a' and b' are
+// exact and s need not be representable. Other scalars need not provide frexp or ldexp: s = max(|a|, |b|).
+template <typename RealScalar>
+RealScalar generalized_eigen_split_pair_diagonal(const RealScalar& a, const RealScalar& b, RealScalar& aScaled,
+                                                 RealScalar& bScaled, true_type) {
+  int e = 0;
+  const RealScalar maxT = max_preserving_subnormals(abs_preserving_subnormals(a), abs_preserving_subnormals(b));
+  if (numext::equal_strict(frexp_preserving_subnormals(maxT, e), RealScalar(0.5))) --e;
+  aScaled = ldexp_preserving_subnormals(a, -e);
+  bScaled = ldexp_preserving_subnormals(b, -e);
+  return ldexp_preserving_subnormals(aScaled, e) * bScaled;
+}
+template <typename RealScalar>
+RealScalar generalized_eigen_split_pair_diagonal(const RealScalar& a, const RealScalar& b, RealScalar& aScaled,
+                                                 RealScalar& bScaled, false_type) {
+  const RealScalar maxT = numext::maxi(numext::abs(a), numext::abs(b));
+  aScaled = a;
+  bScaled = b;
+  if (!numext::is_exactly_zero(maxT)) {
+    aScaled /= maxT;
+    bScaled /= maxT;
+  }
+  return a * bScaled;
+}
+
+}  // namespace internal
+
 /** \eigenvalues_module \ingroup Eigenvalues_Module
  *
  *
@@ -377,22 +407,19 @@ GeneralizedEigenSolver<MatrixType>& GeneralizedEigenSolver<MatrixType>::computeF
         ++i;
       } else {
         // The 2x2 pencil (S_i, T_i), T_i = diag(a, b), has the eigenvalues eig(S_i diag(b, a)) / (a b). With
-        // T_i = 2^e diag(a', b'), 2^e the power of two at or above max(|a|, |b|),
-        //   alpha = eig(M), M = S_i diag(b', a'),  beta = (2^e a') b' = a b',
+        // T_i = s diag(a', b'), s >= max(|a|, |b|) (see generalized_eigen_split_pair_diagonal()),
+        //   alpha = eig(M), M = S_i diag(b', a'),  beta = (s a') b' = a b',
         // so |a'|, |b'| <= 1, |M| <= |S_i|, |alpha| ~ |S_i| and |beta| ~ min(|a|, |b|), as alpha = S(i, i) and
         // beta = T(i, i) for a real eigenvalue; a b over- or underflows with |T_i|^2. The discriminant p^2 + m01 m10
         // is formed relative to its largest term, as in LAPACK's xLANV2. For a complex pair p^2 and m01 m10 have
         // opposite signs, so p, z and m11 + p are at most |S_i|, and alpha is finite whenever S_i is.
         // NOTE: using diagonal() instead of coeff(i,i) works around an MSVC bug.
         const RealScalar a = mT.diagonal().coeff(i), b = mT.diagonal().coeff(i + 1);
-        int e = 0;
-        const RealScalar maxT = internal::max_preserving_subnormals(internal::abs_preserving_subnormals(a),
-                                                                    internal::abs_preserving_subnormals(b));
-        if (numext::equal_strict(internal::frexp_preserving_subnormals(maxT, e), RealScalar(0.5))) --e;
-        const RealScalar aScaled = internal::ldexp_preserving_subnormals(a, -e);
-        const RealScalar bScaled = internal::ldexp_preserving_subnormals(b, -e);
+        RealScalar aScaled, bScaled;
         const RealScalar beta = m_betas.coeffRef(i) = m_betas.coeffRef(i + 1) =
-            internal::ldexp_preserving_subnormals(aScaled, e) * bScaled;
+            internal::generalized_eigen_split_pair_diagonal(
+                a, b, aScaled, bScaled,
+                internal::bool_constant<internal::use_subnormal_preserving_scaling<RealScalar, RealScalar>::value>());
 
         const Matrix<RealScalar, 2, 2> M =
             mS.template block<2, 2>(i, i) * Matrix<RealScalar, 2, 1>(bScaled, aScaled).asDiagonal();
