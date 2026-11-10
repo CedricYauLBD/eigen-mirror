@@ -244,13 +244,15 @@ void generalized_eigensolver_repeated_eigenvalues() {
   MatrixType close(2, 2);
   close << Scalar(1), Scalar(1), Scalar(0), Scalar(1) + Scalar(1024) * eps;
   // c^2 below min (sqrt(min eps)) or above highest (sqrt(highest)) makes max|c A| max|c B| under- or overflow.
+  // Computed outside the flush-to-zero scope below, which would flush the subnormal min eps, and so c, to 0.
   const Scalar smallest = (std::numeric_limits<Scalar>::min)(), highest = NumTraits<Scalar>::highest();
+  const Scalar scales[] = {Scalar(1), numext::sqrt(smallest / numext::sqrt(eps)), numext::sqrt(smallest * eps),
+                           numext::sqrt(highest / Scalar(128)), numext::sqrt(highest)};
   // The row sums of c [1 1; 0 1/2] overflow for c = 0.75 highest, and 1 / c is subnormal.
   MatrixType upper(2, 2);
   upper << Scalar(1), Scalar(1), Scalar(0), Scalar(0.5);
   const auto scaledPencils = [&]() {
-    for (const Scalar c : {Scalar(1), numext::sqrt(smallest / numext::sqrt(eps)), numext::sqrt(smallest * eps),
-                           numext::sqrt(highest / Scalar(128)), numext::sqrt(highest)}) {
+    for (const Scalar c : scales) {
       const ComplexMatrix v3 = eigenvectors(identity3, identity3, c), v4 = eigenvectors(diagonal, identity4, c);
       const ComplexMatrix w3 = eigenvectors(identity3, MatrixType(Scalar(2) * identity3), c);
       if (c == Scalar(1)) {
