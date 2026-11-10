@@ -191,6 +191,92 @@ struct LowerBoundIndex {
   bool found = false;
 };
 
+// Sums (i, v) pairs with lo <= i <= hi in storage the caller owns, keeping the slots in index order, so one scan
+// yields the sorted, duplicate-free pattern: a column of a sparse product, a row of an incomplete factor.
+//
+// Open addressing with the monotone hash
+//
+//   h(i) = floor((i - lo) s / 2^k),   s = floor(m 2^k / span),   span = hi - lo + 1,   m < span,
+//
+// k the width of StorageIndex. h(i) <= (i - lo) m / span < m, and it is nondecreasing in i. A probe stops at the first
+// key >= i; an insertion there shifts the run up to the next empty slot right by one. Slot order therefore follows
+// key order. Probes never wrap: with at most c = min(maxKeys, span) distinct keys, every run ends below m + c.
+// m = 1.5 c (load 2/3); at load 1, runs grow long on clustered columns. When m >= span, h(i) = i - lo (direct).
+//
+// Empty slots hold highest(), above any index, so a probe tests one comparison per slot.
+template <typename Scalar, typename StorageIndex>
+class ordered_hash_accumulator {
+  using Unsigned = std::make_unsigned_t<StorageIndex>;
+  static constexpr StorageIndex kEmpty = NumTraits<StorageIndex>::highest();
+
+ public:
+  // Slots needed for keys in [lo, hi] with at most maxKeys distinct keys.
+  static Index size(StorageIndex lo, StorageIndex hi, Index maxKeys) {
+    Index span = Index(hi) - Index(lo) + 1, m = table_size(span, maxKeys);
+    return m >= span ? span : m + numext::mini(maxKeys, span);
+  }
+
+  // Binds the table to keys[0, size()) and values[0, size()) and empties it.
+  void init(StorageIndex* keys, Scalar* values, StorageIndex lo, StorageIndex hi, Index maxKeys) {
+    Index span = Index(hi) - Index(lo) + 1, m = table_size(span, maxKeys);
+    m_keys = keys;
+    m_values = values;
+    m_lo = lo;
+    m_top = 0;
+    m_direct = m >= span;
+    if (!m_direct) m_scale = int_div::div_shifted(Unsigned(m), Unsigned(span));
+    std::fill_n(keys, size(lo, hi, maxKeys), kEmpty);
+  }
+
+  // The value of index i, inserted as zero if absent. The reference is valid until the next insertion.
+  Scalar& coeffRef(StorageIndex i) {
+    Unsigned x = Unsigned(i - m_lo);
+    Index s = m_direct ? Index(x) : Index(mulhi(x, m_scale));
+    while (m_keys[s] < i) ++s;
+    if (m_keys[s] != i) {
+      Index q = s;
+      while (m_keys[q] != kEmpty) ++q;
+      m_top = numext::maxi(m_top, q);
+      for (; q > s; --q) m_keys[q] = m_keys[q - 1], m_values[q] = m_values[q - 1];
+      m_keys[s] = i;
+      m_values[s] = Scalar(0);
+    }
+    return m_values[s];
+  }
+
+  // Moves the n entries to keys[0, n) and values[0, n) in increasing index order and returns n. The write slot never
+  // passes the read slot, so the table may sit where its output belongs. init() must run before the next use.
+  Index compact() {
+    Index n = 0;
+    for (Index s = 0; s <= m_top; ++s)
+      if (m_keys[s] != kEmpty) m_keys[n] = m_keys[s], m_values[n] = m_values[s], ++n;
+    return n;
+  }
+
+ private:
+  static Index table_size(Index span, Index maxKeys) {
+    Index c = numext::mini(maxKeys, span);
+    return numext::maxi<Index>(1, c + c / 2);
+  }
+  // floor(a b / 2^k).
+  template <typename U = Unsigned, std::enable_if_t<(sizeof(U) < 8), int> = 0>
+  static U mulhi(U a, U b) {
+    using Wide = int_div::double_width_t<U>;
+    return U((Wide(a) * Wide(b)) >> (CHAR_BIT * sizeof(U)));
+  }
+  template <typename U = Unsigned, std::enable_if_t<sizeof(U) == 8, int> = 0>
+  static U mulhi(U a, U b) {
+    return int_div::umulhi(a, b);
+  }
+
+  StorageIndex* m_keys = nullptr;
+  Scalar* m_values = nullptr;
+  StorageIndex m_lo = 0;
+  Unsigned m_scale = 0;
+  Index m_top = 0;
+  bool m_direct = true;
+};
+
 }  // end namespace internal
 
 /** \ingroup SparseCore_Module
