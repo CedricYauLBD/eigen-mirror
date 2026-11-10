@@ -486,6 +486,69 @@ void real_qz_leaves_rand_alone() {
   std::srand(reseed);
 }
 
+// Where both diagonal entries next to S(k, k-1) are exactly zero, the deflation test compared S(k, k-1) with ||S||. The
+// subdiagonal entry of a small block [0 -g; g 0] was then set to zero itself, and the pair +-ig came back as 0, 0:
+//   a = [R X; 0 g R], R = [0 -1; 1 0], g = eps / 16: +-i and +-ig,
+//   a = skew-symmetric tridiagonal (1, h, h^2), h^2 < eps: +-i sigma1 and +-i sigma2, with
+//       sigma1^2 = (t + sqrt(t^2 - 4 h^4)) / 2, t = 1 + h^2 + h^4, and sigma2 = h^2 / sigma1.
+template <typename MatrixType>
+void real_qz_zero_diagonal() {
+  using Scalar = typename MatrixType::Scalar;
+  const Scalar eps = NumTraits<Scalar>::epsilon();
+  const auto verify = [&eps](const MatrixType& a, const Scalar& sigmaLarge, const Scalar& sigmaSmall) {
+    const GeneralizedEigenSolver<MatrixType> eig(a, MatrixType::Identity(4, 4), false);
+    VERIFY_IS_EQUAL(eig.info(), Success);
+    // Empirical, as in real_qz_graded_accuracy: the measured error is 0, against 1 for a pair that is lost.
+    const Scalar tolerance = Scalar(16 * 4) * eps;
+    Index smallCount = 0;
+    for (Index i = 0; i < 4; ++i) {
+      const Scalar re = numext::real(eig.eigenvalues()(i)), im = numext::abs(numext::imag(eig.eigenvalues()(i)));
+      const bool isSmall = im < numext::sqrt(sigmaLarge) * numext::sqrt(sigmaSmall);
+      const Scalar sigma = isSmall ? sigmaSmall : sigmaLarge;
+      if (isSmall) ++smallCount;
+      VERIFY(numext::abs(re) <= tolerance * sigma);
+      VERIFY(numext::abs(im - sigma) <= tolerance * sigma);
+    }
+    VERIFY_IS_EQUAL(smallCount, Index(2));
+  };
+  const Scalar g = eps / Scalar(16);
+  MatrixType blocks(4, 4);
+  blocks << Scalar(0), Scalar(-1), Scalar(0.5), Scalar(-0.25), Scalar(1), Scalar(0), Scalar(0.75), Scalar(0.5),
+      Scalar(0), Scalar(0), Scalar(0), -g, Scalar(0), Scalar(0), g, Scalar(0);
+  verify(blocks, Scalar(1), g);
+  const Scalar h = numext::ldexp(Scalar(1), -((NumTraits<Scalar>::digits() + 3) / 2 + 2)), h2 = h * h;
+  MatrixType skew = MatrixType::Zero(4, 4);
+  skew(1, 0) = Scalar(1);
+  skew(2, 1) = h;
+  skew(3, 2) = h2;
+  skew.template triangularView<StrictlyUpper>() = -skew.transpose();
+  const Scalar t = Scalar(1) + h2 + h2 * h2;
+  const Scalar sigma1 = numext::sqrt((t + numext::sqrt(t * t - Scalar(4) * h2 * h2)) / Scalar(2));
+  verify(skew, sigma1, h2 / sigma1);
+}
+
+// The deflation test keeps a tiny S(f+1, f) on top of a block where its neighboring diagonal entries are zero or as
+// small. The shift vector of the next step, which divides by that entry, then overflowed, and S and T filled with NaN:
+//   a = [d -1 0 1; u d -1 0; 0 1 0 -1; 0 0 1 0], b = diag(1, 1, t, t), u = 4 realmin / eps, t = eps^(3/4), d = 0 or u.
+template <typename MatrixType>
+void real_qz_tiny_subdiagonal() {
+  using Scalar = typename MatrixType::Scalar;
+  const Scalar eps = NumTraits<Scalar>::epsilon();
+  const Scalar u = Scalar(4) * (std::numeric_limits<Scalar>::min)() / eps, t = numext::pow(eps, Scalar(0.75));
+  for (const Scalar d : {Scalar(0), u}) {
+    MatrixType a(4, 4), b = MatrixType::Zero(4, 4);
+    a << d, Scalar(-1), Scalar(0), Scalar(1), u, d, Scalar(-1), Scalar(0), Scalar(0), Scalar(1), Scalar(0), Scalar(-1),
+        Scalar(0), Scalar(0), Scalar(1), Scalar(0);
+    b.diagonal() << Scalar(1), Scalar(1), t, t;
+    const RealQZ<MatrixType> qz(a, b);
+    VERIFY_IS_EQUAL(qz.info(), Success);
+    // O(n eps), as in real_qz_repeated_eigenvalues.
+    const Scalar tolerance = Scalar(128 * 4) * eps;
+    VERIFY((a - qz.matrixQ() * qz.matrixS() * qz.matrixZ()).norm() <= tolerance * a.norm());
+    VERIFY((b - qz.matrixQ() * qz.matrixT() * qz.matrixZ()).norm() <= tolerance * b.norm());
+  }
+}
+
 EIGEN_DECLARE_TEST(real_qz) {
   CALL_SUBTEST_2((real_qz_no_malloc<MatrixXd>()));
   CALL_SUBTEST_1((real_qz_extreme_scaling<MatrixXf>()));
@@ -513,6 +576,12 @@ EIGEN_DECLARE_TEST(real_qz) {
   CALL_SUBTEST_1((real_qz_leaves_rand_alone<MatrixXf>()));
   CALL_SUBTEST_2((real_qz_leaves_rand_alone<MatrixXd>()));
   CALL_SUBTEST_7((real_qz_leaves_rand_alone<Matrix<long double, Dynamic, Dynamic>>()));
+  CALL_SUBTEST_1((real_qz_zero_diagonal<MatrixXf>()));
+  CALL_SUBTEST_2((real_qz_zero_diagonal<MatrixXd>()));
+  CALL_SUBTEST_7((real_qz_zero_diagonal<Matrix<long double, Dynamic, Dynamic>>()));
+  CALL_SUBTEST_1((real_qz_tiny_subdiagonal<MatrixXf>()));
+  CALL_SUBTEST_2((real_qz_tiny_subdiagonal<MatrixXd>()));
+  CALL_SUBTEST_7((real_qz_tiny_subdiagonal<Matrix<long double, Dynamic, Dynamic>>()));
 
   int s = 0;
   for (int i = 0; i < g_repeat; i++) {

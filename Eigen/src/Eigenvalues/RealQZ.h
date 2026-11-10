@@ -232,7 +232,7 @@ class RealQZ {
   Index m_maxIters;
   bool m_isInitialized;
   bool m_computeQZ;
-  Scalar m_normOfT, m_normOfS;
+  Scalar m_normOfT;
   Index m_global_iter;
 
   using Vector3s = Matrix<Scalar, 3, 1>;
@@ -294,10 +294,9 @@ void RealQZ<MatrixType>::hessenbergTriangular() {
   }
 }
 
-/** \internal Computes vector L1 norms of S and T when in Hessenberg-Triangular form already */
+/** \internal Computes the vector L1 norm of T when in Hessenberg-Triangular form already */
 template <typename MatrixType>
 inline void RealQZ<MatrixType>::computeNorms() {
-  m_normOfS = internal::hessenberg_abs_sum<Upper>(m_S);
   m_normOfT = internal::triangular_abs_sum<Upper>(m_T);
 }
 
@@ -328,8 +327,18 @@ inline Index RealQZ<MatrixType>::findSmallSubdiagEntry(Index iu) {
                                         numext::sqrt(numext::abs(m_S.coeff(res - 2, res - 1))),
                                     numext::sqrt(numext::abs(m_S.coeff(res + 1, res))) *
                                         numext::sqrt(numext::abs(m_S.coeff(res, res + 1))));
-    if (numext::is_exactly_zero(s)) s = m_normOfS;
-    // <=, so that an exact zero deflates also where s is 0, e.g. for S = 0.
+    // Both diagonal entries vanish for a pencil with a checkerboard zero pattern (eigenvalues in +- pairs), and can
+    // stay zero through the iteration. The scale is then twice the geometric mean of the neighboring subdiagonal
+    // entries: in a geometrically graded pencil D H D it has the grade of S(res, res-1), while ||S|| or the larger
+    // neighbor would deflate the subdiagonal of a small block. At either end of the active block that mean is zero,
+    // and eps s underflows for s < realmin / eps: there only an entry below realmin deflates.
+    if (numext::is_exactly_zero(s)) {
+      if (res > 1 && res + 1 < m_S.rows())
+        s = Scalar(2) * numext::sqrt(numext::abs(m_S.coeff(res - 1, res - 2))) *
+            numext::sqrt(numext::abs(m_S.coeff(res + 1, res)));
+      s = numext::maxi<Scalar>(s, (std::numeric_limits<Scalar>::min)() / NumTraits<Scalar>::epsilon());
+    }
+    // <=, so that an exact zero deflates also where s is 0: a Scalar without numeric_limits has no floor.
     if (numext::abs(m_S.coeff(res, res - 1)) <= NumTraits<Scalar>::epsilon() * s) break;
     res--;
   }
@@ -509,6 +518,15 @@ inline void RealQZ<MatrixType>::step(Index f, Index l, Index iter, internal::inv
     y = (a22 / b22 - a11 / b11) - (a21 / b11) * (b12 / b22) - (a88 / b88 - a11 / b11) - (a99 / b99 - a11 / b11) +
         (a98 / b88) * (b89 / b99);
     z = a32 / b22;
+    // S(f+1, f) is not negligible, but it can be tiny against the rest of the block, and dividing by it then overflows
+    // x. Only the direction of (x, y, z) matters: multiplied by a21 / b11, no term divides by a21.
+    if (!(numext::isfinite)(x)) {
+      const Scalar scale = a21 / b11;
+      x = (a88 / b88 - a11 / b11) * (a99 / b99 - a11 / b11) - (a89 / b99) * (a98 / b88) +
+          (a98 / b88) * (b89 / b99) * (a11 / b11) + (a12 / b22 - (a11 / b11) * (b12 / b22)) * scale;
+      y *= scale;
+      z *= scale;
+    }
   }
 
   JRs G;
@@ -622,7 +640,7 @@ RealQZ<MatrixType>& RealQZ<MatrixType>::computeInPlace(bool computeQZ) {
 
   // entrance point: hessenberg triangular decomposition
   hessenbergTriangular();
-  // compute L1 vector norms of T, S into m_normOfS, m_normOfT
+  // compute the L1 vector norm of T into m_normOfT
   computeNorms();
 
   Index l = dim - 1, f, local_iter = 0;
