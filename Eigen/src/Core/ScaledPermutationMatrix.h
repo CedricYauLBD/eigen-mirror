@@ -168,7 +168,7 @@ class ScaledPermutationBase : public EigenBase<Derived> {
   }
 
   /** \returns the determinant, the permutation's sign times the product of the scales */
-  Scalar determinant() const {
+  constexpr Scalar determinant() const {
     internal::scaled_product<Scalar> det = internal::scaled_prod(scales());
     det.multiply(Scalar(RealScalar(permutation().determinant())));
     return det.value();
