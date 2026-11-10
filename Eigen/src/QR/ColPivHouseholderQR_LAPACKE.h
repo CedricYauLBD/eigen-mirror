@@ -109,8 +109,8 @@ struct ColPivHouseholderQR_LAPACKE_impl {
     isInitialized = true;
   }
 
-  static void init(Index rows, Index cols, HCoeffsType& hCoeffs, PermutationType& colsPermutation,
-                   bool& usePrescribedThreshold, bool& isInitialized) {
+  static constexpr void init(Index rows, Index cols, HCoeffsType& hCoeffs, PermutationType& colsPermutation,
+                             bool& usePrescribedThreshold, bool& isInitialized) {
     Index diag = numext::mini(rows, cols);
     hCoeffs.resize(diag);
     colsPermutation.resize(cols);
@@ -121,7 +121,11 @@ struct ColPivHouseholderQR_LAPACKE_impl {
 
 #define COLPIVQR_LAPACKE_COMPUTEINPLACE(EIGTYPE)                                                                   \
   template <>                                                                                                      \
-  inline void ColPivHouseholderQR<EIGTYPE, lapack_int>::computeInPlace() {                                         \
+  constexpr void ColPivHouseholderQR<EIGTYPE, lapack_int>::computeInPlace() {                                      \
+    if (internal::is_constant_evaluated()) {                                                                       \
+      computeInPlaceGeneric();                                                                                     \
+      return;                                                                                                      \
+    }                                                                                                              \
     ColPivHouseholderQR_LAPACKE_impl<MatrixType>::run(m_qr, m_hCoeffs, m_colsPermutation, m_nonzero_pivots,        \
                                                       m_maxpivot, m_usePrescribedThreshold, m_prescribedThreshold, \
                                                       m_det_p, m_isInitialized);                                   \
@@ -129,7 +133,7 @@ struct ColPivHouseholderQR_LAPACKE_impl {
 
 #define COLPIVQR_LAPACKE_INIT(EIGTYPE)                                                                            \
   template <>                                                                                                     \
-  inline void ColPivHouseholderQR<EIGTYPE, lapack_int>::init(Index rows, Index cols) {                            \
+  constexpr void ColPivHouseholderQR<EIGTYPE, lapack_int>::init(Index rows, Index cols) {                         \
     ColPivHouseholderQR_LAPACKE_impl<MatrixType>::init(rows, cols, m_hCoeffs, m_colsPermutation, m_isInitialized, \
                                                        m_usePrescribedThreshold);                                 \
   }
