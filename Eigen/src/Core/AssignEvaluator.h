@@ -352,12 +352,10 @@ template <typename Kernel, int Traversal = Kernel::AssignmentTraits::Traversal,
 struct dense_assignment_loop {
   // Always inlined so the loop lands in the caller that owns the evaluators (see the slice traversal).
   EIGEN_DEVICE_FUNC static EIGEN_ALWAYS_INLINE constexpr void run(Kernel& kernel) {
-#ifdef __cpp_lib_is_constant_evaluated
     if (internal::is_constant_evaluated())
       dense_assignment_loop_impl<Kernel, Traversal == AllAtOnceTraversal ? AllAtOnceTraversal : DefaultTraversal,
                                  NoUnrolling>::run(kernel);
     else
-#endif
       dense_assignment_loop_impl<Kernel, Traversal, Unrolling>::run(kernel);
   }
 };
