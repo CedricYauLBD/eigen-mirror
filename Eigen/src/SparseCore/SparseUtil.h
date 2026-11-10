@@ -191,47 +191,75 @@ struct LowerBoundIndex {
   bool found = false;
 };
 
+// Maps [lo, hi] onto [0, m) monotonically:
+//
+//   h(i) = floor((i - lo) s / 2^k),   s = floor(m 2^k / span),   span = hi - lo + 1,
+//
+// k the width of StorageIndex. For m < span, s < 2^k and h(i) <= (i - lo) m / span < m. For m >= span, h(i) = i - lo
+// (direct), and the range is [0, span).
+template <typename StorageIndex>
+class monotone_hash {
+  using Unsigned = std::make_unsigned_t<StorageIndex>;
+
+ public:
+  monotone_hash() = default;
+  monotone_hash(StorageIndex lo, StorageIndex hi, Index m) { compute(lo, hi, m); }
+
+  void compute(StorageIndex lo, StorageIndex hi, Index m) {
+    Index span = Index(hi) - Index(lo) + 1;
+    m_lo = lo;
+    m_direct = m >= span;
+    m_range = m_direct ? span : m;
+    if (!m_direct) m_scale = int_div::div_shifted(Unsigned(m), Unsigned(span));
+  }
+
+  Index operator()(StorageIndex i) const {
+    Unsigned x = Unsigned(i - m_lo);
+    return m_direct ? Index(x) : Index(int_div::umulhi(x, m_scale));
+  }
+
+  // h maps into [0, range()); direct() means h is one-to-one.
+  Index range() const { return m_range; }
+  bool direct() const { return m_direct; }
+
+ private:
+  StorageIndex m_lo = 0;
+  Unsigned m_scale = 0;
+  Index m_range = 1;
+  bool m_direct = true;
+};
+
 // Sums (i, v) pairs with lo <= i <= hi in storage the caller owns, keeping the slots in index order, so one scan
 // yields the sorted, duplicate-free pattern: a column of a sparse product, a row of an incomplete factor.
 //
-// Open addressing with the monotone hash
-//
-//   h(i) = floor((i - lo) s / 2^k),   s = floor(m 2^k / span),   span = hi - lo + 1,   m < span,
-//
-// k the width of StorageIndex. h(i) <= (i - lo) m / span < m, and it is nondecreasing in i. A probe stops at the first
-// key >= i; an insertion there shifts the run up to the next empty slot right by one. Slot order therefore follows
-// key order. Probes never wrap: with at most c = min(maxKeys, span) distinct keys, every run ends below m + c.
-// m = 1.5 c (load 2/3); at load 1, runs grow long on clustered columns. When m >= span, h(i) = i - lo (direct).
+// Open addressing with monotone_hash and ordered linear probing: a probe stops at the first key >= i, and an insertion
+// there shifts the run up to the next empty slot right by one, so slot order follows key order. Probes never wrap:
+// with at most c = min(maxKeys, span) distinct keys, every run ends below m + c. m = 1.5 c (load 2/3); at load 1,
+// runs grow long on clustered columns. A direct hash needs no tail.
 //
 // Empty slots hold highest(), above any index, so a probe tests one comparison per slot.
 template <typename Scalar, typename StorageIndex>
 class ordered_hash_accumulator {
-  using Unsigned = std::make_unsigned_t<StorageIndex>;
   static constexpr StorageIndex kEmpty = NumTraits<StorageIndex>::highest();
 
  public:
   // Slots needed for keys in [lo, hi] with at most maxKeys distinct keys.
   static Index size(StorageIndex lo, StorageIndex hi, Index maxKeys) {
-    Index span = Index(hi) - Index(lo) + 1, m = table_size(span, maxKeys);
-    return m >= span ? span : m + numext::mini(maxKeys, span);
+    return table_size(monotone_hash<StorageIndex>(lo, hi, buckets(lo, hi, maxKeys)), maxKeys);
   }
 
   // Binds the table to keys[0, size()) and values[0, size()) and empties it.
   void init(StorageIndex* keys, Scalar* values, StorageIndex lo, StorageIndex hi, Index maxKeys) {
-    Index span = Index(hi) - Index(lo) + 1, m = table_size(span, maxKeys);
+    m_hash.compute(lo, hi, buckets(lo, hi, maxKeys));
     m_keys = keys;
     m_values = values;
-    m_lo = lo;
     m_top = 0;
-    m_direct = m >= span;
-    if (!m_direct) m_scale = int_div::div_shifted(Unsigned(m), Unsigned(span));
-    std::fill_n(keys, size(lo, hi, maxKeys), kEmpty);
+    std::fill_n(keys, table_size(m_hash, maxKeys), kEmpty);
   }
 
   // The value of index i, inserted as zero if absent. The reference is valid until the next insertion.
   Scalar& coeffRef(StorageIndex i) {
-    Unsigned x = Unsigned(i - m_lo);
-    Index s = m_direct ? Index(x) : Index(mulhi(x, m_scale));
+    Index s = m_hash(i);
     while (m_keys[s] < i) ++s;
     if (m_keys[s] != i) {
       Index q = s;
@@ -254,27 +282,18 @@ class ordered_hash_accumulator {
   }
 
  private:
-  static Index table_size(Index span, Index maxKeys) {
-    Index c = numext::mini(maxKeys, span);
+  static Index buckets(StorageIndex lo, StorageIndex hi, Index maxKeys) {
+    Index c = numext::mini(maxKeys, Index(hi) - Index(lo) + 1);
     return numext::maxi<Index>(1, c + c / 2);
   }
-  // floor(a b / 2^k).
-  template <typename U = Unsigned, std::enable_if_t<(sizeof(U) < 8), int> = 0>
-  static U mulhi(U a, U b) {
-    using Wide = int_div::double_width_t<U>;
-    return U((Wide(a) * Wide(b)) >> (CHAR_BIT * sizeof(U)));
-  }
-  template <typename U = Unsigned, std::enable_if_t<sizeof(U) == 8, int> = 0>
-  static U mulhi(U a, U b) {
-    return int_div::umulhi(a, b);
+  static Index table_size(const monotone_hash<StorageIndex>& h, Index maxKeys) {
+    return h.direct() ? h.range() : h.range() + numext::mini(maxKeys, h.range());
   }
 
+  monotone_hash<StorageIndex> m_hash;
   StorageIndex* m_keys = nullptr;
   Scalar* m_values = nullptr;
-  StorageIndex m_lo = 0;
-  Unsigned m_scale = 0;
   Index m_top = 0;
-  bool m_direct = true;
 };
 
 }  // end namespace internal

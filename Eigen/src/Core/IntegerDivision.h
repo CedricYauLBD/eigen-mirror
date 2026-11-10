@@ -128,6 +128,13 @@ struct use_multiply_add : std::integral_constant<bool, (sizeof(Unsigned) < 8) ||
 template <typename Unsigned>
 using double_width_t = std::conditional_t<(sizeof(Unsigned) < 4), uint32_t, uint64_t>;
 
+// floor(a b / 2^k) for k < 64.
+template <typename Unsigned, std::enable_if_t<(sizeof(Unsigned) < 8), int> = 0>
+EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE Unsigned umulhi(Unsigned a, Unsigned b) {
+  using Wide = double_width_t<Unsigned>;
+  return static_cast<Unsigned>((static_cast<Wide>(a) * b) >> (CHAR_BIT * sizeof(Unsigned)));
+}
+
 // floor((a b + c) / 2^64), which fits in 64 bits for a, b, c < 2^64.
 template <typename Unsigned, std::enable_if_t<sizeof(Unsigned) == 8, int> = 0>
 EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE Unsigned umuladdhi(Unsigned a, Unsigned b, Unsigned c) {
