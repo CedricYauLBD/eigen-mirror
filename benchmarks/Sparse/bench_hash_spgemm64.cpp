@@ -141,6 +141,79 @@ static void hash_product(const SpMat& A, const SpMat& B, SpMat& C) {
   C.finalize();
 }
 
+// Same table, borrowed from C: column j's table occupies C's free storage starting at nnz(C[:, :j]), and the
+// sorted scan compacts it left in place (the write slot never passes the read slot).
+template <typename Hash>
+static void borrowed_product(const SpMat& A, const SpMat& B, SpMat& C) {
+  const Index rows = A.rows(), cols = B.cols();
+  const I* Ap = A.outerIndexPtr();
+  const I* Ai = A.innerIndexPtr();
+  const double* Ax = A.valuePtr();
+  constexpr I kEmpty = -1;
+  Hash h;
+  C.resize(rows, cols);
+  C.reserve(A.nonZeros() + B.nonZeros());
+  I* Cp = C.outerIndexPtr();
+  I nz = 0;
+  for (Index j = 0; j < cols; ++j) {
+    Cp[j] = nz;
+    I lo = rows, hi = -1, bound = 0;
+    for (SpMat::InnerIterator it(B, j); it; ++it) {
+      const I k = it.index(), b = Ap[k], e = Ap[k + 1];
+      if (b == e) continue;
+      lo = std::min(lo, Ai[b]);
+      hi = std::max(hi, Ai[e - 1]);
+      bound += e - b;
+    }
+    if (bound == 0) continue;
+    const I span = hi - lo + 1, cap = std::min(bound, span);
+    I m = std::max<I>(1, cap * 3 / 2);
+    const bool direct = m >= span;
+    if (direct)
+      m = span;
+    else
+      h.set(m, span);
+    const I size = direct ? span : m + cap;
+    if (C.data().allocatedSize() < nz + size) {
+      C.resizeNonZeros(nz);
+      C.data().reserve(std::max<I>(size, nz));
+    }
+    I* K = C.innerIndexPtr() + nz;
+    double* W = C.valuePtr() + nz;
+    std::fill(K, K + size, kEmpty);
+    I top = 0;
+    for (SpMat::InnerIterator it(B, j); it; ++it) {
+      const double y = it.value();
+      const I k = it.index();
+      for (I p = Ap[k]; p < Ap[k + 1]; ++p) {
+        const I i = Ai[p];
+        const double v = Ax[p] * y;
+        I s = direct ? i - lo : h(i - lo);
+        while (K[s] != kEmpty && K[s] < i) ++s;
+        if (K[s] == i) {
+          W[s] += v;
+        } else {
+          if (K[s] != kEmpty) {
+            I q = s;
+            while (K[q] != kEmpty) ++q;
+            top = std::max(top, q);
+            for (; q > s; --q) K[q] = K[q - 1], W[q] = W[q - 1];
+          }
+          K[s] = i;
+          W[s] = v;
+          top = std::max(top, s);
+        }
+      }
+    }
+    I w = 0;
+    for (I s = 0; s <= top; ++s)
+      if (K[s] != kEmpty) K[w] = K[s], W[w] = W[s], ++w;
+    nz += w;
+  }
+  Cp[cols] = nz;
+  C.resizeNonZeros(nz);
+}
+
 static void dense_product(const SpMat& A, const SpMat& B, SpMat& C) {
   const Index rows = A.rows(), cols = B.cols();
   const I* Ap = A.outerIndexPtr();
@@ -216,4 +289,5 @@ BENCHMARK_TEMPLATE(BM, hash_product<IntDivSigned>)->DenseRange(0, 4)->Unit(bench
 BENCHMARK_TEMPLATE(BM, hash_product<IntDivUnsigned>)->DenseRange(0, 4)->Unit(benchmark::kMillisecond);
 #endif
 BENCHMARK_TEMPLATE(BM, hash_product<FixedPoint>)->DenseRange(0, 4)->Unit(benchmark::kMillisecond);
+BENCHMARK_TEMPLATE(BM, borrowed_product<FixedPoint>)->DenseRange(0, 4)->Unit(benchmark::kMillisecond);
 BENCHMARK_MAIN();
