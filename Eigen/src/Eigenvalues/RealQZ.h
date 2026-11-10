@@ -318,10 +318,10 @@ inline Index RealQZ<MatrixType>::findSmallSubdiagEntry(Index iu) {
   Index res = iu;
   while (res > 0) {
     // The diagonal entries of a 2x2 block with complex eigenvalues a +- ib estimate only a. Between two such blocks, at
-    // r = res - 2 and r = res, the scale adds 2 min |b|, with |b| ~ sqrt(|S(r+1, r) S(r, r+1)|) as xLAQR3 measures a
-    // 2x2 block: between the blocks of a repeated pair +-i, a = 0, the diagonal entries are rounding noise, and a
-    // negligible S(res, res-1) would otherwise never deflate. The smaller block bounds the term, so a graded pencil
-    // keeps the relative accuracy of its small eigenvalues.
+    // r = res - 2 and r = res, the scale adds 2 min c, c = sqrt(|S(r+1, r) S(r, r+1)|), as xLAQR3 measures a 2x2
+    // block: between the blocks of a repeated pair +-i the diagonal is rounding noise, and a negligible S(res, res-1)
+    // would otherwise never deflate. For T = I, |b| <= c <= |a +- ib| + min |S(k, k)|, so the smaller block bounds
+    // the term and a graded pencil keeps its small eigenvalues' relative accuracy. A real block has no such bound.
     Scalar s = numext::abs(m_S.coeff(res - 1, res - 1)) + numext::abs(m_S.coeff(res, res));
     if (res > 1 && res + 1 < m_S.rows() && hasComplexEigenvalues(res - 2) && hasComplexEigenvalues(res))
       s += Scalar(2) * numext::mini(numext::sqrt(numext::abs(m_S.coeff(res - 1, res - 2))) *
