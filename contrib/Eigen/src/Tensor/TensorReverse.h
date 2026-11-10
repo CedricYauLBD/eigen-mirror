@@ -52,14 +52,17 @@ class TensorReverseOp : public TensorBase<TensorReverseOp<ReverseDimensions, Xpr
   using StorageKind = typename Eigen::internal::traits<TensorReverseOp>::StorageKind;
   using Index = typename Eigen::internal::traits<TensorReverseOp>::Index;
 
-  EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE TensorReverseOp(const XprType& expr, const ReverseDimensions& reverse_dims)
+  EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE constexpr TensorReverseOp(const XprType& expr,
+                                                                  const ReverseDimensions& reverse_dims)
       : m_xpr(expr), m_reverse_dims(reverse_dims) {}
 
   // The accessor below would otherwise hide TensorBase::reverse(dims), so reverse() could not be applied twice.
   using Base::reverse;
-  EIGEN_DEVICE_FUNC const ReverseDimensions& reverse() const { return m_reverse_dims; }
+  EIGEN_DEVICE_FUNC constexpr const ReverseDimensions& reverse() const { return m_reverse_dims; }
 
-  EIGEN_DEVICE_FUNC const internal::remove_all_t<typename XprType::Nested>& expression() const { return m_xpr; }
+  EIGEN_DEVICE_FUNC constexpr const internal::remove_all_t<typename XprType::Nested>& expression() const {
+    return m_xpr;
+  }
 
   EIGEN_INHERIT_ASSIGNMENT_OPERATORS(TensorReverseOp)
 
@@ -103,7 +106,7 @@ struct TensorEvaluator<const TensorReverseOp<ReverseDimensions, ArgType>, Device
   using TensorBlock = typename internal::TensorMaterializedBlock<CoeffReturnType, NumDims, Layout, Index>;
   //===--------------------------------------------------------------------===//
 
-  EIGEN_STRONG_INLINE TensorEvaluator(const XprType& op, const Device& device)
+  EIGEN_STRONG_INLINE constexpr TensorEvaluator(const XprType& op, const Device& device)
       : m_impl(op.expression(), device), m_reverse(op.reverse()), m_device(device) {
     // Reversing a scalar isn't supported yet. It would be a no-op anyway.
     EIGEN_STATIC_ASSERT((NumDims > 0), YOU_MADE_A_PROGRAMMING_MISTAKE);
@@ -125,9 +128,9 @@ struct TensorEvaluator<const TensorReverseOp<ReverseDimensions, ArgType>, Device
     }
   }
 
-  EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE const Dimensions& dimensions() const { return m_dimensions; }
+  EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE constexpr const Dimensions& dimensions() const { return m_dimensions; }
 
-  EIGEN_STRONG_INLINE bool evalSubExprsIfNeeded(EvaluatorPointerType) {
+  EIGEN_STRONG_INLINE constexpr bool evalSubExprsIfNeeded(EvaluatorPointerType) {
     m_impl.evalSubExprsIfNeeded(nullptr);
     return true;
   }
@@ -139,9 +142,9 @@ struct TensorEvaluator<const TensorReverseOp<ReverseDimensions, ArgType>, Device
   }
 #endif  // EIGEN_USE_THREADS
 
-  EIGEN_STRONG_INLINE void cleanup() { m_impl.cleanup(); }
+  EIGEN_STRONG_INLINE constexpr void cleanup() { m_impl.cleanup(); }
 
-  EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE Index reverseIndex(Index index) const {
+  EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE constexpr Index reverseIndex(Index index) const {
     eigen_assert(index < dimensions().TotalSize());
     Index inputIndex = 0;
     EIGEN_IF_CONSTEXPR (static_cast<int>(Layout) == static_cast<int>(ColMajor)) {
@@ -178,7 +181,7 @@ struct TensorEvaluator<const TensorReverseOp<ReverseDimensions, ArgType>, Device
     return inputIndex;
   }
 
-  EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE CoeffReturnType coeff(Index index) const {
+  EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE constexpr CoeffReturnType coeff(Index index) const {
     return m_impl.coeff(reverseIndex(index));
   }
 
@@ -218,14 +221,14 @@ struct TensorEvaluator<const TensorReverseOp<ReverseDimensions, ArgType>, Device
     return internal::TensorBlockResourceRequirements::skewed<Scalar>(target_size).addCostPerCoeff({0, 0, 24});
   }
 
-  EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE TensorBlock block(TensorBlockDesc& desc, TensorBlockScratch& scratch,
-                                                          bool /*root_of_expr_ast*/ = false) const {
+  EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE constexpr TensorBlock block(TensorBlockDesc& desc, TensorBlockScratch& scratch,
+                                                                    bool /*root_of_expr_ast*/ = false) const {
     // TODO(ezhulenev): If underlying tensor expression supports and prefers
     // block evaluation we must use it. Currently we use coeff and packet
     // access into the underlying tensor expression.
-    static const bool isColMajor = static_cast<int>(Layout) == static_cast<int>(ColMajor);
+    constexpr bool isColMajor = static_cast<int>(Layout) == static_cast<int>(ColMajor);
 
-    static constexpr Index inner_dim_idx = isColMajor ? 0 : NumDims - 1;
+    constexpr Index inner_dim_idx = isColMajor ? 0 : NumDims - 1;
     const bool inner_dim_reversed = m_reverse[inner_dim_idx];
 
     // Offset in the output block.
@@ -236,7 +239,7 @@ struct TensorEvaluator<const TensorReverseOp<ReverseDimensions, ArgType>, Device
 
     // Initialize output block iterator state. Dimensions in this array are
     // always in inner_most -> outer_most order (col major layout).
-    array<BlockIteratorState, NumDims> it;
+    array<BlockIteratorState, NumDims> it{};
     for (int i = 0; i < NumDims; ++i) {
       const int dim = isColMajor ? i : NumDims - 1 - i;
       it[i].size = desc.dimension(dim);
@@ -323,7 +326,7 @@ struct TensorEvaluator<const TensorReverseOp<ReverseDimensions, ArgType>, Device
     return block_storage.AsTensorMaterializedBlock();
   }
 
-  EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE TensorOpCost costPerCoeff(bool vectorized) const {
+  EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE constexpr TensorOpCost costPerCoeff(bool vectorized) const {
     double compute_cost = NumDims * (2 * TensorOpCost::AddCost<Index>() + 2 * TensorOpCost::MulCost<Index>() +
                                      TensorOpCost::DivCost<Index>());
     for (int i = 0; i < NumDims; ++i) {
@@ -336,7 +339,7 @@ struct TensorEvaluator<const TensorReverseOp<ReverseDimensions, ArgType>, Device
     return m_impl.costPerCoeff(vectorized) + TensorOpCost(0, 0, compute_cost, vectorized, PacketSize);
   }
 
-  EIGEN_DEVICE_FUNC typename Storage::Type data() const { return nullptr; }
+  EIGEN_DEVICE_FUNC constexpr typename Storage::Type data() const { return nullptr; }
 
  protected:
   Dimensions m_dimensions;
@@ -348,16 +351,15 @@ struct TensorEvaluator<const TensorReverseOp<ReverseDimensions, ArgType>, Device
 
  private:
   struct BlockIteratorState {
-    BlockIteratorState()
-        : size(0), count(0), reverse(false), block_stride(0), block_span(0), input_stride(0), input_span(0) {}
+    constexpr BlockIteratorState() = default;
 
-    Index size;
-    Index count;
-    bool reverse;
-    Index block_stride;
-    Index block_span;
-    Index input_stride;
-    Index input_span;
+    Index size = 0;
+    Index count = 0;
+    bool reverse = false;
+    Index block_stride = 0;
+    Index block_span = 0;
+    Index input_stride = 0;
+    Index input_span = 0;
   };
 };
 
@@ -386,7 +388,7 @@ struct TensorEvaluator<TensorReverseOp<ReverseDimensions, ArgType>, Device>
     CoordAccess = false,  // to be implemented
     RawAccess = false
   };
-  EIGEN_STRONG_INLINE TensorEvaluator(const XprType& op, const Device& device) : Base(op, device) {}
+  EIGEN_STRONG_INLINE constexpr TensorEvaluator(const XprType& op, const Device& device) : Base(op, device) {}
 
   using Scalar = typename XprType::Scalar;
   using CoeffReturnType = typename XprType::CoeffReturnType;
@@ -398,9 +400,9 @@ struct TensorEvaluator<TensorReverseOp<ReverseDimensions, ArgType>, Device>
   using TensorBlockDesc = internal::TensorBlockDescriptor<NumDims, Index>;
   //===--------------------------------------------------------------------===//
 
-  EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE const Dimensions& dimensions() const { return this->m_dimensions; }
+  EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE constexpr const Dimensions& dimensions() const { return this->m_dimensions; }
 
-  EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE Scalar& coeffRef(Index index) const {
+  EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE constexpr Scalar& coeffRef(Index index) const {
     return this->m_impl.coeffRef(this->reverseIndex(index));
   }
 
@@ -453,7 +455,7 @@ struct TensorEvaluator<TensorReverseOp<ReverseDimensions, ArgType>, Device>
   }
 
   template <typename TensorBlock>
-  EIGEN_STRONG_INLINE void writeBlock(const TensorBlockDesc& desc, const TensorBlock& block) {
+  EIGEN_STRONG_INLINE constexpr void writeBlock(const TensorBlockDesc& desc, const TensorBlock& block) {
     eigen_assert(this->m_impl.data() != nullptr);
 
     // The destination of a block is a box in the underlying tensor: on a
