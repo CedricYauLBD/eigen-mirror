@@ -807,6 +807,13 @@
 #error Eigen requires at least c++14 support.
 #endif
 
+// Constant evaluation relies on __builtin_is_constant_evaluated, which GCC 9, Clang 9 and MSVC 19.25 introduced; the
+// Apple Clang bound is conservative.
+#if (EIGEN_COMP_MSVC_STRICT && EIGEN_COMP_MSVC < 1925) || (EIGEN_COMP_CLANG_STRICT && EIGEN_COMP_CLANG < 900) || \
+    (EIGEN_COMP_CLANGAPPLE && EIGEN_COMP_CLANGAPPLE < 12000000) || (EIGEN_COMP_GNUC_STRICT && EIGEN_COMP_GNUC < 900)
+#error Eigen requires at least GCC 9, Clang 9, Apple Clang 12 or MSVC 19.25 (Visual Studio 2019 16.5).
+#endif
+
 // Deprecated compatibility macro. Eigen requires C++14 and no longer uses this
 // token internally, but keep it defined so downstream #if EIGEN_HAS_C99_MATH
 // checks do not trip -Wundef.
