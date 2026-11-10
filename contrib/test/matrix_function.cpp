@@ -228,6 +228,19 @@ void testEmptyMatrix() {
   VERIFY_IS_EQUAL(MatrixType(A.log()).size(), 0);
 }
 
+// The eigenvalues (0, 5/32, 5/64, 3/16) of this upper triangular matrix, with separation 0.1: 5/64 is close to both
+// 0 and 5/32, so the clusters {0, 5/64} and {5/32} merge, and 3/16 then joins them.
+template <typename = void>
+void testMergedEigenvalueClusters() {
+  Matrix4d A;
+  A << 0, 1, 2, 3, 0, 5.0 / 32, 1, 2, 0, 0, 5.0 / 64, 1, 0, 0, 0, 3.0 / 16;
+  std::vector<std::vector<Index>> clusters;
+  internal::matrix_function_partition_eigenvalues(Vector4cd(A.diagonal().cast<std::complex<double>>()), clusters);
+  VERIFY_IS_EQUAL(clusters.size(), std::size_t(1));
+  VERIFY_IS_EQUAL(clusters[0].size(), std::size_t(4));
+  VERIFY_IS_APPROX(A.exp(), A.matrixFunction(internal::stem_function_exp<std::complex<double>>));
+}
+
 EIGEN_DECLARE_TEST(matrix_function) {
   CALL_SUBTEST_1(testMatrixType(Matrix<float, 1, 1>()));
   CALL_SUBTEST_2(testMatrixType(Matrix3cf()));
@@ -246,5 +259,6 @@ EIGEN_DECLARE_TEST(matrix_function) {
   CALL_SUBTEST_7(testMatrixLogarithmSingular<MatrixXd>());
   CALL_SUBTEST_7(testMatrixLogarithmSquareRootOverflow<>());
   CALL_SUBTEST_3(testEmptyMatrix<MatrixXf>());
+  CALL_SUBTEST_4(testMergedEigenvalueClusters<>());
   CALL_SUBTEST_7(testEmptyMatrix<MatrixXcd>());
 }
