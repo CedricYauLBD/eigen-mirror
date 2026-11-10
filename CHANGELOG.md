@@ -51,6 +51,7 @@ Bug fixes:
 - `SparseVector::prune()` move-assigned the kept entries in front of the first dropped one onto themselves, which leaves them unspecified: with libstdc++, the value of a scalar holding a `std::vector` was lost [!3537]
 
 Breaking changes:
+- Eigen requires GCC 9, Clang 9, Apple Clang 12 or MSVC 19.25 (Visual Studio 2019 16.5) or later: constant evaluation relies on `__builtin_is_constant_evaluated`, which GCC 9, Clang 9 and MSVC 19.25 introduced [!1713]
 - `PaStiXSupport` now requires PaStiX 6.x; version 5 is no longer supported. `FindPASTIX.cmake` uses pkg-config metadata
   instead of dependency-selection components. Removed the unused `FindBLASEXT`, `FindHWLOC`, `FindSCOTCH` and
   `FindPTSCOTCH` modules. Renamed `FindMetis.cmake` to `FindMETIS.cmake` to match `find_package(METIS)` [#2256, !3467]
