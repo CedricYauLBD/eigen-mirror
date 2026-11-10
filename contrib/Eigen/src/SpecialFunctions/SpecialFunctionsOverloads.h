@@ -30,7 +30,7 @@ namespace special_function_overloads {
     template <typename... Args>                                                                                \
     static std::false_type test(...);                                                                          \
     template <typename Scalar, typename... Args>                                                               \
-    EIGEN_DEVICE_FUNC static EIGEN_STRONG_INLINE Scalar call(const Args&... args) {                            \
+    EIGEN_DEVICE_FUNC static EIGEN_STRONG_INLINE constexpr Scalar call(const Args&... args) {                  \
       return NAME(args...);                                                                                    \
     }                                                                                                          \
   };
@@ -91,7 +91,7 @@ struct has_special_function_overload
 template <typename Fn, typename Scalar>
 struct special_function_overload {
   template <typename... Args>
-  EIGEN_DEVICE_FUNC static EIGEN_STRONG_INLINE Scalar run(const Args&... args) {
+  EIGEN_DEVICE_FUNC static EIGEN_STRONG_INLINE constexpr Scalar run(const Args&... args) {
     return Fn::template call<Scalar>(args...);
   }
 };
