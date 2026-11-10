@@ -53,7 +53,7 @@ class ArpackGeneralizedSelfAdjointEigenSolver {
    * perform decompositions via compute().
    *
    */
-  ArpackGeneralizedSelfAdjointEigenSolver()
+  constexpr ArpackGeneralizedSelfAdjointEigenSolver()
       : m_eivec(),
         m_eivalues(),
         m_info(InvalidInput),
@@ -203,7 +203,7 @@ class ArpackGeneralizedSelfAdjointEigenSolver {
    *
    * \sa eigenvalues()
    */
-  const Matrix<Scalar, Dynamic, Dynamic> &eigenvectors() const {
+  constexpr const Matrix<Scalar, Dynamic, Dynamic> &eigenvectors() const {
     eigen_assert(m_isInitialized && "ArpackGeneralizedSelfAdjointEigenSolver is not initialized.");
     eigen_assert(m_eigenvectorsOk && "The eigenvectors have not been computed together with the eigenvalues.");
     return m_eivec;
@@ -224,7 +224,7 @@ class ArpackGeneralizedSelfAdjointEigenSolver {
    *
    * \sa eigenvectors(), MatrixBase::eigenvalues()
    */
-  const Matrix<Scalar, Dynamic, 1> &eigenvalues() const {
+  constexpr const Matrix<Scalar, Dynamic, 1> &eigenvalues() const {
     eigen_assert(m_isInitialized && "ArpackGeneralizedSelfAdjointEigenSolver is not initialized.");
     return m_eivalues;
   }
@@ -247,7 +247,7 @@ class ArpackGeneralizedSelfAdjointEigenSolver {
    * \sa operatorInverseSqrt(),
    *     \ref MatrixFunctions_Module "MatrixFunctions Module"
    */
-  Matrix<Scalar, Dynamic, Dynamic> operatorSqrt() const {
+  constexpr Matrix<Scalar, Dynamic, Dynamic> operatorSqrt() const {
     eigen_assert(m_isInitialized && "SelfAdjointEigenSolver is not initialized.");
     eigen_assert(m_eigenvectorsOk && "The eigenvectors have not been computed together with the eigenvalues.");
     return m_eivec * m_eivalues.cwiseSqrt().asDiagonal() * m_eivec.adjoint();
@@ -271,7 +271,7 @@ class ArpackGeneralizedSelfAdjointEigenSolver {
    * \sa operatorSqrt(), MatrixBase::inverse(),
    *     \ref MatrixFunctions_Module "MatrixFunctions Module"
    */
-  Matrix<Scalar, Dynamic, Dynamic> operatorInverseSqrt() const {
+  constexpr Matrix<Scalar, Dynamic, Dynamic> operatorInverseSqrt() const {
     eigen_assert(m_isInitialized && "SelfAdjointEigenSolver is not initialized.");
     eigen_assert(m_eigenvectorsOk && "The eigenvectors have not been computed together with the eigenvalues.");
     return m_eivec * m_eivalues.cwiseInverse().cwiseSqrt().asDiagonal() * m_eivec.adjoint();
@@ -286,9 +286,9 @@ class ArpackGeneralizedSelfAdjointEigenSolver {
    */
   ComputationInfo info() const { return m_info; }
 
-  size_t getNbrConvergedEigenValues() const { return m_nbrConverged; }
+  constexpr size_t getNbrConvergedEigenValues() const { return m_nbrConverged; }
 
-  size_t getNbrIterations() const { return m_nbrIterations; }
+  constexpr size_t getNbrIterations() const { return m_nbrIterations; }
 
  protected:
   Matrix<Scalar, Dynamic, Dynamic> m_eivec;
@@ -656,13 +656,13 @@ struct arpack_wrapper<double, double> {
 
 template <typename MatrixSolver, typename MatrixType, typename Scalar, bool BisSPD>
 struct OP {
-  static inline void applyOP(MatrixSolver &OP, const MatrixType &A, int n, Scalar *in, Scalar *out);
-  static inline void project(MatrixSolver &OP, int n, int k, Scalar *vecs);
+  static constexpr void applyOP(MatrixSolver &OP, const MatrixType &A, int n, Scalar *in, Scalar *out);
+  static constexpr void project(MatrixSolver &OP, int n, int k, Scalar *vecs);
 };
 
 template <typename MatrixSolver, typename MatrixType, typename Scalar>
 struct OP<MatrixSolver, MatrixType, Scalar, true> {
-  static inline void applyOP(MatrixSolver &OP, const MatrixType &A, int n, Scalar *in, Scalar *out) {
+  static constexpr void applyOP(MatrixSolver &OP, const MatrixType &A, int n, Scalar *in, Scalar *out) {
     // OP = L^{-1} A L^{-T}  (B = LL^T)
     //
     // First solve L^T out = in
@@ -680,7 +680,7 @@ struct OP<MatrixSolver, MatrixType, Scalar, true> {
     Matrix<Scalar, Dynamic, 1>::Map(out, n) = OP.matrixL().solve(Matrix<Scalar, Dynamic, 1>::Map(out, n));
   }
 
-  static inline void project(MatrixSolver &OP, int n, int k, Scalar *vecs) {
+  static constexpr void project(MatrixSolver &OP, int n, int k, Scalar *vecs) {
     // Solve L^T out = in
     //
     Matrix<Scalar, Dynamic, Dynamic>::Map(vecs, n, k) =
@@ -692,11 +692,11 @@ struct OP<MatrixSolver, MatrixType, Scalar, true> {
 
 template <typename MatrixSolver, typename MatrixType, typename Scalar>
 struct OP<MatrixSolver, MatrixType, Scalar, false> {
-  static inline void applyOP(MatrixSolver &, const MatrixType &, int, Scalar *, Scalar *) {
+  static constexpr void applyOP(MatrixSolver &, const MatrixType &, int, Scalar *, Scalar *) {
     eigen_assert(false && "Should never be in here...");
   }
 
-  static inline void project(MatrixSolver &, int, int, Scalar *) {
+  static constexpr void project(MatrixSolver &, int, int, Scalar *) {
     eigen_assert(false && "Should never be in here...");
   }
 };
