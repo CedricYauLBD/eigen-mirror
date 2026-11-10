@@ -171,24 +171,30 @@ void generalized_eigensolver_scaled_complex_pairs() {
   verifyComplexEigenpairs(a2, MatrixType::Identity(2, 2));
 
   // |S_i| near highest: p = (m00 - m11) / 2 overflowed, and M = S_i diag(b', a') exceeded |S_i| for max(|a'|, |b'|)
-  // > 1. A = 2^emax [x y; -y -x] and B = t I have the eigenvalues +- i 2^emax sqrt((y - x) (y + x)) / t. The back
-  // substitution forms beta S - alpha T, which overflows for |S| |T| > highest, so only the eigenvalues are checked.
+  // > 1. |T_i| near highest: a b overflowed, and for t = 3.9 the power of two at or above |T_i|, 2^emax, is not
+  // representable. A = 2^eS [x y; -y -x] and B = 2^eT t I have the eigenvalues +- i 2^(eS - eT) sqrt((y - x) (y + x))
+  // / t. The back substitution forms beta S - alpha T, which overflows for |S| |T| > highest, so only the eigenvalues
+  // are checked.
   const Scalar params[][3] = {{Scalar(0.55), Scalar(0.65), Scalar(1)},
                               {Scalar(0.4), Scalar(0.5), Scalar(1.9)},
                               {Scalar(0.48), Scalar(0.58), Scalar(3.9)}};
-  for (const auto& c : params) {
-    const Scalar x = c[0], y = c[1], t = c[2];
-    MatrixType a3(2, 2);
-    a3 << numext::ldexp(x, emax), numext::ldexp(y, emax), -numext::ldexp(y, emax), -numext::ldexp(x, emax);
-    GeneralizedEigenSolver<MatrixType> eig(a3, t * MatrixType::Identity(2, 2), false);
-    VERIFY_IS_EQUAL(eig.info(), Success);
-    // y - x is exact, and the eigenvalues' condition number is about (x^2 + y^2) / (y^2 - x^2) <= 6.
-    const Scalar exact = numext::ldexp(numext::sqrt((y - x) * (y + x)) / t, emax);
-    const Scalar tolerance = Scalar(16) * NumTraits<Scalar>::epsilon() * exact;
-    for (Index j = 0; j < 2; ++j) {
-      const ComplexScalar lambda = eig.eigenvalues()(j);
-      VERIFY(numext::abs(lambda.real()) <= tolerance);
-      VERIFY(numext::abs(numext::abs(lambda.imag()) - exact) <= tolerance);
+  const int pairExponents[][2] = {{emax, 0}, {emax / 2, emax - 2}};
+  for (const auto& e : pairExponents) {
+    const int eS = e[0], eT = e[1];
+    for (const auto& c : params) {
+      const Scalar x = c[0], y = c[1], t = c[2];
+      MatrixType a3(2, 2);
+      a3 << numext::ldexp(x, eS), numext::ldexp(y, eS), -numext::ldexp(y, eS), -numext::ldexp(x, eS);
+      GeneralizedEigenSolver<MatrixType> eig(a3, numext::ldexp(t, eT) * MatrixType::Identity(2, 2), false);
+      VERIFY_IS_EQUAL(eig.info(), Success);
+      // y - x is exact, and the eigenvalues' condition number is about (x^2 + y^2) / (y^2 - x^2) <= 6.1.
+      const Scalar exact = numext::ldexp(numext::sqrt((y - x) * (y + x)) / t, eS - eT);
+      const Scalar tolerance = Scalar(16) * NumTraits<Scalar>::epsilon() * exact;
+      for (Index j = 0; j < 2; ++j) {
+        const ComplexScalar lambda = eig.eigenvalues()(j);
+        VERIFY(numext::abs(lambda.real()) <= tolerance);
+        VERIFY(numext::abs(numext::abs(lambda.imag()) - exact) <= tolerance);
+      }
     }
   }
 }
