@@ -26,7 +26,7 @@ namespace internal {
  * \returns whether stableNorm() was used, so that later recomputations of partial column norms use it as well.
  */
 template <typename BlockType, typename NormsType>
-bool column_norms_with_fallback(const BlockType& block, NormsType& norms) {
+constexpr bool column_norms_with_fallback(const BlockType& block, NormsType& norms) {
   using RealScalar = typename NumTraits<typename BlockType::Scalar>::Real;
   norms = block.colwise().norm();
   if (block.size() == 0) return false;

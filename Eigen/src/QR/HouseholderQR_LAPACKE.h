@@ -46,7 +46,13 @@ namespace lapacke_helpers {
 
 template <typename MatrixQR, typename HCoeffs>
 struct lapacke_hqr {
-  static void run(MatrixQR& mat, HCoeffs& hCoeffs, Index maxBlockSize = 32, typename MatrixQR::Scalar* tempData = 0) {
+  static constexpr void run(MatrixQR& mat, HCoeffs& hCoeffs, Index maxBlockSize = 32,
+                            typename MatrixQR::Scalar* tempData = 0) {
+    using Native = householder_qr_inplace_blocked<MatrixQR, HCoeffs, typename MatrixQR::Scalar, false>;
+    if (is_constant_evaluated()) {
+      Native::run(mat, hCoeffs, maxBlockSize, tempData);
+      return;
+    }
     lapack_int m = to_lapack(mat.rows());
     lapack_int n = to_lapack(mat.cols());
     lapack_int lda = to_lapack(mat.outerStride());
@@ -55,8 +61,7 @@ struct lapacke_hqr {
     if (info == -4) {
       // High-level LAPACKE may reject NaN inputs before calling LAPACK. Eigen's native path still computes a
       // compact QR representation for these values.
-      householder_qr_inplace_blocked<MatrixQR, HCoeffs, typename MatrixQR::Scalar, false>::run(mat, hCoeffs,
-                                                                                               maxBlockSize, tempData);
+      Native::run(mat, hCoeffs, maxBlockSize, tempData);
       return;
     }
     eigen_assert(info == 0);
