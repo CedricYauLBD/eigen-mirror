@@ -189,38 +189,28 @@ struct selfadjoint_rank2_update_selector<Scalar, Index, Upper> {
   }
 };
 
-}  // end namespace internal
-
-template <typename MatrixType, unsigned int UpLo>
-template <typename DerivedU, typename DerivedV>
-EIGEN_DEVICE_FUNC EIGEN_DONT_INLINE SelfAdjointView<MatrixType, UpLo>& SelfAdjointView<MatrixType, UpLo>::rankUpdate(
-    const MatrixBase<DerivedU>& u, const MatrixBase<DerivedV>& v, const Scalar& alpha) {
-  if (internal::is_identically_zero(alpha)) return *this;
-  using UBlasTraits = internal::blas_traits<DerivedU>;
-  using VBlasTraits = internal::blas_traits<DerivedV>;
-  const Scalar uFactor = UBlasTraits::extractScalarFactor(u.derived());
-  const Scalar vFactor = VBlasTraits::extractScalarFactor(v.derived());
-  if (UBlasTraits::hasZeroScalarFactor(u.derived()) || VBlasTraits::hasZeroScalarFactor(v.derived())) return *this;
-
-  // The rank-2 kernel below addresses the matrix with a unit inner stride.
-  if (MatrixType::InnerStrideAtCompileTime != 1 && nestedExpression().innerStride() != 1) {
-    nestedExpression().template triangularView<UpLo>() +=
-        typename MatrixType::PlainObject(alpha * u * v.adjoint() + numext::conj(alpha) * v * u.adjoint());
-    return *this;
-  }
-  Scalar actualAlpha = alpha * uFactor * numext::conj(vFactor);
+// The rank-2 kernel on a matrix with a unit inner stride.
+template <unsigned int UpLo, typename MatrixType, typename DerivedU, typename DerivedV>
+EIGEN_DEVICE_FUNC EIGEN_DONT_INLINE void selfadjoint_rank2_update_kernel(MatrixType& mat, const MatrixBase<DerivedU>& u,
+                                                                         const MatrixBase<DerivedV>& v,
+                                                                         const typename MatrixType::Scalar& alpha) {
+  using Scalar = typename MatrixType::Scalar;
+  using UBlasTraits = blas_traits<DerivedU>;
+  using VBlasTraits = blas_traits<DerivedV>;
+  Scalar actualAlpha = alpha * UBlasTraits::extractScalarFactor(u.derived()) *
+                       numext::conj(VBlasTraits::extractScalarFactor(v.derived()));
   using ActualUType = typename UBlasTraits::DirectLinearAccessType;
-  using ActualUType_ = internal::remove_all_t<ActualUType>;
-  internal::add_const_on_value_type_t<ActualUType> actualU = UBlasTraits::extract(u.derived());
+  using ActualUType_ = remove_all_t<ActualUType>;
+  add_const_on_value_type_t<ActualUType> actualU = UBlasTraits::extract(u.derived());
 
   using ActualVType = typename VBlasTraits::DirectLinearAccessType;
-  using ActualVType_ = internal::remove_all_t<ActualVType>;
-  internal::add_const_on_value_type_t<ActualVType> actualV = VBlasTraits::extract(v.derived());
+  using ActualVType_ = remove_all_t<ActualVType>;
+  add_const_on_value_type_t<ActualVType> actualV = VBlasTraits::extract(v.derived());
 
   // If MatrixType is row major, then we use the routine for lower triangular in the upper triangular case and
   // vice versa, and take the complex conjugate of all coefficients and vector entries.
   enum {
-    IsRowMajor = (internal::traits<MatrixType>::Flags & RowMajorBit) ? 1 : 0,
+    IsRowMajor = (traits<MatrixType>::Flags & RowMajorBit) ? 1 : 0,
     // Only need to conjugate if complex and the condition triggers
     NeedConjU = (int(IsRowMajor) ^ int(UBlasTraits::NeedToConjugate)) && NumTraits<Scalar>::IsComplex,
     NeedConjV = (int(IsRowMajor) ^ int(VBlasTraits::NeedToConjugate)) && NumTraits<Scalar>::IsComplex,
@@ -235,8 +225,7 @@ EIGEN_DEVICE_FUNC EIGEN_DONT_INLINE SelfAdjointView<MatrixType, UpLo>& SelfAdjoi
   const Index size = u.size();
 
   // Copy u to contiguous buffer, applying conjugation if needed
-  internal::gemv_static_vector_if<Scalar, DerivedU::SizeAtCompileTime, DerivedU::MaxSizeAtCompileTime, !UseUDirectly>
-      static_u;
+  gemv_static_vector_if<Scalar, DerivedU::SizeAtCompileTime, DerivedU::MaxSizeAtCompileTime, !UseUDirectly> static_u;
   ei_declare_aligned_stack_constructed_variable_if(!UseUDirectly, Scalar, uBuffer, size, static_u.data());
   const Scalar* uPtr = UseUDirectly ? actualU.data() : uBuffer;
   EIGEN_IF_CONSTEXPR (!UseUDirectly) {
@@ -248,8 +237,7 @@ EIGEN_DEVICE_FUNC EIGEN_DONT_INLINE SelfAdjointView<MatrixType, UpLo>& SelfAdjoi
   }
 
   // Copy v to contiguous buffer, applying conjugation if needed
-  internal::gemv_static_vector_if<Scalar, DerivedV::SizeAtCompileTime, DerivedV::MaxSizeAtCompileTime, !UseVDirectly>
-      static_v;
+  gemv_static_vector_if<Scalar, DerivedV::SizeAtCompileTime, DerivedV::MaxSizeAtCompileTime, !UseVDirectly> static_v;
   ei_declare_aligned_stack_constructed_variable_if(!UseVDirectly, Scalar, vBuffer, size, static_v.data());
   const Scalar* vPtr = UseVDirectly ? actualV.data() : vBuffer;
   EIGEN_IF_CONSTEXPR (!UseVDirectly) {
@@ -260,11 +248,27 @@ EIGEN_DEVICE_FUNC EIGEN_DONT_INLINE SelfAdjointView<MatrixType, UpLo>& SelfAdjoi
     }
   }
 
-  internal::selfadjoint_rank2_update_selector<
-      Scalar, Index, (IsRowMajor ? int(UpLo == Upper ? Lower : Upper) : UpLo)>::run(size, nestedExpression().data(),
-                                                                                    nestedExpression().outerStride(),
-                                                                                    uPtr, vPtr, actualAlpha);
+  selfadjoint_rank2_update_selector<Scalar, Index, (IsRowMajor ? int(UpLo == Upper ? Lower : Upper) : UpLo)>::run(
+      size, mat.data(), mat.outerStride(), uPtr, vPtr, actualAlpha);
+}
 
+}  // namespace internal
+
+template <typename MatrixType, unsigned int UpLo>
+template <typename DerivedU, typename DerivedV>
+EIGEN_DEVICE_FUNC constexpr SelfAdjointView<MatrixType, UpLo>& SelfAdjointView<MatrixType, UpLo>::rankUpdate(
+    const MatrixBase<DerivedU>& u, const MatrixBase<DerivedV>& v, const Scalar& alpha) {
+  if (internal::is_identically_zero(alpha) || internal::blas_traits<DerivedU>::hasZeroScalarFactor(u.derived()) ||
+      internal::blas_traits<DerivedV>::hasZeroScalarFactor(v.derived()))
+    return *this;
+  // The rank-2 kernel addresses the matrix with a unit inner stride, and is unavailable in constant evaluation.
+  if (internal::is_constant_evaluated() ||
+      (MatrixType::InnerStrideAtCompileTime != 1 && nestedExpression().innerStride() != 1)) {
+    nestedExpression().template triangularView<UpLo>() +=
+        typename MatrixType::PlainObject(alpha * u * v.adjoint() + numext::conj(alpha) * v * u.adjoint());
+  } else {
+    internal::selfadjoint_rank2_update_kernel<UpLo>(nestedExpression(), u, v, alpha);
+  }
   return *this;
 }
 

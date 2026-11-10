@@ -91,7 +91,7 @@ EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE constexpr void swap_plain_array(plain_arra
  * assignment throws, the buffer is destroyed and freed before the exception propagates, because the storage object that
  * owns \a dst is not yet constructed and its destructor will not run. */
 template <typename T, bool Align>
-EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE void copy_to_new_buffer(const T* src, Index size, T* dst) {
+EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE EIGEN_CONSTEXPR20 void copy_to_new_buffer(const T* src, Index size, T* dst) {
   EIGEN_IF_CONSTEXPR (!std::is_nothrow_copy_assignable<T>::value) {
     EIGEN_TRY { smart_copy(src, src + size, dst); }
     EIGEN_CATCH(...) {
@@ -355,7 +355,9 @@ class DenseStorage_impl<T, Dynamic, Dynamic, Cols, Options> {
     other.m_data = nullptr;
     other.m_rows = 0;
   }
-  EIGEN_DEVICE_FUNC ~DenseStorage_impl() { conditional_aligned_delete_auto<T, Align>(m_data, size()); }
+  EIGEN_DEVICE_FUNC EIGEN_CONSTEXPR20 ~DenseStorage_impl() {
+    conditional_aligned_delete_auto<T, Align>(m_data, size());
+  }
   EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE constexpr DenseStorage_impl& operator=(const DenseStorage_impl& other) {
     if (this == &other) return *this;
     resize(other.size(), other.rows(), other.cols());
@@ -415,7 +417,9 @@ class DenseStorage_impl<T, Dynamic, Rows, Dynamic, Options> {
     other.m_data = nullptr;
     other.m_cols = 0;
   }
-  EIGEN_DEVICE_FUNC ~DenseStorage_impl() { conditional_aligned_delete_auto<T, Align>(m_data, size()); }
+  EIGEN_DEVICE_FUNC EIGEN_CONSTEXPR20 ~DenseStorage_impl() {
+    conditional_aligned_delete_auto<T, Align>(m_data, size());
+  }
   EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE constexpr DenseStorage_impl& operator=(const DenseStorage_impl& other) {
     if (this == &other) return *this;
     resize(other.size(), other.rows(), other.cols());
@@ -477,7 +481,9 @@ class DenseStorage_impl<T, Dynamic, Dynamic, Dynamic, Options> {
     other.m_rows = 0;
     other.m_cols = 0;
   }
-  EIGEN_DEVICE_FUNC ~DenseStorage_impl() { conditional_aligned_delete_auto<T, Align>(m_data, size()); }
+  EIGEN_DEVICE_FUNC EIGEN_CONSTEXPR20 ~DenseStorage_impl() {
+    conditional_aligned_delete_auto<T, Align>(m_data, size());
+  }
   EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE constexpr DenseStorage_impl& operator=(const DenseStorage_impl& other) {
     if (this == &other) return *this;
     resize(other.size(), other.rows(), other.cols());
