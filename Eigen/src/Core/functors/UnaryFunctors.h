@@ -378,7 +378,7 @@ struct functor_traits<scalar_imag_ref_op<Scalar>> {
  */
 template <typename Scalar>
 struct scalar_exp_op {
-  EIGEN_DEVICE_FUNC constexpr inline Scalar operator()(const Scalar& a) const { return internal::pexp(a); }
+  EIGEN_DEVICE_FUNC constexpr Scalar operator()(const Scalar& a) const { return internal::pexp(a); }
   template <typename Packet>
   EIGEN_DEVICE_FUNC inline Packet packetOp(const Packet& a) const {
     return internal::pexp(a);
@@ -410,7 +410,7 @@ struct functor_traits<scalar_exp_op<Scalar>> {
 
 template <typename Scalar>
 struct scalar_exp2_op {
-  EIGEN_DEVICE_FUNC constexpr inline Scalar operator()(const Scalar& a) const { return internal::pexp2(a); }
+  EIGEN_DEVICE_FUNC Scalar operator()(const Scalar& a) const { return internal::pexp2(a); }
   template <typename Packet>
   EIGEN_DEVICE_FUNC inline Packet packetOp(const Packet& a) const {
     return internal::pexp2(a);
@@ -436,7 +436,7 @@ struct scalar_ldexp_op {
   static_assert(!NumTraits<Scalar>::IsComplex && !NumTraits<Scalar>::IsInteger,
                 "ldexp is only defined for real floating-point scalar types");
   EIGEN_DEVICE_FUNC constexpr EIGEN_STRONG_INLINE explicit scalar_ldexp_op(int exponent) : m_exponent(exponent) {}
-  EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE Scalar operator()(const Scalar& a) const {
+  EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE constexpr Scalar operator()(const Scalar& a) const {
     return numext::ldexp(a, m_exponent);
   }
   template <typename Packet>
@@ -479,7 +479,7 @@ struct functor_traits<scalar_ldexp_op<Scalar>> {
  */
 template <typename Scalar>
 struct scalar_expm1_op {
-  EIGEN_DEVICE_FUNC constexpr inline Scalar operator()(const Scalar& a) const { return numext::expm1(a); }
+  EIGEN_DEVICE_FUNC constexpr Scalar operator()(const Scalar& a) const { return numext::expm1(a); }
   template <typename Packet>
   EIGEN_DEVICE_FUNC inline Packet packetOp(const Packet& a) const {
     return internal::pexpm1(a);
@@ -501,7 +501,7 @@ struct functor_traits<scalar_expm1_op<Scalar>> {
  */
 template <typename Scalar>
 struct scalar_log_op {
-  EIGEN_DEVICE_FUNC constexpr inline Scalar operator()(const Scalar& a) const { return numext::log(a); }
+  EIGEN_DEVICE_FUNC constexpr Scalar operator()(const Scalar& a) const { return numext::log(a); }
   template <typename Packet>
   EIGEN_DEVICE_FUNC inline Packet packetOp(const Packet& a) const {
     return internal::plog(a);
@@ -533,7 +533,7 @@ struct functor_traits<scalar_log_op<Scalar>> {
  */
 template <typename Scalar>
 struct scalar_log1p_op {
-  EIGEN_DEVICE_FUNC constexpr inline Scalar operator()(const Scalar& a) const { return numext::log1p(a); }
+  EIGEN_DEVICE_FUNC constexpr Scalar operator()(const Scalar& a) const { return numext::log1p(a); }
   template <typename Packet>
   EIGEN_DEVICE_FUNC inline Packet packetOp(const Packet& a) const {
     return internal::plog1p(a);
@@ -555,7 +555,7 @@ struct functor_traits<scalar_log1p_op<Scalar>> {
  */
 template <typename Scalar>
 struct scalar_log10_op {
-  EIGEN_DEVICE_FUNC constexpr inline Scalar operator()(const Scalar& a) const { return numext::log10(a); }
+  EIGEN_DEVICE_FUNC constexpr Scalar operator()(const Scalar& a) const { return numext::log10(a); }
   template <typename Packet>
   EIGEN_DEVICE_FUNC inline Packet packetOp(const Packet& a) const {
     return internal::plog10(a);
@@ -575,7 +575,7 @@ struct functor_traits<scalar_log10_op<Scalar>> {
 template <typename Scalar>
 struct scalar_log2_op {
   using RealScalar = typename NumTraits<Scalar>::Real;
-  EIGEN_DEVICE_FUNC constexpr inline Scalar operator()(const Scalar& a) const {
+  EIGEN_DEVICE_FUNC constexpr Scalar operator()(const Scalar& a) const {
     return run(a, std::integral_constant<int, kKind>());
   }
   template <typename Packet>
@@ -595,11 +595,13 @@ struct scalar_log2_op {
   // std::log2 is exact at powers of two, like plog2; log2(e) * log(a) can be an ulp off there, and two off for half and
   // bfloat16, which round both factors. numext::log2 of half and bfloat16 goes through float. complex_log2 takes the
   // real part log2|a| from std::log2, like plog2 on complex packets.
-  EIGEN_DEVICE_FUNC static Scalar run(const Scalar& a, std::integral_constant<int, 0>) { return numext::log2(a); }
-  EIGEN_DEVICE_FUNC static Scalar run(const Scalar& a, std::integral_constant<int, 1>) {
+  EIGEN_DEVICE_FUNC static constexpr Scalar run(const Scalar& a, std::integral_constant<int, 0>) {
+    return numext::log2(a);
+  }
+  EIGEN_DEVICE_FUNC static constexpr Scalar run(const Scalar& a, std::integral_constant<int, 1>) {
     return internal::complex_log2(a);
   }
-  EIGEN_DEVICE_FUNC static Scalar run(const Scalar& a, std::integral_constant<int, 2>) {
+  EIGEN_DEVICE_FUNC static constexpr Scalar run(const Scalar& a, std::integral_constant<int, 2>) {
     return internal::mul(RealScalar(EIGEN_LOG2E), numext::log(a));
   }
 };
@@ -614,7 +616,7 @@ struct functor_traits<scalar_log2_op<Scalar>> {
  */
 template <typename Scalar>
 struct scalar_sqrt_op {
-  EIGEN_DEVICE_FUNC constexpr inline Scalar operator()(const Scalar& a) const { return numext::sqrt(a); }
+  EIGEN_DEVICE_FUNC constexpr Scalar operator()(const Scalar& a) const { return numext::sqrt(a); }
   template <typename Packet>
   EIGEN_DEVICE_FUNC inline Packet packetOp(const Packet& a) const {
     return internal::psqrt(a);
@@ -639,7 +641,7 @@ struct functor_traits<scalar_sqrt_op<Scalar>> {
 // Boolean specialization to eliminate -Wimplicit-conversion-floating-point-to-bool warnings.
 template <>
 struct scalar_sqrt_op<bool> {
-  EIGEN_DEPRECATED EIGEN_DEVICE_FUNC inline bool operator()(const bool& a) const { return a; }
+  EIGEN_DEPRECATED EIGEN_DEVICE_FUNC constexpr bool operator()(const bool& a) const { return a; }
   template <typename Packet>
   EIGEN_DEPRECATED EIGEN_DEVICE_FUNC inline Packet packetOp(const Packet& a) const {
     return a;
@@ -656,7 +658,7 @@ struct functor_traits<scalar_sqrt_op<bool>> {
  */
 template <typename Scalar>
 struct scalar_cbrt_op {
-  EIGEN_DEVICE_FUNC constexpr inline Scalar operator()(const Scalar& a) const { return numext::cbrt(a); }
+  EIGEN_DEVICE_FUNC constexpr Scalar operator()(const Scalar& a) const { return numext::cbrt(a); }
   template <typename Packet>
   EIGEN_DEVICE_FUNC inline Packet packetOp(const Packet& a) const {
     return internal::pcbrt(a);
@@ -674,7 +676,7 @@ struct functor_traits<scalar_cbrt_op<Scalar>> {
  */
 template <typename Scalar>
 struct scalar_rsqrt_op {
-  EIGEN_DEVICE_FUNC constexpr inline Scalar operator()(const Scalar& a) const { return numext::rsqrt(a); }
+  EIGEN_DEVICE_FUNC constexpr Scalar operator()(const Scalar& a) const { return numext::rsqrt(a); }
   template <typename Packet>
   EIGEN_DEVICE_FUNC inline Packet packetOp(const Packet& a) const {
     return internal::prsqrt(a);
@@ -692,7 +694,7 @@ struct functor_traits<scalar_rsqrt_op<Scalar>> {
  */
 template <typename Scalar>
 struct scalar_cos_op {
-  EIGEN_DEVICE_FUNC constexpr inline Scalar operator()(const Scalar& a) const { return numext::cos(a); }
+  EIGEN_DEVICE_FUNC constexpr Scalar operator()(const Scalar& a) const { return numext::cos(a); }
   template <typename Packet>
   EIGEN_DEVICE_FUNC inline Packet packetOp(const Packet& a) const {
     return internal::pcos(a);
@@ -709,7 +711,7 @@ struct functor_traits<scalar_cos_op<Scalar>> {
  */
 template <typename Scalar>
 struct scalar_sin_op {
-  EIGEN_DEVICE_FUNC constexpr inline Scalar operator()(const Scalar& a) const { return numext::sin(a); }
+  EIGEN_DEVICE_FUNC constexpr Scalar operator()(const Scalar& a) const { return numext::sin(a); }
   template <typename Packet>
   EIGEN_DEVICE_FUNC inline Packet packetOp(const Packet& a) const {
     return internal::psin(a);
@@ -726,7 +728,7 @@ struct functor_traits<scalar_sin_op<Scalar>> {
  */
 template <typename Scalar>
 struct scalar_tan_op {
-  EIGEN_DEVICE_FUNC constexpr inline Scalar operator()(const Scalar& a) const { return numext::tan(a); }
+  EIGEN_DEVICE_FUNC constexpr Scalar operator()(const Scalar& a) const { return numext::tan(a); }
   template <typename Packet>
   EIGEN_DEVICE_FUNC inline Packet packetOp(const Packet& a) const {
     return internal::ptan(a);
@@ -743,7 +745,7 @@ struct functor_traits<scalar_tan_op<Scalar>> {
  */
 template <typename Scalar>
 struct scalar_acos_op {
-  EIGEN_DEVICE_FUNC constexpr inline Scalar operator()(const Scalar& a) const { return numext::acos(a); }
+  EIGEN_DEVICE_FUNC constexpr Scalar operator()(const Scalar& a) const { return numext::acos(a); }
   template <typename Packet>
   EIGEN_DEVICE_FUNC inline Packet packetOp(const Packet& a) const {
     return internal::pacos(a);
@@ -760,7 +762,7 @@ struct functor_traits<scalar_acos_op<Scalar>> {
  */
 template <typename Scalar>
 struct scalar_asin_op {
-  EIGEN_DEVICE_FUNC constexpr inline Scalar operator()(const Scalar& a) const { return numext::asin(a); }
+  EIGEN_DEVICE_FUNC constexpr Scalar operator()(const Scalar& a) const { return numext::asin(a); }
   template <typename Packet>
   EIGEN_DEVICE_FUNC inline Packet packetOp(const Packet& a) const {
     return internal::pasin(a);
@@ -777,7 +779,7 @@ struct functor_traits<scalar_asin_op<Scalar>> {
  */
 template <typename Scalar>
 struct scalar_atan_op {
-  EIGEN_DEVICE_FUNC constexpr inline Scalar operator()(const Scalar& a) const { return numext::atan(a); }
+  EIGEN_DEVICE_FUNC constexpr Scalar operator()(const Scalar& a) const { return numext::atan(a); }
   template <typename Packet>
   EIGEN_DEVICE_FUNC inline Packet packetOp(const Packet& a) const {
     return internal::patan(a);
@@ -794,7 +796,7 @@ struct functor_traits<scalar_atan_op<Scalar>> {
  */
 template <typename Scalar>
 struct scalar_tanh_op {
-  EIGEN_DEVICE_FUNC constexpr inline Scalar operator()(const Scalar& a) const { return numext::tanh(a); }
+  EIGEN_DEVICE_FUNC constexpr Scalar operator()(const Scalar& a) const { return numext::tanh(a); }
   template <typename Packet>
   EIGEN_DEVICE_FUNC inline Packet packetOp(const Packet& x) const {
     return ptanh(x);
@@ -829,7 +831,7 @@ struct functor_traits<scalar_tanh_op<Scalar>> {
  */
 template <typename Scalar>
 struct scalar_atanh_op {
-  EIGEN_DEVICE_FUNC constexpr inline Scalar operator()(const Scalar& a) const { return numext::atanh(a); }
+  EIGEN_DEVICE_FUNC constexpr Scalar operator()(const Scalar& a) const { return numext::atanh(a); }
   template <typename Packet>
   EIGEN_DEVICE_FUNC inline Packet packetOp(const Packet& x) const {
     return patanh(x);
@@ -847,7 +849,7 @@ struct functor_traits<scalar_atanh_op<Scalar>> {
  */
 template <typename Scalar>
 struct scalar_sinh_op {
-  EIGEN_DEVICE_FUNC constexpr inline Scalar operator()(const Scalar& a) const { return numext::sinh(a); }
+  EIGEN_DEVICE_FUNC constexpr Scalar operator()(const Scalar& a) const { return numext::sinh(a); }
   template <typename Packet>
   EIGEN_DEVICE_FUNC inline Packet packetOp(const Packet& a) const {
     return internal::psinh(a);
@@ -864,7 +866,7 @@ struct functor_traits<scalar_sinh_op<Scalar>> {
  */
 template <typename Scalar>
 struct scalar_asinh_op {
-  EIGEN_DEVICE_FUNC constexpr inline Scalar operator()(const Scalar& a) const { return numext::asinh(a); }
+  EIGEN_DEVICE_FUNC constexpr Scalar operator()(const Scalar& a) const { return numext::asinh(a); }
   template <typename Packet>
   EIGEN_DEVICE_FUNC inline Packet packetOp(const Packet& a) const {
     return internal::pasinh(a);
@@ -882,7 +884,7 @@ struct functor_traits<scalar_asinh_op<Scalar>> {
  */
 template <typename Scalar>
 struct scalar_cosh_op {
-  EIGEN_DEVICE_FUNC constexpr inline Scalar operator()(const Scalar& a) const { return numext::cosh(a); }
+  EIGEN_DEVICE_FUNC constexpr Scalar operator()(const Scalar& a) const { return numext::cosh(a); }
   template <typename Packet>
   EIGEN_DEVICE_FUNC inline Packet packetOp(const Packet& a) const {
     return internal::pcosh(a);
@@ -899,7 +901,7 @@ struct functor_traits<scalar_cosh_op<Scalar>> {
  */
 template <typename Scalar>
 struct scalar_acosh_op {
-  EIGEN_DEVICE_FUNC constexpr inline Scalar operator()(const Scalar& a) const { return numext::acosh(a); }
+  EIGEN_DEVICE_FUNC constexpr Scalar operator()(const Scalar& a) const { return numext::acosh(a); }
   template <typename Packet>
   EIGEN_DEVICE_FUNC inline Packet packetOp(const Packet& a) const {
     return internal::pacosh(a);
@@ -917,7 +919,7 @@ struct functor_traits<scalar_acosh_op<Scalar>> {
  */
 template <typename Scalar>
 struct scalar_inverse_op {
-  EIGEN_DEVICE_FUNC constexpr inline Scalar operator()(const Scalar& a) const { return Scalar(1) / a; }
+  EIGEN_DEVICE_FUNC constexpr Scalar operator()(const Scalar& a) const { return Scalar(1) / a; }
   template <typename Packet>
   EIGEN_DEVICE_FUNC inline Packet packetOp(const Packet& a) const {
     return internal::preciprocal(a);
@@ -941,7 +943,7 @@ struct functor_traits<scalar_inverse_op<Scalar>> {
  */
 template <typename Scalar>
 struct scalar_square_op {
-  EIGEN_DEVICE_FUNC constexpr inline Scalar operator()(const Scalar& a) const { return internal::mul(a, a); }
+  EIGEN_DEVICE_FUNC constexpr Scalar operator()(const Scalar& a) const { return internal::mul(a, a); }
   template <typename Packet>
   EIGEN_DEVICE_FUNC inline Packet packetOp(const Packet& a) const {
     return internal::pmul(a, a);
@@ -955,7 +957,7 @@ struct functor_traits<scalar_square_op<Scalar>> {
 // Boolean specialization to avoid -Wint-in-bool-context warnings on GCC.
 template <>
 struct scalar_square_op<bool> {
-  EIGEN_DEPRECATED EIGEN_DEVICE_FUNC inline bool operator()(const bool& a) const { return a; }
+  EIGEN_DEPRECATED EIGEN_DEVICE_FUNC constexpr bool operator()(const bool& a) const { return a; }
   template <typename Packet>
   EIGEN_DEPRECATED EIGEN_DEVICE_FUNC inline Packet packetOp(const Packet& a) const {
     return a;
@@ -972,9 +974,7 @@ struct functor_traits<scalar_square_op<bool>> {
  */
 template <typename Scalar>
 struct scalar_cube_op {
-  EIGEN_DEVICE_FUNC constexpr inline Scalar operator()(const Scalar& a) const {
-    return internal::mul(a, internal::mul(a, a));
-  }
+  EIGEN_DEVICE_FUNC constexpr Scalar operator()(const Scalar& a) const { return internal::mul(a, internal::mul(a, a)); }
   template <typename Packet>
   EIGEN_DEVICE_FUNC inline Packet packetOp(const Packet& a) const {
     return internal::pmul(a, pmul(a, a));
@@ -988,7 +988,7 @@ struct functor_traits<scalar_cube_op<Scalar>> {
 // Boolean specialization to avoid -Wint-in-bool-context warnings on GCC.
 template <>
 struct scalar_cube_op<bool> {
-  EIGEN_DEPRECATED EIGEN_DEVICE_FUNC inline bool operator()(const bool& a) const { return a; }
+  EIGEN_DEPRECATED EIGEN_DEVICE_FUNC constexpr bool operator()(const bool& a) const { return a; }
   template <typename Packet>
   EIGEN_DEPRECATED EIGEN_DEVICE_FUNC inline Packet packetOp(const Packet& a) const {
     return a;
@@ -1283,7 +1283,7 @@ struct functor_traits<scalar_bitwise_not_op<Scalar>> {
  */
 template <typename Scalar>
 struct scalar_sign_op {
-  EIGEN_DEVICE_FUNC constexpr inline Scalar operator()(const Scalar& a) const { return numext::sign(a); }
+  EIGEN_DEVICE_FUNC constexpr Scalar operator()(const Scalar& a) const { return numext::sign(a); }
 
   template <typename Packet>
   EIGEN_DEVICE_FUNC inline Packet packetOp(const Packet& a) const {
@@ -1365,7 +1365,7 @@ struct scalar_logistic_op : scalar_logistic_op_impl<T> {};
  */
 template <>
 struct scalar_logistic_op<float> {
-  EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE float operator()(const float& x) const {
+  EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE constexpr float operator()(const float& x) const {
     // Truncate at the first point where the interpolant is exactly one.
     const float cst_exp_hi = 16.6355324f;
     const float e = numext::exp(numext::mini(x, cst_exp_hi));
@@ -1468,7 +1468,7 @@ struct scalar_unary_pow_op {
 
  private:
   const ExponentScalar m_exponent;
-  scalar_unary_pow_op() {}
+  constexpr scalar_unary_pow_op() = default;
 };
 
 template <typename T>
@@ -1488,13 +1488,13 @@ struct is_floating_exactly_representable {
 template <typename Scalar, typename ExponentScalar>
 struct scalar_unary_pow_op<Scalar, ExponentScalar, false, false, false, false> {
   template <bool IsExactlyRepresentable = is_floating_exactly_representable<ExponentScalar, Scalar>::value>
-  std::enable_if_t<IsExactlyRepresentable, void> check_is_representable() const {}
+  constexpr std::enable_if_t<IsExactlyRepresentable, void> check_is_representable() const {}
 
   // Issue a deprecation warning if we do a narrowing conversion on the exponent.
   template <bool IsExactlyRepresentable = is_floating_exactly_representable<ExponentScalar, Scalar>::value>
-  EIGEN_DEPRECATED std::enable_if_t<!IsExactlyRepresentable, void> check_is_representable() const {}
+  EIGEN_DEPRECATED constexpr std::enable_if_t<!IsExactlyRepresentable, void> check_is_representable() const {}
 
-  EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE scalar_unary_pow_op(const ExponentScalar& exponent)
+  EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE constexpr scalar_unary_pow_op(const ExponentScalar& exponent)
       : m_exponent(static_cast<Scalar>(exponent)) {
     check_is_representable();
   }
@@ -1509,7 +1509,7 @@ struct scalar_unary_pow_op<Scalar, ExponentScalar, false, false, false, false> {
 
  private:
   const Scalar m_exponent;
-  scalar_unary_pow_op() {}
+  constexpr scalar_unary_pow_op() = default;
 };
 
 // Specialization for a complex base and a real, non-integer exponent type: integer-valued exponents take the
@@ -1517,11 +1517,11 @@ struct scalar_unary_pow_op<Scalar, ExponentScalar, false, false, false, false> {
 // vectorized complex pow, so this stays scalar.
 template <typename Scalar, typename ExponentScalar>
 struct scalar_unary_pow_op<Scalar, ExponentScalar, false, false, true, false> {
-  EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE scalar_unary_pow_op(const ExponentScalar& exponent)
+  EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE constexpr scalar_unary_pow_op(const ExponentScalar& exponent)
       : m_exponent(exponent),
         m_use_repeated_squaring((numext::isfinite)(exponent) && numext::round(exponent) == exponent &&
                                 unary_pow::use_repeated_squaring<Scalar>(exponent)) {}
-  EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE Scalar operator()(const Scalar& a) const {
+  EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE constexpr Scalar operator()(const Scalar& a) const {
     if (m_use_repeated_squaring) return unary_pow::int_pow(a, m_exponent);
     // std::pow can promote the complex component for a wider exponent before casting back to Scalar.
     EIGEN_USING_STD(pow);
@@ -1538,7 +1538,7 @@ template <typename Scalar, typename ExponentScalar, bool BaseIsInteger, bool Bas
 struct scalar_unary_pow_op<Scalar, ExponentScalar, BaseIsInteger, true, BaseIsComplex, false> {
   EIGEN_DEVICE_FUNC constexpr EIGEN_STRONG_INLINE scalar_unary_pow_op(const ExponentScalar& exponent)
       : m_exponent(exponent) {}
-  EIGEN_DEVICE_FUNC constexpr EIGEN_STRONG_INLINE Scalar operator()(const Scalar& a) const {
+  EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE constexpr Scalar operator()(const Scalar& a) const {
     return unary_pow_impl<Scalar, ExponentScalar>::run(a, m_exponent);
   }
   template <typename Packet>
@@ -1548,7 +1548,7 @@ struct scalar_unary_pow_op<Scalar, ExponentScalar, BaseIsInteger, true, BaseIsCo
 
  private:
   const ExponentScalar m_exponent;
-  scalar_unary_pow_op() {}
+  constexpr scalar_unary_pow_op() = default;
 };
 
 template <typename Scalar, typename ExponentScalar>
