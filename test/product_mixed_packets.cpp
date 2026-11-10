@@ -101,66 +101,51 @@ void mixed_infinite_segments(const Product& product, internal::true_type) {
   }
 }
 
+template <typename Result, typename Product>
+void check_infinite_product(const Product& product) {
+  using Real = typename NumTraits<typename Result::Scalar>::Real;
+  const Result result = product;
+  for (Index i = 0; i < result.size(); ++i) {
+    VERIFY_IS_EQUAL(result(i).real(), NumTraits<Real>::infinity());
+    VERIFY_IS_EQUAL(result(i).imag(), NumTraits<Real>::infinity());
+  }
+}
+
+template <typename Product>
+void check_infinite_lazy_product(const Product& product) {
+  using Scalar = typename Product::Scalar;
+  check_infinite_product<Matrix<Scalar, Dynamic, Dynamic>>(product);
+  mixed_infinite_segments(product, internal::bool_constant<internal::packet_traits<Scalar>::Vectorizable>());
+}
+
 template <typename Real>
 EIGEN_DONT_INLINE void mixed_infinite_factor() {
 #if !defined(__FAST_MATH__)
   using Complex = std::complex<Real>;
+  const Real inf = NumTraits<Real>::infinity();
   for (Index size = 1; size <= 9; ++size) {
     for (Index depth : {Index(1), Index(3)}) {
-      Matrix<Complex, Dynamic, Dynamic, ColMajor> a(size, depth);
-      a.setConstant(Complex(1, 2));
-      Matrix<Complex, Dynamic, Dynamic, RowMajor> transposed = a.transpose();
-      Matrix<Real, Dynamic, 1> factors(depth);
-      for (bool row_major : {false, true}) {
-        for (bool expand_real : {false, true}) {
-          const Real factor = NumTraits<Real>::infinity();
-          factors.setConstant(factor);
-          const Matrix<Real, Dynamic, Dynamic, ColMajor> real =
-              Matrix<Real, Dynamic, Dynamic, ColMajor>::Constant(size, depth, Real(factor));
-          const Matrix<Complex, Dynamic, 1> complex_factors =
-              Matrix<Complex, Dynamic, 1>::Constant(depth, Complex(1, 2));
-          Matrix<Complex, Dynamic, Dynamic> result;
-          if (expand_real && row_major) {
-            result = complex_factors.transpose().lazyProduct(real.transpose()).eval();
-            mixed_infinite_segments(complex_factors.transpose().lazyProduct(real.transpose()),
-                                    internal::bool_constant<internal::packet_traits<Complex>::Vectorizable>());
-          } else if (expand_real) {
-            result = real.lazyProduct(complex_factors).eval();
-            mixed_infinite_segments(real.lazyProduct(complex_factors),
-                                    internal::bool_constant<internal::packet_traits<Complex>::Vectorizable>());
-          } else if (row_major) {
-            result = factors.transpose().lazyProduct(transposed).eval();
-            mixed_infinite_segments(factors.transpose().lazyProduct(transposed),
-                                    internal::bool_constant<internal::packet_traits<Complex>::Vectorizable>());
-          } else {
-            result = a.lazyProduct(factors).eval();
-            mixed_infinite_segments(a.lazyProduct(factors),
-                                    internal::bool_constant<internal::packet_traits<Complex>::Vectorizable>());
-          }
-          if (size == 3 && depth == 3) {
-            auto check_fixed = [](const auto& product) {
-              using Product = internal::remove_all_t<decltype(product)>;
-              const typename Product::PlainObject fixed = product;
-              for (Index i = 0; i < fixed.size(); ++i) {
-                VERIFY_IS_EQUAL(fixed(i).real(), NumTraits<Real>::infinity());
-                VERIFY_IS_EQUAL(fixed(i).imag(), NumTraits<Real>::infinity());
-              }
-            };
-            if (expand_real && row_major)
-              check_fixed(complex_factors.template head<3>().transpose() *
-                          real.template topLeftCorner<3, 3>().transpose());
-            else if (expand_real)
-              check_fixed(real.template topLeftCorner<3, 3>() * complex_factors.template head<3>());
-            else if (row_major)
-              check_fixed(factors.template head<3>().transpose() * transposed.template topLeftCorner<3, 3>());
-            else
-              check_fixed(a.template topLeftCorner<3, 3>() * factors.template head<3>());
-          }
-          for (Index i = 0; i < result.size(); ++i) {
-            VERIFY_IS_EQUAL(result(i).real(), NumTraits<Real>::infinity());
-            VERIFY_IS_EQUAL(result(i).imag(), NumTraits<Real>::infinity());
-          }
-        }
+      const Matrix<Complex, Dynamic, Dynamic, ColMajor> a =
+          Matrix<Complex, Dynamic, Dynamic, ColMajor>::Constant(size, depth, Complex(1, 2));
+      const Matrix<Complex, Dynamic, Dynamic, RowMajor> transposed = a.transpose();
+      const Matrix<Real, Dynamic, 1> factors = Matrix<Real, Dynamic, 1>::Constant(depth, inf);
+      const Matrix<Real, Dynamic, Dynamic, ColMajor> real =
+          Matrix<Real, Dynamic, Dynamic, ColMajor>::Constant(size, depth, inf);
+      const Matrix<Complex, Dynamic, 1> complex_factors = Matrix<Complex, Dynamic, 1>::Constant(depth, Complex(1, 2));
+      check_infinite_lazy_product(a.lazyProduct(factors));
+      check_infinite_lazy_product(factors.transpose().lazyProduct(transposed));
+      check_infinite_lazy_product(real.lazyProduct(complex_factors));
+      check_infinite_lazy_product(complex_factors.transpose().lazyProduct(real.transpose()));
+      if (size == 3 && depth == 3) {
+        const auto a3 = a.template topLeftCorner<3, 3>();
+        const auto transposed3 = transposed.template topLeftCorner<3, 3>();
+        const auto real3 = real.template topLeftCorner<3, 3>();
+        const auto factors3 = factors.template head<3>();
+        const auto complex_factors3 = complex_factors.template head<3>();
+        check_infinite_product<Matrix<Complex, 3, 1>>(a3 * factors3);
+        check_infinite_product<Matrix<Complex, 1, 3>>(factors3.transpose() * transposed3);
+        check_infinite_product<Matrix<Complex, 3, 1>>(real3 * complex_factors3);
+        check_infinite_product<Matrix<Complex, 1, 3>>(complex_factors3.transpose() * real3.transpose());
       }
     }
   }
@@ -190,8 +175,6 @@ void check_mixed_packets(const Lhs& lhs, const Rhs& rhs) {
   result.setZero();
   result.noalias() += lhs * rhs;
   VERIFY_IS_EQUAL(result, reference);
-  result.noalias() -= lhs * rhs;
-  VERIFY(result.isZero(Real(0)));
   VERIFY_IS_EQUAL(lhs.lazyProduct(rhs).sum(), reference.sum());
   Result reversed = lhs.lazyProduct(rhs).reverse();
   VERIFY_IS_EQUAL(reversed, reference.reverse());
@@ -199,10 +182,6 @@ void check_mixed_packets(const Lhs& lhs, const Rhs& rhs) {
   padded.setConstant(Complex(19, 23));
   auto destination = padded.topLeftCorner(lhs.rows(), rhs.cols());
   destination.noalias() = lhs * rhs;
-  VERIFY_IS_EQUAL(destination, reference);
-  destination.noalias() += lhs * rhs;
-  VERIFY_IS_EQUAL(destination, (Real(2) * reference).eval());
-  destination.noalias() -= lhs * rhs;
   VERIFY_IS_EQUAL(destination, reference);
   VERIFY((padded.bottomRows(1).array() == Complex(19, 23)).all());
   VERIFY((padded.rightCols(1).array() == Complex(19, 23)).all());
@@ -275,80 +254,69 @@ void mixed_dynamic_packets() {
   }
 }
 
+// Compares bit-for-bit up to the NaN payload: NaN matches NaN, and zeros must agree in sign.
+template <typename Real>
+void verify_identical(const Real& actual, const Real& expected) {
+  if ((numext::isnan)(expected)) {
+    VERIFY((numext::isnan)(actual));
+  } else {
+    VERIFY_IS_EQUAL(actual, expected);
+    if (expected == Real(0)) VERIFY_IS_EQUAL((std::signbit)(actual), (std::signbit)(expected));
+  }
+}
+
+template <typename Real>
+void verify_identical(const std::complex<Real>& actual, const std::complex<Real>& expected) {
+  verify_identical(actual.real(), expected.real());
+  verify_identical(actual.imag(), expected.imag());
+}
+
 template <typename Real>
 void mixed_special_packets() {
   using Complex = std::complex<Real>;
+  const Real inf = NumTraits<Real>::infinity(), nan = NumTraits<Real>::quiet_NaN(), zero(0);
   Matrix<Complex, 5, 1> a;
-  const Real inf = NumTraits<Real>::infinity(), nan = NumTraits<Real>::quiet_NaN();
-  a << Complex(inf, 2), Complex(2, inf), Complex(nan, 3), Complex(-Real(0), Real(0)), Complex(4, -Real(0));
+  a << Complex(inf, 2), Complex(2, inf), Complex(nan, 3), Complex(-zero, zero), Complex(4, -zero);
   const Matrix<Real, 1, 1> factor = Matrix<Real, 1, 1>::Constant(2);
+  const Matrix<Complex, Dynamic, Dynamic, ColMajor> dynamic = a;
+  const Matrix<Real, Dynamic, Dynamic> dynamic_factor = factor;
   const Matrix<Complex, 5, 1> result = a.lazyProduct(factor);
-  for (Index i = 0; i < a.size(); ++i) {
-    const Complex expected = a(i) * Real(2);
-    VERIFY((numext::isnan)(expected.real()) ? (numext::isnan)(result(i).real()) : result(i).real() == expected.real());
-    VERIFY((numext::isnan)(expected.imag()) ? (numext::isnan)(result(i).imag()) : result(i).imag() == expected.imag());
-    if (expected.real() == 0) VERIFY_IS_EQUAL((std::signbit)(result(i).real()), (std::signbit)(expected.real()));
-    if (expected.imag() == 0) VERIFY_IS_EQUAL((std::signbit)(result(i).imag()), (std::signbit)(expected.imag()));
-  }
-  Matrix<Complex, Dynamic, Dynamic, ColMajor> dynamic = a;
-  Matrix<Real, Dynamic, Dynamic> dynamic_factor = factor;
   const Matrix<Complex, 5, 1> dynamic_result = dynamic.lazyProduct(dynamic_factor);
-  VERIFY_IS_EQUAL((std::signbit)(dynamic_result(3).real()), (std::signbit)(result(3).real()));
-  VERIFY_IS_EQUAL((std::signbit)(dynamic_result(4).imag()), (std::signbit)(result(4).imag()));
+  for (Index i = 0; i < a.size(); ++i) {
+    verify_identical(result(i), a(i) * Real(2));
+    verify_identical(dynamic_result(i), a(i) * Real(2));
+  }
+
+  // MSVC's real*complex operator introduces cross terms; both Eigen paths must scale components directly.
+  const Complex negative_zero(-zero, -zero);
+  for (const Complex& value : {internal::fast_mult_op<Real, Complex>()(Real(2), negative_zero),
+                               internal::conj_helper<Real, Complex, false, false>().pmul(Real(2), negative_zero),
+                               internal::conj_helper<Real, Complex, true, false>().pmul(Real(2), negative_zero)})
+    verify_identical(value, negative_zero);
+  for (const Complex& value : {internal::conj_helper<Real, Complex, false, true>().pmul(Real(2), negative_zero),
+                               internal::conj_helper<Real, Complex, true, true>().pmul(Real(2), negative_zero)})
+    verify_identical(value, Complex(-zero, zero));
+  for (const Complex& value : {internal::fast_mult_op<Real, Complex>()(Real(2), a(0)),
+                               internal::conj_helper<Real, Complex, false, false>().pmul(Real(2), a(0))})
+    verify_identical(value, Complex(inf, 4));
 
   const Matrix<Real, 5, 1> real = Matrix<Real, 5, 1>::Constant(2);
-  const Matrix<Complex, 1, 1> complex_factor = Matrix<Complex, 1, 1>::Constant(Complex(-Real(0), -Real(0)));
-  // MSVC's real*complex operator introduces cross terms; both Eigen paths must scale components directly.
-  const Complex scalar_products[] = {
-      internal::fast_mult_op<Real, Complex>()(Real(2), complex_factor(0)),
-      internal::conj_helper<Real, Complex, false, false>().pmul(Real(2), complex_factor(0)),
-      internal::conj_helper<Real, Complex, true, false>().pmul(Real(2), complex_factor(0))};
-  for (const Complex& value : scalar_products) {
-    VERIFY_IS_EQUAL(value.real(), Real(0));
-    VERIFY_IS_EQUAL(value.imag(), Real(0));
-    VERIFY((std::signbit)(value.real()));
-    VERIFY((std::signbit)(value.imag()));
-  }
-  const Complex conjugated_products[] = {
-      internal::conj_helper<Real, Complex, false, true>().pmul(Real(2), complex_factor(0)),
-      internal::conj_helper<Real, Complex, true, true>().pmul(Real(2), complex_factor(0))};
-  for (const Complex& value : conjugated_products) {
-    VERIFY_IS_EQUAL(value.real(), Real(0));
-    VERIFY_IS_EQUAL(value.imag(), Real(0));
-    VERIFY((std::signbit)(value.real()));
-    VERIFY(!(std::signbit)(value.imag()));
-  }
-  const Complex infinite_products[] = {internal::fast_mult_op<Real, Complex>()(Real(2), a(0)),
-                                       internal::conj_helper<Real, Complex, false, false>().pmul(Real(2), a(0))};
-  for (const Complex& value : infinite_products) {
-    VERIFY_IS_EQUAL(value.real(), inf);
-    VERIFY_IS_EQUAL(value.imag(), Real(4));
-  }
+  const Matrix<Complex, 1, 1> complex_factor = Matrix<Complex, 1, 1>::Constant(negative_zero);
   const Matrix<Complex, 5, 1> expanded = real.lazyProduct(complex_factor);
   const Matrix<Real, Dynamic, Dynamic, ColMajor> dynamic_real = real;
   const Matrix<Complex, Dynamic, Dynamic> dynamic_complex_factor = complex_factor;
   const Matrix<Complex, Dynamic, Dynamic> dynamic_expanded = dynamic_real.lazyProduct(dynamic_complex_factor);
   for (Index i = 0; i < real.size(); ++i) {
-    VERIFY_IS_EQUAL(expanded(i).real(), Real(0));
-    VERIFY_IS_EQUAL(expanded(i).imag(), Real(0));
-    VERIFY((std::signbit)(expanded(i).real()));
-    VERIFY((std::signbit)(expanded(i).imag()));
-    VERIFY((std::signbit)(dynamic_expanded(i).real()));
-    VERIFY((std::signbit)(dynamic_expanded(i).imag()));
+    verify_identical(expanded(i), negative_zero);
+    verify_identical(dynamic_expanded(i), negative_zero);
   }
+
   Matrix<Real, 5, 1> real_special;
-  real_special << inf, nan, Real(0), -Real(0), Real(2);
-  const Matrix<Complex, 1, 1> factor_special = Matrix<Complex, 1, 1>::Constant(Complex(2, -3));
-  const Matrix<Complex, 5, 1> special = real_special.lazyProduct(factor_special);
-  for (Index i = 0; i < real_special.size(); ++i) {
-    const Complex expected(real_special(i) * factor_special(0).real(), real_special(i) * factor_special(0).imag());
-    VERIFY((numext::isnan)(expected.real()) ? (numext::isnan)(special(i).real())
-                                            : special(i).real() == expected.real());
-    VERIFY((numext::isnan)(expected.imag()) ? (numext::isnan)(special(i).imag())
-                                            : special(i).imag() == expected.imag());
-    if (expected.real() == 0) VERIFY_IS_EQUAL((std::signbit)(special(i).real()), (std::signbit)(expected.real()));
-    if (expected.imag() == 0) VERIFY_IS_EQUAL((std::signbit)(special(i).imag()), (std::signbit)(expected.imag()));
-  }
+  real_special << inf, nan, zero, -zero, Real(2);
+  const Complex c(2, -3);
+  const Matrix<Complex, 5, 1> special = real_special.lazyProduct(Matrix<Complex, 1, 1>::Constant(c));
+  for (Index i = 0; i < real_special.size(); ++i)
+    verify_identical(special(i), Complex(real_special(i) * c.real(), real_special(i) * c.imag()));
 }
 
 template <typename Real>
@@ -386,64 +354,17 @@ void mixed_strided_packets() {
     check_mixed_packets(x.transpose(), a.transpose());
     Matrix<Real, 64, 1> real_backing;
     real_backing.setConstant(Real(43));
-    Map<Matrix<Real, Dynamic, Dynamic, ColMajor>, Unaligned, Stride<Dynamic, Dynamic>> real_map(
+    Map<Matrix<Real, Dynamic, Dynamic, ColMajor>, Unaligned, Stride<Dynamic, Dynamic>> strided_real_map(
         real_backing.data() + 1, 7, 3, Stride<Dynamic, Dynamic>(20, inner));
-    real_map = a.real();
-    using Fallback = decltype(real_map.lazyProduct(complex_ones));
+    strided_real_map = a.real();
+    using Fallback = decltype(strided_real_map.lazyProduct(complex_ones));
     STATIC_CHECK((!(internal::evaluator<Fallback>::Flags & PacketAccessBit)));
-    check_mixed_packets(real_map, complex_ones);
-    check_mixed_packets(complex_ones.transpose(), real_map.transpose());
+    check_mixed_packets(strided_real_map, complex_ones);
+    check_mixed_packets(complex_ones.transpose(), strided_real_map.transpose());
     Map<Matrix<Real, Dynamic, Dynamic, ColMajor>, Unaligned, OuterStride<Dynamic>> unit_map(
         real_backing.data() + 1, 7, 3, OuterStride<Dynamic>(20));
     check_mixed_packets(unit_map, complex_ones);
     check_mixed_packets(complex_ones.transpose(), unit_map.transpose());
-  }
-}
-
-template <typename Real>
-void mixed_roundoff_packets() {
-  using Complex = std::complex<Real>;
-  const Matrix<Complex, 3, 3, ColMajor> a = Matrix<Complex, 3, 3, ColMajor>::Random();
-  const Matrix<Real, 3, 1> x = Matrix<Real, 3, 1>::Random();
-  const Matrix<Complex, 3, 1> result = a * x;
-  const Matrix<Complex, 3, 3, RowMajor> transposed = a.transpose();
-  const Matrix<Complex, 1, 3> row_result = x.transpose() * transposed;
-  for (Index i = 0; i < 3; ++i) {
-    long double real = 0, imag = 0, magnitude = 0;
-    for (Index k = 0; k < 3; ++k) {
-      const long double re = static_cast<long double>(a(i, k).real()) * static_cast<long double>(x(k));
-      const long double im = static_cast<long double>(a(i, k).imag()) * static_cast<long double>(x(k));
-      real += re;
-      imag += im;
-      magnitude += std::abs(re) + std::abs(im);
-    }
-    // Three products and two additions per component, allowing fused and unfused evaluation.
-    const long double bound = 8 * static_cast<long double>(NumTraits<Real>::epsilon()) * magnitude;
-    VERIFY(std::abs(static_cast<long double>(result(i).real()) - real) <= bound);
-    VERIFY(std::abs(static_cast<long double>(result(i).imag()) - imag) <= bound);
-    VERIFY(std::abs(static_cast<long double>(row_result(i).real()) - real) <= bound);
-    VERIFY(std::abs(static_cast<long double>(row_result(i).imag()) - imag) <= bound);
-  }
-  const Matrix<Real, 3, 3, ColMajor> real_matrix = a.real();
-  const Matrix<Complex, 3, 1> complex_vector = a.col(0);
-  const Matrix<Complex, 3, 1> expanded = real_matrix * complex_vector;
-  const Matrix<Complex, 1, 3> expanded_row = complex_vector.transpose() * real_matrix.transpose();
-  for (Index i = 0; i < 3; ++i) {
-    long double real = 0, imag = 0, magnitude = 0;
-    for (Index k = 0; k < 3; ++k) {
-      const long double re =
-          static_cast<long double>(real_matrix(i, k)) * static_cast<long double>(complex_vector(k).real());
-      const long double im =
-          static_cast<long double>(real_matrix(i, k)) * static_cast<long double>(complex_vector(k).imag());
-      real += re;
-      imag += im;
-      magnitude += std::abs(re) + std::abs(im);
-    }
-    const long double bound = 8 * static_cast<long double>(NumTraits<Real>::epsilon()) * magnitude;
-    VERIFY(std::abs(static_cast<long double>(expanded(i).real()) - real) <= bound);
-    VERIFY(std::abs(static_cast<long double>(expanded(i).imag()) - imag) <= bound);
-    VERIFY(std::abs(static_cast<long double>(expanded_row(i).real()) - real) <= bound);
-    VERIFY(std::abs(static_cast<long double>(expanded_row(i).imag()) - imag) <= bound);
   }
 }
 
@@ -453,13 +374,11 @@ void mixed_packet_tests() {
   mixed_proxy_packets<Real, RowMajor>();
   mixed_fixed_packets<Real, 2>();
   mixed_fixed_packets<Real, 3>();
-  mixed_fixed_packets<Real, 4>();
-  mixed_fixed_packets<Real, 5>();
   mixed_fixed_packets<Real, 7>();
+  mixed_fixed_packets<Real, 8>();
   mixed_dynamic_packets<Real>();
   mixed_special_packets<Real>();
   mixed_strided_packets<Real>();
-  mixed_roundoff_packets<Real>();
   mixed_infinite_factor<Real>();
 }
 

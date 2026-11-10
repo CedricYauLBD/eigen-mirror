@@ -100,9 +100,12 @@ void mixed_gemv_layout() {
       const Lhs lhs = Lhs::Random(rows, cols);
       const Rhs rhs = Rhs::Random(cols);
       check_mixed_gemv(lhs, rhs);
-      check_mixed_gemv(lhs.conjugate(), rhs);
-      check_mixed_gemv(lhs, rhs.conjugate());
-      check_mixed_gemv(lhs.conjugate(), rhs.conjugate());
+      // Conjugating the real operand is the identity, so only the complex one varies.
+      EIGEN_IF_CONSTEXPR (RealLeft) {
+        check_mixed_gemv(lhs, rhs.conjugate());
+      } else {
+        check_mixed_gemv(lhs.conjugate(), rhs);
+      }
       Rhs storage = Rhs::Zero(2 * cols + 1);
       Map<Rhs, Unaligned, InnerStride<2>> strided_rhs(storage.data(), cols);
       strided_rhs = rhs;
