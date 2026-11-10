@@ -47,6 +47,8 @@ Bug fixes:
 - Eigen's BLAS library departed from Reference BLAS on special values and zero increments: `?axpy` and `?gemmtr` read their operands when `alpha` is zero, so an infinite or NaN operand made the result NaN; `?copy` with `incy = 0`, and `?swap` and `?axpby` with a zero increment, did nothing; `?trsm` applied `alpha` after the solve and could overflow where the result does not; real `i?amax` returned an ISA-dependent index for vectors holding NaN; `crotg` and `zrotg` returned NaN for large representable inputs and used the conventions of Reference BLAS before 3.10; `csrot`, `zdrot`, `?herk` and `?her2k` applied their real factor through a complex multiplication, producing NaN from infinite components; and `?rotmg` could loop forever on infinite input [!3505]
 
 Breaking changes:
+- Removed triSYCL and ComputeCpp support from SYCL test builds. Use DPC++ instead of the removed
+  `EIGEN_SYCL_TRISYCL` and `EIGEN_SYCL_ComputeCpp` configurations; DPC++ is now the only supported backend.
 - `PaStiXSupport` now requires PaStiX 6.x; version 5 is no longer supported. `FindPASTIX.cmake` uses pkg-config metadata
   instead of dependency-selection components. Removed the unused `FindBLASEXT`, `FindHWLOC`, `FindSCOTCH` and
   `FindPTSCOTCH` modules. Renamed `FindMetis.cmake` to `FindMETIS.cmake` to match `find_package(METIS)` [#2256, !3467]
