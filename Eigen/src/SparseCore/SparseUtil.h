@@ -265,7 +265,8 @@ class ordered_hash_accumulator {
       Index q = s;
       while (m_keys[q] != kEmpty) ++q;
       m_top = numext::maxi(m_top, q);
-      for (; q > s; --q) m_keys[q] = m_keys[q - 1], m_values[q] = m_values[q - 1];
+      std::move_backward(m_keys + s, m_keys + q, m_keys + q + 1);
+      std::move_backward(m_values + s, m_values + q, m_values + q + 1);
       m_keys[s] = i;
       m_values[s] = Scalar(0);
     }
@@ -275,9 +276,16 @@ class ordered_hash_accumulator {
   // Moves the n entries to keys[0, n) and values[0, n) in increasing index order and returns n. The write slot never
   // passes the read slot, so the table may sit where its output belongs. init() must run before the next use.
   Index compact() {
-    Index n = 0;
-    for (Index s = 0; s <= m_top; ++s)
-      if (m_keys[s] != kEmpty) m_keys[n] = m_keys[s], m_values[n] = m_values[s], ++n;
+    // Entries before the first empty slot are already in place; after it, n < s, so no value moves onto itself.
+    Index s = 0;
+    while (s <= m_top && m_keys[s] != kEmpty) ++s;
+    Index n = s;
+    for (; s <= m_top; ++s)
+      if (m_keys[s] != kEmpty) {
+        m_keys[n] = m_keys[s];
+        m_values[n] = std::move(m_values[s]);
+        ++n;
+      }
     return n;
   }
 
