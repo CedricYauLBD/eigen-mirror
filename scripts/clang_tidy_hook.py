@@ -28,8 +28,8 @@ payload is not a unified diff.
 lints the lines the edit added, and after a shell command that committed, the
 lines the commit added.
 
-No compilation database is required: ``-std=c++14 -I<repo>`` parses any file
-in the C++14 trees, with ``test/`` added for the test sources and
+No compilation database is required: ``-std=c++17 -I<repo>`` parses any file
+in the checked trees, with ``test/`` added for the test sources and
 ``contrib/`` for the contrib ones, which keeps the hook usable in a
 fresh checkout with no build directory.
 
@@ -163,7 +163,7 @@ def compile_args(rel_path, root=REPO_ROOT):
     with ``contrib/`` on the path.  These are the directories
     ``contrib/test/CMakeLists.txt`` adds for them.
     """
-    args = ["-std=c++14", "-I" + root]
+    args = ["-std=c++17", "-I" + root]
     if rel_path.startswith(("test/", "contrib/test/")):
         args += ["-I" + os.path.join(root, "test")]
     if rel_path.startswith("contrib/test/"):
