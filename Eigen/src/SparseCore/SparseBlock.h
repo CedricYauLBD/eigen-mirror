@@ -187,14 +187,15 @@ class sparse_matrix_block_impl : public SparseCompressedBase<Block<SparseMatrixT
       // realloc manually to reduce copies; the old buffer is released below, so its entries are moved
       typename SparseMatrixType::Storage newdata(m_matrix.data().allocatedSize() - block_size + nnz);
 
-      std::move(matrix.valuePtr(), matrix.valuePtr() + start, newdata.valuePtr());
+      internal::move_or_copy(matrix.valuePtr(), matrix.valuePtr() + start, newdata.valuePtr());
       internal::smart_copy(m_matrix.innerIndexPtr(), m_matrix.innerIndexPtr() + start, newdata.indexPtr());
 
       internal::smart_copy(tmp.valuePtr() + tmp_start, tmp.valuePtr() + tmp_start + nnz, newdata.valuePtr() + start);
       internal::smart_copy(tmp.innerIndexPtr() + tmp_start, tmp.innerIndexPtr() + tmp_start + nnz,
                            newdata.indexPtr() + start);
 
-      std::move(matrix.valuePtr() + end, matrix.valuePtr() + end + tail_size, newdata.valuePtr() + start + nnz);
+      internal::move_or_copy(matrix.valuePtr() + end, matrix.valuePtr() + end + tail_size,
+                             newdata.valuePtr() + start + nnz);
       internal::smart_copy(matrix.innerIndexPtr() + end, matrix.innerIndexPtr() + end + tail_size,
                            newdata.indexPtr() + start + nnz);
 
@@ -212,10 +213,10 @@ class sparse_matrix_block_impl : public SparseCompressedBase<Block<SparseMatrixT
         StorageIndex* indices = matrix.innerIndexPtr();
         const Index tail_end = end + tail_size;
         if (nnz < block_size) {
-          std::move(values + end, values + tail_end, values + start + nnz);
+          internal::move_or_copy(values + end, values + tail_end, values + start + nnz);
           std::move(indices + end, indices + tail_end, indices + start + nnz);
         } else {
-          std::move_backward(values + end, values + tail_end, values + start + nnz + tail_size);
+          internal::move_or_copy_backward(values + end, values + tail_end, values + start + nnz + tail_size);
           std::move_backward(indices + end, indices + tail_end, indices + start + nnz + tail_size);
         }
 

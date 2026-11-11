@@ -634,6 +634,37 @@ struct smart_copy_helper<T, false> {
   }
 };
 
+// std::move(x) where `T = std::move(x)` compiles, and x otherwise, so that a T that deletes its move assignment but
+// keeps its copy assignment is copied rather than rejected.
+template <typename T>
+constexpr std::conditional_t<std::is_move_assignable<T>::value, T&&, const T&> move_if_assignable(T& x) noexcept {
+  return std::move(x);
+}
+
+// std::move and std::move_backward where T can be move-assigned, std::copy and std::copy_backward otherwise. The
+// ranges may overlap as those algorithms allow.
+template <typename T, bool Move = std::is_move_assignable<T>::value>
+struct move_or_copy_helper {
+  static void run(T* start, T* end, T* target) { std::move(start, end, target); }
+  static void run_backward(T* start, T* end, T* target_end) { std::move_backward(start, end, target_end); }
+};
+
+template <typename T>
+struct move_or_copy_helper<T, false> {
+  static void run(T* start, T* end, T* target) { std::copy(start, end, target); }
+  static void run_backward(T* start, T* end, T* target_end) { std::copy_backward(start, end, target_end); }
+};
+
+template <typename T>
+inline void move_or_copy(T* start, T* end, T* target) {
+  move_or_copy_helper<T>::run(start, end, target);
+}
+
+template <typename T>
+inline void move_or_copy_backward(T* start, T* end, T* target_end) {
+  move_or_copy_helper<T>::run_backward(start, end, target_end);
+}
+
 /*****************************************************************************
 *** Implementation of runtime stack allocation (falling back to malloc)    ***
 *****************************************************************************/

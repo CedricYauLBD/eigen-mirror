@@ -376,7 +376,7 @@ class SparseMatrix : public SparseCompressedBase<SparseMatrix<Scalar_, Options_,
         eigen_internal_assert(target >= begin);
         if (target != begin) {
           std::move_backward(innerIndexPtr() + begin, innerIndexPtr() + end, innerIndexPtr() + target + innerNNZ);
-          std::move_backward(valuePtr() + begin, valuePtr() + end, valuePtr() + target + innerNNZ);
+          internal::move_or_copy_backward(valuePtr() + begin, valuePtr() + end, valuePtr() + target + innerNNZ);
         }
         previousOuterIndex = m_outerIndex[j];
         m_outerIndex[j] = newOuterIndex[j];
@@ -411,7 +411,7 @@ class SparseMatrix : public SparseCompressedBase<SparseMatrix<Scalar_, Options_,
         eigen_internal_assert(target >= begin);
         if (target != begin) {
           std::move_backward(innerIndexPtr() + begin, innerIndexPtr() + end, innerIndexPtr() + target + innerNNZ);
-          std::move_backward(valuePtr() + begin, valuePtr() + end, valuePtr() + target + innerNNZ);
+          internal::move_or_copy_backward(valuePtr() + begin, valuePtr() + end, valuePtr() + target + innerNNZ);
         }
       }
 
@@ -509,7 +509,7 @@ class SparseMatrix : public SparseCompressedBase<SparseMatrix<Scalar_, Options_,
       uncompress();
       const Index from = internal::convert_index<Index>(m_outerIndex[0]);
       const Index chunkSize = internal::convert_index<Index>(m_innerNonZeros[0]);
-      std::move(valuePtr() + from, valuePtr() + from + chunkSize, valuePtr());
+      internal::move_or_copy(valuePtr() + from, valuePtr() + from + chunkSize, valuePtr());
       std::move(innerIndexPtr() + from, innerIndexPtr() + from + chunkSize, innerIndexPtr());
       m_outerIndex[0] = StorageIndex(0);
     }
@@ -620,7 +620,7 @@ class SparseMatrix : public SparseCompressedBase<SparseMatrix<Scalar_, Options_,
         Index chunkSize = internal::convert_index<Index>(end) - copyStart;
         // A leading chunk is already in place; a self-move would leave it unspecified.
         if (copyTarget != copyStart) {
-          std::move(valuePtr() + copyStart, valuePtr() + copyStart + chunkSize, valuePtr() + copyTarget);
+          internal::move_or_copy(valuePtr() + copyStart, valuePtr() + copyStart + chunkSize, valuePtr() + copyTarget);
           std::move(innerIndexPtr() + copyStart, innerIndexPtr() + copyStart + chunkSize, innerIndexPtr() + copyTarget);
         }
         copyStart = internal::convert_index<Index>(nextStart);
@@ -680,7 +680,7 @@ class SparseMatrix : public SparseCompressedBase<SparseMatrix<Scalar_, Options_,
           // Entries in front of the first dropped one are already in place, where a self-move would leave them
           // unspecified. A trivially copyable scalar is assigned anyway, which costs less than the branch.
           if (std::is_trivially_copyable<Scalar>::value || k != i) {
-            m_data.value(k) = std::move(m_data.value(i));
+            m_data.value(k) = internal::move_if_assignable(m_data.value(i));
             m_data.index(k) = m_data.index(i);
           }
           ++k;
@@ -1091,7 +1091,8 @@ class SparseMatrix : public SparseCompressedBase<SparseMatrix<Scalar_, Options_,
             Index copyBegin = m_outerIndex[j + 1];
             // shift == 0: every remaining insertion fits in its vector's capacity, so the chunk stays in place.
             if (shift > 0) {
-              std::move_backward(valuePtr() + copyBegin, valuePtr() + copyEnd, valuePtr() + copyEnd + shift);
+              internal::move_or_copy_backward(valuePtr() + copyBegin, valuePtr() + copyEnd,
+                                              valuePtr() + copyEnd + shift);
               std::move_backward(innerIndexPtr() + copyBegin, innerIndexPtr() + copyEnd,
                                  innerIndexPtr() + copyEnd + shift);
             }
@@ -1105,7 +1106,7 @@ class SparseMatrix : public SparseCompressedBase<SparseMatrix<Scalar_, Options_,
             if (capacity > 0) shift++;
             // shift >= 1 here: this insertion either took a slot of capacity or was counted in the first pass.
             Index copyBegin = insertionLocations(j);
-            std::move_backward(valuePtr() + copyBegin, valuePtr() + copyEnd, valuePtr() + copyEnd + shift);
+            internal::move_or_copy_backward(valuePtr() + copyBegin, valuePtr() + copyEnd, valuePtr() + copyEnd + shift);
             std::move_backward(innerIndexPtr() + copyBegin, innerIndexPtr() + copyEnd,
                                innerIndexPtr() + copyEnd + shift);
             Index dst = copyBegin + shift - 1;
@@ -1533,7 +1534,7 @@ void SparseMatrix<Scalar_, Options_, StorageIndex_>::collapseDuplicates(DenseBas
         // where a self-move would leave it unspecified; a trivially copyable scalar is assigned anyway.
         if (std::is_trivially_copyable<Scalar>::value || count != k) {
           m_data.index(count) = i;
-          m_data.value(count) = std::move(m_data.value(k));
+          m_data.value(count) = internal::move_if_assignable(m_data.value(k));
         }
         wi(i) = count;
         ++count;
@@ -1686,7 +1687,7 @@ SparseMatrix<Scalar_, Options_, StorageIndex_>::insertCompressedAtByOuterInner(I
   m_data.resize(m_data.size() + 1);
   Index end = m_outerIndex[m_outerSize];
   // shift the existing data to the right if necessary
-  std::move_backward(valuePtr() + dst, valuePtr() + end, valuePtr() + end + 1);
+  internal::move_or_copy_backward(valuePtr() + dst, valuePtr() + end, valuePtr() + end + 1);
   std::move_backward(innerIndexPtr() + dst, innerIndexPtr() + end, innerIndexPtr() + end + 1);
   // update nonzero counts
   // potentially O(outerSize) bottleneck!
@@ -1711,7 +1712,7 @@ SparseMatrix<Scalar_, Options_, StorageIndex_>::insertUncompressedAtByOuterInner
       Index capacity = nextStart - end;
       if (capacity > 0) {
         // move [dst, end) to dst+1 and insert at dst
-        std::move_backward(valuePtr() + dst, valuePtr() + end, valuePtr() + end + 1);
+        internal::move_or_copy_backward(valuePtr() + dst, valuePtr() + end, valuePtr() + end + 1);
         std::move_backward(innerIndexPtr() + dst, innerIndexPtr() + end, innerIndexPtr() + end + 1);
         m_innerNonZeros[outer]++;
         for (Index j = outer; j < rightTarget; j++) m_outerIndex[j + 1]++;
@@ -1729,7 +1730,7 @@ SparseMatrix<Scalar_, Options_, StorageIndex_>::insertUncompressedAtByOuterInner
       if (capacity > 0) {
         // tricky: dst is a lower bound, so we must insert at dst-1 when shifting left
         // move [nextStart, dst) to nextStart-1 and insert at dst-1
-        std::move(valuePtr() + nextStart, valuePtr() + dst, valuePtr() + nextStart - 1);
+        internal::move_or_copy(valuePtr() + nextStart, valuePtr() + dst, valuePtr() + nextStart - 1);
         std::move(innerIndexPtr() + nextStart, innerIndexPtr() + dst, innerIndexPtr() + nextStart - 1);
         m_innerNonZeros[outer]++;
         for (Index j = leftTarget; j < outer; j++) m_outerIndex[j + 1]--;
@@ -1777,7 +1778,7 @@ SparseMatrix<Scalar_, Options_, StorageIndex_>::insertUncompressedAtByOuterInner
   Index start = internal::convert_index<Index>(m_outerIndex[outer]);
   Index end = start + internal::convert_index<Index>(m_innerNonZeros[outer]);
   Index new_dst = start + dst_offset;
-  std::move_backward(valuePtr() + new_dst, valuePtr() + end, valuePtr() + end + 1);
+  internal::move_or_copy_backward(valuePtr() + new_dst, valuePtr() + end, valuePtr() + end + 1);
   std::move_backward(innerIndexPtr() + new_dst, innerIndexPtr() + end, innerIndexPtr() + end + 1);
   m_innerNonZeros[outer]++;
   m_data.index(new_dst) = StorageIndex(inner);

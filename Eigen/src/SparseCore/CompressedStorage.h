@@ -159,7 +159,7 @@ class CompressedStorage {
         reallocate(newAllocatedSize);
       }
       if (m_size > id) {
-        std::move_backward(m_values + id, m_values + m_size, m_values + m_size + 1);
+        internal::move_or_copy_backward(m_values + id, m_values + m_size, m_values + m_size + 1);
         std::move_backward(m_indices + id, m_indices + m_size, m_indices + m_size + 1);
       }
       m_size++;
