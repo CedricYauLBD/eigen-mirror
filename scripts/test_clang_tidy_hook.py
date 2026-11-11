@@ -243,6 +243,22 @@ def test_hook_mode_reports_broken_unit_without_blocking():
     assert code == 2 and not out and "modernize-use-using" in err, (code, out, err)
 
 
+def test_hook_targets_keep_every_section_of_a_file():
+    # A Codex patch may update one file in two sections; both sets of added lines are linted.
+    rel = "Eigen/src/Core/Dot.h"
+    with open(os.path.join(REPO_ROOT, rel), encoding="utf-8") as handle:
+        lines = handle.read().splitlines()
+    unique = [i for i, line in enumerate(lines) if line.strip() and lines.count(line) == 1]
+    first, second = unique[0], unique[-1]
+    patch = "\n".join(["*** Begin Patch",
+                       "*** Update File: " + rel, "@@", "+" + lines[first],
+                       "*** Update File: " + rel, "@@", "+" + lines[second],
+                       "*** End Patch"])
+    payload = {"tool_name": "apply_patch", "cwd": REPO_ROOT, "tool_input": {"command": patch}}
+    targets = clang_tidy_hook.hook_targets("codex", payload)
+    assert targets == {clang_tidy_hook.REPO_ROOT: {rel: {first + 1, second + 1}}}, targets
+
+
 def test_new_src_header_is_checked():
     """A private header absent from its umbrella must still be parsed."""
     if shutil.which("clang-tidy") is None:

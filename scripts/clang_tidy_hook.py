@@ -254,17 +254,18 @@ def hook_targets(harness, payload):
     targets = {}
     for call in tool_calls(harness, payload):
         for root, per_file in hook_commit_added(call):
-            targets.setdefault(root, {}).update(
-                (path, added) for path, added in per_file.items()
-                if is_cxx_path(path) and path.startswith(CHECKED_TREES))
+            for path, added in per_file.items():
+                if is_cxx_path(path) and path.startswith(CHECKED_TREES):
+                    targets.setdefault(root, {}).setdefault(path, set()).update(added)
         rel_path, snippets = hook_edit_snippets(call)
         if rel_path is None or not is_cxx_path(rel_path) or not rel_path.startswith(CHECKED_TREES):
             continue
         _, added, exact = hook_post_image_and_added(call, rel_path, snippets)
         # Without real line numbers a line filter would point at the wrong
         # lines; silence beats a misplaced diagnostic.
+        # One patch can update a file in two sections: keep the lines of both.
         if exact and added:
-            targets.setdefault(REPO_ROOT, {})[rel_path] = added
+            targets.setdefault(REPO_ROOT, {}).setdefault(rel_path, set()).update(added)
     return targets
 
 
