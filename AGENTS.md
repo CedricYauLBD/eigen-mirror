@@ -30,6 +30,8 @@ guides by default.
 | Writing or updating a merge request description | [`.agents/merge-requests.md`](.agents/merge-requests.md) |
 | Answering merge request review comments | [`.agents/review-response.md`](.agents/review-response.md) |
 | Editing `AGENTS.md` or a guide under `.agents/` | [`.agents/writing-guidance.md`](.agents/writing-guidance.md) |
+| Reviewing a diff that touches numerical code | [`.agents/reviews/numerical-accuracy.md`](.agents/reviews/numerical-accuracy.md) |
+| Reviewing a diff that touches the packet layer | [`.agents/reviews/packet-math.md`](.agents/reviews/packet-math.md) |
 | Expression templates or evaluator internals | [`doc/TopicLazyEvaluation.dox`](doc/TopicLazyEvaluation.dox), [`doc/NewExpressionType.dox`](doc/NewExpressionType.dox), and [`doc/ClassHierarchy.dox`](doc/ClassHierarchy.dox) |
 
 The wording of a rule sets its strength:
@@ -236,6 +238,8 @@ Before declaring the task complete:
 - Focused regression tests pass, with broader tests or benchmarks run when the risk warrants them.
 - Numerical, aliasing, scalar, storage-order, device, threading, and ABI implications have been considered where
   relevant.
+- For a diff that touches numerical code or the packet layer, an independent review against the matching checklist
+  under [`.agents/reviews/`](.agents/reviews) has run. Its findings are fixed or reported.
 - The final report names validation performed, residual risk, and anything that could not be tested locally.
 
 Prefer commit subjects of the form `Category: Short description`, for example
