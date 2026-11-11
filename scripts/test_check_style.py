@@ -21,6 +21,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from check_style import (
     added_from_structured_patch,
     added_lines_from_diff,
+    doxygen_excludes,
     find_findings,
     hook_added_line_numbers,
     run_diff_mode,
@@ -211,6 +212,52 @@ def test_multiline_literals():
     assert_clean("Eigen/src/Core/Foo.h", 'auto v = myR"(not raw)";\n')
     # Single-line raw strings close on the same line.
     assert_clean("Eigen/src/Core/Foo.h", 'auto s = R"(if constexpr NULL typedef)";\n')
+
+
+def test_documentation_checks():
+    message = "ref target followed by a colon"
+    # Doxygen comments in C++ and every line of a .dox page are checked.
+    assert_flags("Eigen/src/Core/Foo.h", "/** \\returns \\ref adjoint: the adjoint */\nint x;\n", message)
+    assert_flags("Eigen/src/Core/Foo.h", "/// See @ref MatrixBase::cross():\nint x;\n", message)
+    assert_flags("doc/Page.dox", "See \\ref TopicAliasing: it explains\n", message)
+    assert_clean("Eigen/src/Core/Foo.h", "/// \\ref MatrixBase::cross() and \\ref adjoint. The\nint x;\n")
+    assert_clean("doc/Page.dox", "\\ref TopicAliasing \"aliasing\": see \\ref a, \\ref b::c\n")
+    # An ordinary comment and code are not Doxygen input.
+    assert_clean("Eigen/src/Core/Foo.h", "// \\ref adjoint: the adjoint\nint x;\n")
+    # Pre-existing lines are not reported.
+    assert_clean("doc/Page.dox", "\\ref adjoint: old\nnew text\n", added={2})
+
+    excludes = doxygen_excludes(
+        "INPUT = x\n"
+        "EXCLUDE                = ${Eigen_SOURCE_DIR}/doc/examples \\\n"
+        "                         ${Eigen_SOURCE_DIR}/contrib/Eigen/src/StructuredMatrices/README.md\n"
+        "\n"
+        "#                        ${Eigen_SOURCE_DIR}/Eigen/src/Core/products \\\n"
+        "EXCLUDE_PATTERNS       = CMake* \\\n"
+        "                         *.txt\n"
+        "EXCLUDE_SYMBOLS        = Kernel\n")
+    assert excludes == (["doc/examples", "contrib/Eigen/src/StructuredMatrices/README.md"], ["CMake*", "*.txt"])
+
+    def markdown(rel_path, text):
+        lines = text.splitlines()
+        return [m for _, m in find_findings(rel_path, lines, set(range(1, len(lines) + 1)), excludes)]
+
+    readme = "contrib/Eigen/src/Tensor/README.md"
+    assert any("in-page link" in m for m in markdown(readme, "See [storage](#storage-order).\n"))
+    assert any("GitLab math" in m for m in markdown(readme, "The bound $`c n \\varepsilon`$ holds.\n"))
+    assert not markdown(readme, "See [the guide](../README.md#storage) and `$x`.\n")
+    assert not markdown(readme, "```\n[x](#y) $`z`$\n```\n")
+    # A heading that carries the id as a Doxygen anchor resolves.
+    assert not markdown(readme, "See [storage](#tensor_storage).\n\n## Storage order {#tensor_storage}\n")
+    # The colon check stops at the end of the reference name.
+    assert_clean("doc/Page.dox", "the view (see \\ref TutorialReshape):\n")
+    # Markdown that Doxygen does not read: excluded by path, by pattern, or outside its inputs.
+    link = "See [storage](#storage-order).\n"
+    assert not markdown("contrib/Eigen/src/StructuredMatrices/README.md", link)
+    assert not markdown("doc/examples/README.md", link)
+    assert not markdown("Eigen/CMakeNotes.md", link)
+    assert not markdown(".agents/ci.md", link)
+    assert not markdown("README.md", link)
 
 
 def test_hook_line_mapping():

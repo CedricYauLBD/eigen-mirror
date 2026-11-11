@@ -25,6 +25,9 @@ Recommend `affected-tests` with the relevant platform labels, or `affected-tests
 coverage as described in [`ci.md`](ci.md). Of the test labels, only `all-tests` also runs `build:linux:docs`. Do not
 add it for that purpose. Add it only with the user's explicit permission for that label.
 
+`scripts/check_style.py` flags two of the mistakes below on added lines: a colon after a `\ref` target, and an
+in-page link or GitLab math in Markdown that Doxygen reads. It does not replace the job.
+
 The recurring authoring mistake is trailing punctuation that Doxygen reads as part of a cross-reference. A colon
 directly after `\ref name` becomes part of the symbol Doxygen tries to resolve, so `\ref adjoint: the ...` fails while
 `\ref adjoint. The ...` resolves. Separate a reference from following prose with a space, comma, or period. Punctuation
@@ -41,7 +44,8 @@ documents that namespace instead of its own declaration.
 
 Markdown can break the job too. Doxygen reads every `.md` file under its inputs, module READMEs included, in its own
 dialect, so GitLab Markdown that renders on the web can fail it. Three constructs do. An in-page link
-`[text](#heading)` becomes an unresolved `\ref`. A single-backtick code span ends at an apostrophe followed by a
+`[text](#heading)` becomes an unresolved `\ref`, unless the heading carries that id explicitly
+(`## Linking {#eigen_gpu_linking}`, as in `contrib/Eigen/src/GPU/README.md`). A single-backtick code span ends at an apostrophe followed by a
 non-identifier character (Doxygen's `` `quoted' `` rule), so GitLab math such as `` $`\bar U' V`$ `` loses its code
 span and its backslash commands reach Doxygen's parser. Inline math that opens with a parenthesized identifier, such as
 `` $`(f_k)_j`$ ``, raises a `</tt>` error. Doxygen does not render GitLab math either; it prints the source. A README

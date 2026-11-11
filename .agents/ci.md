@@ -213,29 +213,47 @@ codespell --config setup.cfg path/to/changed-file
 reuse lint
 python3 scripts/check_style.py --diff <base-sha>
 python3 scripts/clang_tidy_hook.py --diff <base-sha>   # needs clang-tidy
+python3 scripts/check_agent_guides.py                  # after moving a file or editing a guide
 ```
 
-The two Python scripts report only on the lines a change adds, and both are advisory. `check_style.py` covers the
+The first two Python scripts report only on the lines a change adds, and both are advisory. `check_style.py` covers the
 conventions clang-tidy cannot express: comment verbosity, and the declaration forms that `.clang-tidy` has
-`CustomChecks` queries for but does not enable yet (see its commented-out block). `clang_tidy_hook.py` runs
+`CustomChecks` queries for but does not enable yet (see its commented-out block). It also flags the documentation
+constructs that fail the blocking documentation job; see [`docs.md`](docs.md). `clang_tidy_hook.py` runs
 clang-tidy itself, limited to added lines with `--line-filter`. It needs no build directory. Instead it generates a
 driver source file that includes the module's umbrella header and then the edited `Eigen/src` header, as
 `ci/scripts/run-clang-tidy.sh` does for merge requests. It skips silently when clang-tidy is not installed, and shows
 the user a non-blocking notice when a file's translation unit does not compile.
 
-Claude Code sessions run both automatically through the hooks registered in `.claude/settings.json`. `check_style.py`
-runs after every Edit or Write. `clang_tidy_hook.py` runs only for `.h`, `.cpp`, `.cu` and `.inc` files, in the
-background, because parsing a module takes 10–30 s. Its findings arrive as a reminder after the edit has returned, and
-they name the file they apply to. After changing either script, run their unit tests,
-[`scripts/test_check_style.py`](../scripts/test_check_style.py) and
-[`scripts/test_clang_tidy_hook.py`](../scripts/test_clang_tidy_hook.py); `checkformat:lint` runs them too.
+Claude Code and Codex sessions run both scripts automatically, through the hooks registered in
+`.claude/settings.json` and `.codex/hooks.json`. Codex runs project hooks only after the user has trusted them with
+`/hooks`. [`scripts/agent_hooks.py`](../scripts/agent_hooks.py) translates each harness's payload and reply. The
+hooks fire at two points:
+
+- **After a file edit.** Both scripts check the lines the edit added. Under Claude Code, `clang_tidy_hook.py` runs
+  in the background, because parsing a module takes 10–30 s. Its findings arrive as a reminder after the edit has
+  returned, and they name the file they apply to.
+- **After a shell command that committed.** Both scripts check the lines the commit added. A file changed through
+  the shell (`sed -i`, a heredoc, `git apply`) fires no edit hook, so the commit is the first point at which a hook
+  sees those lines. Findings the edit hook already reported appear again here.
+
+With another harness, or before committing a file that was changed through the shell, run the two `--diff` commands
+above by hand. After changing a hook script, run its unit tests:
+[`scripts/test_check_style.py`](../scripts/test_check_style.py),
+[`scripts/test_clang_tidy_hook.py`](../scripts/test_clang_tidy_hook.py) and
+[`scripts/test_agent_hooks.py`](../scripts/test_agent_hooks.py); `checkformat:lint` runs them too.
+
+[`scripts/check_agent_guides.py`](../scripts/check_agent_guides.py) checks the guidance itself: every relative link
+and every repository path that `AGENTS.md`, a guide under `.agents/`, or a pointer under `.claude/` names must exist.
+It is blocking in `checkformat:lint`. When a change moves or deletes a file that a guide names, update the guide in
+the same merge request.
 
 The whole-tree codespell invocation used by CI can expose pre-existing findings. Do not modify unrelated files merely to
 make a local broad scan clean.
 
-`checkformat:lint` runs clang-format, codespell, REUSE, and the Python helper tests through
-[`ci/lint/lint.sh`](../ci/lint/lint.sh), with `vermin` checking that the helpers still run on Python 3.12. REUSE and
-the helper tests are blocking. A clang-format or codespell failure alone only marks the job as a warning, and any
+`checkformat:lint` runs clang-format, codespell, REUSE, the guidance check, and the Python helper tests through
+[`ci/lint/lint.sh`](../ci/lint/lint.sh), with `vermin` checking that the helpers still run on Python 3.12. REUSE, the
+guidance check, and the helper tests are blocking. A clang-format or codespell failure alone only marks the job as a warning, and any
 failure in `checkformat:clangtidy` is also only a warning. Treat their diagnostics as review findings anyway.
 
 Source files carry the inline SPDX header that [`conventions.md`](conventions.md) records. Files that cannot carry

@@ -6,9 +6,10 @@
 
 Both ``check_style.py`` (textual conventions) and ``clang_tidy_hook.py``
 (clang-tidy conventions) need the same two things: the set of line numbers a
-change ADDED to each file, and the ability to turn a Claude Code PostToolUse
-payload into that set.  That logic lives here so the two checkers cannot drift
-apart in what they consider an added line.
+change ADDED to each file, and the ability to turn a tool call, in the Claude
+Code form ``agent_hooks.py`` gives every harness's payload, into that set.
+That logic lives here so the two checkers cannot drift apart in what they
+consider an added line.
 
 Run directly to emit a clang-tidy ``--line-filter`` argument for the files a
 diff touches, which is how ``ci/scripts/run-clang-tidy.sh`` restricts an MR's
@@ -23,12 +24,21 @@ import os
 import re
 import subprocess
 import sys
+import time
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CXX_EXT = {".h", ".hpp", ".hxx", ".cpp", ".cc", ".cxx", ".cu", ".cuh", ".inc"}
 # unsupported/Eigen/ still holds the legacy umbrella shims, which are
 # extensionless headers too.
 EXTENSIONLESS_HEADER_TREES = ("Eigen/", "contrib/Eigen/", "unsupported/Eigen/")
+# Documentation sources check_style.py also reads: Doxygen pages and the
+# Markdown files Doxygen takes as input.
+DOC_EXT = {".dox", ".md"}
+# A shell command that may have committed, and the directories it names.
+GIT_COMMIT = re.compile(r"(?:^|[\s;&|(`])git\b[^;&|\n]*?\scommit\b")
+COMMAND_DIRS = re.compile(r"(?:\bcd|\s-C)\s+(\S+)")
+# A commit older than this was not made by the tool call being answered.
+COMMIT_MAX_AGE_SECONDS = 300
 
 
 def is_cxx_path(rel_path):
@@ -39,11 +49,22 @@ def is_cxx_path(rel_path):
                 and rel_path.startswith(EXTENSIONLESS_HEADER_TREES)))
 
 
+def is_checked_path(rel_path):
+    """Return whether ``rel_path`` is a file some added-line check reads."""
+    return is_cxx_path(rel_path) or os.path.splitext(rel_path)[1].lower() in DOC_EXT
+
+
 def git(root, *args):
     return subprocess.run(["git"] + list(args), cwd=root, capture_output=True, text=True)
 
 
-def read_post_image(root, rel_path):
+def read_post_image(root, rel_path, rev=None):
+    """Return the text of ``rel_path`` in the work tree, or as commit ``rev``
+    holds it; None when it cannot be read."""
+    if rev is not None:
+        shown = subprocess.run(["git", "show", "%s:%s" % (rev, rel_path)], cwd=root, capture_output=True,
+                               encoding="utf-8", errors="replace")
+        return shown.stdout if shown.returncode == 0 else None
     try:
         with open(os.path.join(root, rel_path), encoding="utf-8", errors="replace") as handle:
             return handle.read()
@@ -90,6 +111,25 @@ def added_from_structured_patch(tool_response):
         return added
     except Exception:
         return None
+
+
+def added_from_hunks(lines, hunks):
+    """Added line numbers for patch hunks, each a list of ``' '``/``'+'``/``'-'``
+    lines as Codex's ``apply_patch`` writes them.  A hunk's context and added
+    lines together must occur exactly once in the post-image ``lines``; None
+    when one does not, which enables the snippet fallback."""
+    added = set()
+    for hunk in hunks:
+        post = [line for line in hunk if not line.startswith("-")]
+        text = [line[1:] for line in post]
+        if not text:
+            continue
+        starts = [i for i in range(len(lines) - len(text) + 1)
+                  if lines[i] == text[0] and lines[i:i + len(text)] == text]
+        if len(starts) != 1:
+            return None
+        added.update(starts[0] + 1 + k for k, line in enumerate(post) if line.startswith("+"))
+    return added
 
 
 def hook_added_line_numbers(content, snippets):
@@ -142,9 +182,10 @@ def hook_post_image_and_added(payload, rel_path, snippets):
 
     The hook runs after the edit, so the file on disk is the post-image.  The
     edited lines come from the tool response's structured patch when present,
-    else from locating a uniquely occurring added string.  Returns
-    (lines, added, exact): ``exact`` is False when the lines could not be
-    located in the real file and the snippet text is being checked standalone.
+    else from the hunks of a Codex patch, else from locating a uniquely
+    occurring added string.  Returns (lines, added, exact): ``exact`` is False
+    when the lines could not be located in the real file and the snippet text
+    is being checked standalone.
     """
     text = read_post_image(REPO_ROOT, rel_path)
     added = None
@@ -152,6 +193,9 @@ def hook_post_image_and_added(payload, rel_path, snippets):
     if text is not None:
         lines = text.splitlines()
         added = added_from_structured_patch(payload.get("tool_response") or {})
+        hunks = (payload.get("tool_input") or {}).get("hunks")
+        if added is None and hunks:
+            added = added_from_hunks(lines, hunks)
         if added is None:
             if payload.get("tool_name") == "Write":
                 added = set(range(1, len(lines) + 1))
@@ -163,12 +207,51 @@ def hook_post_image_and_added(payload, rel_path, snippets):
     return lines, added, True
 
 
-def diff_added_lines(base, root=REPO_ROOT, include_untracked=True):
+def hook_commit_added(call, now=None):
+    """Return [(root, {rel_path: added line numbers})] for each commit a shell
+    tool call just made.
+
+    A file changed through the shell (``sed -i``, a heredoc, ``git apply``)
+    fires no edit hook, so the commit is where its added lines are first seen.
+    The command is searched for ``git ... commit``; the candidate work trees
+    are the call's ``cwd`` and every directory the command names with ``cd`` or
+    ``-C``.  A command that did not commit is told apart by the age of HEAD.
+    The line numbers are those of the committed files (read them with
+    ``read_post_image(root, rel_path, rev="HEAD")``): changes left uncommitted
+    in the work tree are not part of the answer.
+    """
+    if call.get("tool_name") != "Bash":
+        return []
+    command = (call.get("tool_input") or {}).get("command") or ""
+    if not isinstance(command, str) or not GIT_COMMIT.search(command):
+        return []
+    cwd = call.get("cwd") or os.getcwd()
+    now = time.time() if now is None else now
+    commits, seen = [], set()
+    for name in [""] + COMMAND_DIRS.findall(command):
+        directory = os.path.join(cwd, os.path.expanduser(name.strip("'\"")))
+        if not os.path.isdir(directory):
+            continue
+        root = git(directory, "rev-parse", "--show-toplevel").stdout.strip()
+        if not root or root in seen:
+            continue
+        seen.add(root)
+        stamp = git(root, "log", "-1", "--format=%ct").stdout.strip()
+        if not stamp.isdigit() or now - int(stamp) > COMMIT_MAX_AGE_SECONDS:
+            continue
+        if git(root, "rev-parse", "--verify", "--quiet", "HEAD~1").returncode != 0:
+            continue
+        commits.append((root, diff_added_lines("HEAD~1", root, include_untracked=False, head="HEAD")))
+    return commits
+
+
+def diff_added_lines(base, root=REPO_ROOT, include_untracked=True, head=None):
     """Return {rel_path: set(added line numbers)} for everything added since
-    merge-base(base, HEAD), optionally including whole untracked C++ files."""
+    merge-base(base, HEAD), optionally including whole untracked source files.
+    The comparison is with the work tree, or with commit ``head`` when given."""
     merge_base = git(root, "merge-base", base, "HEAD")
     resolved = merge_base.stdout.strip() if merge_base.returncode == 0 else base
-    diff = git(root, "diff", "-U0", "--no-color", resolved)
+    diff = git(root, "diff", "-U0", "--no-color", resolved, *([head] if head else []))
     if diff.returncode not in (0, 1):
         sys.stderr.write(diff.stderr)
         raise SystemExit(2)
@@ -176,7 +259,7 @@ def diff_added_lines(base, root=REPO_ROOT, include_untracked=True):
     if include_untracked:
         untracked = git(root, "ls-files", "--others", "--exclude-standard")
         for rel_path in untracked.stdout.splitlines():
-            if is_cxx_path(rel_path):
+            if is_checked_path(rel_path):
                 text = read_post_image(root, rel_path)
                 if text is not None:
                     per_file.setdefault(rel_path, set()).update(range(1, len(text.splitlines()) + 1))
