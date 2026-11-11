@@ -241,10 +241,13 @@ class monotone_hash {
 template <typename Scalar, typename StorageIndex>
 class ordered_hash_accumulator {
   static constexpr StorageIndex kEmpty = NumTraits<StorageIndex>::highest();
+  // compact() tests this many slots at once for being all empty.
+  static constexpr Index kBlock = 16;
 
  public:
   // Slots needed for keys in [lo, hi] with at most maxKeys distinct keys.
   static Index size(StorageIndex lo, StorageIndex hi, Index maxKeys) {
+    if (is_direct(lo, hi, maxKeys)) return Index(hi) - Index(lo) + 1;
     return table_size(monotone_hash<StorageIndex>(lo, hi, buckets(lo, hi, maxKeys)), maxKeys);
   }
 
@@ -260,7 +263,7 @@ class ordered_hash_accumulator {
     m_top = 0;
     // A table that ends up direct starts out direct: it never grows, and a smaller hashed table could need more
     // slots than size() reserves for it.
-    bool direct = buckets(lo, hi, maxKeys) >= Index(hi) - Index(lo) + 1;
+    bool direct = is_direct(lo, hi, maxKeys);
     rehash(direct ? maxKeys : numext::maxi<Index>(1, numext::mini(expectedKeys, maxKeys)));
     std::fill_n(keys, table_size(m_hash, m_capacity), kEmpty);
   }
@@ -301,6 +304,61 @@ class ordered_hash_accumulator {
     return m_values[s];
   }
 
+  // Calls func(value, inserted, it) for each entry of the inner iterator it, with the value of index it.index() as
+  // findOrInsert returns it. The table state stays in locals over the whole vector; findOrInsert reloads it from the
+  // members at each call, since the stores to the table may alias them.
+  template <typename InnerIterator, typename Func>
+  void accumulate(InnerIterator it, const Func& func) {
+    StorageIndex* keys = m_keys;
+    Scalar* values = m_values;
+    Index top = m_top;
+    if (m_hash.direct()) {
+      Index lo = m_lo;
+      for (; it; ++it) {
+        StorageIndex i = StorageIndex(it.index());
+        Index s = Index(i) - lo;
+        bool inserted = keys[s] == kEmpty;
+        if (inserted) {
+          keys[s] = i;
+          top = numext::maxi(top, s);
+        }
+        func(values[s], inserted, it);
+      }
+      m_top = top;
+      return;
+    }
+    monotone_hash<StorageIndex> hash = m_hash;
+    Index count = m_count;
+    Index capacity = m_capacity;
+    for (; it; ++it) {
+      StorageIndex i = StorageIndex(it.index());
+      Index s = hash(i);
+      while (keys[s] < i) ++s;
+      bool inserted = keys[s] != i;
+      if (inserted) {
+        if (count == capacity) {
+          m_top = top;
+          grow();
+          hash = m_hash;
+          capacity = m_capacity;
+          top = m_top;
+          s = hash(i);
+          while (keys[s] < i) ++s;
+        }
+        ++count;
+        Index q = s;
+        while (keys[q] != kEmpty) ++q;
+        top = numext::maxi(top, q);
+        std::move_backward(keys + s, keys + q, keys + q + 1);
+        std::move_backward(values + s, values + q, values + q + 1);
+        keys[s] = i;
+      }
+      func(values[s], inserted, it);
+    }
+    m_top = top;
+    m_count = count;
+  }
+
   // The value of index i, inserted as zero if absent. The reference is valid until the next insertion.
   Scalar& coeffRef(StorageIndex i) {
     bool inserted;
@@ -316,6 +374,19 @@ class ordered_hash_accumulator {
     Index s = 0;
     while (s <= m_top && m_keys[s] != kEmpty) ++s;
     Index n = s;
+    // A block of kBlock empty slots is skipped after one test of all of them; its fixed length lets the compiler
+    // vectorize the test.
+    for (; s + kBlock <= m_top + 1; s += kBlock) {
+      StorageIndex occupied = 0;
+      for (Index k = 0; k < kBlock; ++k) occupied |= m_keys[s + k] ^ kEmpty;
+      if (occupied == 0) continue;
+      for (Index k = s; k < s + kBlock; ++k)
+        if (m_keys[k] != kEmpty) {
+          m_keys[n] = m_keys[k];
+          m_values[n] = std::move(m_values[k]);
+          ++n;
+        }
+    }
     for (; s <= m_top; ++s)
       if (m_keys[s] != kEmpty) {
         m_keys[n] = m_keys[s];
@@ -326,6 +397,13 @@ class ordered_hash_accumulator {
   }
 
  private:
+  // A table is direct when its span is at most kDirectRatio slots per key: emptying it is one fill and compact()
+  // skips its empty blocks, so unused slots are cheap next to probing.
+  static constexpr Index kDirectRatio = 16;
+  static bool is_direct(StorageIndex lo, StorageIndex hi, Index maxKeys) {
+    Index span = Index(hi) - Index(lo) + 1;
+    return numext::maxi(buckets(lo, hi, maxKeys), kDirectRatio * numext::mini(maxKeys, span)) >= span;
+  }
   static Index buckets(StorageIndex lo, StorageIndex hi, Index maxKeys) {
     Index c = numext::mini(maxKeys, Index(hi) - Index(lo) + 1);
     return numext::maxi<Index>(1, c + c / 2);
@@ -336,8 +414,9 @@ class ordered_hash_accumulator {
 
   // Sets the hash for capacity distinct keys. A direct hash holds every key of [lo, hi].
   void rehash(Index capacity) {
-    m_hash.compute(m_lo, m_hi, buckets(m_lo, m_hi, capacity));
-    m_capacity = m_hash.direct() ? m_maxKeys : capacity;
+    bool direct = is_direct(m_lo, m_hi, capacity);
+    m_hash.compute(m_lo, m_hi, direct ? Index(m_hi) - Index(m_lo) + 1 : buckets(m_lo, m_hi, capacity));
+    m_capacity = direct ? m_maxKeys : capacity;
   }
 
   // Doubles the capacity. The n entries move to the end of the new table and are then laid out from its start in
@@ -375,6 +454,53 @@ class ordered_hash_accumulator {
   Index m_count = 0;
   Index m_top = 0;
 };
+
+// Sorts the n distinct entries (indices[k], values[k]) by index, given the lowest and highest index and the number of
+// descents, the positions k with indices[k] < indices[k - 1]: the entries form descents + 1 increasing runs.
+//
+// - No descent: sorted.
+// - Up to kSmall entries: insertion sort, unless they fill half of their span, where the table is direct and sorts
+//   them without a comparison.
+// - Few runs: insertion sort, which moves an entry only past the larger ones before it, within a budget of moves.
+//   Long interleaved runs exhaust it.
+// - Otherwise, and for what the budget leaves unsorted: an ordered_hash_accumulator in table, storage with
+//   allocatedSize(), reserve(), indexPtr() and valuePtr() like CompressedStorage.
+template <typename Scalar, typename StorageIndex, typename Table>
+void sort_inner_vector(StorageIndex* indices, Scalar* values, Index n, StorageIndex lo, StorageIndex hi, Index descents,
+                       Table& table, ordered_hash_accumulator<Scalar, StorageIndex>& acc) {
+  constexpr Index kSmall = 64;
+  if (descents == 0) return;
+  bool small = n <= kSmall && Index(hi) - Index(lo) + 1 > 2 * n;
+  Index sortedEnd = 1;
+  if (small || (n > kSmall && descents * 4 <= n)) {
+    Index budget = small ? n * n : 4 * n;
+    for (; sortedEnd < n && budget >= 0; ++sortedEnd) {
+      Index q = sortedEnd;
+      if (indices[q - 1] < indices[q]) continue;
+      StorageIndex index = indices[q];
+      Scalar value = std::move(values[q]);
+      do {
+        indices[q] = indices[q - 1];
+        values[q] = std::move(values[q - 1]);
+        --q;
+      } while (q > 0 && indices[q - 1] > index);
+      indices[q] = index;
+      values[q] = std::move(value);
+      budget -= sortedEnd - q;
+    }
+  }
+  if (sortedEnd == n) return;
+  Index size = acc.size(lo, hi, n);
+  if (table.allocatedSize() < size) table.reserve(size);
+  acc.init(table.indexPtr(), table.valuePtr(), lo, hi, n);
+  for (Index k = 0; k < n; ++k) {
+    bool inserted;
+    acc.findOrInsert(indices[k], inserted) = std::move(values[k]);
+  }
+  acc.compact();
+  std::copy(table.indexPtr(), table.indexPtr() + n, indices);
+  std::move(table.valuePtr(), table.valuePtr() + n, values);
+}
 
 }  // end namespace internal
 

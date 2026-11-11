@@ -106,17 +106,32 @@ static void conservative_sparse_sparse_product_impl(const Lhs& lhs, const Rhs& r
   res.finalize();
 }
 
-// Computes res = lhs * rhs with sorted inner vectors: each vector of res is accumulated by an
-// ordered_hash_accumulator that lives in res's own free storage, so there is no workspace, no sort, and no transpose.
+// Computes res = lhs * rhs with sorted inner vectors and no transpose. Each vector of res is built in res's own
+// free storage, in one of two ways:
+//
+// - Marked: a marker of the inner dimension locates each index in the vector being built, so a coefficient costs one
+//   lookup however many products it sums; the distinct entries are sorted afterwards (sort_inner_vector), which is
+//   free when they arrive in order. This is the faster way unless nearly every product brings a new index.
+// - Streamed: an ordered_hash_accumulator sums the products and keeps them sorted, with no work proportional to the
+//   inner dimension. This is the faster way for large vectors whose indices rarely repeat.
+//
+// A vector is streamed if the previous one was large with few repeated indices; the first one is streamed. The
+// marker is allocated when the first vector is marked.
 template <typename Lhs, typename Rhs, typename ResultType, bool ReverseProduct = false>
-static void conservative_sparse_sparse_product_hash_impl(const Lhs& lhs, const Rhs& rhs, ResultType& res) {
+static void conservative_sparse_sparse_product_sorted_impl(const Lhs& lhs, const Rhs& rhs, ResultType& res) {
   using LhsScalar = typename remove_all_t<Lhs>::Scalar;
   using RhsScalar = typename remove_all_t<Rhs>::Scalar;
   using ResScalar = typename remove_all_t<ResultType>::Scalar;
   using StorageIndex = typename remove_all_t<ResultType>::StorageIndex;
+  using LhsIterator = typename evaluator<Lhs>::InnerIterator;
+  using RhsIterator = typename evaluator<Rhs>::InnerIterator;
   const sparse_scalar_product_op<LhsScalar, RhsScalar, ReverseProduct> product;
+  // A vector with fewer distinct indices than this is marked: sort_inner_vector sorts up to half as many by
+  // insertion.
+  constexpr Index kStreamMin = 128;
 
   // make sure to call innerSize/outerSize since we fake the storage order.
+  Index rows = lhs.innerSize();
   Index cols = rhs.outerSize();
   Index mid = lhs.outerSize();
   eigen_assert(mid == rhs.innerSize());
@@ -131,7 +146,7 @@ static void conservative_sparse_sparse_product_hash_impl(const Lhs& lhs, const R
   for (Index k = 0; k < mid; ++k) {
     Index count = 0;
     StorageIndex lo = NumTraits<StorageIndex>::highest(), hi = 0;
-    for (typename evaluator<Lhs>::InnerIterator lhsIt(lhsEval, k); lhsIt; ++lhsIt, ++count) {
+    for (LhsIterator lhsIt(lhsEval, k); lhsIt; ++lhsIt, ++count) {
       lo = numext::mini(lo, StorageIndex(lhsIt.index()));
       hi = numext::maxi(hi, StorageIndex(lhsIt.index()));
     }
@@ -143,42 +158,81 @@ static void conservative_sparse_sparse_product_hash_impl(const Lhs& lhs, const R
   res.setZero();
   res.data().reserve(lhsEval.nonZerosEstimate() + rhsEval.nonZerosEstimate());
   StorageIndex* outer = res.outerIndexPtr();
+  // marker[i] >= start locates inner index i in the vector being built, which begins at start.
+  Matrix<StorageIndex, Dynamic, 1> marker;
+  CompressedStorage<ResScalar, StorageIndex> table;
   ordered_hash_accumulator<ResScalar, StorageIndex> acc;
   Index nnz = 0;
   Index prevKeys = 0;
+  bool stream = true;
   for (Index j = 0; j < cols; ++j) {
-    outer[j] = convert_index<StorageIndex>(nnz);
+    Index start = nnz;
+    outer[j] = convert_index<StorageIndex>(start);
     Index maxKeys = 0;
-    StorageIndex lo = NumTraits<StorageIndex>::highest(), hi = 0;
-    for (typename evaluator<Rhs>::InnerIterator rhsIt(rhsEval, j); rhsIt; ++rhsIt) {
-      Index k = rhsIt.index();
-      if (lhsCount[k] == 0) continue;
-      maxKeys += lhsCount[k];
-      lo = numext::mini(lo, lhsLo[k]);
-      hi = numext::maxi(hi, lhsHi[k]);
-    }
+    for (RhsIterator rhsIt(rhsEval, j); rhsIt; ++rhsIt) maxKeys += lhsCount[rhsIt.index()];
     if (maxKeys == 0) continue;
-    Index size = acc.size(lo, hi, maxKeys);
-    if (res.data().allocatedSize() < nnz + size) {
-      res.data().resize(nnz);
-      res.data().reserve(numext::maxi(size, nnz));
-    }
-    // The previous vector predicts the size of this one; maxKeys is often far above it.
-    Index expectedKeys = numext::maxi<Index>(16, prevKeys + prevKeys / 4);
-    acc.init(res.data().indexPtr() + nnz, res.data().valuePtr() + nnz, lo, hi, maxKeys, expectedKeys);
-    for (typename evaluator<Rhs>::InnerIterator rhsIt(rhsEval, j); rhsIt; ++rhsIt) {
-      RhsScalar y = rhsIt.value();
-      for (typename evaluator<Lhs>::InnerIterator lhsIt(lhsEval, rhsIt.index()); lhsIt; ++lhsIt) {
-        bool inserted;
-        ResScalar& value = acc.findOrInsert(StorageIndex(lhsIt.index()), inserted);
-        if (inserted)
-          value = product(lhsIt.value(), y);
-        else
-          product.accumulate(value, lhsIt.value(), y);
+
+    StorageIndex lo = NumTraits<StorageIndex>::highest(), hi = 0;
+    if (stream) {
+      for (RhsIterator rhsIt(rhsEval, j); rhsIt; ++rhsIt) {
+        Index k = rhsIt.index();
+        if (lhsCount[k] == 0) continue;
+        lo = numext::mini(lo, lhsLo[k]);
+        hi = numext::maxi(hi, lhsHi[k]);
       }
+      Index size = acc.size(lo, hi, maxKeys);
+      if (res.data().allocatedSize() < nnz + size) {
+        res.data().resize(nnz);
+        res.data().reserve(numext::maxi(size, nnz));
+      }
+      // The previous vector predicts the size of this one; maxKeys is often far above it.
+      Index expectedKeys = numext::maxi<Index>(16, prevKeys + prevKeys / 4);
+      acc.init(res.data().indexPtr() + nnz, res.data().valuePtr() + nnz, lo, hi, maxKeys, expectedKeys);
+      for (RhsIterator rhsIt(rhsEval, j); rhsIt; ++rhsIt) {
+        RhsScalar y = rhsIt.value();
+        acc.accumulate(LhsIterator(lhsEval, rhsIt.index()),
+                       [&](ResScalar& value, bool inserted, const LhsIterator& lhsIt) {
+                         if (inserted)
+                           value = product(lhsIt.value(), y);
+                         else
+                           product.accumulate(value, lhsIt.value(), y);
+                       });
+      }
+      nnz += acc.compact();
+    } else {
+      if (marker.size() == 0) marker.setConstant(rows, StorageIndex(-1));
+      Index bound = numext::mini(maxKeys, rows);
+      if (res.data().allocatedSize() < nnz + bound) {
+        res.data().resize(nnz);
+        res.data().reserve(numext::maxi(bound, nnz));
+      }
+      StorageIndex* indices = res.data().indexPtr();
+      ResScalar* values = res.data().valuePtr();
+      Index descents = 0;
+      StorageIndex prev = 0;
+      for (RhsIterator rhsIt(rhsEval, j); rhsIt; ++rhsIt) {
+        RhsScalar y = rhsIt.value();
+        for (LhsIterator lhsIt(lhsEval, rhsIt.index()); lhsIt; ++lhsIt) {
+          StorageIndex i = StorageIndex(lhsIt.index());
+          Index position = marker[i];
+          if (position >= start) {
+            product.accumulate(values[position], lhsIt.value(), y);
+          } else {
+            descents += i < prev;
+            prev = i;
+            lo = numext::mini(lo, i);
+            hi = numext::maxi(hi, i);
+            marker[i] = convert_index<StorageIndex>(nnz);
+            indices[nnz] = i;
+            values[nnz] = product(lhsIt.value(), y);
+            ++nnz;
+          }
+        }
+      }
+      sort_inner_vector(indices + start, values + start, nnz - start, lo, hi, descents, table, acc);
     }
-    prevKeys = acc.compact();
-    nnz += prevKeys;
+    prevKeys = nnz - start;
+    stream = prevKeys >= kStreamMin && 2 * prevKeys >= maxKeys;
   }
   outer[cols] = convert_index<StorageIndex>(nnz);
   res.data().resize(nnz);
@@ -202,7 +256,7 @@ struct conservative_sparse_sparse_product_selector<Lhs, Rhs, ResultType, ColMajo
   static void run(const Lhs& lhs, const Rhs& rhs, ResultType& res) {
     using ColMajorRes = WithStorageOrder<ResultType, ColMajor>;
     ColMajorRes resCol(lhs.rows(), rhs.cols());
-    internal::conservative_sparse_sparse_product_hash_impl<Lhs, Rhs, ColMajorRes>(lhs, rhs, resCol);
+    internal::conservative_sparse_sparse_product_sorted_impl<Lhs, Rhs, ColMajorRes>(lhs, rhs, resCol);
     res = resCol.markAsRValue();
   }
 };
@@ -214,7 +268,7 @@ struct conservative_sparse_sparse_product_selector<Lhs, Rhs, ResultType, RowMajo
     ColMajorLhs lhsCol = lhs;
     using ColMajorRes = WithStorageOrder<ResultType, ColMajor>;
     ColMajorRes resCol(lhs.rows(), rhs.cols());
-    internal::conservative_sparse_sparse_product_hash_impl<ColMajorLhs, Rhs, ColMajorRes>(lhsCol, rhs, resCol);
+    internal::conservative_sparse_sparse_product_sorted_impl<ColMajorLhs, Rhs, ColMajorRes>(lhsCol, rhs, resCol);
     res = resCol.markAsRValue();
   }
 };
@@ -226,7 +280,7 @@ struct conservative_sparse_sparse_product_selector<Lhs, Rhs, ResultType, ColMajo
     ColMajorRhs rhsCol = rhs;
     using ColMajorRes = WithStorageOrder<ResultType, ColMajor>;
     ColMajorRes resCol(lhs.rows(), rhs.cols());
-    internal::conservative_sparse_sparse_product_hash_impl<Lhs, ColMajorRhs, ColMajorRes>(lhs, rhsCol, resCol);
+    internal::conservative_sparse_sparse_product_sorted_impl<Lhs, ColMajorRhs, ColMajorRes>(lhs, rhsCol, resCol);
     res = resCol.markAsRValue();
   }
 };
@@ -260,7 +314,7 @@ struct conservative_sparse_sparse_product_selector<Lhs, Rhs, ResultType, RowMajo
     RowMajorRhs rhsRow = rhs;
     using RowMajorRes = WithStorageOrder<ResultType, RowMajor>;
     RowMajorRes resRow(lhs.rows(), rhs.cols());
-    internal::conservative_sparse_sparse_product_hash_impl<RowMajorRhs, Lhs, RowMajorRes, true>(rhsRow, lhs, resRow);
+    internal::conservative_sparse_sparse_product_sorted_impl<RowMajorRhs, Lhs, RowMajorRes, true>(rhsRow, lhs, resRow);
     res = resRow.markAsRValue();
   }
 };
@@ -272,7 +326,7 @@ struct conservative_sparse_sparse_product_selector<Lhs, Rhs, ResultType, ColMajo
     RowMajorLhs lhsRow = lhs;
     using RowMajorRes = WithStorageOrder<ResultType, RowMajor>;
     RowMajorRes resRow(lhs.rows(), rhs.cols());
-    internal::conservative_sparse_sparse_product_hash_impl<Rhs, RowMajorLhs, RowMajorRes, true>(rhs, lhsRow, resRow);
+    internal::conservative_sparse_sparse_product_sorted_impl<Rhs, RowMajorLhs, RowMajorRes, true>(rhs, lhsRow, resRow);
     res = resRow.markAsRValue();
   }
 };
@@ -282,7 +336,7 @@ struct conservative_sparse_sparse_product_selector<Lhs, Rhs, ResultType, RowMajo
   static void run(const Lhs& lhs, const Rhs& rhs, ResultType& res) {
     using RowMajorRes = WithStorageOrder<ResultType, RowMajor>;
     RowMajorRes resRow(lhs.rows(), rhs.cols());
-    internal::conservative_sparse_sparse_product_hash_impl<Rhs, Lhs, RowMajorRes, true>(rhs, lhs, resRow);
+    internal::conservative_sparse_sparse_product_sorted_impl<Rhs, Lhs, RowMajorRes, true>(rhs, lhs, resRow);
     res = resRow.markAsRValue();
   }
 };

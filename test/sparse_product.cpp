@@ -1335,6 +1335,65 @@ void check_sparse_triangular_view_products_all_modes() {
   }
 }
 
+// Products large enough that the kernel takes each of its two ways of building a vector. Vectors with many distinct,
+// rarely repeated indices are streamed through the hash table; the others are marked and then sorted: already in
+// order, by insertion, or through the table, direct or hashed. The reference sums the same products through
+// setFromTriplets.
+template <int LhsOrder, int RhsOrder, int ResOrder>
+void sparse_product_large() {
+  using Triplets = std::vector<Triplet<double>>;
+  enum Pattern { Scattered, Run, Pooled };
+  // perColumn entries per column: at random rows, in one contiguous run from a random row, or 100 of the 300
+  // scattered rows of one of three pools, so that columns of a pool share most of their rows.
+  auto random_matrix = [](Index rows, Index cols, Index perColumn, Pattern pattern) {
+    Triplets triplets;
+    for (Index j = 0; j < cols; ++j) {
+      Index first = internal::random<Index>(0, rows - 1);
+      for (Index k = 0; k < perColumn; ++k) {
+        Index i = internal::random<Index>(0, rows - 1);
+        if (pattern == Run) i = (first + k) % rows;
+        if (pattern == Pooled) i = ((j % 3) * 7919 + ((j * 37 + k * 3) % 300) * 127) % rows;
+        triplets.emplace_back(i, j, double(1 + (i + 3 * j + k) % 7));
+      }
+    }
+    SparseMatrix<double> m(rows, cols);
+    m.setFromTriplets(triplets.begin(), triplets.end());
+    return m;
+  };
+  struct Shape {
+    Index rows, mid, cols, lhsPerColumn, rhsPerColumn;
+    Pattern pattern;
+  };
+  const Shape shapes[] = {
+      {3000, 3000, 300, 40, 40, Scattered},  // about 1200 distinct indices of 1600 products: streamed
+      {60000, 200, 200, 300, 2, Scattered},  // tall, 600 distinct indices: streamed, and the table grows
+      {400, 400, 200, 60, 60, Scattered},    // 3600 products on 400 rows: marked, sorted through a direct table
+      {40000, 300, 200, 100, 30, Pooled},  // 3000 products on 900 scattered rows: marked, sorted through a hashed table
+      {5000, 500, 500, 30, 2, Run},        // two runs of 30: marked, then in order or sorted by insertion
+      {20000, 300, 300, 100, 1, Run},      // one run of 100: marked and already sorted
+  };
+  for (const Shape& shape : shapes) {
+    SparseMatrix<double> a = random_matrix(shape.rows, shape.mid, shape.lhsPerColumn, shape.pattern);
+    SparseMatrix<double> b = random_matrix(shape.mid, shape.cols, shape.rhsPerColumn, Scattered);
+    Triplets triplets;
+    for (Index j = 0; j < b.outerSize(); ++j)
+      for (SparseMatrix<double>::InnerIterator bIt(b, j); bIt; ++bIt)
+        for (SparseMatrix<double>::InnerIterator aIt(a, bIt.index()); aIt; ++aIt)
+          triplets.emplace_back(aIt.index(), j, aIt.value() * bIt.value());
+    SparseMatrix<double, ResOrder> ref(shape.rows, shape.cols);
+    ref.setFromTriplets(triplets.begin(), triplets.end());
+
+    SparseMatrix<double, LhsOrder> lhs = a;
+    SparseMatrix<double, RhsOrder> rhs = b;
+    SparseMatrix<double, ResOrder> res = lhs * rhs;
+    VERIFY(res.isCompressed());
+    VERIFY_IS_EQUAL(res.innerIndicesAreSorted(), res.outerSize());
+    VERIFY_IS_EQUAL(res.nonZeros(), ref.nonZeros());
+    // integer-valued entries: the sums are exact in any order
+    VERIFY_IS_EQUAL((res - ref).norm(), 0.0);
+  }
+}
+
 EIGEN_DECLARE_TEST(sparse_product) {
   sparse_structured_view_product_sfinae<SparseMatrix<double, ColMajor>>();
   sparse_structured_view_product_sfinae<SparseMatrix<double, RowMajor>>();
@@ -1397,4 +1456,8 @@ EIGEN_DECLARE_TEST(sparse_product) {
     CALL_SUBTEST_6((test_ambivector_front_insertion_relocates<>()));
 #endif
   }
+  CALL_SUBTEST_3((sparse_product_large<ColMajor, ColMajor, ColMajor>()));
+  CALL_SUBTEST_3((sparse_product_large<RowMajor, RowMajor, RowMajor>()));
+  CALL_SUBTEST_3((sparse_product_large<RowMajor, ColMajor, ColMajor>()));
+  CALL_SUBTEST_3((sparse_product_large<ColMajor, ColMajor, RowMajor>()));
 }
