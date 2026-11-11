@@ -159,20 +159,14 @@ class CompressedStorage {
         reallocate(newAllocatedSize);
       }
       if (m_size > id) {
-        internal::smart_memmove(m_values + id, m_values + m_size, m_values + id + 1);
-        internal::smart_memmove(m_indices + id, m_indices + m_size, m_indices + id + 1);
+        std::move_backward(m_values + id, m_values + m_size, m_values + m_size + 1);
+        std::move_backward(m_indices + id, m_indices + m_size, m_indices + m_size + 1);
       }
       m_size++;
       m_indices[id] = internal::convert_index<StorageIndex>(key);
       m_values[id] = defaultValue;
     }
     return m_values[id];
-  }
-
-  inline void moveChunk(Index from, Index to, Index chunkSize) {
-    eigen_internal_assert(chunkSize >= 0 && to + chunkSize <= m_size);
-    internal::smart_memmove(m_values + from, m_values + from + chunkSize, m_values + to);
-    internal::smart_memmove(m_indices + from, m_indices + from + chunkSize, m_indices + to);
   }
 
  protected:

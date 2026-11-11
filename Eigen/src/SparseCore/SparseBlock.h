@@ -209,10 +209,16 @@ class sparse_matrix_block_impl : public SparseCompressedBase<Block<SparseMatrixT
         // no need to realloc, simply copy the tail at its respective position and insert tmp
         matrix.data().resize(start + nnz + tail_size);
 
-        internal::smart_memmove(matrix.valuePtr() + end, matrix.valuePtr() + end + tail_size,
-                                matrix.valuePtr() + start + nnz);
-        internal::smart_memmove(matrix.innerIndexPtr() + end, matrix.innerIndexPtr() + end + tail_size,
-                                matrix.innerIndexPtr() + start + nnz);
+        Scalar* values = matrix.valuePtr();
+        StorageIndex* indices = matrix.innerIndexPtr();
+        const Index tail_end = end + tail_size;
+        if (nnz < block_size) {
+          std::move(values + end, values + tail_end, values + start + nnz);
+          std::move(indices + end, indices + tail_end, indices + start + nnz);
+        } else {
+          std::move_backward(values + end, values + tail_end, values + start + nnz + tail_size);
+          std::move_backward(indices + end, indices + tail_end, indices + start + nnz + tail_size);
+        }
 
         update_trailing_pointers = true;
       }
