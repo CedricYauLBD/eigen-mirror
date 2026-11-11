@@ -1631,8 +1631,24 @@ void sparse_shift_moves() {
     }
     MovableScalarCounters::reset();
     v.coeffRef(0) = Scalar(value);
-    ref(0) = value;
+    ref(0) = value++;
     VERIFY_SHIFT_COUNTS(1);
+    verify_movable_entries(v, ref);
+  }
+
+  // SparseVector::prune() packs the kept entries; the one in front of the dropped entry stays in place.
+  {
+    SparseVector<Scalar> v(n);
+    MatrixXd ref = MatrixXd::Zero(n, 1);
+    for (Index i : {1, 3, 4, 6}) {
+      v.insert(i) = Scalar(value);
+      ref(i) = value++;
+    }
+    const double dropped = ref(3);
+    ref(3) = 0;
+    MovableScalarCounters::reset();
+    v.prune([dropped](const Scalar& x) { return double(x) != dropped; });
+    VERIFY_SHIFT_COUNTS(0);
     verify_movable_entries(v, ref);
   }
 }
