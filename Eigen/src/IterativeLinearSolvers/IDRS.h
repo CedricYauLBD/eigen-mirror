@@ -142,11 +142,22 @@ bool idrs(const MatrixType& A, const Rhs& b, Dest& x, const Preconditioner& prec
       G.col(k).noalias() = A * U.col(k);
 
       // Bi-Orthogonalise the new basis vectors:
-      for (Index i = 0; i < k - 1; ++i) {
+      const RealScalar normg = G.col(k).stableNorm();
+      for (Index i = 0; i < k; ++i) {
         // alpha =  ( P(:,i)'*G(:,k) )/M(i,i);
         Scalar alpha = P.col(i).dot(G.col(k)) / M(i, i);
         G.col(k) = G.col(k) - alpha * G.col(i);
         U.col(k) = U.col(k) - alpha * U.col(i);
+      }
+
+      if (k > 0 && G.col(k).stableNorm() <= mp * normg) {
+        // G(:,k) was in the span of the earlier directions: the Krylov space is exhausted. What is left of G(:,k) is
+        // the rounding error of the loop above, for which A U(:,k) = G(:,k) no longer holds. Restart from the current
+        // iterate with the omega step below.
+        G.setZero();
+        U.setZero();
+        M.setIdentity();
+        break;
       }
 
       // New column of M = P'*G  (first k-1 entries are zero)
