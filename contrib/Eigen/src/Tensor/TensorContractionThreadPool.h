@@ -1546,35 +1546,43 @@ struct TensorEvaluator<const TensorContractionOp<Indices, LeftArgType, RightArgT
     return shard_by_k;
   }
 
-  TensorOpCost contractionCostPerInnerDim(Index m, Index n, Index k) const {
-    // Compute cost.
+  // Estimated cycles for one step along the inner dimension of a contraction sharded by that dimension: packing
+  // one lhs column and one rhs row, then m * n multiply-adds in the kernel.
+  double contractionCostPerInnerDim(Index m, Index n) const {
+    using CostModel = TensorCostModel<ThreadPoolDevice>;
     const int output_packet_size = internal::unpacket_traits<PacketReturnType>::size;
-    TensorOpCost cost(0, 0, (computeBandwidth(m, n, k) * m) * n, true, output_packet_size);
+    // computeBandwidth() compares a kernel block with the register block (mr x nr). Here m and n are whole
+    // dimensions, and the kernel loses its peak rate only when a lhs column is shorter than a packet.
+    const double bandwidth = (m < output_packet_size) ? 2.0 : peakComputeBandwidth();
+    TensorOpCost kernel_cost(0, 0, (bandwidth * m) * n, true, output_packet_size);
     // Output stores.
-    cost += TensorOpCost(0, sizeof(CoeffReturnType), 0, true, output_packet_size);
-    TensorOpCost lhsCost = this->m_leftImpl.costPerCoeff(true) * m;
-    TensorOpCost rhsCost = this->m_rightImpl.costPerCoeff(true) * n;
-    // Since the inner gemm kernel is always sharded by column, the lhs
-    // load cost is negligible.
-    lhsCost.dropMemoryCost();
-    return cost + lhsCost + rhsCost;
+    kernel_cost += TensorOpCost(0, sizeof(CoeffReturnType), 0, true, output_packet_size);
+    // Packing loads and stores every coefficient once. The kernel amortizes a packed lhs column over only n
+    // columns, so when n is small, packing costs as much as the kernel does.
+    TensorOpCost pack_cost = this->m_leftImpl.costPerCoeff(true) * m + this->m_rightImpl.costPerCoeff(true) * n;
+    pack_cost +=
+        TensorOpCost(0, static_cast<double>(m) * sizeof(LhsScalar) + static_cast<double>(n) * sizeof(RhsScalar), 0);
+    // Packing and the kernel run one after the other, so their times add.
+    return CostModel::totalCost(1, kernel_cost) + CostModel::totalCost(1, pack_cost);
   }
 
   int numThreadsInnerDim(Index m, Index n, Index k) const {
+    using CostModel = TensorCostModel<ThreadPoolDevice>;
     const int output_packet_size = internal::unpacket_traits<PacketReturnType>::size;
-    TensorOpCost cost = contractionCostPerInnerDim(m, n, k);
-    double total_parallel_cost = TensorCostModel<ThreadPoolDevice>::totalCost(k, cost);
+    const double total_parallel_cost = k * contractionCostPerInnerDim(m, n);
     // Cost of reduction step accumulating the m*n per-thread buffers into the
     // result.
-    double reduction_cost =
-        TensorCostModel<ThreadPoolDevice>::totalCost(m * n, TensorOpCost(2, 1, 1, true, output_packet_size));
+    const double reduction_cost = CostModel::totalCost(m * n, TensorOpCost(2, 1, 1, true, output_packet_size));
+    // As in TensorCostModel::numThreads(), each thread needs at least kPerThreadCycles of work. It also needs more
+    // than 8 * nr steps, or shardByInnerDim() rejects the sharding instead of using fewer threads.
+    const double max_threads_by_work = total_parallel_cost / CostModel::kPerThreadCycles;
+    const double max_threads_by_steps = static_cast<double>(k / (8 * Traits::nr + 1));
+    const int max_threads = static_cast<int>(numext::mini<double>(
+        this->m_device.numThreads(), numext::mini<double>(max_threads_by_work, max_threads_by_steps)));
     int num_threads = 1;
     double min_cost = total_parallel_cost;
-    double kPerThreadOverHead = TensorCostModel<ThreadPoolDevice>::kPerThreadCycles;
-    double kFixedOverHead = TensorCostModel<ThreadPoolDevice>::kStartupCycles;
-    for (int nt = 2; nt <= this->m_device.numThreads(); nt += 2) {
-      double sequential_cost = kFixedOverHead + nt * (reduction_cost + kPerThreadOverHead);
-      double parallel_cost = total_parallel_cost / nt + sequential_cost;
+    for (int nt = 2; nt <= max_threads; nt += 2) {
+      const double parallel_cost = total_parallel_cost / nt + CostModel::kStartupCycles + nt * reduction_cost;
       if (parallel_cost < min_cost) {
         num_threads = nt;
         min_cost = parallel_cost;
@@ -1583,19 +1591,25 @@ struct TensorEvaluator<const TensorContractionOp<Indices, LeftArgType, RightArgT
     return num_threads;
   }
 
-  double computeBandwidth(Index bm, Index bn, Index bk) const {
-    // Peak VFMA bandwidth is 0.5. However if we have not enough data for
-    // vectorization bandwidth drops. The 4.0 and 2.0 bandwidth is determined
-    // experimentally.
-    double computeBandwidth = bk == 1 ? 4.0 : (bn < Traits::nr || bm < Traits::mr) ? 2.0 : 0.5;
-#ifndef EIGEN_VECTORIZE_FMA
+  static double peakComputeBandwidth() {
+#ifdef EIGEN_VECTORIZE_FMA
+    return 0.5;
+#else
     // Bandwidth of all of VFMA/MULPS/ADDPS is 0.5 on latest Intel processors.
     // However for MULPS/ADDPS we have dependent sequence of 2 such
     // instructions,
     // so overall bandwidth is 1.0.
-    if (computeBandwidth == 0.5) computeBandwidth = 1.0;
+    return 1.0;
 #endif
-    return computeBandwidth;
+  }
+
+  double computeBandwidth(Index bm, Index bn, Index bk) const {
+    // Peak VFMA bandwidth is 0.5. However if we have not enough data for
+    // vectorization bandwidth drops. The 4.0 and 2.0 bandwidth is determined
+    // experimentally.
+    if (bk == 1) return 4.0;
+    if (bn < Traits::nr || bm < Traits::mr) return 2.0;
+    return peakComputeBandwidth();
   }
 };
 

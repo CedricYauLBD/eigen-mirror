@@ -866,9 +866,8 @@ static void test_sharded_by_inner_dim_cost_model() {
   using ContractionEval = TensorEvaluator<const decltype(expr), Eigen::ThreadPoolDevice>;
   ContractionEval eval(expr, device);
 
-  // Scale k by the packet width so the parallel cost (6.6e4..2.6e5 cycles across FMA and panel-width regimes) sits
-  // between the old hardcoded threshold (~5.7e4 cycles) and the TensorCostModel threshold (~4.0e5 cycles) under every
-  // SIMD width.
+  // Scale k by the packet width so the cost stays moderate (7.5e4..1.6e5 cycles across FMA and packet-width regimes)
+  // and below the sharding threshold of 2 * kStartupCycles = 2.0e5 cycles, for packets of up to 32 scalars.
   const Index f32_packet_size = PacketType<float, Eigen::ThreadPoolDevice>::size;
   const Index moderate_f32_k = 64 * f32_packet_size;
   VERIFY_IS_EQUAL(eval.numThreadsInnerDim(32, 64, moderate_f32_k), 1);
@@ -892,6 +891,17 @@ static void test_sharded_by_inner_dim_cost_model() {
   const int nt_k = eval.numThreadsInnerDim(2, 10, deep_f32_k);
   VERIFY(nt_k > 1);
   VERIFY(ContractionEval::shardByInnerDim(2, 10, deep_f32_k, /*num_threads=*/1, nt_k));
+
+  // Issue #3233: with few columns, packing the lhs costs as much as the kernel, so these shapes hold enough work to
+  // shard by k with or without FMA. On a wide pool, the thread count must still leave each thread the steps that
+  // shardByInnerDim() requires.
+  Eigen::ThreadPoolDevice wide_device(&threads, 112);
+  ContractionEval wide_eval(expr, wide_device);
+  for (Index m : {256, 1024}) {
+    const int skinny_nt_k = wide_eval.numThreadsInnerDim(m, 4, 1536);
+    VERIFY(skinny_nt_k > 1);
+    VERIFY(ContractionEval::shardByInnerDim(m, 4, 1536, /*num_threads=*/1, skinny_nt_k));
+  }
 }
 
 template <int DataLayout>
