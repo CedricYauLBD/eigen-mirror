@@ -137,14 +137,27 @@ void compressed_storage_of_non_trivially_copyable() {
     storage.index(i) = int(2 * i);
     storage.value(i).set(int(i) + 1);
   }
-  Scalar::constructions = 0;
-  storage.reserve(4096);
-  VERIFY_IS_EQUAL(Scalar::constructions, int(size));
-  for (Index i = 0; i < size; ++i) {
-    VERIFY(storage.value(i).intact());
-    VERIFY_IS_EQUAL(storage.value(i).value, int(i) + 1);
-    VERIFY_IS_EQUAL(storage.index(i), int(2 * i));
+  // The second reserve() and the squeeze() start with capacity past the stored size: those slots were never written
+  // and must not be read.
+  for (int step = 0; step < 3; ++step) {
+    Scalar::constructions = 0;
+    if (step < 2)
+      storage.reserve(4096 << step);
+    else
+      storage.squeeze();
+    VERIFY_IS_EQUAL(Scalar::constructions, int(size));
+    for (Index i = 0; i < size; ++i) {
+      VERIFY(storage.value(i).intact());
+      VERIFY_IS_EQUAL(storage.value(i).value, int(i) + 1);
+      VERIFY_IS_EQUAL(storage.index(i), int(2 * i));
+    }
   }
+
+  Scalar::constructions = 0;
+  SparseVector<Scalar> empty(32);
+  empty.reserve(8);
+  empty.reserve(16);
+  VERIFY_IS_EQUAL(Scalar::constructions, 0);
 }
 
 template <bool Align>

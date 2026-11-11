@@ -193,7 +193,20 @@ class CompressedStorage {
     EIGEN_TRY {
       const Index copy_size = (std::min)(m_size, size);
       if (copy_size > 0) internal::smart_copy(m_indices, m_indices + copy_size, new_indices);
-      m_values = conditional_aligned_realloc_new_auto<Scalar, true>(m_values, size, m_allocatedSize);
+      EIGEN_IF_CONSTEXPR (NumTraits<Scalar>::RequireInitialization) {
+        // Every slot of the old buffer holds a constructed Scalar, and every slot of the new one must.
+        m_values = conditional_aligned_realloc_new_auto<Scalar, true>(m_values, size, m_allocatedSize);
+      } else {
+        // Slots past m_size hold no entry and may be uninitialized, so only the stored entries are relocated.
+        Scalar* new_values = conditional_aligned_new_auto<Scalar, true>(size);
+        EIGEN_TRY { move_construct_elements_of_array(new_values, m_values, static_cast<std::size_t>(copy_size)); }
+        EIGEN_CATCH(...) {
+          conditional_aligned_delete_auto<Scalar, true>(new_values, size);
+          EIGEN_THROW;
+        }
+        conditional_aligned_delete_auto<Scalar, true>(m_values, m_allocatedSize);
+        m_values = new_values;
+      }
     }
     EIGEN_CATCH(...) {
       conditional_aligned_delete_auto<StorageIndex, true>(new_indices, size);
