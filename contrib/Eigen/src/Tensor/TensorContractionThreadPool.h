@@ -1071,7 +1071,7 @@ struct TensorEvaluator<const TensorContractionOp<Indices, LeftArgType, RightArgT
           k(k_size),
           done(std::move(done_callback)),
           buffer_size_bytes(m * n * sizeof(Scalar)),
-          block_size(blockSize(k, num_threads)),
+          block_size(innerDimBlockSize(k, num_threads)),
           num_blocks(numext::div_ceil<Index>(k, block_size)),
           num_pending_blocks(internal::convert_index<int>(num_blocks)),
           l0_ranges(numext::div_ceil<Index>(num_blocks, l0_size)),
@@ -1144,10 +1144,6 @@ struct TensorEvaluator<const TensorContractionOp<Indices, LeftArgType, RightArgT
     }
 
    private:
-    // The underlying GEMM kernel assumes that k is a multiple of
-    // the packet size and subtle breakage occurs if this is violated.
-    static constexpr Index packet_size = internal::packet_traits<RhsScalar>::size;
-
     const Self* evaluator;  // TensorContraction evaluator
 
     // These fields cache values from the evaluator for use in processBlock dispatch.
@@ -1376,21 +1372,6 @@ struct TensorEvaluator<const TensorContractionOp<Indices, LeftArgType, RightArgT
       }
     }
 
-    // Cost model doesn't capture well the cost associated with constructing
-    // tensor contraction mappers and computing loop bounds in gemm_pack_lhs
-    // and gemm_pack_rhs, so we specify minimum desired block size.
-    static Index blockSize(Index k, int num_threads) {
-      const auto round_up = [=](Index index) -> Index {
-        const Index kmultiple = packet_size <= 8 ? 8 : packet_size;
-        return numext::div_ceil<Index>(index, kmultiple) * kmultiple;
-      };
-
-      const Index target_block_size = round_up(numext::div_ceil<Index>(k, num_threads));
-      const Index desired_min_block_size = 12 * packet_size;
-
-      return numext::mini<Index>(k, numext::maxi<Index>(desired_min_block_size, target_block_size));
-    }
-
     EvalShardedByInnerDimContext(const EvalShardedByInnerDimContext&) = delete;
     void operator=(const EvalShardedByInnerDimContext&) = delete;
   };
@@ -1546,6 +1527,24 @@ struct TensorEvaluator<const TensorContractionOp<Indices, LeftArgType, RightArgT
     return shard_by_k;
   }
 
+  // Steps along the inner dimension in each block of a contraction sharded by that dimension for num_threads
+  // threads. Cost model doesn't capture well the cost associated with constructing tensor contraction mappers and
+  // computing loop bounds in gemm_pack_lhs and gemm_pack_rhs, so we specify minimum desired block size.
+  static Index innerDimBlockSize(Index k, int num_threads) {
+    // The underlying GEMM kernel assumes that k is a multiple of
+    // the packet size and subtle breakage occurs if this is violated.
+    const Index packet_size = internal::packet_traits<RhsScalar>::size;
+    const auto round_up = [=](Index index) -> Index {
+      const Index kmultiple = packet_size <= 8 ? 8 : packet_size;
+      return numext::div_ceil<Index>(index, kmultiple) * kmultiple;
+    };
+
+    const Index target_block_size = round_up(numext::div_ceil<Index>(k, num_threads));
+    const Index desired_min_block_size = 12 * packet_size;
+
+    return numext::mini<Index>(k, numext::maxi<Index>(desired_min_block_size, target_block_size));
+  }
+
   // Estimated cycles for one step along the inner dimension of a contraction sharded by that dimension: packing
   // one lhs column and one rhs row, then m * n multiply-adds in the kernel.
   double contractionCostPerInnerDim(Index m, Index n) const {
@@ -1553,10 +1552,8 @@ struct TensorEvaluator<const TensorContractionOp<Indices, LeftArgType, RightArgT
     const int output_packet_size = internal::unpacket_traits<PacketReturnType>::size;
     // computeBandwidth() compares a kernel block with the register block (mr x nr). Here m and n are whole
     // dimensions, and the kernel loses its peak rate only when a lhs column is shorter than a packet.
-    const double bandwidth = (m < output_packet_size) ? 2.0 : peakComputeBandwidth();
-    TensorOpCost kernel_cost(0, 0, (bandwidth * m) * n, true, output_packet_size);
-    // Output stores.
-    kernel_cost += TensorOpCost(0, sizeof(CoeffReturnType), 0, true, output_packet_size);
+    const double bandwidth = (m < output_packet_size) ? shortBlockComputeBandwidth() : peakComputeBandwidth();
+    const TensorOpCost kernel_cost(0, 0, (bandwidth * m) * n, true, output_packet_size);
     // Packing loads and stores every coefficient once. The kernel amortizes a packed lhs column over only n
     // columns, so when n is small, packing costs as much as the kernel does.
     TensorOpCost pack_cost = this->m_leftImpl.costPerCoeff(true) * m + this->m_rightImpl.costPerCoeff(true) * n;
@@ -1566,6 +1563,8 @@ struct TensorEvaluator<const TensorContractionOp<Indices, LeftArgType, RightArgT
     return CostModel::totalCost(1, kernel_cost) + CostModel::totalCost(1, pack_cost);
   }
 
+  // Number of blocks, each one a task, into which to shard a contraction by its inner dimension; 1 if sharding by
+  // that dimension does not pay.
   int numThreadsInnerDim(Index m, Index n, Index k) const {
     using CostModel = TensorCostModel<ThreadPoolDevice>;
     const int output_packet_size = internal::unpacket_traits<PacketReturnType>::size;
@@ -1582,9 +1581,13 @@ struct TensorEvaluator<const TensorContractionOp<Indices, LeftArgType, RightArgT
     int num_threads = 1;
     double min_cost = total_parallel_cost;
     for (int nt = 2; nt <= max_threads; nt += 2) {
-      const double parallel_cost = total_parallel_cost / nt + CostModel::kStartupCycles + nt * reduction_cost;
+      // innerDimBlockSize() rounds the block size up and bounds it from below, so nt threads can get fewer than nt
+      // blocks. Cost the blocks that run and return their number.
+      const int num_blocks = internal::convert_index<int>(numext::div_ceil<Index>(k, innerDimBlockSize(k, nt)));
+      const double parallel_cost =
+          total_parallel_cost / num_blocks + CostModel::kStartupCycles + num_blocks * reduction_cost;
       if (parallel_cost < min_cost) {
-        num_threads = nt;
+        num_threads = num_blocks;
         min_cost = parallel_cost;
       }
     }
@@ -1603,12 +1606,15 @@ struct TensorEvaluator<const TensorContractionOp<Indices, LeftArgType, RightArgT
 #endif
   }
 
+  // Bandwidth of a kernel block with too little data to vectorize, determined experimentally.
+  static double shortBlockComputeBandwidth() { return 2.0; }
+
   double computeBandwidth(Index bm, Index bn, Index bk) const {
     // Peak VFMA bandwidth is 0.5. However if we have not enough data for
     // vectorization bandwidth drops. The 4.0 and 2.0 bandwidth is determined
     // experimentally.
     if (bk == 1) return 4.0;
-    if (bn < Traits::nr || bm < Traits::mr) return 2.0;
+    if (bn < Traits::nr || bm < Traits::mr) return shortBlockComputeBandwidth();
     return peakComputeBandwidth();
   }
 };
