@@ -626,9 +626,12 @@ struct smart_copy_helper<T, true> {
   }
 };
 
+// The ranges do not overlap, and saying so lets the compiler turn an assignment that copies fields into memcpy.
 template <typename T>
 struct smart_copy_helper<T, false> {
-  EIGEN_DEVICE_FUNC static inline void run(const T* start, const T* end, T* target) { std::copy(start, end, target); }
+  EIGEN_DEVICE_FUNC static inline void run(const T* EIGEN_RESTRICT start, const T* end, T* EIGEN_RESTRICT target) {
+    std::copy(start, end, target);
+  }
 };
 
 /*****************************************************************************

@@ -4,7 +4,7 @@
 // Operations that shift, pack or relocate stored entries inside a SparseMatrix or a SparseVector: sorted insertion,
 // reserve(), makeCompressed(), adding a diagonal, assigning an inner vector, prune(), and setFromTriplets() with
 // duplicates. Each runs for double, where a shift is a memmove, and for a scalar that owns heap memory, where it is
-// one assignment per entry.
+// one assignment per entry. A last case copies a matrix of a scalar whose user-provided copy only copies a field.
 
 #include <benchmark/benchmark.h>
 #include <Eigen/SparseCore>
@@ -39,8 +39,22 @@ class HeapScalar {
   std::vector<double> limbs_;
 };
 
+// Not trivially copyable, though its copy only copies a field: smart_copy assigns it entry by entry, and the compiler
+// may turn that loop into memcpy once it knows that the ranges do not overlap.
+struct FieldCopyScalar {
+  double value = 0;
+  FieldCopyScalar() = default;
+  FieldCopyScalar(double x) : value(x) {}
+  FieldCopyScalar(const FieldCopyScalar& other) noexcept : value(other.value) {}
+  FieldCopyScalar& operator=(const FieldCopyScalar& other) noexcept {
+    value = other.value;
+    return *this;
+  }
+};
+
 double toDouble(double x) { return x; }
 double toDouble(const HeapScalar& x) { return x.value(); }
+double toDouble(const FieldCopyScalar& x) { return x.value; }
 
 template <typename SparseType>
 double sumOfEntries(const SparseType& m) {
@@ -67,6 +81,10 @@ namespace Eigen {
 template <>
 struct NumTraits<HeapScalar> : NumTraits<double> {
   static constexpr int RequireInitialization = 1;
+};
+template <>
+struct NumTraits<FieldCopyScalar> : NumTraits<double> {
+  static constexpr int RequireInitialization = 0;
 };
 }  // namespace Eigen
 
@@ -285,6 +303,23 @@ static void BM_AssignInnerVectorUncompressed(benchmark::State& state) {
   state.SetItemsProcessed(state.iterations() * size * nnzPerVector);
 }
 
+// Copy assignment into storage that is already large enough copies the values with smart_copy.
+template <typename Scalar>
+static void BM_CopyAssign(benchmark::State& state) {
+  const Index nnzPerVector = state.range(0);
+  const Index size = 256;
+  const SparseMatrix<Scalar> source = makeOffDiagonal<Scalar>(size, nnzPerVector);
+  SparseMatrix<Scalar> m = source;
+  for (auto _ : state) {
+    m = source;
+    benchmark::DoNotOptimize(m.valuePtr());
+    benchmark::ClobberMemory();
+  }
+  if (m.nonZeros() != size * nnzPerVector || sumOfEntries(m) != double(size * nnzPerVector))
+    state.SkipWithError("copy assignment lost or changed coefficients");
+  state.SetItemsProcessed(state.iterations() * size * nnzPerVector);
+}
+
 BENCHMARK_TEMPLATE(BM_InsertDescending, double)->Arg(4)->Arg(16)->Arg(64);
 BENCHMARK_TEMPLATE(BM_InsertDescending, HeapScalar)->Arg(4)->Arg(16)->Arg(64);
 BENCHMARK_TEMPLATE(BM_InsertRandomNoReserve, double)->Arg(4)->Arg(16);
@@ -305,3 +340,4 @@ BENCHMARK_TEMPLATE(BM_SetFromTripletsDuplicates, double)->Arg(4)->Arg(16);
 BENCHMARK_TEMPLATE(BM_SetFromTripletsDuplicates, HeapScalar)->Arg(4)->Arg(16);
 BENCHMARK_TEMPLATE(BM_AssignInnerVectorUncompressed, double)->Arg(4)->Arg(16);
 BENCHMARK_TEMPLATE(BM_AssignInnerVectorUncompressed, HeapScalar)->Arg(4)->Arg(16);
+BENCHMARK_TEMPLATE(BM_CopyAssign, FieldCopyScalar)->Arg(4)->Arg(16)->Arg(64);
