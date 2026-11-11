@@ -1113,14 +1113,30 @@ struct madd_impl {
   }
 };
 
-#if EIGEN_SCALAR_MADD_USE_FMA
+// Whether fma for Scalar is treated as a software routine. x87 extended and IBM double-double long double have no fma
+// instruction, nor does binary128 on most targets; unless the compiler or <cmath> advertises a fast fmal, assume none.
+// libm's fmal made a 200x200 long double GEMM take 61x the instructions on x86-64 with FMA. A long double with
+// double's format fuses like double.
 template <typename Scalar>
-struct madd_impl<Scalar, std::enable_if_t<has_fma<Scalar>::value>> {
+struct has_slow_fma : std::false_type {};
+#if !defined(FP_FAST_FMAL) && !defined(__FP_FAST_FMAL)
+template <>
+struct has_slow_fma<long double>
+    : bool_constant<std::numeric_limits<long double>::digits != std::numeric_limits<double>::digits> {};
+#endif
+
+// Whether numext::madd fuses Scalar. has_fma<Scalar> is passed as a type, not a value, so it is instantiated only when
+// selected, never when EIGEN_SCALAR_MADD_USE_FMA is 0.
+template <typename Scalar>
+struct scalar_madd_uses_fma : std::conditional_t<bool(EIGEN_SCALAR_MADD_USE_FMA) && !has_slow_fma<Scalar>::value,
+                                                 has_fma<Scalar>, std::false_type> {};
+
+template <typename Scalar>
+struct madd_impl<Scalar, std::enable_if_t<scalar_madd_uses_fma<Scalar>::value>> {
   static EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE Scalar run(const Scalar& x, const Scalar& y, const Scalar& z) {
     return fma_impl<Scalar>::run(x, y, z);
   }
 };
-#endif
 
 // Representation properties shared by operations that inspect an IEEE-style binary floating-point value.
 template <typename Scalar>
