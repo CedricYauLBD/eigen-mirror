@@ -1486,7 +1486,7 @@ void verify_movable_entries(const SparseType& m, const MatrixXd& ref) {
     VERIFY_IS_EQUAL(MovableScalarCounters::get().self_moves, Index(0));  \
   } while (false)
 
-// Every shift of stored entries inside SparseCore, for a scalar that owns heap memory.
+// Every shift, compaction and relocation of stored entries inside SparseCore, for a scalar that owns heap memory.
 template <int Options>
 void sparse_shift_moves() {
   using Scalar = MovableScalar<double>;
@@ -1603,10 +1603,19 @@ void sparse_shift_moves() {
   }
 
   // Assigning an inner vector of a compressed matrix shifts the entries behind it: left when the vector shrinks,
-  // right when it grows. Only the `nnz` assigned values are copied.
-  for (Index nnz : {1, 6}) {
+  // right when it grows. In an uncompressed matrix a vector that outgrows its room reallocates the storage, and the
+  // entries in front of it and behind it move to the new buffer. Only the `nnz` assigned values are copied.
+  struct InnerVectorCase {
+    bool compressed;
+    Index nnz;
+  };
+  for (InnerVectorCase c : {InnerVectorCase{true, 1}, InnerVectorCase{true, 6}, InnerVectorCase{false, 6}}) {
+    const Index nnz = c.nnz;
     SpMat m = base;
-    m.data().reserve(n);
+    if (c.compressed)
+      m.data().reserve(n);
+    else
+      m.uncompress();
     MatrixXd ref = baseRef;
     SpMat source(SpMat::IsRowMajor ? 1 : n, SpMat::IsRowMajor ? n : 1);
     for (Index i = 0; i < n; ++i) coeff(ref, 2, i) = 0;
@@ -1618,6 +1627,7 @@ void sparse_shift_moves() {
     MovableScalarCounters::reset();
     m.innerVector(2) = source;
     VERIFY_SHIFT_COUNTS(nnz);
+    VERIFY_IS_EQUAL(m.isCompressed(), c.compressed);
     verify_movable_entries(m, ref);
   }
 
@@ -1636,6 +1646,21 @@ void sparse_shift_moves() {
     verify_movable_entries(v, ref);
   }
 
+  // SparseVector::insert() shifts the entries behind the new one.
+  {
+    SparseVector<Scalar> v(n);
+    MatrixXd ref = MatrixXd::Zero(n, 1);
+    for (Index i : {2, 5, 7}) {
+      v.insert(i) = Scalar(value);
+      ref(i) = value++;
+    }
+    MovableScalarCounters::reset();
+    v.insert(0) = Scalar(value);
+    ref(0) = value++;
+    VERIFY_SHIFT_COUNTS(0);
+    verify_movable_entries(v, ref);
+  }
+
   // SparseVector::prune() packs the kept entries; the one in front of the dropped entry stays in place.
   {
     SparseVector<Scalar> v(n);
@@ -1650,6 +1675,40 @@ void sparse_shift_moves() {
     v.prune([dropped](const Scalar& x) { return double(x) != dropped; });
     VERIFY_SHIFT_COUNTS(0);
     verify_movable_entries(v, ref);
+  }
+
+  // prune() packs the kept entries across the vectors of a compressed matrix and within each vector of an
+  // uncompressed one. Dropping inner index 4 leaves the entries in front of the first dropped one in place.
+  for (bool compressed : {true, false}) {
+    SpMat m = base;
+    if (!compressed) m.uncompress();
+    MatrixXd ref = baseRef;
+    for (Index j = 0; j < n; ++j) coeff(ref, j, 4) = 0;
+    MovableScalarCounters::reset();
+    m.prune([](Index row, Index col, const Scalar&) { return (SpMat::IsRowMajor ? col : row) != 4; });
+    VERIFY_SHIFT_COUNTS(0);
+    VERIFY_IS_EQUAL(m.isCompressed(), compressed);
+    verify_movable_entries(m, ref);
+  }
+
+  // setFromTriplets() sums duplicate entries and packs the first entry of each coefficient in front. Its copies are
+  // those of reading the triplets and of the transposing assignment that sorts the result.
+  {
+    std::vector<Triplet<Scalar>> triplets;
+    MatrixXd ref = MatrixXd::Zero(n, n);
+    for (Index j = 0; j < n; ++j) {
+      for (Index i : {1, 4, 6, 4}) {
+        const int outer = int(j), inner = int(i);
+        triplets.emplace_back(SpMat::IsRowMajor ? outer : inner, SpMat::IsRowMajor ? inner : outer, Scalar(value));
+        coeff(ref, j, i) += value++;
+      }
+    }
+    SpMat m(n, n);
+    MovableScalarCounters::reset();
+    m.setFromTriplets(triplets.begin(), triplets.end(),
+                      [](const Scalar& a, const Scalar& b) { return Scalar(double(a) + double(b)); });
+    VERIFY_SHIFT_COUNTS(Index(triplets.size()) + m.nonZeros());
+    verify_movable_entries(m, ref);
   }
 }
 

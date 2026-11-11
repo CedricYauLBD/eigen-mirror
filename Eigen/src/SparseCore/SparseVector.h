@@ -174,7 +174,7 @@ class SparseVector : public SparseCompressedBase<SparseVector<Scalar_, Options_,
 
     while ((p >= startId) && (m_data.index(p) > i)) {
       m_data.index(p + 1) = m_data.index(p);
-      m_data.value(p + 1) = m_data.value(p);
+      m_data.value(p + 1) = std::move(m_data.value(p));
       --p;
     }
     m_data.index(p + 1) = convert_index(i);

@@ -677,8 +677,12 @@ class SparseMatrix : public SparseCompressedBase<SparseMatrix<Scalar_, Options_,
         StorageIndex col = IsRowMajor ? m_data.index(i) : StorageIndex(j);
         bool keepEntry = keep(row, col, m_data.value(i));
         if (keepEntry) {
-          m_data.value(k) = m_data.value(i);
-          m_data.index(k) = m_data.index(i);
+          // Entries in front of the first dropped one are already in place, where a self-move would leave them
+          // unspecified. A trivially copyable scalar is assigned anyway, which costs less than the branch.
+          if (std::is_trivially_copyable<Scalar>::value || k != i) {
+            m_data.value(k) = std::move(m_data.value(i));
+            m_data.index(k) = m_data.index(i);
+          }
           ++k;
         } else if (!isCompressed())
           m_innerNonZeros[j]--;
@@ -1525,9 +1529,12 @@ void SparseMatrix<Scalar_, Options_, StorageIndex_>::collapseDuplicates(DenseBas
         m_data.value(wi(i)) = dup_func(m_data.value(wi(i)), m_data.value(k));
       } else {
         // k is the primary entry in j with inner index i
-        // shift it to the left and record its location at wi(i)
-        m_data.index(count) = i;
-        m_data.value(count) = m_data.value(k);
+        // shift it to the left and record its location at wi(i). Until the first duplicate it is already in place,
+        // where a self-move would leave it unspecified; a trivially copyable scalar is assigned anyway.
+        if (std::is_trivially_copyable<Scalar>::value || count != k) {
+          m_data.index(count) = i;
+          m_data.value(count) = std::move(m_data.value(k));
+        }
         wi(i) = count;
         ++count;
       }

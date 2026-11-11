@@ -1,14 +1,16 @@
 // SPDX-FileCopyrightText: The Eigen Authors
 // SPDX-License-Identifier: MPL-2.0
 
-// Operations that shift stored entries inside a SparseMatrix or a SparseVector: sorted insertion, reserve(),
-// makeCompressed(), adding a diagonal, and assigning an inner vector. Each runs for double, where a shift is a
-// memmove, and for a scalar that owns heap memory, where it is one assignment per entry.
+// Operations that shift, pack or relocate stored entries inside a SparseMatrix or a SparseVector: sorted insertion,
+// reserve(), makeCompressed(), adding a diagonal, assigning an inner vector, prune(), and setFromTriplets() with
+// duplicates. Each runs for double, where a shift is a memmove, and for a scalar that owns heap memory, where it is
+// one assignment per entry.
 
 #include <benchmark/benchmark.h>
 #include <Eigen/SparseCore>
 
 #include <algorithm>
+#include <memory>
 #include <random>
 #include <utility>
 #include <vector>
@@ -193,6 +195,96 @@ static void BM_VectorCoeffRefDescending(benchmark::State& state) {
   state.SetItemsProcessed(state.iterations() * nnz);
 }
 
+// SparseVector::insert() in descending index order: every insertion shifts all the stored entries.
+template <typename Scalar>
+static void BM_VectorInsertDescending(benchmark::State& state) {
+  const Index nnz = state.range(0);
+  SparseVector<Scalar> v(4 * nnz);
+  for (auto _ : state) {
+    v.setZero();
+    for (Index k = nnz - 1; k >= 0; --k) v.insert(3 * k) = Scalar(1.0);
+    benchmark::DoNotOptimize(v.valuePtr());
+    benchmark::ClobberMemory();
+  }
+  if (v.nonZeros() != nnz || sumOfEntries(v) != double(nnz))
+    state.SkipWithError("insertion lost or changed coefficients");
+  state.SetItemsProcessed(state.iterations() * nnz);
+}
+
+// prune() keeping the even inner indices of a compressed matrix: about half the entries move to the front. The
+// timing includes releasing the matrix: a move into a dropped entry frees its memory during prune(), where a copy
+// reuses it and leaves the release to the destructor.
+template <typename Scalar>
+static void BM_Prune(benchmark::State& state) {
+  const Index nnzPerVector = state.range(0);
+  const Index size = 1024;
+  const SparseMatrix<Scalar> base = makeOffDiagonal<Scalar>(size, nnzPerVector);
+  auto keep = [](Index row, Index, const Scalar&) { return row % 2 == 0; };
+  for (auto _ : state) {
+    state.PauseTiming();
+    std::unique_ptr<SparseMatrix<Scalar>> m(new SparseMatrix<Scalar>(base));
+    state.ResumeTiming();
+    m->prune(keep);
+    benchmark::DoNotOptimize(m->valuePtr());
+    m.reset();
+    benchmark::ClobberMemory();
+  }
+  Index kept = 0;
+  for (Index j = 0; j < size; ++j)
+    for (typename SparseMatrix<Scalar>::InnerIterator it(base, j); it; ++it) kept += it.row() % 2 == 0;
+  SparseMatrix<Scalar> m = base;
+  m.prune(keep);
+  if (m.nonZeros() != kept || sumOfEntries(m) != double(kept)) state.SkipWithError("prune() kept the wrong entries");
+  state.SetItemsProcessed(state.iterations() * size * nnzPerVector);
+}
+
+// setFromTriplets() with every coefficient given twice, in random order: summing the duplicates packs the first
+// entry of each coefficient to the front of its vector.
+template <typename Scalar>
+static void BM_SetFromTripletsDuplicates(benchmark::State& state) {
+  const Index nnzPerVector = state.range(0);
+  const Index size = 1024;
+  std::vector<Triplet<Scalar>> triplets;
+  for (Index j = 0; j < size; ++j)
+    for (Index k = 0; k < nnzPerVector; ++k)
+      for (int copy = 0; copy < 2; ++copy) triplets.emplace_back(int((j + 1 + 7 * k) % size), int(j), Scalar(1.0));
+  std::shuffle(triplets.begin(), triplets.end(), std::mt19937(42));
+  SparseMatrix<Scalar> m(size, size);
+  for (auto _ : state) {
+    m.setFromTriplets(triplets.begin(), triplets.end());
+    benchmark::DoNotOptimize(m.valuePtr());
+    benchmark::ClobberMemory();
+  }
+  if (m.nonZeros() != size * nnzPerVector || sumOfEntries(m) != 2.0 * double(size * nnzPerVector))
+    state.SkipWithError("setFromTriplets() lost or changed coefficients");
+  state.SetItemsProcessed(state.iterations() * Index(triplets.size()));
+}
+
+// Assigning a longer first inner vector to an uncompressed matrix with no free room reallocates the storage, and
+// every other entry goes to the new buffer.
+template <typename Scalar>
+static void BM_AssignInnerVectorUncompressed(benchmark::State& state) {
+  const Index nnzPerVector = state.range(0);
+  const Index size = 1024;
+  const SparseMatrix<Scalar> base = makeOffDiagonal<Scalar>(size, nnzPerVector);
+  SparseMatrix<Scalar> longer(size, 1);
+  for (Index k = 0; k < 2 * nnzPerVector; ++k) longer.insert(k, 0) = Scalar(1.0);
+  longer.makeCompressed();
+  SparseMatrix<Scalar> m;
+  for (auto _ : state) {
+    state.PauseTiming();
+    m = SparseMatrix<Scalar>(base);  // a fresh copy, so the storage has no free room
+    m.uncompress();
+    state.ResumeTiming();
+    m.col(0) = longer;
+    benchmark::DoNotOptimize(m.valuePtr());
+    benchmark::ClobberMemory();
+  }
+  if (m.nonZeros() != (size + 1) * nnzPerVector || sumOfEntries(m) != double((size + 1) * nnzPerVector))
+    state.SkipWithError("assigning an inner vector lost or changed coefficients");
+  state.SetItemsProcessed(state.iterations() * size * nnzPerVector);
+}
+
 BENCHMARK_TEMPLATE(BM_InsertDescending, double)->Arg(4)->Arg(16)->Arg(64);
 BENCHMARK_TEMPLATE(BM_InsertDescending, HeapScalar)->Arg(4)->Arg(16)->Arg(64);
 BENCHMARK_TEMPLATE(BM_InsertRandomNoReserve, double)->Arg(4)->Arg(16);
@@ -205,3 +297,11 @@ BENCHMARK_TEMPLATE(BM_AssignInnerVector, double)->Arg(4)->Arg(16);
 BENCHMARK_TEMPLATE(BM_AssignInnerVector, HeapScalar)->Arg(4)->Arg(16);
 BENCHMARK_TEMPLATE(BM_VectorCoeffRefDescending, double)->Arg(16)->Arg(128)->Arg(1024);
 BENCHMARK_TEMPLATE(BM_VectorCoeffRefDescending, HeapScalar)->Arg(16)->Arg(128)->Arg(1024);
+BENCHMARK_TEMPLATE(BM_VectorInsertDescending, double)->Arg(16)->Arg(128)->Arg(1024);
+BENCHMARK_TEMPLATE(BM_VectorInsertDescending, HeapScalar)->Arg(16)->Arg(128)->Arg(1024);
+BENCHMARK_TEMPLATE(BM_Prune, double)->Arg(4)->Arg(16)->Arg(64);
+BENCHMARK_TEMPLATE(BM_Prune, HeapScalar)->Arg(4)->Arg(16)->Arg(64);
+BENCHMARK_TEMPLATE(BM_SetFromTripletsDuplicates, double)->Arg(4)->Arg(16);
+BENCHMARK_TEMPLATE(BM_SetFromTripletsDuplicates, HeapScalar)->Arg(4)->Arg(16);
+BENCHMARK_TEMPLATE(BM_AssignInnerVectorUncompressed, double)->Arg(4)->Arg(16);
+BENCHMARK_TEMPLATE(BM_AssignInnerVectorUncompressed, HeapScalar)->Arg(4)->Arg(16);
