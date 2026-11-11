@@ -134,10 +134,10 @@ void sparse_product() {
 
 #ifndef EIGEN_SPARSE_PRODUCT_IGNORE_TEMPORARY_COUNT
     // make sure the right product implementation is called:
-    if ((!SparseMatrixType::IsRowMajor) && m2.rows() <= m3.cols()) {
-      VERIFY_EVALUATION_COUNT(m4 = m2 * m3, 2);  // 2 for transposing and get a sorted result.
+    if (!SparseMatrixType::IsRowMajor) {
+      VERIFY_EVALUATION_COUNT(m4 = m2 * m3, 0);  // the product is sorted as computed, and moved into m4.
       VERIFY_EVALUATION_COUNT(m4 = (m2 * m3).pruned(0), 1);
-      VERIFY_EVALUATION_COUNT(m4 = (m2 * m3).eval().pruned(0), 4);
+      VERIFY_EVALUATION_COUNT(m4 = (m2 * m3).eval().pruned(0), 2);
     }
 #endif
 
