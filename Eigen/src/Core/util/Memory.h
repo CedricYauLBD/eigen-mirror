@@ -520,8 +520,22 @@ EIGEN_DEVICE_FUNC inline T* conditional_aligned_realloc_new_auto(T* pts, std::si
 
   check_size_for_overflow<T>(new_size);
   check_size_for_overflow<T>(old_size);
-  return static_cast<T*>(
-      conditional_aligned_realloc<Align>(static_cast<void*>(pts), sizeof(T) * new_size, sizeof(T) * old_size));
+  EIGEN_IF_CONSTEXPR (std::is_trivially_copyable<T>::value) {
+    return static_cast<T*>(
+        conditional_aligned_realloc<Align>(static_cast<void*>(pts), sizeof(T) * new_size, sizeof(T) * old_size));
+  }
+
+  // realloc relocates bytes, which only a trivially copyable T allows: move the elements instead. As in
+  // conditional_aligned_new_auto and conditional_aligned_delete_auto, T gets no default constructor or destructor call.
+  if (new_size == old_size) return pts;
+  T* result = static_cast<T*>(conditional_aligned_malloc<Align>(sizeof(T) * new_size));
+  EIGEN_TRY { move_construct_elements_of_array(result, pts, (std::min)(old_size, new_size)); }
+  EIGEN_CATCH(...) {
+    conditional_aligned_free<Align>(result);
+    EIGEN_THROW;
+  }
+  conditional_aligned_free<Align>(pts);
+  return result;
 }
 
 template <typename T, bool Align>
