@@ -189,6 +189,8 @@ EIGEN_DECLARE_TEST(tensor_intdiv) {
   CALL_SUBTEST_5(test_powers_32bit());
   CALL_SUBTEST_6(test_powers_64bit());
   CALL_SUBTEST_7(test_specific());
+  CALL_SUBTEST_8(test_full_range<int8_t>());
+  CALL_SUBTEST_8(test_full_range<uint8_t>());
   CALL_SUBTEST_8(test_full_range<int16_t>());
   CALL_SUBTEST_8(test_full_range<int32_t>());
   CALL_SUBTEST_8(test_full_range<uint32_t>());
