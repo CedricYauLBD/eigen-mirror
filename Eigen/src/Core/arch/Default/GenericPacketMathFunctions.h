@@ -667,9 +667,9 @@ struct pexpm1_reduced_impl<Packet, double> {
 };
 
 /** \internal \returns exp(x)-1.
-    With n = rint(x / ln(2)) and r = x - n ln(2), expm1(x) = 2^n (expm1(r) + (1 - 2^-n)): expm1(r) comes from the
-    reduced-argument kernel of the exponential without its leading 1, so nothing cancels, and for |x| < ln(2)/2,
-    where n = 0, the result is that kernel's.
+    With n = rint(x / ln(2)) and r = x - n ln(2), expm1(x) = 2^n (expm1(r) + (1 - 2^-n)): expm1(r) comes from a
+    kernel fitted for the relative error of expm1, so nothing cancels, and for |x| < ln(2)/2, where n = 0, the result
+    is that kernel's.
  */
 template <typename Packet>
 EIGEN_DEFINE_FUNCTION_ALLOWING_MULTIPLE_DEFINITIONS Packet generic_expm1(const Packet& _x) {
@@ -691,12 +691,16 @@ EIGEN_DEFINE_FUNCTION_ALLOWING_MULTIPLE_DEFINITIONS Packet generic_expm1(const P
   // c = 1 - 2^-n, exact while it has at most `digits` bits. Beyond that, 2^-n is below half an ulp of 1 for a
   // positive n, hence the cap, and 1 is below half an ulp of 2^-n for a negative one.
   const Packet c = psub(one, pldexp_fast(one, pnegate(pmin(n, pset1<Packet>(Scalar(digits + 2))))));
-  // 2^n (em1 + c) in two steps: 2^n itself overflows for the largest n.
-  Packet y = pmul(pldexp_fast(padd(em1, c), psub(n, one)), pset1<Packet>(Scalar(2)));
+  // 2^n (em1 + c) in two steps: 2^n itself overflows for the largest n. The barrier keeps -ffast-math from forming
+  // 2^(n - 1) 2, which overflows for n = max_exponent.
+  Packet y = pldexp_fast(padd(em1, c), psub(n, one));
+  pbarrier(y);
+  y = pmul(y, pset1<Packet>(Scalar(2)));
   // Below epsilon / 4 in magnitude, x is the result to a quarter of an ulp; returning it keeps the sign of zero and
   // the subnormals.
   y = pselect(pcmp_lt(pabs(_x), pset1<Packet>(Scalar(0.25) * NumTraits<Scalar>::epsilon())), _x, y);
-  // expm1(x) >= x, so the max only acts on a NaN input, which it propagates.
+  // A NaN input propagates through the clamp or this max, as in pexp, depending on the NaN convention of pmin and
+  // pmax. expm1(x) >= x, so otherwise the max only replaces a y that rounding left below x, with the closer x.
   return pmax(y, _x);
 }
 
