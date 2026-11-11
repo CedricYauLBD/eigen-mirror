@@ -3,7 +3,6 @@ paths:
   - "AGENTS.md"
   - ".agents/**"
   - ".claude/rules/**"
-  - ".claude/agents/**"
 ---
 
 Before you change a file that this rule matches, read

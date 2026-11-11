@@ -24,9 +24,9 @@ LLVM's ``clang-tidy-diff.py`` cannot replace this routing: it invokes changed
 headers directly, which trips Eigen's internal-header guard, and a PostToolUse
 payload is not a unified diff.
 
-``--hook HARNESS`` runs it as a PostToolUse hook of Claude Code or Codex
-(``agent_hooks.py``): after an edit it lints the lines the edit added, and
-after a shell command that committed, the lines the commit added.
+``--claude-hook`` runs it as a Claude Code PostToolUse hook: after an edit it
+lints the lines the edit added, and after a shell command that committed, the
+lines the commit added.
 
 No compilation database is required: ``-std=c++14 -I<repo>`` parses any file
 in the C++14 trees, with ``test/`` added for the test sources and
@@ -49,7 +49,6 @@ import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from agent_hooks import add_hook_arguments, answer, tool_calls  # noqa: E402
 from style_common import (REPO_ROOT, diff_added_lines, hook_commit_added, hook_edit_snippets,  # noqa: E402
                           hook_post_image_and_added, is_cxx_path, line_filter_json)
 
@@ -248,54 +247,53 @@ def run_clang_tidy(per_file, root=REPO_ROOT, tidy=None):
     return diagnostics, skipped
 
 
-def hook_targets(harness, payload):
+def hook_targets(payload):
     """Return {root: {rel_path: added line numbers}} for the lines a hook
-    payload's edits, or the commit its shell command made, added."""
+    payload's edit, or the commit its shell command made, added."""
     targets = {}
-    for call in tool_calls(harness, payload):
-        for root, per_file in hook_commit_added(call):
-            for path, added in per_file.items():
-                if is_cxx_path(path) and path.startswith(CHECKED_TREES):
-                    targets.setdefault(root, {}).setdefault(path, set()).update(added)
-        rel_path, snippets = hook_edit_snippets(call)
-        if rel_path is None or not is_cxx_path(rel_path) or not rel_path.startswith(CHECKED_TREES):
-            continue
-        _, added, exact = hook_post_image_and_added(call, rel_path, snippets)
+    for root, per_file in hook_commit_added(payload):
+        per_file = {path: added for path, added in per_file.items()
+                    if is_cxx_path(path) and path.startswith(CHECKED_TREES)}
+        if per_file:
+            targets[root] = per_file
+    rel_path, snippets = hook_edit_snippets(payload)
+    if rel_path is not None and is_cxx_path(rel_path) and rel_path.startswith(CHECKED_TREES):
+        _, added, exact = hook_post_image_and_added(payload, rel_path, snippets)
         # Without real line numbers a line filter would point at the wrong
         # lines; silence beats a misplaced diagnostic.
-        # One patch can update a file in two sections: keep the lines of both.
         if exact and added:
-            targets.setdefault(REPO_ROOT, {}).setdefault(rel_path, set()).update(added)
+            targets[REPO_ROOT] = {rel_path: added}
     return targets
 
 
-def run_hook_mode(harness="claude", tidy=None):
+def run_hook_mode(tidy=None):
     try:
         payload = json.load(sys.stdin)
     except Exception:
         return 0
     diagnostics, broken, checked = [], [], []
-    for root, per_file in hook_targets(harness, payload).items():
+    for root, per_file in hook_targets(payload).items():
         found, skipped = run_clang_tidy(per_file, root=root, tidy=tidy)
         diagnostics.extend(found or [])
         broken.extend(path for path, reason in skipped if reason == "translation unit did not compile")
         checked.extend(sorted(per_file))
     if not diagnostics:
-        # A header edited mid-refactor routinely fails to parse on its own,
-        # so show the user a non-blocking notice rather than feeding the model
-        # an error with no finding to act on.
-        notice = ""
         if broken:
-            notice = "clang-tidy (%s): not checked — the translation unit did not compile." % ", ".join(broken)
-        return answer(harness, notice=notice)
+            # A header edited mid-refactor routinely fails to parse on its own,
+            # so show the user a non-blocking notice rather than feeding Claude
+            # an error with no finding to act on.
+            message = "clang-tidy (%s): not checked — the translation unit did not compile." % ", ".join(broken)
+            sys.stdout.write(json.dumps({"systemMessage": message}) + "\n")
+        return 0
     names = checked[:4] + (["..."] if len(checked) > 4 else [])
-    feedback = ["clang-tidy (%s) — added lines only:\n" % ", ".join(names)]
-    feedback.extend("  %s\n" % line for line in diagnostics[:8])
+    sys.stderr.write("clang-tidy (%s) — added lines only:\n" % ", ".join(names))
+    for line in diagnostics[:8]:
+        sys.stderr.write("  %s\n" % line)
     if len(diagnostics) > 8:
-        feedback.append("  ... and %d more\n" % (len(diagnostics) - 8))
-    feedback.append("Advisory: these are Eigen conventions from .clang-tidy; keep a flagged construct only if it is "
-                    "justified, and say why at the construct.\n")
-    return answer(harness, "".join(feedback))
+        sys.stderr.write("  ... and %d more\n" % (len(diagnostics) - 8))
+    sys.stderr.write("Advisory: these are Eigen conventions from .clang-tidy; keep a flagged construct "
+                     "only if it is justified, and say why at the construct.\n")
+    return 2
 
 
 def run_diff_mode(base, tidy=None):
@@ -317,7 +315,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument("--diff", metavar="BASE", help="lint lines added since merge-base(BASE, HEAD)")
-    add_hook_arguments(mode)
+    mode.add_argument("--claude-hook", action="store_true", help="run as a Claude Code PostToolUse hook")
     mode.add_argument("--gate-macros", nargs=2, metavar=("UMBRELLA", "HEADER"),
                       help="print the EIGEN_USE_* macros UMBRELLA needs defined to include HEADER, one per line")
     parser.add_argument("-b", "--binary", metavar="CLANG_TIDY",
@@ -329,9 +327,9 @@ def main():
         for macro in gate_macros(*args.gate_macros):
             print(macro)
         return 0
-    if args.hook:
+    if args.claude_hook:
         try:
-            return run_hook_mode(args.hook, tidy=args.binary)
+            return run_hook_mode(tidy=args.binary)
         except Exception:
             return 0  # a broken hook must not block the harness
     if args.binary and shutil.which(args.binary) is None:

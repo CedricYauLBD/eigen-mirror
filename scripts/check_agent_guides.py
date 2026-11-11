@@ -34,7 +34,7 @@ import subprocess
 import sys
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-# fnmatch's * also matches /, so .agents/*.md takes in .agents/reviews/.
+# fnmatch's * also matches /, so .agents/*.md takes in a guide in a subdirectory.
 GUIDE_PATTERNS = ("AGENTS.md", ".agents/*.md", ".claude/rules/*.md", ".claude/agents/*.md")
 RULES_TREE = ".claude/rules/"
 ROOT_GUIDE = "AGENTS.md"

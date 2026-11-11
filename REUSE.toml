@@ -12,7 +12,6 @@ version = 1
 [[annotations]]
 path = [
     ".agents/*.md",
-    ".agents/reviews/*.md",
     "AGENTS.md",
     "CHANGELOG.md",
     "INSTALL",
@@ -25,12 +24,10 @@ SPDX-License-Identifier = "MPL-2.0"
 
 [[annotations]]
 path = [
-    ".claude/agents/*.md",
     ".claude/rules/*.md",
     ".claude/settings.json",
     ".clang-format",
     ".clang-tidy",
-    ".codex/hooks.json",
     ".coderabbit.yaml",
     ".git-blame-ignore-revs",
     ".gitattributes",
