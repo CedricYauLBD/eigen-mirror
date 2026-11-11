@@ -5,6 +5,7 @@
 #include <Eigen/SparseCore>
 #include <benchmark/benchmark.h>
 #include <algorithm>
+#include <numeric>
 #include <random>
 #include <vector>
 using namespace Eigen;
@@ -65,6 +66,17 @@ static SpMat fehex(I k) {
       }
   return fromT(3 * k * k * k, 3 * k * k * k, t);
 }
+// Renumbers rows and columns by one random permutation, as an unstructured mesh would be numbered.
+static SpMat renumber(const SpMat& m, unsigned seed) {
+  std::vector<I> p(m.rows());
+  std::iota(p.begin(), p.end(), I(0));
+  std::mt19937 g(seed);
+  std::shuffle(p.begin(), p.end(), g);
+  std::vector<Trip> t;
+  for (Index j = 0; j < m.outerSize(); ++j)
+    for (SpMat::InnerIterator it(m, j); it; ++it) t.emplace_back(p[it.index()], p[j], it.value());
+  return fromT(m.rows(), m.cols(), t);
+}
 struct PCase {
   const char* name;
   SpMat A, B;
@@ -94,6 +106,14 @@ static std::vector<PCase>& pcases() {
     c.push_back({"lap2d300^2_x_lap", Q2, Q});
     SpMat D = randmat(3000, 3000, 300, 8);
     c.push_back({"rand3k_300^2", D, D});
+    SpMat Lp = renumber(L, 9);
+    c.push_back({"lap2d500_renum^2", Lp, Lp});
+    SpMat Hp = renumber(H, 10);
+    c.push_back({"fehex16_renum^2", Hp, Hp});
+    SpMat G = lap2d(1000);
+    c.push_back({"lap2d1000^2", G, G});
+    SpMat W = randmat(2000000, 2000000, 8, 11);
+    c.push_back({"rand2M_8^2", W, W});
   }
   return c;
 }
@@ -135,7 +155,7 @@ static void BM_ccr(benchmark::State& s) {
   }
   s.SetLabel(k.name);
 }
-BENCHMARK(BM_ccc)->DenseRange(0, 10)->Unit(benchmark::kMillisecond);
+BENCHMARK(BM_ccc)->DenseRange(0, 14)->Unit(benchmark::kMillisecond);
 BENCHMARK(BM_rrr)->DenseRange(0, 7)->Unit(benchmark::kMillisecond);
 BENCHMARK(BM_rcc)->DenseRange(0, 7)->Unit(benchmark::kMillisecond);
 BENCHMARK(BM_ccr)->DenseRange(0, 7)->Unit(benchmark::kMillisecond);
