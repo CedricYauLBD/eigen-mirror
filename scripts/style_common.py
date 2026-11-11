@@ -34,7 +34,7 @@ EXTENSIONLESS_HEADER_TREES = ("Eigen/", "contrib/Eigen/", "unsupported/Eigen/")
 # Markdown files Doxygen takes as input.
 DOC_EXT = {".dox", ".md"}
 # A shell command that may have committed, and the directories it names.
-GIT_COMMIT = re.compile(r"(?:^|[\s;&|(`])git\b[^;&|\n]*?\scommit\b")
+GIT_COMMIT = re.compile(r"(?:^|[\s;&|(`])git\b[^;&|\n]*?\scommit(?![\w-])")
 COMMAND_DIRS = re.compile(r"(?:\bcd|\s-C)\s+(\S+)")
 # A commit older than this was not made by the tool call being answered.
 COMMIT_MAX_AGE_SECONDS = 300
@@ -162,9 +162,9 @@ def hook_post_image_and_added(payload, rel_path, snippets):
 
     The hook runs after the edit, so the file on disk is the post-image.  The
     edited lines come from the tool response's structured patch when present,
-    else from locating a uniquely occurring added string.  Returns (lines, added, exact): ``exact`` is False
-    when the lines could not be located in the real file and the snippet text
-    is being checked standalone.
+    else from locating a uniquely occurring added string.  Returns
+    (lines, added, exact): ``exact`` is False when the lines could not be
+    located in the real file and the snippet text is being checked standalone.
     """
     text = read_post_image(REPO_ROOT, rel_path)
     added = None
@@ -183,7 +183,25 @@ def hook_post_image_and_added(payload, rel_path, snippets):
     return lines, added, True
 
 
-def hook_commit_added(call, now=None):
+def claim_commit(root, hook, sha):
+    """Record that ``hook`` checked commit ``sha`` of the work tree at ``root``;
+    return False if it already had."""
+    marker = os.path.join(root, git(root, "rev-parse", "--git-path", "eigen-%s-checked" % hook).stdout.strip())
+    try:
+        with open(marker, encoding="utf-8") as handle:
+            if handle.read().strip() == sha:
+                return False
+    except OSError:
+        pass
+    try:
+        with open(marker, "w", encoding="utf-8") as handle:
+            handle.write(sha + "\n")
+    except OSError:
+        pass
+    return True
+
+
+def hook_commit_added(call, now=None, hook=None):
     """Return [(root, {rel_path: added line numbers})] for each commit a shell
     tool call just made.
 
@@ -191,10 +209,13 @@ def hook_commit_added(call, now=None):
     fires no edit hook, so the commit is where its added lines are first seen.
     The command is searched for ``git ... commit``; the candidate work trees
     are the call's ``cwd`` and every directory the command names with ``cd`` or
-    ``-C``.  A command that did not commit is told apart by the age of HEAD.
-    The line numbers are those of the committed files (read them with
-    ``read_post_image(root, rel_path, rev="HEAD")``): changes left uncommitted
-    in the work tree are not part of the answer.
+    ``-C``.  A command that did not commit is told apart by the age of HEAD,
+    and, when ``hook`` names the caller, by ``claim_commit``: a later command
+    that only mentions ``commit`` does not report the same commit again.  A
+    merge commit is skipped, because its diff against the first parent holds
+    the whole merged branch.  The line numbers are those of the committed
+    files (read them with ``read_post_image(root, rel_path, rev="HEAD")``):
+    changes left uncommitted in the work tree are not part of the answer.
     """
     if call.get("tool_name") != "Bash":
         return []
@@ -215,7 +236,9 @@ def hook_commit_added(call, now=None):
         stamp = git(root, "log", "-1", "--format=%ct").stdout.strip()
         if not stamp.isdigit() or now - int(stamp) > COMMIT_MAX_AGE_SECONDS:
             continue
-        if git(root, "rev-parse", "--verify", "--quiet", "HEAD~1").returncode != 0:
+        # The commit and its parents; exactly one parent excludes root and merge commits.
+        shas = git(root, "rev-list", "--parents", "-n", "1", "HEAD").stdout.split()
+        if len(shas) != 2 or (hook and not claim_commit(root, hook, shas[0])):
             continue
         commits.append((root, diff_added_lines("HEAD~1", root, include_untracked=False, head="HEAD")))
     return commits

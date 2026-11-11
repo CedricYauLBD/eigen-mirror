@@ -213,7 +213,10 @@ hooks fire at two points:
   name the file they apply to.
 - **After a shell command that committed.** Both scripts check the lines the commit added. A file changed through
   the shell (`sed -i`, a heredoc, `git apply`) fires no edit hook, so the commit is the first point at which a hook
-  sees those lines. Findings the edit hook already reported appear again here.
+  sees those lines. Findings the edit hook already reported appear again here. Each hook reports a commit once,
+  and skips merge commits. `clang_tidy_hook.py` lints the work tree, so it skips a file edited again since the
+  commit. It also stops after eight files, to stay inside the hook's time limit. A notice names the files it left
+  out.
 
 With another harness, or before committing a file that was changed through the shell, run the two `--diff` commands
 above by hand. After changing a hook script, run its unit test:
@@ -230,8 +233,9 @@ make a local broad scan clean.
 
 `checkformat:lint` runs clang-format, codespell, REUSE, the guidance check, and the Python helper tests through
 [`ci/lint/lint.sh`](../ci/lint/lint.sh), with `vermin` checking that the helpers still run on Python 3.12. REUSE, the
-guidance check, and the helper tests are blocking. A clang-format or codespell failure alone only marks the job as a warning, and any
-failure in `checkformat:clangtidy` is also only a warning. Treat their diagnostics as review findings anyway.
+guidance check, and the helper tests are blocking. A clang-format or codespell failure alone only marks the job as a
+warning, and any failure in `checkformat:clangtidy` is also only a warning. Treat their diagnostics as review findings
+anyway.
 
 Source files carry the inline SPDX header that [`conventions.md`](conventions.md) records. Files that cannot carry
 one need coverage in [`REUSE.toml`](../REUSE.toml). The repository helper scans tracked files by default, so pass new

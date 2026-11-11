@@ -441,9 +441,19 @@ def test_commit_is_checked():
         assert hook_commit_added(call("git status && echo commit")) == []
         assert hook_commit_added({"tool_name": "Edit", "tool_input": {"command": "git commit"}, "cwd": tmp}) == []
         assert hook_commit_added(call("git commit -m x"), now=time.time() + 3600) == []
+        assert hook_commit_added(call("git commit-tree HEAD^{tree}")) == []
+        # A named hook reports each commit once, however many later commands mention `commit`.
+        assert len(hook_commit_added(call("git commit -m x"), hook="probe")) == 1
+        assert hook_commit_added(call("git log --grep commit"), hook="probe") == []
+        assert len(hook_commit_added(call("git commit -m x"), hook="other")) == 1
+        # A merge commit, whose first-parent diff holds the whole merged branch, and a root commit.
+        git = ["git", "-c", "user.email=t@t", "-c", "user.name=t"]
+        merge = subprocess.run(git + ["commit-tree", "HEAD^{tree}", "-p", "HEAD", "-p", "HEAD~1", "-m", "merge"],
+                               cwd=tmp, check=True, capture_output=True, text=True).stdout.strip()
+        subprocess.run(["git", "update-ref", "HEAD", merge], cwd=tmp, check=True)
+        assert hook_commit_added(call("git commit -m merge")) == []
         subprocess.run(["git", "update-ref", "-d", "HEAD"], cwd=tmp, check=True)
-        subprocess.run(["git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "root"], cwd=tmp,
-                       check=True, capture_output=True)
+        subprocess.run(git + ["commit", "-q", "-m", "root"], cwd=tmp, check=True, capture_output=True)
         assert hook_commit_added(call("git commit -m root")) == []
 
 
@@ -453,6 +463,7 @@ def test_hook_reports_a_commit():
         payload = json.dumps({"tool_name": "Bash", "tool_input": {"command": "git commit -m change"}, "cwd": tmp})
         code, out, err = run_script("check_style.py", ["--claude-hook"], payload)
         assert code == 2 and not out and "bool_constant" in err and "doc/Page.dox:2" in err, (code, out, err)
+        assert run_script("check_style.py", ["--claude-hook"], payload) == (0, "", ""), "reported a commit twice"
     # With nothing to say, including a payload that cannot be read, each hook is silent and exits 0.
     quiet = json.dumps({"tool_name": "Bash", "tool_input": {"command": "ls"}, "cwd": SCRIPTS})
     for script in ("check_style.py", "clang_tidy_hook.py"):

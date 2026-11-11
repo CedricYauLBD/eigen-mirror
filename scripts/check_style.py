@@ -478,7 +478,7 @@ def run_hook_mode():
     except Exception:
         return 0
     feedback = []
-    for root, per_file in hook_commit_added(payload):
+    for root, per_file in hook_commit_added(payload, hook="check-style"):
         results = check_files(per_file, root, rev="HEAD")
         if results:
             feedback.append("style check (lines added by the commit in %s) — review before proceeding:\n" % root)

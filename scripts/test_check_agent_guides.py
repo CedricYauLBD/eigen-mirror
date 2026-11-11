@@ -68,6 +68,10 @@ def test_rule_paths():
         return problems(front + "Read [`ci.md`](../../.agents/ci.md).\n", rel_path=".claude/rules/ci.md")
 
     assert not rule("Eigen/src/Core/**", "ci/*.yml", "**/*.h", "AGENTS.md")
+    # As in Claude Code, * stays within one path component; ** crosses them and also matches none.
+    assert rule("Eigen/*.h") == ["paths: glob matches no file: Eigen/*.h"]
+    assert not rule("Eigen/**/*.h", "**/Core", "Eigen/src/Cor[ef]/Dot.h", "test/main.?")
+    assert problems("`Eigen/*/Dot.h`\n") == ["path does not exist: Eigen/*/Dot.h"]
     # Each alternative of a brace list is tried; one match is enough.
     assert expand_braces("a/{b,c}/*{d,e}.h") == ["a/b/*d.h", "a/b/*e.h", "a/c/*d.h", "a/c/*e.h"]
     assert not rule("Eigen/src/{Gone,Core}/**")

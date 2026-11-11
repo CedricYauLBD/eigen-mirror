@@ -27,15 +27,13 @@ Fenced code blocks are not checked.  Usage:
 Exit status 1 if anything is unresolved.
 """
 
-import fnmatch
 import os
 import re
 import subprocess
 import sys
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-# fnmatch's * also matches /, so .agents/*.md takes in a guide in a subdirectory.
-GUIDE_PATTERNS = ("AGENTS.md", ".agents/*.md", ".claude/rules/*.md", ".claude/agents/*.md")
+GUIDE_PATTERNS = ("AGENTS.md", ".agents/**/*.md", ".claude/rules/*.md", ".claude/agents/*.md")
 RULES_TREE = ".claude/rules/"
 ROOT_GUIDE = "AGENTS.md"
 # Codex stops adding project instruction files at 32 KiB by default
@@ -53,7 +51,11 @@ BRACES = re.compile(r"\{([^{}]*)\}")
 
 
 def tree_paths(root):
-    """Every file git tracks or would track under ``root``, plus each ancestor directory."""
+    """Every file git tracks or would track under ``root``, plus each ancestor directory.
+
+    Untracked files count, so that a new guide and the new files it names are checked before ``git add``; a guide
+    that names a file never added therefore passes here and fails in CI.
+    """
     listing = subprocess.run(["git", "ls-files", "--cached", "--others", "--exclude-standard"], cwd=root,
                              capture_output=True, text=True, check=True).stdout.splitlines()
     return with_directories(path for path in listing if os.path.exists(os.path.join(root, path)))
@@ -89,12 +91,36 @@ def unfenced(text):
     return lines
 
 
+def glob_filter(paths, pattern):
+    """The ``paths`` that ``pattern`` matches as Claude Code and Git match a
+    glob: ``*``, ``?`` and ``[...]`` stay within one path component, and
+    ``**`` crosses components (``**/`` also matches none)."""
+    rx, at = "", 0
+    while at < len(pattern):
+        if pattern.startswith("**/", at):
+            rx, at = rx + "(?:.*/)?", at + 3
+        elif pattern.startswith("**", at):
+            rx, at = rx + ".*", at + 2
+        elif pattern[at] == "*":
+            rx, at = rx + "[^/]*", at + 1
+        elif pattern[at] == "?":
+            rx, at = rx + "[^/]", at + 1
+        elif pattern[at] == "[" and "]" in pattern[at + 2:]:
+            end = pattern.index("]", at + 2)
+            body = pattern[at + 1:end]
+            rx, at = rx + "[" + ("^" + body[1:] if body.startswith("!") else body) + "]", end + 1
+        else:
+            rx, at = rx + re.escape(pattern[at]), at + 1
+    compiled = re.compile(rx + r"\Z")
+    return [path for path in paths if compiled.match(path)]
+
+
 def exists(path, paths):
     path = path.rstrip("/")
     if path in paths:
         return True
-    if any(c in path for c in "*["):
-        return bool(fnmatch.filter(paths, path))
+    if any(c in path for c in "*?["):
+        return bool(glob_filter(paths, path))
     return any(other.startswith(path + ".") for other in paths)  # a target named for its source file
 
 
@@ -138,7 +164,7 @@ def check_guide(rel_path, text, paths, read):
                 problems.append((line_no, "path does not exist: %s" % span))
     if rel_path.startswith(RULES_TREE):
         for pattern in rule_paths(text):
-            if not any(fnmatch.filter(paths, glob) for glob in expand_braces(pattern)):
+            if not any(glob_filter(paths, glob) for glob in expand_braces(pattern)):
                 problems.append((1, "paths: glob matches no file: %s" % pattern))
     size = len(text.encode("utf-8"))
     if rel_path == ROOT_GUIDE and size > ROOT_GUIDE_MAX_BYTES:
@@ -155,7 +181,7 @@ def main():
         with open(os.path.join(root, rel_path), encoding="utf-8") as handle:
             return handle.read()
 
-    guides = sorted(path for path in paths if any(fnmatch.fnmatch(path, pattern) for pattern in GUIDE_PATTERNS))
+    guides = sorted(set().union(*(glob_filter(paths, pattern) for pattern in GUIDE_PATTERNS)))
     count = 0
     for rel_path in guides:
         for line_no, message in check_guide(rel_path, read(rel_path), paths, read):
