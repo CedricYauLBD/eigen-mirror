@@ -248,29 +248,65 @@ class ordered_hash_accumulator {
     return table_size(monotone_hash<StorageIndex>(lo, hi, buckets(lo, hi, maxKeys)), maxKeys);
   }
 
-  // Binds the table to keys[0, size()) and values[0, size()) and empties it.
-  void init(StorageIndex* keys, Scalar* values, StorageIndex lo, StorageIndex hi, Index maxKeys) {
-    m_hash.compute(lo, hi, buckets(lo, hi, maxKeys));
+  // Binds the table to keys[0, size()) and values[0, size()) and empties it. The table starts out sized for
+  // expectedKeys distinct keys and doubles when they are exceeded, so a loose maxKeys costs only reserved storage.
+  void init(StorageIndex* keys, Scalar* values, StorageIndex lo, StorageIndex hi, Index maxKeys, Index expectedKeys) {
     m_keys = keys;
     m_values = values;
+    m_lo = lo;
+    m_hi = hi;
+    m_maxKeys = maxKeys;
+    m_count = 0;
     m_top = 0;
-    std::fill_n(keys, table_size(m_hash, maxKeys), kEmpty);
+    // A table that ends up direct starts out direct: it never grows, and a smaller hashed table could need more
+    // slots than size() reserves for it.
+    bool direct = buckets(lo, hi, maxKeys) >= Index(hi) - Index(lo) + 1;
+    rehash(direct ? maxKeys : numext::maxi<Index>(1, numext::mini(expectedKeys, maxKeys)));
+    std::fill_n(keys, table_size(m_hash, m_capacity), kEmpty);
+  }
+  void init(StorageIndex* keys, Scalar* values, StorageIndex lo, StorageIndex hi, Index maxKeys) {
+    init(keys, values, lo, hi, maxKeys, maxKeys);
   }
 
-  // The value of index i, inserted as zero if absent. The reference is valid until the next insertion.
-  Scalar& coeffRef(StorageIndex i) {
+  // The value of index i. If i is absent, inserts it with an unspecified value and sets inserted. The reference is
+  // valid until the next insertion.
+  Scalar& findOrInsert(StorageIndex i, bool& inserted) {
+    if (m_hash.direct()) {
+      // slot i - lo holds i or nothing
+      Index s = Index(i) - Index(m_lo);
+      inserted = m_keys[s] == kEmpty;
+      if (inserted) {
+        m_keys[s] = i;
+        m_top = numext::maxi(m_top, s);
+      }
+      return m_values[s];
+    }
     Index s = m_hash(i);
     while (m_keys[s] < i) ++s;
-    if (m_keys[s] != i) {
+    inserted = m_keys[s] != i;
+    if (inserted) {
+      if (m_count == m_capacity) {
+        grow();
+        s = m_hash(i);
+        while (m_keys[s] < i) ++s;
+      }
+      ++m_count;
       Index q = s;
       while (m_keys[q] != kEmpty) ++q;
       m_top = numext::maxi(m_top, q);
       std::move_backward(m_keys + s, m_keys + q, m_keys + q + 1);
       std::move_backward(m_values + s, m_values + q, m_values + q + 1);
       m_keys[s] = i;
-      m_values[s] = Scalar(0);
     }
     return m_values[s];
+  }
+
+  // The value of index i, inserted as zero if absent. The reference is valid until the next insertion.
+  Scalar& coeffRef(StorageIndex i) {
+    bool inserted;
+    Scalar& value = findOrInsert(i, inserted);
+    if (inserted) value = Scalar(0);
+    return value;
   }
 
   // Moves the n entries to keys[0, n) and values[0, n) in increasing index order and returns n. The write slot never
@@ -298,9 +334,45 @@ class ordered_hash_accumulator {
     return h.direct() ? h.range() : h.range() + numext::mini(maxKeys, h.range());
   }
 
+  // Sets the hash for capacity distinct keys. A direct hash holds every key of [lo, hi].
+  void rehash(Index capacity) {
+    m_hash.compute(m_lo, m_hi, buckets(m_lo, m_hi, capacity));
+    m_capacity = m_hash.direct() ? m_maxKeys : capacity;
+  }
+
+  // Doubles the capacity. The n entries move to the end of the new table and are then laid out from its start in
+  // index order, each at the later of its bucket and the slot after its predecessor: at most m - 1 + k for entry k,
+  // which is read from m + min(capacity, m) - n + k >= m + k. Only a hashed table grows, into a hashed table.
+  void grow() {
+    eigen_internal_assert(m_capacity < m_maxKeys && "more distinct keys than maxKeys");
+    Index n = compact();
+    rehash(numext::mini(m_maxKeys, 2 * m_capacity));
+    eigen_internal_assert(!m_hash.direct());
+    Index size = table_size(m_hash, m_capacity);
+    std::move_backward(m_keys, m_keys + n, m_keys + size);
+    std::move_backward(m_values, m_values + n, m_values + size);
+    Index next = 0;
+    for (Index src = size - n; src < size; ++src) {
+      Index s = numext::maxi(m_hash(m_keys[src]), next);
+      std::fill(m_keys + next, m_keys + s, kEmpty);
+      if (s != src) {
+        m_keys[s] = m_keys[src];
+        m_values[s] = std::move(m_values[src]);
+      }
+      next = s + 1;
+    }
+    std::fill(m_keys + next, m_keys + size, kEmpty);
+    m_top = next - 1;
+  }
+
   monotone_hash<StorageIndex> m_hash;
   StorageIndex* m_keys = nullptr;
   Scalar* m_values = nullptr;
+  StorageIndex m_lo = 0;
+  StorageIndex m_hi = 0;
+  Index m_maxKeys = 0;
+  Index m_capacity = 0;
+  Index m_count = 0;
   Index m_top = 0;
 };
 
