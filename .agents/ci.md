@@ -13,9 +13,6 @@ coverage needs additional labels, listed in the platform table below. The `docs-
 documentation job, which no default merge request pipeline runs. A green default merge request pipeline is not proof
 that every supported configuration was exercised.
 
-Do not add `all-tests` without the user's explicit permission for that label. Permission to push, rebase, address
-review, or validate a merge request does not authorize it.
-
 A pipeline is evidence only for the commit it ran on. After a push, amend, or rebase, check which SHA the pipeline and
 the merge request point at before citing either. A green run on a superseded revision proves nothing about the current
 head. Likewise, a reported failure should be reproduced at the current head.
@@ -31,25 +28,8 @@ Three things to know when reading a test report:
    test job that reports "No tests were found", is therefore expected rather than a regression. Scheduled and web
    pipelines never skip tests, and setting `EIGEN_CI_TEST_CACHE: "off"` in a job opts it out.
 
-Build jobs keep a second GitLab cache: the ccache pool, which holds `.ccache/`. Its key is
-`$EIGEN_CI_CCACHE_POOL$EIGEN_CI_CCACHE_SCOPE-ccache`. The pool is the job's own slug, except in the `:affected` tier:
-a job there compiles a subset of another job's targets with the same flags, and uses that job's slug. The scope is
-`-mr<iid>` in a merge request pipeline, `-<ref slug>` in other pipelines off the default branch, and empty on the
-default branch. So only default-branch builds write the unscoped pool, and `fallback_keys` names that pool. A restore
-replaces `.ccache/` rather than merging into it. If every pipeline shared one pool, the last pipeline to write it would
-win. When merge requests on unrelated bases shared a pool, they overwrote each other's objects and compiled at a 0.35%
-hit rate. GitLab appends its clear-cache index and `-protected` or `-non_protected` to both the key and the fallback
-key. A merge request pipeline started by a Developer therefore cannot read the pool that the scheduled builds fill.
-
-Two tiers opt out of scoping by setting `EIGEN_CI_CCACHE_SCOPE` back to `""` in the job. The smoke tier
-(`.smoketest:build`) runs only on merge request events. With a scoped key, each merge request would get its own pool,
-and nothing would write the shared one. Windows opts out because its runner has no distributed cache: a separate
-archive for each merge request would pile up on its disk without limit.
-
-Any self-hosted runner without `[runners.cache]` keeps one archive per key forever. The script
-[`prune_runner_cache.py`](../ci/scripts/prune_runner_cache.py) caps such a directory (`--max-gb`, LRU by mtime) and
-drops superseded clear-cache generations (`--stale-index-below`). Its unit tests,
-[`test_prune_runner_cache.py`](../ci/scripts/test_prune_runner_cache.py), run in `checkformat:lint`.
+Build jobs also restore a ccache pool. [`ci-internals.md`](ci-internals.md#the-ccache-pool) explains how it is keyed and
+why a merge request pipeline cannot read every pool.
 
 ## Test Tiers On Merge Requests
 
@@ -59,7 +39,7 @@ Three tiers, in increasing cost:
 |---|---|---|
 | smoke | every merge request with neither label below | the fixed list in [`cmake/EigenSmokeTestList.cmake`](../cmake/EigenSmokeTestList.cmake), usually one part per test, at baseline ISA on x86-64, aarch64 and riscv64, under gcc and clang |
 | affected | `affected-tests` label | every test the diff can reach, all parts, on x86-64 (gcc AVX2, clang baseline) and aarch64 (gcc, clang), plus any platform the diff or a `*-tests` label selects |
-| full | `all-tests` label (requires explicit user permission) | the whole suite across the entire compiler and ISA matrix, minus the NVHPC pair below |
+| full | `all-tests` label (needs the user's explicit permission; rule 8 in [`AGENTS.md`](../AGENTS.md#non-negotiable-rules)) | the whole suite across the entire compiler and ISA matrix, minus the NVHPC pair below |
 
 One configuration sits outside all three tiers: the NVHPC (`nvc++`) build and test jobs. The `nvc++` frontend is so slow
 that the two NVHPC builds alone once took roughly a quarter of the project's hosted-runner minutes. They run on
@@ -271,41 +251,21 @@ Test builds compile with the warning set in the top-level [`CMakeLists.txt`](../
 new warning therefore turns up only in a build log. Do not add a warning. When a new warning is a compiler false
 positive, keep the code and say so in the merge request rather than suppressing it. Read the build-job logs of the
 merge request pipeline, and compare them against a scheduled or web pipeline on the target branch. Those pipelines run
-every build job, while default-branch pushes run only a few. Prefer one at the merge request's base commit; the newest
-scheduled pipeline can be days older, and the master changes in between then show up in the diff:
+every build job, while default-branch pushes run only a few.
+[`scripts/ci_warning_diff.sh`](../scripts/ci_warning_diff.sh) does the comparison:
 
 ```bash
-base=$(glab api "projects/libeigen%2Feigen/merge_requests/<iid>" |
-  python3 -c 'import json, sys; print(json.load(sys.stdin)["diff_refs"]["base_sha"])')
-glab api "projects/libeigen%2Feigen/pipelines?sha=$base&per_page=100" |       # base pipeline id, if one exists
-  python3 -c 'import json, sys; print(*[p["id"] for p in json.load(sys.stdin) if p["source"] in ("schedule", "web")][:1])'
-glab api "projects/libeigen%2Feigen/pipelines?ref=master&source=schedule&per_page=1"    # otherwise the newest scheduled
-warnings() {  # warnings() <pipeline-id>: one line per build job and warning site
-  glab api --paginate "projects/libeigen%2Feigen/pipelines/$1/jobs?per_page=100" | python3 -c '
-import json, sys
-s, d, i = sys.stdin.read(), json.JSONDecoder(), 0
-while i < len(s):
-    page, i = d.raw_decode(s, i)
-    for j in page:
-        if j["stage"] == "build" and j["status"] in ("success", "failed"): print(j["id"], j["name"])' |
-  while read -r id name; do
-    name=${name%:affected}
-    glab api "projects/libeigen%2Feigen/jobs/$id/trace" |
-      sed -E 's/\x1b\[[0-9;]*[mK]//g; s/\r//; s/^[0-9-]+T[0-9:.]+Z [0-9A-Z]+ //' |
-      grep -E ': warning[: #]|warning C[0-9]{4}' |
-      sed -E "s|\\\\|/|g; s|^.*/eigen/||; s|:[0-9]+:[0-9]+:|:|; s|\([0-9]+\)||; s|^|$name: |"
-  done | sort -u
-}
-diff <(warnings <base-id>) <(warnings <mr-id>)
+scripts/ci_warning_diff.sh <mr-iid>                            # needs glab and python3
+scripts/ci_warning_diff.sh <base-pipeline-id> <mr-pipeline-id>
 ```
 
-The normalization strips what differs between runs of the same warning: the `:affected` suffix that merge request
-build jobs carry, the runners' per-line timestamps, line numbers in both the `file:12:3:` and the MSVC/nvcc
-`file(12):` forms, and the checkout prefix, which on Windows is a backslash path with a per-run runner directory.
-Without it, every warning in a merge request pipeline reads as new. A warning in a changed file that
-appears on both sides can still come from a changed line, so check those as well. The default merge request
-pipeline builds only the smoke targets. Most warnings below appear only in configurations that the `affected-tests`
-labels enable.
+Given a merge request, the script prefers a pipeline at the merge request's base commit. When none ran there, it
+falls back to the newest scheduled pipeline, which can be days older, and says so: the master changes in between then
+show up in the diff. It normalizes away what differs between two runs of the same warning (line numbers, timestamps,
+the checkout prefix, the `:affected` job suffix), so a line marked `>` is a warning that only the merge request
+pipeline has. A warning in a changed file that appears on both sides can still come from a changed line, so check
+those as well. The default merge request pipeline builds only the smoke targets. Most warnings below appear only in
+configurations that the `affected-tests` labels enable.
 
 Many warnings show up in only one configuration, so an x86-64 build that compiles cleanly proves little:
 

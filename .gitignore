@@ -45,6 +45,8 @@ Makefile
 CLAUDE.md
 .claude/*
 !.claude/settings.json
+!.claude/rules/
+!.claude/agents/
 .codex/*
 !.codex/hooks.json
 .DS_Store

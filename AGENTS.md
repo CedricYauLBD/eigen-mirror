@@ -30,6 +30,8 @@ guides by default.
 | Writing or updating a merge request description | [`.agents/merge-requests.md`](.agents/merge-requests.md) |
 | Answering merge request review comments | [`.agents/review-response.md`](.agents/review-response.md) |
 | Editing `AGENTS.md` or a guide under `.agents/` | [`.agents/writing-guidance.md`](.agents/writing-guidance.md) |
+| Reviewing a diff that touches numerical code | [`.agents/reviews/numerical-accuracy.md`](.agents/reviews/numerical-accuracy.md) |
+| Reviewing a diff that touches the packet layer | [`.agents/reviews/packet-math.md`](.agents/reviews/packet-math.md) |
 | Expression templates or evaluator internals | [`doc/TopicLazyEvaluation.dox`](doc/TopicLazyEvaluation.dox), [`doc/NewExpressionType.dox`](doc/NewExpressionType.dox), and [`doc/ClassHierarchy.dox`](doc/ClassHierarchy.dox) |
 
 The wording of a rule sets its strength:
@@ -39,6 +41,9 @@ The wording of a rule sets its strength:
 - *Prefer*, *avoid*, *should*, and *usually* state a default. Depart from one when the task gives a concrete reason, and
   give that reason in your report.
 - *May* grants permission. For possibility, the guides write *can* or *might*.
+
+A sub-agent or a fresh session does not inherit the guides you have read. When you delegate work, name in the brief
+each guide that the work needs.
 
 ## Non-negotiable rules
 
@@ -83,7 +88,12 @@ The wording of a rule sets its strength:
    to any other external system only when the user has asked for that action. Otherwise, stop after the local commit and
    ask. Recommend the `affected-tests` label with the relevant platform labels, or with `all-platforms` for broader
    coverage; see [`.agents/ci.md`](.agents/ci.md). Do not add `all-tests` without the user's explicit permission for
-   that label.
+   that label. Permission to push, rebase, address review, or validate a merge request does not grant it.
+9. **Establish a claim before you make it.** To establish what code does, read the function body and the branch
+   actually taken. Never rely on a comment or a Doxygen block for this; it can be stale or describe an adjacent case.
+   Confirming that a path or symbol exists proves nothing about behavior. To claim something about every case,
+   enumerate the cases; do not infer them from a few instances. Report as validated only what ran, and name the commit
+   it ran on.
 
 ## Standard workflow
 
@@ -215,6 +225,10 @@ cmake --build build --target <test-name>
 ctest --test-dir build -R '^<test-name>$' --output-on-failure --no-tests=error
 ```
 
+Compiling one test translation unit can take about 4 GiB of memory;
+[`cmake/EigenTestPartGroups.cmake`](cmake/EigenTestPartGroups.cmake) records the measurements. Set the build's `-j`
+from the available memory, not from the core count.
+
 For one part of a split test, such as `foo_3`, build that exact target and match it exactly with CTest. Keep
 `--no-tests=error`, because without it a filter that matches nothing exits 0. The generated `buildtests.sh` and
 `check.sh` wrappers accept regexes over source or test names and are useful for building all matching parts. Use
@@ -236,6 +250,8 @@ Before declaring the task complete:
 - Focused regression tests pass, with broader tests or benchmarks run when the risk warrants them.
 - Numerical, aliasing, scalar, storage-order, device, threading, and ABI implications have been considered where
   relevant.
+- For a diff that touches numerical code or the packet layer, an independent review against the matching checklist
+  under [`.agents/reviews/`](.agents/reviews) has run. Its findings are fixed or reported.
 - The final report names validation performed, residual risk, and anything that could not be tested locally.
 
 Prefer commit subjects of the form `Category: Short description`, for example
