@@ -256,6 +256,30 @@ void eigensolver_triangular_overflow() {
   VERIFY((eigensolver_scaled_residual<RealScalar>(A0, RealScalar(1), eig)) <= RealScalar(100) * eps);
 }
 
+// A pair of complex eigenvalues whose imaginary part is below 2*eps*|real part| is still a pair: the Schur form has
+// the 2x2 block, and the pseudo-eigenvectors hold (Re v, Im v) in two columns. [1, g; -1, 1] has eigenvalues
+// 1 +- i sqrt(g) = 1 +- i eps / 2.
+template <typename RealScalar>
+void eigensolver_tiny_imaginary_pair() {
+  using MatrixType = Matrix<RealScalar, Dynamic, Dynamic>;
+  using Complex = std::complex<RealScalar>;
+  using ComplexMatrix = Matrix<Complex, Dynamic, Dynamic>;
+  const RealScalar eps = NumTraits<RealScalar>::epsilon();
+  MatrixType A(2, 2);
+  A << RealScalar(1), eps * eps / RealScalar(4), RealScalar(-1), RealScalar(1);
+  EigenSolver<MatrixType> eig(A);
+  VERIFY_IS_EQUAL(eig.info(), Success);
+  VERIFY(numext::imag(eig.eigenvalues()(0)) != RealScalar(0));
+  VERIFY(numext::abs(numext::imag(eig.eigenvalues()(0))) < RealScalar(2) * eps);
+  const ComplexMatrix V = eig.eigenvectors();
+  const RealScalar residual =
+      (A.template cast<Complex>() * V - V * eig.eigenvalues().asDiagonal()).cwiseAbs().maxCoeff() /
+      V.cwiseAbs().maxCoeff();
+  VERIFY(residual <= RealScalar(100) * eps);
+  const MatrixType U = eig.pseudoEigenvectors();
+  VERIFY((A * U - U * eig.pseudoEigenvalueMatrix()).cwiseAbs().maxCoeff() <= RealScalar(100) * eps);
+}
+
 EIGEN_DECLARE_TEST(eigensolver_generic) {
   int s = 0;
   for (int i = 0; i < g_repeat; i++) {
@@ -305,6 +329,8 @@ EIGEN_DECLARE_TEST(eigensolver_generic) {
   CALL_SUBTEST_5(eigensolver_scale_sweep<double>());
   CALL_SUBTEST_5(eigensolver_triangular_overflow<float>());
   CALL_SUBTEST_5(eigensolver_triangular_overflow<double>());
+  CALL_SUBTEST_5(eigensolver_tiny_imaginary_pair<float>());
+  CALL_SUBTEST_5(eigensolver_tiny_imaginary_pair<double>());
 
   TEST_SET_BUT_UNUSED_VARIABLE(s);
 }
