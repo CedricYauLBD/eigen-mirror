@@ -211,7 +211,7 @@ if(EIGEN_INSTALL)
           "${CMAKE_INSTALL_PREFIX}")
       configure_file(eigen3.pc.in eigen3.pc @ONLY)
       install(FILES ${CMAKE_CURRENT_BINARY_DIR}/eigen3.pc
-          DESTINATION ${PKGCONFIG_INSTALL_DIR})
+          DESTINATION ${PKGCONFIG_INSTALL_DIR} COMPONENT Devel)
   endif()
 
   install(DIRECTORY Eigen DESTINATION ${INCLUDE_INSTALL_DIR} COMPONENT Devel)
@@ -219,7 +219,7 @@ if(EIGEN_INSTALL)
   install(FILES ${CMAKE_CURRENT_BINARY_DIR}/include/Eigen/Version
       DESTINATION ${INCLUDE_INSTALL_DIR}/Eigen/ COMPONENT Devel)
 
-  install(TARGETS eigen EXPORT Eigen3Targets)
+  install(TARGETS eigen EXPORT Eigen3Targets COMPONENT Devel)
 endif()
 
 if(EIGEN_BUILD_CMAKE_PACKAGE)
@@ -245,11 +245,11 @@ if(EIGEN_BUILD_CMAKE_PACKAGE)
   export (PACKAGE Eigen3)
 
   if(EIGEN_INSTALL)
-    install (EXPORT Eigen3Targets NAMESPACE Eigen3:: DESTINATION ${CMAKEPACKAGE_INSTALL_DIR})
+    install (EXPORT Eigen3Targets NAMESPACE Eigen3:: DESTINATION ${CMAKEPACKAGE_INSTALL_DIR} COMPONENT Devel)
 
     install (FILES ${CMAKE_CURRENT_BINARY_DIR}/Eigen3Config.cmake
                   ${CMAKE_CURRENT_BINARY_DIR}/Eigen3ConfigVersion.cmake
-            DESTINATION ${CMAKEPACKAGE_INSTALL_DIR})
+            DESTINATION ${CMAKEPACKAGE_INSTALL_DIR} COMPONENT Devel)
   endif()
 
   # Add uninstall target
