@@ -56,6 +56,7 @@ class ArpackGeneralizedSelfAdjointEigenSolver {
   ArpackGeneralizedSelfAdjointEigenSolver()
       : m_eivec(),
         m_eivalues(),
+        m_info(InvalidInput),
         m_isInitialized(false),
         m_eigenvectorsOk(false),
         m_nbrConverged(0),
@@ -88,6 +89,7 @@ class ArpackGeneralizedSelfAdjointEigenSolver {
                                           RealScalar tol = 0.0)
       : m_eivec(),
         m_eivalues(),
+        m_info(InvalidInput),
         m_isInitialized(false),
         m_eigenvectorsOk(false),
         m_nbrConverged(0),
@@ -121,6 +123,7 @@ class ArpackGeneralizedSelfAdjointEigenSolver {
                                           int options = ComputeEigenvectors, RealScalar tol = 0.0)
       : m_eivec(),
         m_eivalues(),
+        m_info(InvalidInput),
         m_isInitialized(false),
         m_eigenvectorsOk(false),
         m_nbrConverged(0),
@@ -276,12 +279,12 @@ class ArpackGeneralizedSelfAdjointEigenSolver {
 
   /** \brief Reports whether previous computation was successful.
    *
-   * \returns \c Success if computation was successful, \c NoConvergence otherwise.
+   * \returns \c Success if computation was successful, otherwise \c NoConvergence, \c NumericalIssue (the
+   * factorization used by the solver failed, or ARPACK reported a numerical problem) or \c InvalidInput.
+   * It can be called after any compute(), whether it succeeded or not; before the first compute() it returns
+   * \c InvalidInput. eigenvalues() and eigenvectors() require that the last compute() succeeded.
    */
-  ComputationInfo info() const {
-    eigen_assert(m_isInitialized && "ArpackGeneralizedSelfAdjointEigenSolver is not initialized.");
-    return m_info;
-  }
+  ComputationInfo info() const { return m_info; }
 
   size_t getNbrConvergedEigenValues() const { return m_nbrConverged; }
 
@@ -322,6 +325,10 @@ ArpackGeneralizedSelfAdjointEigenSolver<MatrixType, MatrixSolver, BisSPD>::compu
   eigen_assert(B.rows() == 0 || A.cols() == B.rows());
   eigen_assert((options & ~(EigVecMask | GenEigMask)) == 0 && (options & EigVecMask) != EigVecMask &&
                "invalid option parameter");
+
+  m_info = InvalidInput;
+  m_isInitialized = false;
+  m_eigenvectorsOk = false;
 
   bool isBempty = (B.rows() == 0) || (B.cols() == 0);
 
@@ -516,9 +523,9 @@ ArpackGeneralizedSelfAdjointEigenSolver<MatrixType, MatrixSolver, BisSPD>::compu
     m_info = NumericalIssue;
   else if (info < 0)
     m_info = InvalidInput;
-  else if (info != 0)
+  else if (info != 0) {
     eigen_assert(false && "Unknown ARPACK return value!");
-  else {
+  } else {
     // Do we compute eigenvectors or not?
     //
     int rvec = (options & ComputeEigenvectors) == ComputeEigenvectors;
