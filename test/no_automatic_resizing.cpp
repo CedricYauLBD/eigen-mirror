@@ -210,27 +210,43 @@ SparseMatrixType makeSolverMatrix(Index n) {
   return A;
 }
 
+// Whether every column x of X satisfies the normwise backward error bound of A x = b (Rigal-Gaches):
+// |A x - b| / (|A|_F |x| + |b|) <= tol. A backward stable direct solver achieves c n eps; an iterative solver with
+// relative residual tolerance t stops with |A x - b| <= t |b|, hence at most t. A NaN fails the comparison.
+template <typename MatrixType, typename Rhs>
+bool hasSmallBackwardError(const MatrixType& A, const MatrixXd& X, const Rhs& B, double tol) {
+  const double normA = A.norm();
+  for (Index j = 0; j < B.cols(); ++j) {
+    const double eta = (A * X.col(j) - B.col(j)).norm() / (normA * X.col(j).norm() + B.col(j).norm());
+    if (!(eta <= tol)) return false;
+  }
+  return true;
+}
+
 // The solution is assigned to default-constructed destinations, which stay legal under the macro; anything the solver
-// assigns to a non-empty member of the wrong size would assert.
+// assigns to a non-empty member of the wrong size would assert. The default bound n eps is the backward stability of
+// a direct solver (the largest error measured over seeds 1..20 on these matrices is 0.017 n eps); iterative solvers
+// pass a multiple of their stopping tolerance.
 template <typename Solver, typename MatrixType>
-void checkSparseSolve(Solver& solver, const MatrixType& A, double tol = 1e-8) {
+void checkSparseSolve(Solver& solver, const MatrixType& A, double tol = -1) {
   const Index n = A.rows();
+  if (tol < 0) tol = double(n) * NumTraits<double>::epsilon();
   const VectorXd b = VectorXd::Random(n);
   const MatrixXd B = MatrixXd::Random(n, 3);
   solver.compute(A);
   VERIFY_IS_EQUAL(int(solver.info()), int(Success));
   VectorXd x;
   x = solver.solve(b);
-  VERIFY((A * x - b).norm() <= tol * b.norm());
+  VERIFY(hasSmallBackwardError(A, x, b, tol));
   MatrixXd X;
   X = solver.solve(B);
-  VERIFY((A * X - B).norm() <= tol * B.norm());
+  VERIFY(hasSmallBackwardError(A, X, B, tol));
   // Refactorize the same pattern.
   solver.analyzePattern(A);
   solver.factorize(A);
   VERIFY_IS_EQUAL(int(solver.info()), int(Success));
   x = solver.solve(b);
-  VERIFY((A * x - b).norm() <= tol * b.norm());
+  VERIFY(hasSmallBackwardError(A, x, b, tol));
 }
 
 template <int Order>
@@ -312,8 +328,8 @@ void testIterativeNoAutomaticResizing() {
   const Index n = internal::random<Index>(12, 60);
   const SM A = makeSolverMatrix<SM>(n);
   const SM S = makeSpdMatrix<Order>(n);
-  const double tol = 1e-6;
   const double solverTol = 1e-12;
+  const double tol = 10 * solverTol;  // the largest error measured over seeds 1..20 is 0.9 solverTol
 
   {
     ConjugateGradient<SM, Lower | Upper> cg;
@@ -378,7 +394,7 @@ void testIterativeNoAutomaticResizing() {
     const VectorXd b = VectorXd::Random(n);
     VectorXd x;
     x = bicgstab.solveWithGuess(b, VectorXd::Zero(n));
-    VERIFY((A * x - b).norm() <= tol * b.norm());
+    VERIFY(hasSmallBackwardError(A, x, b, tol));
   }
 }
 

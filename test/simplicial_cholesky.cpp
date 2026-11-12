@@ -60,9 +60,12 @@ void test_simplicial_cholesky_determinant_asserts() {
   SimplicialNonHermitianLLT<SparseMatrixType> nh_indefinite_llt(negative_pivot);
   if (NumTraits<Scalar>::IsComplex) {
     VERIFY(nh_indefinite_llt.info() == Success);
-    const Matrix<Scalar, Dynamic, Dynamic> L = nh_indefinite_llt.matrixL();
-    const Scalar corner = L(n - 1, n - 1);
-    VERIFY_IS_APPROX(corner * corner, Scalar(-1));
+    // L L^T = P A P^T, whichever position the ordering gives the pivot -1.
+    using DenseMatrix = Matrix<Scalar, Dynamic, Dynamic>;
+    const DenseMatrix L = nh_indefinite_llt.matrixL();
+    const DenseMatrix A = DenseMatrix(negative_pivot);
+    const DenseMatrix PAPt = nh_indefinite_llt.permutationP() * A * nh_indefinite_llt.permutationP().transpose();
+    VERIFY_IS_APPROX(L * L.transpose(), PAPt);
   } else {
     VERIFY(nh_indefinite_llt.info() == NumericalIssue);
     verify_determinant_asserts(nh_indefinite_llt);
