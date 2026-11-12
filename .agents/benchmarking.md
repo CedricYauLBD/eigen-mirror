@@ -19,6 +19,36 @@ reduction improves performance at the relevant sizes. Check the model's assumpti
 limits the operation, whether the compiler already eliminates the temporary, and how the working set fits in cache.
 Scale the analysis to the change; a formal model is not required for every contribution.
 
+## Postconditions And Invariants
+
+A postcondition holds when an operation finishes. An invariant holds after every step of it. An invariant costs work
+at every step, so it pays only when something reads the intermediate state.
+
+- Before you speed up a structure that maintains an invariant, name the reader that needs the invariant before the
+  operation ends. When no such reader exists, treat the property as a postcondition and establish it once, at the end.
+- When the output must be sorted only at the end, do not keep it sorted while it accumulates. A structure that stays
+  sorted through every insertion is an insertion sort, and has that sort's quadratic worst case.
+- When the keys are integers in a known range, prefer to partition before you sort. Write each entry to a bucket chosen
+  by a monotone function of its key, then sort each bucket separately. The buckets are already in order relative to one
+  another, so each one is an independent problem that fits in cache.
+- Choose the method for a bucket after you see its contents: nothing when it arrived in order, insertion when it is
+  small, a further split on its own range when it is overfull.
+- Handle the overfull bucket explicitly, and test it. Keys that cluster make the buckets uneven, and the bound below
+  assumes even buckets.
+
+For N entries in b even buckets, placing costs O(N + b), and sorting costs
+
+    b · (N/b) · log(N/b) = N · log(N/b).
+
+With b = 1 this is an ordinary sort, O(N log N). With b proportional to N the bucket size is a constant, and the total
+is O(N).
+
+This section exists because the failure happened here. The sorted sparse product in
+[`ConservativeSparseSparseProduct.h`](../Eigen/src/SparseCore/ConservativeSparseSparseProduct.h) first summed each
+result vector in a hash table that stayed sorted. A vector of clustered indices then took up to ten times as long as
+in the kernel it replaced. Several proposals made the insertion cheaper; none questioned the invariant. Appending the
+products to buckets and sorting the buckets afterwards removed the regression.
+
 ## Projects and Builds
 
 The supported and contrib benchmark trees are separate, standalone CMake projects. They are not part of Eigen's

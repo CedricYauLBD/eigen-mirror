@@ -74,6 +74,9 @@ into a sparse destination. So `Q`, unlike `R`, comes out sorted.
   ([`ConservativeSparseSparseProduct.h`](../Eigen/src/SparseCore/ConservativeSparseSparseProduct.h)). A new product,
   permutation, or assembly path must also leave the indices sorted. `sortInnerIndices()` and `innerIndicesAreSorted()`
   on `SparseCompressedBase` are the tools for this. Check `innerIndicesAreSorted()` in a test, not only in reasoning.
+- When a new kernel must produce sorted inner vectors, read "Postconditions And Invariants" in
+  [`benchmarking.md`](benchmarking.md) before you choose a structure that keeps a vector sorted while it accumulates.
+  The inner vector is read only when it is complete, so the order is a postcondition.
 
 ## Products
 
