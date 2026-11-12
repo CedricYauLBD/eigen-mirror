@@ -250,7 +250,10 @@ def diff_added_lines(base, root=REPO_ROOT, include_untracked=True, head=None):
     The comparison is with the work tree, or with commit ``head`` when given."""
     merge_base = git(root, "merge-base", base, "HEAD")
     resolved = merge_base.stdout.strip() if merge_base.returncode == 0 else base
-    diff = git(root, "diff", "-U0", "--no-color", resolved, *([head] if head else []))
+    # Pin the options that user configuration can change: path prefixes
+    # (diff.mnemonicPrefix, diff.noprefix) and external diff drivers.
+    diff = git(root, "diff", "-U0", "--no-color", "--no-ext-diff", "--src-prefix=a/", "--dst-prefix=b/", resolved,
+               *([head] if head else []))
     if diff.returncode not in (0, 1):
         sys.stderr.write(diff.stderr)
         raise SystemExit(2)
