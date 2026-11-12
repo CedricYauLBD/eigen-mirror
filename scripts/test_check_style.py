@@ -340,6 +340,28 @@ def test_no_newline_marker():
     assert added_from_structured_patch(response) == {1}
 
 
+def test_diff_parser_content_that_looks_like_a_header():
+    # An added "++i;" or "++ b/x" appears in the diff as "+++i;" or "+++ b/x".
+    diff = (
+        "--- a/Eigen/src/Core/Foo.h\n"
+        "+++ b/Eigen/src/Core/Foo.h\n"
+        "@@ -1,0 +2,4 @@\n"
+        "+++i;\n"
+        "+++ i;\n"
+        "+int y;\n"
+        "+++ b/fake.h\n"
+        "@@ -9,2 +12,0 @@\n"
+        "---old;\n"
+        "--- a/also_content\n"
+        "+++ b/Eigen/src/Core/Bar.h\n"
+        "@@ -1 +1 @@\n"
+        "-int a;\n"
+        "+int b;\n"
+    )
+    files = added_lines_from_diff(diff)
+    assert files == {"Eigen/src/Core/Foo.h": {2, 3, 4, 5}, "Eigen/src/Core/Bar.h": {1}}, files
+
+
 def test_diff_added_lines_ignore_diff_configuration():
     with tempfile.TemporaryDirectory(prefix="check_style_test_") as tmp:
         def sh(*args):
@@ -354,13 +376,13 @@ def test_diff_added_lines_ignore_diff_configuration():
         sh("git", "add", ".")
         sh(*commit, "base")
         with open(path, "w") as handle:
-            handle.write("int old;\nint y;\n")
+            handle.write("int old;\n++i;\n++ i;\nint y;\n")
         # Each setting changes how `git diff` spells paths or what it runs.
         for key, value in (("diff.mnemonicPrefix", "true"), ("diff.noprefix", "true"),
                            ("diff.external", "false")):
             sh("git", "config", key, value)
             added = diff_added_lines("HEAD", root=tmp, include_untracked=False)
-            assert added == {"Eigen/src/x.h": {2}}, (key, added)
+            assert added == {"Eigen/src/x.h": {2, 3, 4}}, (key, added)
             sh("git", "config", "--unset", key)
 
 
