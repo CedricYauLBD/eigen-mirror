@@ -120,6 +120,13 @@ class BDCSVD_LAPACKE : public BDCSVD<MatrixType_, Options> {
       SVD::m_info = NoConvergence;
     } else {
       SVD::m_info = Success;
+      // The values come back in descending order: count the leading ones that are not exactly 0.
+      for (Index i = 0; i < SVD::diagSize(); i++) {
+        if (numext::is_exactly_zero_no_flush(SVD::m_singularValues.coeff(i))) {
+          SVD::m_nonzeroSingularValues = i;
+          break;
+        }
+      }
       if (SVD::m_computeThinU && SVD::m_computeFullV) {
         SVD::m_matrixU = localU.leftCols(SVD::m_matrixU.cols());
       }
