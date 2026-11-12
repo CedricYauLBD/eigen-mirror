@@ -136,7 +136,12 @@ class ThreadPoolTempl : public Eigen::ThreadPoolInterface {
       eigen_plain_assert(start < limit);
       eigen_plain_assert(limit <= num_threads_);
       int num_queues = limit - start;
+#ifdef EIGEN_THREAD_LOCAL
       int rnd = Rand(&pt->rand) % num_queues;
+#else
+      // Without thread-local storage all non-workers share one PerThread, so draw from a shared atomic state.
+      int rnd = SharedRand() % num_queues;
+#endif
       eigen_plain_assert(start + rnd < limit);
       Queue& q = thread_data_[start + rnd].queue;
       t = q.PushBack(std::move(t));
@@ -580,6 +585,15 @@ class ThreadPoolTempl : public Eigen::ThreadPoolInterface {
     return pt;
 #endif
   }
+
+#ifndef EIGEN_THREAD_LOCAL
+  // Rand() on a state that every concurrent caller advances by a fixed odd stride.
+  static unsigned SharedRand() {
+    static std::atomic<uint64_t> shared_state(0);
+    uint64_t state = shared_state.fetch_add(0x9E3779B97F4A7C15ULL, std::memory_order_relaxed);
+    return Rand(&state);
+  }
+#endif
 
   static EIGEN_STRONG_INLINE unsigned Rand(uint64_t* state) {
     uint64_t current = *state;
