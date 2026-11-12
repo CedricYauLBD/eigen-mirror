@@ -41,7 +41,6 @@ add_custom_target(buildtests_gpu)
 add_custom_target(check_gpu COMMAND "ctest" ${EIGEN_CTEST_ARGS}
                                             "--output-on-failure"
                                             "--no-compress-output"
-                                            "--build-no-clean"
                                             "-T" "test"
                                             "-L" "gpu")
 add_dependencies(check_gpu buildtests_gpu)
