@@ -112,7 +112,7 @@ static void conservative_sparse_sparse_product_impl(const Lhs& lhs, const Rhs& r
 // - Marked: a marker of the inner dimension locates each index in the vector being built, so a coefficient costs one
 //   lookup however many products it sums; the distinct entries are sorted afterwards (sort_inner_vector), which is
 //   free when they arrive in order. This is the faster way for short vectors and for repeated indices.
-// - Direct: an ordered_hash_accumulator that holds index i at slot i - lo sums the products, with no work
+// - Direct: a direct_accumulator, which holds index i at slot i - lo, sums the products, with no work
 //   proportional to the inner dimension. This is the faster way for long vectors that are dense in their range and
 //   whose indices rarely repeat.
 // - Appended: every product is written to the bucket of its index, in the order of arrival, and each bucket is then
@@ -166,7 +166,7 @@ static void conservative_sparse_sparse_product_sorted_impl(const Lhs& lhs, const
   Matrix<StorageIndex, Dynamic, 1> marker;
   using Workspace = inner_sort_workspace<ResScalar, StorageIndex>;
   Workspace workspace;
-  ordered_hash_accumulator<ResScalar, StorageIndex>& acc = workspace.acc;
+  direct_accumulator<ResScalar, StorageIndex>& acc = workspace.acc;
   Index nnz = 0;
   bool marked = false;
   for (Index j = 0; j < cols; ++j) {
@@ -185,12 +185,12 @@ static void conservative_sparse_sparse_product_sorted_impl(const Lhs& lhs, const
         hi = numext::maxi(hi, lhsHi[k]);
       }
       if (acc.direct(lo, hi, maxKeys)) {
-        Index size = acc.size(lo, hi, maxKeys);
+        Index size = acc.size(lo, hi);
         if (res.data().allocatedSize() < nnz + size) {
           res.data().resize(nnz);
           res.data().reserve(numext::maxi(size, nnz));
         }
-        acc.init(res.data().indexPtr() + nnz, res.data().valuePtr() + nnz, lo, hi, maxKeys);
+        acc.init(res.data().indexPtr() + nnz, res.data().valuePtr() + nnz, lo, hi);
         for (RhsIterator rhsIt(rhsEval, j); rhsIt; ++rhsIt) {
           RhsScalar y = rhsIt.value();
           acc.accumulate(LhsIterator(lhsEval, rhsIt.index()),
