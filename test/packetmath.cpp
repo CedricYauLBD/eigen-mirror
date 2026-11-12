@@ -1220,11 +1220,14 @@ std::enable_if_t<std::is_same<Scalar, float>::value || std::is_same<Scalar, doub
   }
   // Just below 2^max_exponent the result is finite, though 2^max_exponent is not; just below 2^min_exponent it rounds
   // to the smallest subnormal or to zero.
-  const Scalar edges[] = {Scalar(max_exponent) - Scalar(0.25), Scalar(max_exponent) - Scalar(0.5),
-                          Scalar(max_exponent) - Scalar(0.75),
+  const Scalar edges[] = {
+    Scalar(max_exponent) - Scalar(0.25),
+    Scalar(max_exponent) - Scalar(0.5),
+    Scalar(max_exponent) - Scalar(0.75),
 #if !EIGEN_ARCH_ARM
-                          Scalar(min_exponent) - Scalar(0.25), Scalar(min_exponent) - Scalar(0.75),
-                          Scalar(min_exponent) - Scalar(1.25)
+    Scalar(min_exponent) - Scalar(0.25),
+    Scalar(min_exponent) - Scalar(0.75),
+    Scalar(min_exponent) - Scalar(1.25)
 #endif
   };
   for (const Scalar edge : edges) {
@@ -2781,8 +2784,8 @@ void test_conj_helper(Scalar* data1, Scalar* data2, Scalar* ref, Scalar* pval) {
 // in[0, NumIn) and results are copied to out[0, NumOut); none where the environment cannot be held.
 template <int NumIn, int NumOut, typename Scalar, typename Op>
 int raised_exceptions(const Scalar* in, Scalar* out, Op op) {
-  return (
-      std::max)(0, fp_exceptions_raised_by_staged<NumIn, NumOut>(FE_DIVBYZERO | FE_INVALID | FE_OVERFLOW, in, out, op));
+  return (std::max)(
+      0, fp_exceptions_raised_by_staged<NumIn, NumOut>(FE_DIVBYZERO | FE_INVALID | FE_OVERFLOW, in, out, op));
 }
 
 template <typename Scalar, typename Packet, bool HasExp = internal::packet_traits<Scalar>::HasExp>
@@ -3017,7 +3020,7 @@ struct exp_complex_test_impl {
 template <typename Scalar, typename Packet>
 struct exp_complex_test_impl<Scalar, Packet, false> {
   using RealScalar = typename Scalar::value_type;
-  static void run(Scalar*, Scalar*, Scalar*, int) {};
+  static void run(Scalar*, Scalar*, Scalar*, int){};
 };
 
 template <typename Scalar, typename Packet>
