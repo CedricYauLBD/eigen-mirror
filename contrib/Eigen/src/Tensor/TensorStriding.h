@@ -103,7 +103,8 @@ struct TensorEvaluator<const TensorStridingOp<Strides, ArgType>, Device> {
     m_dimensions = m_impl.dimensions();
     m_is_identity = true;
     for (int i = 0; i < NumDims; ++i) {
-      m_dimensions[i] = Eigen::numext::ceil(static_cast<float>(m_dimensions[i]) / op.strides()[i]);
+      eigen_assert(op.strides()[i] > 0);
+      m_dimensions[i] = numext::div_ceil<Index>(m_dimensions[i], op.strides()[i]);
       if (op.strides()[i] != 1) m_is_identity = false;
     }
 

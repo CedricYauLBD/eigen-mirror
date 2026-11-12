@@ -184,6 +184,25 @@ static void test_striding_without_impl_packet_access() {
   }
 }
 
+// The output extent is ceil(n / stride) in integer arithmetic, also for extents a float cannot represent.
+// Only the evaluator is constructed, so the tensor map may claim more elements than the buffer holds.
+template <int DataLayout>
+static void test_striding_large_extents() {
+  unsigned char dummy = 0;
+  const Index extents[] = {(Index(1) << 24) + 1, (Index(1) << 24) + 3, 3 * (Index(1) << 24) + 1};
+  const Index strides[] = {1, 2, 3, 5};
+  for (Index n : extents) {
+    for (Index stride : strides) {
+      TensorMap<Tensor<unsigned char, 2, DataLayout>> input(&dummy, n, 2);
+      array<Index, 2> stride_array{{stride, 1}};
+      auto expr = input.stride(stride_array);
+      TensorEvaluator<const decltype(expr), DefaultDevice> evaluator(expr, DefaultDevice());
+      VERIFY_IS_EQUAL(evaluator.dimensions()[0], (n + stride - 1) / stride);
+      VERIFY_IS_EQUAL(evaluator.dimensions()[1], 2);
+    }
+  }
+}
+
 EIGEN_DECLARE_TEST(tensor_striding) {
   CALL_SUBTEST(test_simple_striding<ColMajor>());
   CALL_SUBTEST(test_simple_striding<RowMajor>());
@@ -195,4 +214,6 @@ EIGEN_DECLARE_TEST(tensor_striding) {
   CALL_SUBTEST((test_striding_packet_paths<int, RowMajor>()));
   CALL_SUBTEST((test_striding_without_impl_packet_access<float, ColMajor>()));
   CALL_SUBTEST((test_striding_without_impl_packet_access<float, RowMajor>()));
+  CALL_SUBTEST(test_striding_large_extents<ColMajor>());
+  CALL_SUBTEST(test_striding_large_extents<RowMajor>());
 }
