@@ -530,6 +530,50 @@ void bdcsvd_qr_crossover() {
   }
 }
 
+// An empty matrix, whose divide-and-conquer path has no bidiagonal: 0 x n and n x 0 on both sides of the switch size
+// return no singular values and identity unitaries, also when the object computed a nonempty matrix before.
+template <typename MatrixType>
+void bdcsvd_empty_matrices() {
+  using Scalar = typename MatrixType::Scalar;
+  using RealScalar = typename MatrixType::RealScalar;
+  const Index nonempty = 20;
+  for (const unsigned int options : {unsigned(ComputeThinU | ComputeThinV), unsigned(ComputeFullU | ComputeFullV)}) {
+    const bool thin = (options & ComputeThinU) != 0;
+    BDCSVD<MatrixType> svd;
+    for (const Index n : {1, 3, 15, 16, 17, 20, 40}) {
+      for (const bool wide : {true, false}) {
+        const Index rows = wide ? 0 : n;
+        const Index cols = wide ? n : 0;
+        const MatrixType m(rows, cols);
+        svd.compute(m, options);
+        VERIFY_IS_EQUAL(svd.info(), Success);
+        VERIFY_IS_EQUAL(svd.singularValues().size(), 0);
+        VERIFY_IS_EQUAL(svd.nonzeroSingularValues(), 0);
+        VERIFY_IS_EQUAL(svd.rank(), 0);
+        VERIFY_IS_EQUAL(svd.matrixU().rows(), rows);
+        VERIFY_IS_EQUAL(svd.matrixU().cols(), thin ? 0 : rows);
+        VERIFY_IS_EQUAL(svd.matrixV().rows(), cols);
+        VERIFY_IS_EQUAL(svd.matrixV().cols(), thin ? 0 : cols);
+        if (!thin) {
+          VERIFY_IS_EQUAL(svd.matrixU(), MatrixType::Identity(rows, rows));
+          VERIFY_IS_EQUAL(svd.matrixV(), MatrixType::Identity(cols, cols));
+        }
+        // The object is reusable after the empty problem.
+        MatrixType a = MatrixType::Random(nonempty, nonempty - 2);
+        if (wide) a = a.adjoint().eval();
+        svd.compute(a, options);
+        VERIFY_IS_EQUAL(svd.info(), Success);
+        const Index k = (std::min)(a.rows(), a.cols());
+        const RealScalar bound = RealScalar(64 * nonempty) * NumTraits<RealScalar>::epsilon();
+        Matrix<Scalar, Dynamic, Dynamic> reconstruction = svd.matrixU().leftCols(k) *
+                                                          svd.singularValues().template cast<Scalar>().asDiagonal() *
+                                                          svd.matrixV().leftCols(k).adjoint();
+        VERIFY_LE((reconstruction - a).norm(), bound * a.norm());
+      }
+    }
+  }
+}
+
 EIGEN_DECLARE_TEST(bdcsvd) {
   CALL_SUBTEST_60((svd_normal_equation_roundoff<float, ColMajor>()));
   CALL_SUBTEST_72((svd_normal_equation_roundoff<double, RowMajor>()));
@@ -625,6 +669,8 @@ EIGEN_DECLARE_TEST(bdcsvd) {
   CALL_SUBTEST_71((svd_zero_matrix_solvers<Matrix3d>(3, 3)));
   CALL_SUBTEST_80((svd_zero_matrix_solvers<Matrix<float, 2, 5>>(2, 5)));
   CALL_SUBTEST_81((svd_zero_matrix_solvers<MatrixXcf>(5, 3)));
+  CALL_SUBTEST_82(bdcsvd_empty_matrices<MatrixXd>());
+  CALL_SUBTEST_82(bdcsvd_empty_matrices<MatrixXcf>());
 
   // Without total deflation issues.
   CALL_SUBTEST_46((compare_bdc_jacobi_instance<>(true)));

@@ -292,7 +292,8 @@ template <typename MatrixType, int Options>
 void BDCSVD<MatrixType, Options>::allocate(Index rows, Index cols, unsigned int computationOptions) {
   if (Base::allocate(rows, cols, computationOptions)) return;
 
-  if (cols < m_impl.algoSwap())
+  // An empty matrix has no bidiagonal to divide: the JacobiSVD fallback handles it.
+  if (cols < m_impl.algoSwap() || diagSize() == 0)
     smallSvd.allocate(rows, cols, internal::get_computation_options(Options | computationOptions));
 
   m_isTranspose = (cols > rows);
@@ -367,8 +368,8 @@ EIGEN_DONT_INLINE BDCSVD<MatrixType, Options>& BDCSVD<MatrixType, Options>::comp
 
   const RealScalar considerZero = (std::numeric_limits<RealScalar>::min)();
 
-  //**** step -1 - If the problem is too small, directly falls back to JacobiSVD and return
-  if (matrix.cols() < m_impl.algoSwap()) {
+  //**** step -1 - If the problem is too small or empty, directly falls back to JacobiSVD and return
+  if (matrix.cols() < m_impl.algoSwap() || diagSize() == 0) {
     smallSvd.compute(matrix);
     m_isInitialized = true;
     m_info = smallSvd.info();
