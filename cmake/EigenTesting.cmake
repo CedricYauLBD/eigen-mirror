@@ -458,7 +458,7 @@ macro(ei_testing_print_summary)
       message(STATUS "ARMv8 NEON:        Using architecture defaults")
     endif()
 
-    if(EIGEN_TEST_ZVECTOR)
+    if(EIGEN_TEST_Z14)
       message(STATUS "S390X ZVECTOR:     ON")
     else()
       message(STATUS "S390X ZVECTOR:     Using architecture defaults")
