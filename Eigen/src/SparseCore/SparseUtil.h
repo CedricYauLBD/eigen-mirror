@@ -309,14 +309,14 @@ class direct_accumulator {
       for (Index k = s; k < s + kBlock; ++k)
         if (m_keys[k] != kEmpty) {
           m_keys[n] = m_keys[k];
-          m_values[n] = std::move(m_values[k]);
+          m_values[n] = move_if_assignable(m_values[k]);
           ++n;
         }
     }
     for (; s <= m_top; ++s)
       if (m_keys[s] != kEmpty) {
         m_keys[n] = m_keys[s];
-        m_values[n] = std::move(m_values[s]);
+        m_values[n] = move_if_assignable(m_values[s]);
         ++n;
       }
     return n;
@@ -378,7 +378,7 @@ Index split_into_buckets(const StorageIndex* srcIndices, Scalar* srcValues, Inde
   for (Index k = 0; k < n; ++k) {
     Index position = ends[hash(srcIndices[k])]++;
     dstIndices[position] = srcIndices[k];
-    dstValues[position] = std::move(srcValues[k]);
+    dstValues[position] = move_if_assignable(srcValues[k]);
   }
   return buckets;
 }
@@ -417,13 +417,13 @@ Index merge_buckets(StorageIndex* bucketIndices, Scalar* bucketValues, StorageIn
           bool inserted;
           Scalar& value = acc.findOrInsert(bucketIndices[p], inserted);
           if (inserted)
-            value = std::move(bucketValues[p]);
+            value = move_if_assignable(bucketValues[p]);
           else
             value += bucketValues[p];
         }
         Index distinct = acc.compact();
         std::copy(workspace.table.indexPtr(), workspace.table.indexPtr() + distinct, indices + count);
-        std::move(workspace.table.valuePtr(), workspace.table.valuePtr() + distinct, values + count);
+        move_or_copy(workspace.table.valuePtr(), workspace.table.valuePtr() + distinct, values + count);
         count += distinct;
       } else {
         // The split has at least two buckets, the first with lo and the last with hi, so each is smaller than this
@@ -448,10 +448,10 @@ Index merge_buckets(StorageIndex* bucketIndices, Scalar* bucketValues, StorageIn
       }
       for (Index t = count; t > q; --t) {
         indices[t] = indices[t - 1];
-        values[t] = std::move(values[t - 1]);
+        values[t] = move_if_assignable(values[t - 1]);
       }
       indices[q] = i;
-      values[q] = std::move(bucketValues[p]);
+      values[q] = move_if_assignable(bucketValues[p]);
       ++count;
     }
     begin = end;
@@ -485,11 +485,11 @@ void sort_inner_vector(StorageIndex* indices, Scalar* values, Index n, StorageIn
       Scalar value = std::move(values[q]);
       do {
         indices[q] = indices[q - 1];
-        values[q] = std::move(values[q - 1]);
+        values[q] = move_if_assignable(values[q - 1]);
         --q;
       } while (q > 0 && indices[q - 1] > index);
       indices[q] = index;
-      values[q] = std::move(value);
+      values[q] = move_if_assignable(value);
       budget -= sortedEnd - q;
     }
   }
@@ -500,11 +500,11 @@ void sort_inner_vector(StorageIndex* indices, Scalar* values, Index n, StorageIn
     acc.init(workspace.table.indexPtr(), workspace.table.valuePtr(), lo, hi);
     for (Index k = 0; k < n; ++k) {
       bool inserted;
-      acc.findOrInsert(indices[k], inserted) = std::move(values[k]);
+      acc.findOrInsert(indices[k], inserted) = move_if_assignable(values[k]);
     }
     acc.compact();
     std::copy(workspace.table.indexPtr(), workspace.table.indexPtr() + n, indices);
-    std::move(workspace.table.valuePtr(), workspace.table.valuePtr() + n, values);
+    move_or_copy(workspace.table.valuePtr(), workspace.table.valuePtr() + n, values);
     return;
   }
   Workspace::reserve(workspace.buckets, n);
