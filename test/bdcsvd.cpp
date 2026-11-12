@@ -601,6 +601,37 @@ void bdcsvd_qr_crossover() {
   }
 }
 
+// An invalid (non-finite) input reports no singular values on an object that computed a valid matrix before: the
+// values are zero and the count is 0, as for JacobiSVD, on every entry point and on both sides of the switch size.
+template <typename RealScalar>
+void bdcsvd_invalid_input_resets() {
+  using Mat = Matrix<RealScalar, Dynamic, Dynamic>;
+  using Vec = Matrix<RealScalar, Dynamic, 1>;
+  const RealScalar nan = std::numeric_limits<RealScalar>::quiet_NaN();
+  for (const Index n : {8, 20}) {
+    const Mat valid = Mat::Random(n, n);
+    Mat invalid = valid;
+    invalid(n / 2, 1) = nan;
+    BDCSVD<Mat> svd;
+    svd.compute(valid);
+    VERIFY_IS_EQUAL(svd.nonzeroSingularValues(), n);
+    svd.compute(invalid);
+    VERIFY_IS_EQUAL(svd.info(), InvalidInput);
+    VERIFY_IS_EQUAL(svd.nonzeroSingularValues(), 0);
+    VERIFY(svd.singularValues().isZero());
+
+    const Vec d = Vec::Random(n), e = Vec::Random(n - 1);
+    Vec badDiagonal = d;
+    badDiagonal(n / 2) = nan;
+    svd.compute(d, e);
+    VERIFY_IS_EQUAL(svd.nonzeroSingularValues(), n);
+    svd.compute(badDiagonal, e);
+    VERIFY_IS_EQUAL(svd.info(), InvalidInput);
+    VERIFY_IS_EQUAL(svd.nonzeroSingularValues(), 0);
+    VERIFY(svd.singularValues().isZero());
+  }
+}
+
 // An empty matrix, whose divide-and-conquer path has no bidiagonal: 0 x n and n x 0 on both sides of the switch size
 // return no singular values and identity unitaries, also when the object computed a nonempty matrix before.
 template <typename MatrixType>
@@ -773,4 +804,6 @@ EIGEN_DECLARE_TEST(bdcsvd) {
   CALL_SUBTEST_65((bdcsvd_switch_size<>()));
   CALL_SUBTEST_83(bdcsvd_nonzero_count_after_unscaling<float>());
   CALL_SUBTEST_83(bdcsvd_nonzero_count_after_unscaling<double>());
+  CALL_SUBTEST_84(bdcsvd_invalid_input_resets<float>());
+  CALL_SUBTEST_84(bdcsvd_invalid_input_resets<double>());
 }

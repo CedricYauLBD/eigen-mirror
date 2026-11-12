@@ -351,11 +351,12 @@ EIGEN_DONT_INLINE BDCSVD<MatrixType, Options>& BDCSVD<MatrixType, Options>::comp
   smallSvd.compute(matrix);
   m_isInitialized = true;
   m_info = smallSvd.info();
+  // JacobiSVD zeroes the values and the count for an invalid input, which must not leave stale ones here.
+  m_singularValues = smallSvd.singularValues();
+  m_nonzeroSingularValues = smallSvd.nonzeroSingularValues();
   if (m_info == Success || m_info == NoConvergence) {
     if (computeU()) m_matrixU = smallSvd.matrixU();
     if (computeV()) m_matrixV = smallSvd.matrixV();
-    m_singularValues = smallSvd.singularValues();
-    m_nonzeroSingularValues = smallSvd.nonzeroSingularValues();
   }
   return *this;
 }
@@ -373,11 +374,11 @@ EIGEN_DONT_INLINE BDCSVD<MatrixType, Options>& BDCSVD<MatrixType, Options>::comp
     smallSvd.compute(matrix);
     m_isInitialized = true;
     m_info = smallSvd.info();
+    m_singularValues = smallSvd.singularValues();
+    m_nonzeroSingularValues = smallSvd.nonzeroSingularValues();
     if (m_info == Success || m_info == NoConvergence) {
       if (computeU()) m_matrixU = smallSvd.matrixU();
       if (computeV()) m_matrixV = smallSvd.matrixV();
-      m_singularValues = smallSvd.singularValues();
-      m_nonzeroSingularValues = smallSvd.nonzeroSingularValues();
     }
     return *this;
   }
@@ -389,6 +390,8 @@ EIGEN_DONT_INLINE BDCSVD<MatrixType, Options>& BDCSVD<MatrixType, Options>::comp
   if (!(numext::isfinite)(maxCoeff)) {
     m_isInitialized = true;
     m_info = InvalidInput;
+    m_nonzeroSingularValues = 0;
+    m_singularValues.setZero();
     return *this;
   }
 
@@ -536,6 +539,8 @@ EIGEN_DONT_INLINE BDCSVD<MatrixType, Options>& BDCSVD<MatrixType, Options>::comp
   if (!(numext::isfinite)(maxCoeff)) {
     m_isInitialized = true;
     m_info = InvalidInput;
+    m_nonzeroSingularValues = 0;
+    m_singularValues.setZero();
     return *this;
   }
 
