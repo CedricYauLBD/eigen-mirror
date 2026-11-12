@@ -372,7 +372,9 @@ class SparseMatrix : public SparseCompressedBase<SparseMatrix<Scalar_, Options_,
         StorageIndex begin = m_outerIndex[j];
         StorageIndex end = begin + innerNNZ;
         StorageIndex target = newOuterIndex[j];
-        // target == begin iff nothing is reserved before vector j; a self-move would leave it unspecified.
+        // m_outerIndex[0] == 0, which removeOuterVectors() restores, so target - begin is the room reserved before
+        // vector j: the shift goes right, and target == begin iff it is empty, where a self-move would leave the
+        // entries unspecified.
         eigen_internal_assert(target >= begin);
         if (target != begin) {
           std::move_backward(innerIndexPtr() + begin, innerIndexPtr() + end, innerIndexPtr() + target + innerNNZ);
@@ -407,7 +409,8 @@ class SparseMatrix : public SparseCompressedBase<SparseMatrix<Scalar_, Options_,
         StorageIndex begin = m_outerIndex[j];
         StorageIndex end = begin + innerNNZ;
         StorageIndex target = newOuterIndex[j];
-        // As above; target == begin iff no room is added before vector j.
+        // As above, and every vector in front of j keeps at least its current room: target - begin is the room
+        // added before vector j.
         eigen_internal_assert(target >= begin);
         if (target != begin) {
           std::move_backward(innerIndexPtr() + begin, innerIndexPtr() + end, innerIndexPtr() + target + innerNNZ);

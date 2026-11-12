@@ -1712,33 +1712,50 @@ void sparse_shift_moves() {
   }
 }
 
-// Not trivially copyable, with a copy assignment and a deleted move assignment.
-struct CopyOnlyScalar {
+// User-provided copy operations, which make a class built on it not trivially copyable.
+template <bool TriviallyCopyable>
+struct CopyOnlyBase {
   double value = 0;
-  CopyOnlyScalar() = default;
-  CopyOnlyScalar(double v) : value(v) {}
-  CopyOnlyScalar(const CopyOnlyScalar& other) : value(other.value) {}
-  CopyOnlyScalar& operator=(const CopyOnlyScalar& other) {
+  CopyOnlyBase() = default;
+  CopyOnlyBase(const CopyOnlyBase& other) : value(other.value) {}
+  CopyOnlyBase& operator=(const CopyOnlyBase& other) {
     value = other.value;
     return *this;
   }
+};
+
+template <>
+struct CopyOnlyBase<true> {
+  double value = 0;
+};
+
+// A copy assignment and a deleted move assignment.
+template <bool TriviallyCopyable, int RequireInitialization>
+struct CopyOnlyScalar : CopyOnlyBase<TriviallyCopyable> {
+  CopyOnlyScalar() = default;
+  CopyOnlyScalar(double v) { this->value = v; }
+  CopyOnlyScalar(const CopyOnlyScalar&) = default;
+  CopyOnlyScalar& operator=(const CopyOnlyScalar&) = default;
   CopyOnlyScalar& operator=(CopyOnlyScalar&&) = delete;
-  explicit operator double() const { return value; }
+  explicit operator double() const { return this->value; }
 };
 
 namespace Eigen {
-template <>
-struct NumTraits<CopyOnlyScalar> : NumTraits<double> {
-  static constexpr int RequireInitialization = 1;
+template <bool TriviallyCopyable, int RequireInitialization_>
+struct NumTraits<CopyOnlyScalar<TriviallyCopyable, RequireInitialization_>> : NumTraits<double> {
+  static constexpr int RequireInitialization = RequireInitialization_;
 };
 }  // namespace Eigen
 
-// The shifts copy a scalar that cannot be move-assigned rather than reject it.
-template <int Options>
+// The shifts copy a scalar that cannot be move-assigned rather than reject it. With RequireInitialization == 0,
+// growing the storage move-constructs the stored entries of a scalar that is not trivially copyable, and reallocates
+// the bytes of one that is.
+template <bool TriviallyCopyable, int RequireInitialization, int Options>
 void sparse_shift_copy_only() {
-  using Scalar = CopyOnlyScalar;
+  using Scalar = CopyOnlyScalar<TriviallyCopyable, RequireInitialization>;
   using SpMat = SparseMatrix<Scalar, Options>;
-  STATIC_CHECK(!std::is_trivially_copyable<Scalar>::value && !std::is_move_assignable<Scalar>::value);
+  STATIC_CHECK(std::is_trivially_copyable<Scalar>::value == TriviallyCopyable);
+  STATIC_CHECK(!std::is_move_assignable<Scalar>::value);
   const Index n = 6;
   auto coeff = [](MatrixXd& dense, Index outer, Index inner) -> double& {
     return SpMat::IsRowMajor ? dense(outer, inner) : dense(inner, outer);
@@ -1829,8 +1846,12 @@ EIGEN_DECLARE_TEST(sparse_basic) {
   CALL_SUBTEST_2((sparse_insert_full_index_range<RowMajor>()));
   CALL_SUBTEST_1((sparse_shift_moves<ColMajor>()));
   CALL_SUBTEST_1((sparse_shift_moves<RowMajor>()));
-  CALL_SUBTEST_1((sparse_shift_copy_only<ColMajor>()));
-  CALL_SUBTEST_1((sparse_shift_copy_only<RowMajor>()));
+  CALL_SUBTEST_1((sparse_shift_copy_only<false, 1, ColMajor>()));
+  CALL_SUBTEST_1((sparse_shift_copy_only<false, 1, RowMajor>()));
+  CALL_SUBTEST_1((sparse_shift_copy_only<false, 0, ColMajor>()));
+  CALL_SUBTEST_1((sparse_shift_copy_only<false, 0, RowMajor>()));
+  CALL_SUBTEST_1((sparse_shift_copy_only<true, 0, ColMajor>()));
+  CALL_SUBTEST_1((sparse_shift_copy_only<true, 0, RowMajor>()));
   CALL_SUBTEST_1((sparse_isapprox_extreme_scales<float, ColMajor>()));
   CALL_SUBTEST_1((sparse_isapprox_extreme_scales<double, RowMajor>()));
   CALL_SUBTEST_1((sparse_isapprox_extreme_scales<std::complex<double>, ColMajor>()));

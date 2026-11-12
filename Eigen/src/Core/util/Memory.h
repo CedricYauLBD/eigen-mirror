@@ -527,6 +527,8 @@ EIGEN_DEVICE_FUNC inline T* conditional_aligned_realloc_new_auto(T* pts, std::si
 
   // realloc relocates bytes, which only a trivially copyable T allows: move the elements instead. As in
   // conditional_aligned_new_auto and conditional_aligned_delete_auto, T gets no default constructor or destructor call.
+  // Eigen's own callers do not reach this: dense conservativeResize() copies such a T into a new object, and
+  // CompressedStorage relocates only its stored entries, since old_size counts its uninitialized capacity too.
   if (new_size == old_size) return pts;
   T* result = static_cast<T*>(conditional_aligned_malloc<Align>(sizeof(T) * new_size));
   EIGEN_TRY { move_construct_elements_of_array(result, pts, (std::min)(old_size, new_size)); }
