@@ -3895,7 +3895,18 @@ struct runall<Scalar, PacketType, true, false> {  // i.e. complex
 }  // namespace test
 }  // namespace Eigen
 
+// SimdInstructionSetsInUse() must name a backend exactly when Eigen vectorizes.
+static void simd_instruction_sets_in_use() {
+  const std::string isa = SimdInstructionSetsInUse();
+#ifdef EIGEN_VECTORIZE
+  VERIFY(isa != "None");
+#else
+  VERIFY_IS_EQUAL(isa, std::string("None"));
+#endif
+}
+
 EIGEN_DECLARE_TEST(packetmath) {
+  CALL_SUBTEST_14(simd_instruction_sets_in_use());
   g_first_pass = true;
   for (int i = 0; i < g_repeat; i++) {
     CALL_SUBTEST_1(test::runner<float>::run());
