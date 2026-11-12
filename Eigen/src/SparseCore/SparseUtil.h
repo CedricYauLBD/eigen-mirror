@@ -252,6 +252,9 @@ class ordered_hash_accumulator {
     return table_size(monotone_hash<StorageIndex>(lo, hi, buckets(lo, hi, maxKeys)), maxKeys);
   }
 
+  // Whether a table for keys in [lo, hi] with at most maxKeys distinct keys holds index i at slot i - lo.
+  static bool direct(StorageIndex lo, StorageIndex hi, Index maxKeys) { return is_direct(lo, hi, maxKeys); }
+
   // Binds the table to keys[0, size()) and values[0, size()) and empties it. The table starts out sized for
   // expectedKeys distinct keys and doubles when they are exceeded, so a loose maxKeys costs only reserved storage.
   void init(StorageIndex* keys, Scalar* values, StorageIndex lo, StorageIndex hi, Index maxKeys, Index expectedKeys) {

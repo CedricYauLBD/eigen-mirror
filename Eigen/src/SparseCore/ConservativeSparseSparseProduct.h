@@ -107,16 +107,20 @@ static void conservative_sparse_sparse_product_impl(const Lhs& lhs, const Rhs& r
 }
 
 // Computes res = lhs * rhs with sorted inner vectors and no transpose. Each vector of res is built in res's own
-// free storage, in one of two ways:
+// free storage, in one of three ways:
 //
 // - Marked: a marker of the inner dimension locates each index in the vector being built, so a coefficient costs one
 //   lookup however many products it sums; the distinct entries are sorted afterwards (sort_inner_vector), which is
-//   free when they arrive in order. This is the faster way unless nearly every product brings a new index.
-// - Streamed: an ordered_hash_accumulator sums the products and keeps them sorted, with no work proportional to the
-//   inner dimension. This is the faster way for large vectors whose indices rarely repeat.
+//   free when they arrive in order. This is the faster way for short vectors and for repeated indices.
+// - Direct: an ordered_hash_accumulator that holds index i at slot i - lo sums the products, with no work
+//   proportional to the inner dimension. This is the faster way for long vectors that are dense in their range and
+//   whose indices rarely repeat.
+// - Appended: every product is written to the bucket of its index, in the order of arrival, and each bucket is then
+//   sorted and its equal indices summed. The buckets split [lo, hi] evenly, so they follow one another in the result
+//   and a bucket's work is local to it. This is the faster way for long vectors that are sparse in their range.
 //
-// A vector is streamed if the previous one was large with few repeated indices; the first one is streamed. The
-// marker is allocated when the first vector is marked.
+// A vector is marked unless the previous one had at least kUnmarkedMin distinct indices, with at most two products
+// each; the first one is not marked. The marker is allocated when the first vector is marked.
 template <typename Lhs, typename Rhs, typename ResultType, bool ReverseProduct = false>
 static void conservative_sparse_sparse_product_sorted_impl(const Lhs& lhs, const Rhs& rhs, ResultType& res) {
   using LhsScalar = typename remove_all_t<Lhs>::Scalar;
@@ -126,9 +130,12 @@ static void conservative_sparse_sparse_product_sorted_impl(const Lhs& lhs, const
   using LhsIterator = typename evaluator<Lhs>::InnerIterator;
   using RhsIterator = typename evaluator<Rhs>::InnerIterator;
   const sparse_scalar_product_op<LhsScalar, RhsScalar, ReverseProduct> product;
-  // A vector with fewer distinct indices than this is marked: sort_inner_vector sorts up to half as many by
-  // insertion.
-  constexpr Index kStreamMin = 128;
+  // A vector with fewer distinct indices than this is marked; setting up the other two ways costs more.
+  constexpr Index kUnmarkedMin = 48;
+  // Products per bucket of an appended vector, on average.
+  constexpr Index kBucketLoad = 4;
+  // A bucket with more products than this holds a cluster and is not sorted by insertion.
+  constexpr Index kBucketMax = 32;
 
   // make sure to call innerSize/outerSize since we fake the storage order.
   Index rows = lhs.innerSize();
@@ -160,11 +167,11 @@ static void conservative_sparse_sparse_product_sorted_impl(const Lhs& lhs, const
   StorageIndex* outer = res.outerIndexPtr();
   // marker[i] >= start locates inner index i in the vector being built, which begins at start.
   Matrix<StorageIndex, Dynamic, 1> marker;
-  CompressedStorage<ResScalar, StorageIndex> table;
+  CompressedStorage<ResScalar, StorageIndex> table, clusterTable;
+  Matrix<Index, Dynamic, 1> cursor;
   ordered_hash_accumulator<ResScalar, StorageIndex> acc;
   Index nnz = 0;
-  Index prevKeys = 0;
-  bool stream = true;
+  bool marked = false;
   for (Index j = 0; j < cols; ++j) {
     Index start = nnz;
     outer[j] = convert_index<StorageIndex>(start);
@@ -173,32 +180,109 @@ static void conservative_sparse_sparse_product_sorted_impl(const Lhs& lhs, const
     if (maxKeys == 0) continue;
 
     StorageIndex lo = NumTraits<StorageIndex>::highest(), hi = 0;
-    if (stream) {
+    if (!marked) {
       for (RhsIterator rhsIt(rhsEval, j); rhsIt; ++rhsIt) {
         Index k = rhsIt.index();
         if (lhsCount[k] == 0) continue;
         lo = numext::mini(lo, lhsLo[k]);
         hi = numext::maxi(hi, lhsHi[k]);
       }
-      Index size = acc.size(lo, hi, maxKeys);
-      if (res.data().allocatedSize() < nnz + size) {
-        res.data().resize(nnz);
-        res.data().reserve(numext::maxi(size, nnz));
+      if (acc.direct(lo, hi, maxKeys)) {
+        Index size = acc.size(lo, hi, maxKeys);
+        if (res.data().allocatedSize() < nnz + size) {
+          res.data().resize(nnz);
+          res.data().reserve(numext::maxi(size, nnz));
+        }
+        acc.init(res.data().indexPtr() + nnz, res.data().valuePtr() + nnz, lo, hi, maxKeys);
+        for (RhsIterator rhsIt(rhsEval, j); rhsIt; ++rhsIt) {
+          RhsScalar y = rhsIt.value();
+          acc.accumulate(LhsIterator(lhsEval, rhsIt.index()),
+                         [&](ResScalar& value, bool inserted, const LhsIterator& lhsIt) {
+                           if (inserted)
+                             value = product(lhsIt.value(), y);
+                           else
+                             product.accumulate(value, lhsIt.value(), y);
+                         });
+        }
+        nnz += acc.compact();
+      } else {
+        monotone_hash<StorageIndex> hash(lo, hi, numext::maxi<Index>(1, maxKeys / kBucketLoad));
+        Index buckets = hash.range();
+        // cursor[b + 1] counts the products of bucket b; cursor[b] then becomes where its next product goes.
+        if (cursor.size() < buckets + 1) cursor.resize(buckets + 1);
+        cursor.head(buckets + 1).setZero();
+        for (RhsIterator rhsIt(rhsEval, j); rhsIt; ++rhsIt)
+          for (LhsIterator lhsIt(lhsEval, rhsIt.index()); lhsIt; ++lhsIt)
+            ++cursor[hash(StorageIndex(lhsIt.index())) + 1];
+        for (Index b = 1; b < buckets; ++b) cursor[b + 1] += cursor[b];
+        if (table.allocatedSize() < maxKeys) table.reserve(maxKeys);
+        StorageIndex* bucketIndices = table.indexPtr();
+        ResScalar* bucketValues = table.valuePtr();
+        for (RhsIterator rhsIt(rhsEval, j); rhsIt; ++rhsIt) {
+          RhsScalar y = rhsIt.value();
+          for (LhsIterator lhsIt(lhsEval, rhsIt.index()); lhsIt; ++lhsIt) {
+            StorageIndex i = StorageIndex(lhsIt.index());
+            Index position = cursor[hash(i)]++;
+            bucketIndices[position] = i;
+            bucketValues[position] = product(lhsIt.value(), y);
+          }
+        }
+        if (res.data().allocatedSize() < nnz + maxKeys) {
+          res.data().resize(nnz);
+          res.data().reserve(numext::maxi(maxKeys, nnz));
+        }
+        StorageIndex* indices = res.data().indexPtr();
+        ResScalar* values = res.data().valuePtr();
+        // Bucket b is now [begin, cursor[b]).
+        Index begin = 0;
+        for (Index b = 0; b < buckets; ++b) {
+          Index end = cursor[b];
+          Index n = end - begin;
+          if (n <= kBucketMax) {
+            // Insertion sort into the result; a product whose index is already there is added to it.
+            Index first = nnz;
+            for (Index p = begin; p < end; ++p) {
+              StorageIndex i = bucketIndices[p];
+              Index q = nnz;
+              while (q > first && indices[q - 1] > i) --q;
+              if (q > first && indices[q - 1] == i) {
+                values[q - 1] += bucketValues[p];
+                continue;
+              }
+              for (Index t = nnz; t > q; --t) {
+                indices[t] = indices[t - 1];
+                values[t] = std::move(values[t - 1]);
+              }
+              indices[q] = i;
+              values[q] = std::move(bucketValues[p]);
+              ++nnz;
+            }
+          } else {
+            // A table on the range of the cluster spreads it out, and is direct if the cluster is dense.
+            StorageIndex bucketLo = bucketIndices[begin], bucketHi = bucketIndices[begin];
+            for (Index p = begin + 1; p < end; ++p) {
+              bucketLo = numext::mini(bucketLo, bucketIndices[p]);
+              bucketHi = numext::maxi(bucketHi, bucketIndices[p]);
+            }
+            Index size = acc.size(bucketLo, bucketHi, n);
+            if (clusterTable.allocatedSize() < size) clusterTable.reserve(size);
+            acc.init(clusterTable.indexPtr(), clusterTable.valuePtr(), bucketLo, bucketHi, n);
+            for (Index p = begin; p < end; ++p) {
+              bool inserted;
+              ResScalar& value = acc.findOrInsert(bucketIndices[p], inserted);
+              if (inserted)
+                value = std::move(bucketValues[p]);
+              else
+                value += bucketValues[p];
+            }
+            Index count = acc.compact();
+            std::copy(clusterTable.indexPtr(), clusterTable.indexPtr() + count, indices + nnz);
+            std::move(clusterTable.valuePtr(), clusterTable.valuePtr() + count, values + nnz);
+            nnz += count;
+          }
+          begin = end;
+        }
       }
-      // The previous vector predicts the size of this one; maxKeys is often far above it.
-      Index expectedKeys = numext::maxi<Index>(16, prevKeys + prevKeys / 4);
-      acc.init(res.data().indexPtr() + nnz, res.data().valuePtr() + nnz, lo, hi, maxKeys, expectedKeys);
-      for (RhsIterator rhsIt(rhsEval, j); rhsIt; ++rhsIt) {
-        RhsScalar y = rhsIt.value();
-        acc.accumulate(LhsIterator(lhsEval, rhsIt.index()),
-                       [&](ResScalar& value, bool inserted, const LhsIterator& lhsIt) {
-                         if (inserted)
-                           value = product(lhsIt.value(), y);
-                         else
-                           product.accumulate(value, lhsIt.value(), y);
-                       });
-      }
-      nnz += acc.compact();
     } else {
       if (marker.size() == 0) marker.setConstant(rows, StorageIndex(-1));
       Index bound = numext::mini(maxKeys, rows);
@@ -231,8 +315,8 @@ static void conservative_sparse_sparse_product_sorted_impl(const Lhs& lhs, const
       }
       sort_inner_vector(indices + start, values + start, nnz - start, lo, hi, descents, table, acc);
     }
-    prevKeys = nnz - start;
-    stream = prevKeys >= kStreamMin && 2 * prevKeys >= maxKeys;
+    Index keys = nnz - start;
+    marked = keys < kUnmarkedMin || 2 * keys < maxKeys;
   }
   outer[cols] = convert_index<StorageIndex>(nnz);
   res.data().resize(nnz);

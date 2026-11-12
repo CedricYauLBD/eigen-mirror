@@ -1335,16 +1335,18 @@ void check_sparse_triangular_view_products_all_modes() {
   }
 }
 
-// Products large enough that the kernel takes each of its two ways of building a vector. Vectors with many distinct,
-// rarely repeated indices are streamed through the hash table; the others are marked and then sorted: already in
-// order, by insertion, or through the table, direct or hashed. The reference sums the same products through
-// setFromTriplets.
+// Products large enough that the kernel takes each of its ways of building a vector. Long vectors whose indices
+// rarely repeat go through a direct table if they are dense in their range, and are otherwise appended to buckets,
+// which are sorted by insertion or, for a cluster, through a table, direct or hashed. The other vectors are marked
+// and then sorted: already in order, by insertion, or through a table, direct or hashed. The reference sums the same
+// products through setFromTriplets.
 template <int LhsOrder, int RhsOrder, int ResOrder>
 void sparse_product_large() {
   using Triplets = std::vector<Triplet<double>>;
-  enum Pattern { Scattered, Run, Pooled };
-  // perColumn entries per column: at random rows, in one contiguous run from a random row, or 100 of the 300
-  // scattered rows of one of three pools, so that columns of a pool share most of their rows.
+  enum Pattern { Scattered, Run, Window, Pooled };
+  // perColumn entries per column: at random rows, in one contiguous run from a random row, at random rows among the
+  // 3000 that follow a random row, or 100 of the 300 scattered rows of one of three pools, so that columns of a pool
+  // share most of their rows.
   auto random_matrix = [](Index rows, Index cols, Index perColumn, Pattern pattern) {
     Triplets triplets;
     for (Index j = 0; j < cols; ++j) {
@@ -1352,6 +1354,7 @@ void sparse_product_large() {
       for (Index k = 0; k < perColumn; ++k) {
         Index i = internal::random<Index>(0, rows - 1);
         if (pattern == Run) i = (first + k) % rows;
+        if (pattern == Window) i = (first + internal::random<Index>(0, 2999)) % rows;
         if (pattern == Pooled) i = ((j % 3) * 7919 + ((j * 37 + k * 3) % 300) * 127) % rows;
         triplets.emplace_back(i, j, double(1 + (i + 3 * j + k) % 7));
       }
@@ -1365,12 +1368,14 @@ void sparse_product_large() {
     Pattern pattern;
   };
   const Shape shapes[] = {
-      {3000, 3000, 300, 40, 40, Scattered},  // about 1200 distinct indices of 1600 products: streamed
-      {60000, 200, 200, 300, 2, Scattered},  // tall, 600 distinct indices: streamed, and the table grows
+      {3000, 3000, 300, 40, 40, Scattered},  // about 1200 distinct indices of 1600 products on 3000 rows: direct
+      {60000, 200, 200, 300, 2, Scattered},  // 600 products on 60000 rows: appended, buckets sorted by insertion
+      {200000, 300, 200, 100, 4, Run},       // four runs of 100: appended, each cluster through a direct table
+      {400000, 300, 200, 60, 4, Window},     // four windows of 60: appended, each cluster through a hashed table
       {400, 400, 200, 60, 60, Scattered},    // 3600 products on 400 rows: marked, sorted through a direct table
-      {40000, 300, 200, 100, 30, Pooled},  // 3000 products on 900 scattered rows: marked, sorted through a hashed table
-      {5000, 500, 500, 30, 2, Run},        // two runs of 30: marked, then in order or sorted by insertion
-      {20000, 300, 300, 100, 1, Run},      // one run of 100: marked and already sorted
+      {40000, 300, 200, 100, 30, Pooled},    // 3000 products on 900 scattered rows: marked, through a hashed table
+      {5000, 500, 500, 20, 2, Run},          // two runs of 20: marked, then in order or sorted by insertion
+      {20000, 300, 300, 40, 1, Run},         // one run of 40: marked and already sorted
   };
   for (const Shape& shape : shapes) {
     SparseMatrix<double> a = random_matrix(shape.rows, shape.mid, shape.lhsPerColumn, shape.pattern);
