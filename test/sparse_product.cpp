@@ -1399,6 +1399,49 @@ void sparse_product_large() {
   }
 }
 
+// A matrix may have highest() + 1 rows, so that highest() is an inner index. The direct table of the sorted product
+// must keep that index: in the first vector of a product, in a vector that is marked and then sorted, and in a
+// cluster at the end of a vector that is appended to buckets.
+template <typename StorageIndex>
+void sparse_product_highest_inner_index() {
+  using SpMat = SparseMatrix<double, ColMajor, StorageIndex>;
+  const Index rows = Index(NumTraits<StorageIndex>::highest()) + 1;
+  {
+    SpMat a(rows, 2), b(2, 2);
+    a.insert(rows - 4, 0) = 1.0;
+    a.insert(rows - 1, 0) = 2.0;
+    a.insert(rows - 3, 1) = 3.0;
+    a.insert(rows - 2, 1) = 4.0;
+    a.insert(rows - 1, 1) = 5.0;
+    for (Index j = 0; j < 2; ++j)
+      for (Index i = 0; i < 2; ++i) b.insert(i, j) = 1.0;
+    SpMat c = a * b;
+    VERIFY_IS_EQUAL(c.innerIndicesAreSorted(), c.outerSize());
+    VERIFY_IS_EQUAL(c.nonZeros(), Index(8));
+    for (Index j = 0; j < 2; ++j) {
+      VERIFY_IS_EQUAL(c.coeff(rows - 4, j), 1.0);
+      VERIFY_IS_EQUAL(c.coeff(rows - 3, j), 3.0);
+      VERIFY_IS_EQUAL(c.coeff(rows - 2, j), 4.0);
+      VERIFY_IS_EQUAL(c.coeff(rows - 1, j), 7.0);
+    }
+  }
+  {
+    // row 0 and the last 12 rows, twice: 26 products
+    const Index cluster = 12;
+    SpMat a(rows, 2), b(2, 1);
+    for (Index j = 0; j < 2; ++j) {
+      a.insert(0, j) = 1.0;
+      for (Index k = 0; k < cluster; ++k) a.insert(rows - cluster + k, j) = double(k + 1);
+      b.insert(j, 0) = 1.0;
+    }
+    SpMat c = a * b;
+    VERIFY_IS_EQUAL(c.innerIndicesAreSorted(), c.outerSize());
+    VERIFY_IS_EQUAL(c.nonZeros(), cluster + 1);
+    VERIFY_IS_EQUAL(c.coeff(0, 0), 2.0);
+    for (Index k = 0; k < cluster; ++k) VERIFY_IS_EQUAL(c.coeff(rows - cluster + k, 0), double(2 * (k + 1)));
+  }
+}
+
 EIGEN_DECLARE_TEST(sparse_product) {
   sparse_structured_view_product_sfinae<SparseMatrix<double, ColMajor>>();
   sparse_structured_view_product_sfinae<SparseMatrix<double, RowMajor>>();
@@ -1461,6 +1504,8 @@ EIGEN_DECLARE_TEST(sparse_product) {
     CALL_SUBTEST_6((test_ambivector_front_insertion_relocates<>()));
 #endif
   }
+  CALL_SUBTEST_3((sparse_product_highest_inner_index<signed char>()));
+  CALL_SUBTEST_3((sparse_product_highest_inner_index<short>()));
   CALL_SUBTEST_3((sparse_product_large<ColMajor, ColMajor, ColMajor>()));
   CALL_SUBTEST_3((sparse_product_large<RowMajor, RowMajor, RowMajor>()));
   CALL_SUBTEST_3((sparse_product_large<RowMajor, ColMajor, ColMajor>()));

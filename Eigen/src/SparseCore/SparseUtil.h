@@ -233,11 +233,11 @@ class monotone_hash {
 // yields the sorted, duplicate-free pattern. The table has a slot for every index of [lo, hi]: it suits a vector
 // that is dense in its range, see direct().
 //
-// Empty slots hold highest(), above any index.
+// Empty slots hold -1. Every other value of StorageIndex can be an index: a matrix may have highest() + 1 rows.
 template <typename Scalar, typename StorageIndex>
 class direct_accumulator {
   // Used by value only: in C++14 a static constexpr member that is bound to a reference needs a definition.
-  static constexpr StorageIndex kEmpty = NumTraits<StorageIndex>::highest();
+  static constexpr StorageIndex kEmpty = StorageIndex(-1);
   // compact() tests this many slots at once for being all empty.
   static constexpr Index kBlock = 16;
   // direct() accepts up to this many slots per key: emptying the table is one fill and compact() skips its empty
