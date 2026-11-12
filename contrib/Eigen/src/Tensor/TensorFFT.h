@@ -99,6 +99,7 @@ struct eval<TensorFFTOp<FFT, XprType, FFTResultType, FFTDirection>, Eigen::Dense
 template <typename FFT, typename XprType, int FFTResultType, int FFTDir>
 class TensorFFTOp : public TensorBase<TensorFFTOp<FFT, XprType, FFTResultType, FFTDir>, ReadOnlyAccessors> {
  public:
+  using Base = TensorBase<TensorFFTOp<FFT, XprType, FFTResultType, FFTDir>, ReadOnlyAccessors>;
   using Scalar = typename Eigen::internal::traits<TensorFFTOp>::Scalar;
   using RealScalar = typename Eigen::NumTraits<Scalar>::Real;
   using ComplexScalar = internal::make_complex_t<Scalar>;
@@ -111,6 +112,8 @@ class TensorFFTOp : public TensorBase<TensorFFTOp<FFT, XprType, FFTResultType, F
 
   EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE TensorFFTOp(const XprType& expr, const FFT& fft) : m_xpr(expr), m_fft(fft) {}
 
+  // The accessor below would otherwise hide TensorBase::fft(dims), so fft() could not be applied twice.
+  using Base::fft;
   EIGEN_DEVICE_FUNC const FFT& fft() const { return m_fft; }
 
   EIGEN_DEVICE_FUNC const internal::remove_all_t<typename XprType::Nested>& expression() const { return m_xpr; }

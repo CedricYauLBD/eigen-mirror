@@ -318,6 +318,23 @@ static void test_fft_large_impulse() {
   }
 }
 
+// fft() applied twice: the op's accessor of the same name must not hide TensorBase::fft(dims).
+// A 2-D transform is the transform along each axis in turn.
+template <int DataLayout>
+static void test_chained_fft() {
+  using Complex = std::complex<float>;
+  Tensor<Complex, 2, DataLayout> input(4, 8);
+  input.setRandom();
+  Tensor<Complex, 2, DataLayout> chained = input.template fft<BothParts, FFT_FORWARD>(array<int, 1>{{0}})
+                                               .template fft<BothParts, FFT_FORWARD>(array<int, 1>{{1}});
+  Tensor<Complex, 2, DataLayout> expected = input.template fft<BothParts, FFT_FORWARD>(array<int, 2>{{0, 1}});
+  for (int i = 0; i < 4; ++i) {
+    for (int j = 0; j < 8; ++j) {
+      VERIFY(std::abs(chained(i, j) - expected(i, j)) <= 1e-4f * (1 + std::abs(expected(i, j))));
+    }
+  }
+}
+
 EIGEN_DECLARE_TEST(tensor_fft) {
   test_fft_complex_input_golden();
   test_fft_real_input_golden();
@@ -384,4 +401,6 @@ EIGEN_DECLARE_TEST(tensor_fft) {
   test_fft_large_impulse<double, ColMajor>();
   test_fft_large_impulse<float, RowMajor>();
   test_fft_large_impulse<double, RowMajor>();
+  test_chained_fft<ColMajor>();
+  test_chained_fft<RowMajor>();
 }
