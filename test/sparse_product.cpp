@@ -19,6 +19,7 @@ inline void on_temporary_creation() {
   { on_temporary_creation(); }
 
 #include "sparse.h"
+#include <map>
 
 #define EIGEN_TEST_ANNOYING_SCALAR_DONT_THROW
 #include "AnnoyingScalar.h"
@@ -1399,6 +1400,120 @@ void sparse_product_large() {
   }
 }
 
+// Long inner vectors of the sorted product, for a scalar type, an index type and each storage order of the operands
+// and of the result: these take the bucket paths, which the small products above do not reach. The scalars are
+// integer-valued, so every sum is exact and the result is compared with == against products summed in a map.
+//
+// x has long inner vectors with a dense run, scattered indices, and indices at geometrically growing gaps, which
+// are clusters within clusters and split more than once. The vectors of y choose one vector of x, or three with the
+// same indices; a vector with three products per index makes the next one marked. For a row-major result the
+// product is y^T x^T, so that the long vectors are the rows of the right operand. With unsortedOperands, the inner
+// vectors of both operands are stored in reverse order.
+template <typename Scalar>
+Scalar sparse_product_test_value(Index v, Scalar*) {
+  return Scalar(double(v));
+}
+template <typename Real>
+std::complex<Real> sparse_product_test_value(Index v, std::complex<Real>*) {
+  return std::complex<Real>(Real(v), Real(v % 3 - 1));
+}
+inline noncommutative_scalar::Quaternion sparse_product_test_value(Index v, noncommutative_scalar::Quaternion*) {
+  return noncommutative_scalar::Quaternion(double(v), double(v % 3 - 1), double(v % 2), double(v % 5 - 2));
+}
+
+template <typename Scalar, typename StorageIndex, int LhsOrder, int RhsOrder, int ResOrder>
+void sparse_product_long_vectors(bool unsortedOperands) {
+  using Entry = std::pair<Index, Index>;
+  using Entries = std::map<Entry, Scalar>;
+  const Index inner = numext::mini<Index>(2000000, Index(NumTraits<StorageIndex>::highest()));
+  const Index mid = 4, outer = 4;
+
+  std::vector<Index> indices;
+  for (Index k = 0; k < 30; ++k) indices.push_back(inner / 3 + k);
+  for (Index k = 0; k < 60; ++k) indices.push_back((inner / 61) * k + 7);
+  double gap = 1.0;
+  for (Index k = 0; Index(gap) + k < inner / 4; ++k, gap *= 1.25) indices.push_back(inner / 2 + Index(gap) + k);
+  std::sort(indices.begin(), indices.end());
+  indices.erase(std::unique(indices.begin(), indices.end()), indices.end());
+  VERIFY(Index(indices.size()) > 64);
+
+  // x(i, k) for i in indices; y(k, j): vectors 0 and 3 take x(:, 3), vectors 1 and 2 take x(:, 0..2).
+  Entries x, y;
+  for (Index k = 0; k < mid; ++k)
+    for (Index q = 0; q < Index(indices.size()); ++q)
+      x[Entry(indices[q], k)] = sparse_product_test_value(1 + (q + 2 * k) % 5, static_cast<Scalar*>(nullptr));
+  y[Entry(3, 0)] = sparse_product_test_value(2, static_cast<Scalar*>(nullptr));
+  y[Entry(3, 3)] = sparse_product_test_value(3, static_cast<Scalar*>(nullptr));
+  for (Index j = 1; j < 3; ++j)
+    for (Index k = 0; k < 3; ++k) y[Entry(k, j)] = sparse_product_test_value(1 + j + k, static_cast<Scalar*>(nullptr));
+
+  const bool transposed = ResOrder == RowMajor;
+  auto transpose = [](const Entries& m) {
+    Entries t;
+    for (const auto& e : m) t[Entry(e.first.second, e.first.first)] = e.second;
+    return t;
+  };
+  const Entries l = transposed ? transpose(y) : x;
+  const Entries r = transposed ? transpose(x) : y;
+  const Index rows = transposed ? outer : inner, cols = transposed ? inner : outer;
+  const Index middle = mid;
+
+  auto build = [&](const Entries& m, Index nrows, Index ncols, auto& matrix) {
+    std::vector<Triplet<Scalar, StorageIndex>> triplets;
+    for (const auto& e : m) triplets.emplace_back(StorageIndex(e.first.first), StorageIndex(e.first.second), e.second);
+    matrix.resize(nrows, ncols);
+    matrix.setFromTriplets(triplets.begin(), triplets.end());
+    if (unsortedOperands)
+      for (Index j = 0; j < matrix.outerSize(); ++j) {
+        Index begin = matrix.outerIndexPtr()[j], end = matrix.outerIndexPtr()[j + 1];
+        std::reverse(matrix.innerIndexPtr() + begin, matrix.innerIndexPtr() + end);
+        std::reverse(matrix.valuePtr() + begin, matrix.valuePtr() + end);
+      }
+  };
+  SparseMatrix<Scalar, LhsOrder, StorageIndex> lhs;
+  SparseMatrix<Scalar, RhsOrder, StorageIndex> rhs;
+  build(l, rows, middle, lhs);
+  build(r, middle, cols, rhs);
+
+  Entries ref;
+  for (const auto& b : r)
+    for (const auto& a : l)
+      if (a.first.second == b.first.first) {
+        Entry at(a.first.first, b.first.second);
+        auto found = ref.find(at);
+        if (found == ref.end())
+          ref[at] = a.second * b.second;
+        else
+          found->second += a.second * b.second;
+      }
+
+  SparseMatrix<Scalar, ResOrder, StorageIndex> res = lhs * rhs;
+  VERIFY(res.isCompressed());
+  VERIFY_IS_EQUAL(res.innerIndicesAreSorted(), res.outerSize());
+  VERIFY_IS_EQUAL(res.nonZeros(), Index(ref.size()));
+  Index mismatches = 0;
+  for (Index j = 0; j < res.outerSize(); ++j)
+    for (typename SparseMatrix<Scalar, ResOrder, StorageIndex>::InnerIterator it(res, j); it; ++it) {
+      auto found = ref.find(Entry(it.row(), it.col()));
+      mismatches += found == ref.end() || !(found->second == it.value());
+    }
+  VERIFY_IS_EQUAL(mismatches, Index(0));
+}
+
+template <typename Scalar, typename StorageIndex>
+void sparse_product_long_vectors_all_orders() {
+  for (bool unsortedOperands : {false, true}) {
+    sparse_product_long_vectors<Scalar, StorageIndex, ColMajor, ColMajor, ColMajor>(unsortedOperands);
+    sparse_product_long_vectors<Scalar, StorageIndex, RowMajor, ColMajor, ColMajor>(unsortedOperands);
+    sparse_product_long_vectors<Scalar, StorageIndex, ColMajor, RowMajor, ColMajor>(unsortedOperands);
+    sparse_product_long_vectors<Scalar, StorageIndex, RowMajor, RowMajor, ColMajor>(unsortedOperands);
+    sparse_product_long_vectors<Scalar, StorageIndex, ColMajor, ColMajor, RowMajor>(unsortedOperands);
+    sparse_product_long_vectors<Scalar, StorageIndex, RowMajor, ColMajor, RowMajor>(unsortedOperands);
+    sparse_product_long_vectors<Scalar, StorageIndex, ColMajor, RowMajor, RowMajor>(unsortedOperands);
+    sparse_product_long_vectors<Scalar, StorageIndex, RowMajor, RowMajor, RowMajor>(unsortedOperands);
+  }
+}
+
 // A matrix may have highest() + 1 rows, so that highest() is an inner index. The direct table of the sorted product
 // must keep that index: in the first vector of a product, in a vector that is marked and then sorted, and in a
 // cluster at the end of a vector that is appended to buckets.
@@ -1504,6 +1619,11 @@ EIGEN_DECLARE_TEST(sparse_product) {
     CALL_SUBTEST_6((test_ambivector_front_insertion_relocates<>()));
 #endif
   }
+  CALL_SUBTEST_3((sparse_product_long_vectors_all_orders<double, int>()));
+  CALL_SUBTEST_4((sparse_product_long_vectors_all_orders<double, short>()));
+  CALL_SUBTEST_4((sparse_product_long_vectors_all_orders<double, long long>()));
+  CALL_SUBTEST_5((sparse_product_long_vectors_all_orders<std::complex<double>, int>()));
+  CALL_SUBTEST_7((sparse_product_long_vectors_all_orders<noncommutative_scalar::Quaternion, int>()));
   CALL_SUBTEST_3((sparse_product_highest_inner_index<signed char>()));
   CALL_SUBTEST_3((sparse_product_highest_inner_index<short>()));
   CALL_SUBTEST_3((sparse_product_large<ColMajor, ColMajor, ColMajor>()));
