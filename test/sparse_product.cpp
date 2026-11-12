@@ -971,6 +971,41 @@ void test_sparse_product_mul_assign() {
   VERIFY_IS_APPROX(MatrixXd(A.toDense()), ref);
 }
 
+// A Block with no rows or no columns has data() == nullptr but a non-zero outerStride(); the product kernels must not
+// offset that pointer. The failure is undefined behavior that only a sanitizer reports (-fsanitize=undefined).
+template <int SparseOrder, int DenseOrder>
+void test_sparse_dense_product_empty_blocks() {
+  using DenseMatrix = Matrix<double, Dynamic, Dynamic, DenseOrder>;
+  DenseMatrix big = DenseMatrix::Random(6, 6);
+  DenseMatrix dstStorage = DenseMatrix::Constant(6, 6, 7.0);
+  for (Index m : {0, 3})
+    for (Index k : {0, 3})
+      for (Index c : {0, 2}) {
+        SparseMatrix<double, SparseOrder> A(m, k);
+        for (Index i = 0; k > 0 && i < m; ++i) A.insert(i, i % k) = double(i + 1);
+        const DenseMatrix refA = DenseMatrix(A);
+        const DenseMatrix B = DenseMatrix::Random(k, c);
+        big.block(1, 1, k, c) = B;
+        const auto rhs = big.block(1, 1, k, c);
+        const DenseMatrix ref = refA * B;
+
+        const DenseMatrix Y = A * rhs;
+        VERIFY_IS_EQUAL(Y.rows(), m);
+        VERIFY_IS_EQUAL(Y.cols(), c);
+        VERIFY_IS_APPROX(Y, ref);
+        const DenseMatrix Z = rhs.transpose() * A.transpose();
+        VERIFY_IS_EQUAL(Z.rows(), c);
+        VERIFY_IS_EQUAL(Z.cols(), m);
+        VERIFY_IS_APPROX(Z, ref.transpose());
+
+        auto dst = dstStorage.block(1, 1, m, c);
+        dst.noalias() = A * rhs;
+        VERIFY_IS_APPROX(DenseMatrix(dst), ref);
+        dst.noalias() += A * rhs;
+        VERIFY_IS_APPROX(DenseMatrix(dst), DenseMatrix(2 * ref));
+      }
+}
+
 template <int Order>
 void test_sparse_cwise_product_operand_types() {
   using Left = noncommutative_scalar::TaggedScalar<0>;
@@ -1310,6 +1345,10 @@ EIGEN_DECLARE_TEST(sparse_product) {
     CALL_SUBTEST_1((check_sparse_triangular_view_products_all_modes<RowMajor>()));
     CALL_SUBTEST_1((test_pruned_product_row_vector<>()));
     CALL_SUBTEST_1((test_sparse_product_mul_assign<>()));
+    CALL_SUBTEST_1((test_sparse_dense_product_empty_blocks<ColMajor, ColMajor>()));
+    CALL_SUBTEST_1((test_sparse_dense_product_empty_blocks<ColMajor, RowMajor>()));
+    CALL_SUBTEST_1((test_sparse_dense_product_empty_blocks<RowMajor, ColMajor>()));
+    CALL_SUBTEST_1((test_sparse_dense_product_empty_blocks<RowMajor, RowMajor>()));
     CALL_SUBTEST_1((sparse_product<SparseMatrix<double, ColMajor>>()));
     CALL_SUBTEST_1((sparse_product<SparseMatrix<double, RowMajor>>()));
     CALL_SUBTEST_1((bug_942<double>()));
