@@ -77,6 +77,29 @@ static SpMat runs(I rows, I cols, I len, unsigned seed) {
   }
   return fromT(rows, cols, t);
 }
+// Columns are contiguous runs of len entries; the columns j, j + groups, j + 2 groups share one run.
+static SpMat grouped_runs(I rows, I groups, I len, unsigned seed) {
+  std::mt19937 g(seed);
+  std::uniform_int_distribution<I> d(0, rows - len);
+  std::vector<I> first(groups);
+  for (I& f : first) f = d(g);
+  std::vector<Trip> t;
+  for (I j = 0; j < 3 * groups; ++j)
+    for (I q = 0; q < len; ++q) t.emplace_back(first[j % groups] + q, j, 1.0);
+  return fromT(rows, 3 * groups, t);
+}
+// Each column takes picks random groups and has an entry for each of the three columns of a group.
+static SpMat group_picks(I groups, I cols, int picks, unsigned seed) {
+  std::mt19937 g(seed);
+  std::uniform_int_distribution<I> d(0, groups - 1);
+  std::vector<Trip> t;
+  for (I j = 0; j < cols; ++j)
+    for (int q = 0; q < picks; ++q) {
+      I k = d(g);
+      for (I r = 0; r < 3; ++r) t.emplace_back(k + r * groups, j, 1.0);
+    }
+  return fromT(3 * groups, cols, t);
+}
 // Renumbers rows and columns by one random permutation, as an unstructured mesh would be numbered.
 static SpMat renumber(const SpMat& m, unsigned seed) {
   std::vector<I> p(m.rows());
@@ -130,6 +153,9 @@ static std::vector<PCase>& pcases() {
     c.push_back({"runs100_x_rand4", runs(2000000, 20000, 100, 14), randmat(20000, 20000, 4, 15)});
     c.push_back({"runs1000_x_rand4", runs(2000000, 2000, 1000, 16), randmat(2000, 2000, 4, 17)});
     c.push_back({"runs100_x_rand16", runs(2000000, 20000, 100, 18), randmat(20000, 5000, 16, 19)});
+    // Each result vector is a few dense clusters whose indices each sum three products.
+    c.push_back({"runs100_tripled4", grouped_runs(2000000, 2500, 100, 20), group_picks(2500, 20000, 4, 21)});
+    c.push_back({"runs1000_tripled4", grouped_runs(2000000, 2500, 1000, 22), group_picks(2500, 2000, 4, 23)});
   }
   return c;
 }
@@ -171,7 +197,7 @@ static void BM_ccr(benchmark::State& s) {
   }
   s.SetLabel(k.name);
 }
-BENCHMARK(BM_ccc)->DenseRange(0, 18)->Unit(benchmark::kMillisecond);
+BENCHMARK(BM_ccc)->DenseRange(0, 20)->Unit(benchmark::kMillisecond);
 BENCHMARK(BM_rrr)->DenseRange(0, 7)->Unit(benchmark::kMillisecond);
 BENCHMARK(BM_rcc)->DenseRange(0, 7)->Unit(benchmark::kMillisecond);
 BENCHMARK(BM_ccr)->DenseRange(0, 7)->Unit(benchmark::kMillisecond);
