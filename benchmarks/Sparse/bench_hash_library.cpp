@@ -156,6 +156,11 @@ static std::vector<PCase>& pcases() {
     // Each result vector is a few dense clusters whose indices each sum three products.
     c.push_back({"runs100_tripled4", grouped_runs(2000000, 2500, 100, 20), group_picks(2500, 20000, 4, 21)});
     c.push_back({"runs1000_tripled4", grouped_runs(2000000, 2500, 1000, 22), group_picks(2500, 2000, 4, 23)});
+    // A sparse column with one entry: the product must not cost a pass over the whole left operand.
+    {
+      std::vector<Trip> one{Trip(7, 0, 2.0)};
+      c.push_back({"rand20k_200_x_col1", randmat(20000, 20000, 200, 24), fromT(20000, 1, one)});
+    }
   }
   return c;
 }
@@ -197,7 +202,7 @@ static void BM_ccr(benchmark::State& s) {
   }
   s.SetLabel(k.name);
 }
-BENCHMARK(BM_ccc)->DenseRange(0, 20)->Unit(benchmark::kMillisecond);
+BENCHMARK(BM_ccc)->DenseRange(0, 21)->Unit(benchmark::kMillisecond);
 BENCHMARK(BM_rrr)->DenseRange(0, 7)->Unit(benchmark::kMillisecond);
 BENCHMARK(BM_rcc)->DenseRange(0, 7)->Unit(benchmark::kMillisecond);
 BENCHMARK(BM_ccr)->DenseRange(0, 7)->Unit(benchmark::kMillisecond);
