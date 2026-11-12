@@ -223,6 +223,10 @@ class RandomSetter {
       }
       m_target->finalize();
     } else {
+      // The constructor copied the target's coefficients into the hash maps. Reset the target before writing the
+      // new outer index: compacting an uncompressed target with the new offsets would read stale data.
+      m_target->setZero();
+      m_target->makeCompressed();
       VectorXi positions(m_target->outerSize());
       positions.setZero();
       // pass 1
@@ -241,7 +245,6 @@ class RandomSetter {
         positions[j] = count;
         count += tmp;
       }
-      m_target->makeCompressed();
       m_target->outerIndexPtr()[m_target->outerSize()] = count;
       m_target->resizeNonZeros(count);
       // pass 2
