@@ -66,6 +66,17 @@ static SpMat fehex(I k) {
       }
   return fromT(3 * k * k * k, 3 * k * k * k, t);
 }
+// Each column is one contiguous run of len entries starting at a random row.
+static SpMat runs(I rows, I cols, I len, unsigned seed) {
+  std::mt19937 g(seed);
+  std::uniform_int_distribution<I> d(0, rows - len);
+  std::vector<Trip> t;
+  for (I j = 0; j < cols; ++j) {
+    I first = d(g);
+    for (I q = 0; q < len; ++q) t.emplace_back(first + q, j, 1.0);
+  }
+  return fromT(rows, cols, t);
+}
 // Renumbers rows and columns by one random permutation, as an unstructured mesh would be numbered.
 static SpMat renumber(const SpMat& m, unsigned seed) {
   std::vector<I> p(m.rows());
@@ -114,6 +125,11 @@ static std::vector<PCase>& pcases() {
     c.push_back({"lap2d1000^2", G, G});
     SpMat W = randmat(2000000, 2000000, 8, 11);
     c.push_back({"rand2M_8^2", W, W});
+    // Large vectors with few repeated indices over a wide span: scattered, then in a few dense clusters.
+    c.push_back({"tall2M_60x60", randmat(2000000, 20000, 60, 12), randmat(20000, 2000, 60, 13)});
+    c.push_back({"runs100_x_rand4", runs(2000000, 20000, 100, 14), randmat(20000, 20000, 4, 15)});
+    c.push_back({"runs1000_x_rand4", runs(2000000, 2000, 1000, 16), randmat(2000, 2000, 4, 17)});
+    c.push_back({"runs100_x_rand16", runs(2000000, 20000, 100, 18), randmat(20000, 5000, 16, 19)});
   }
   return c;
 }
@@ -155,7 +171,7 @@ static void BM_ccr(benchmark::State& s) {
   }
   s.SetLabel(k.name);
 }
-BENCHMARK(BM_ccc)->DenseRange(0, 14)->Unit(benchmark::kMillisecond);
+BENCHMARK(BM_ccc)->DenseRange(0, 18)->Unit(benchmark::kMillisecond);
 BENCHMARK(BM_rrr)->DenseRange(0, 7)->Unit(benchmark::kMillisecond);
 BENCHMARK(BM_rcc)->DenseRange(0, 7)->Unit(benchmark::kMillisecond);
 BENCHMARK(BM_ccr)->DenseRange(0, 7)->Unit(benchmark::kMillisecond);
