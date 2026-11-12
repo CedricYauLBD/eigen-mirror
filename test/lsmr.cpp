@@ -135,7 +135,8 @@ void test_lsmr_minnorm() {
 // With damping lambda > 0 LSMR solves the regularized problem
 //   min ||Ax-b||^2 + lambda^2 ||x||^2,
 // whose solution satisfies the (well-conditioned) normal equation
-//   (A^T A + lambda^2 I) x = A^T b.
+//   (A^T A + lambda^2 I) x = A^T b,
+// from any initial guess.
 template <typename T>
 void test_lsmr_damping() {
   using RealScalar = typename NumTraits<T>::Real;
@@ -158,6 +159,14 @@ void test_lsmr_damping() {
     DenseMatrix normalMat = A.adjoint() * A + (lambda * lambda) * DenseMatrix::Identity(cols, cols);
     DenseVector xref = normalMat.ldlt().solve(A.adjoint() * b);
     VERIFY_IS_APPROX(x, xref);
+
+    // The damped minimizer is unique, so it does not depend on the initial guess. solveWithGuess() used to return the
+    // minimizer of ||Ax-b||^2 + lambda^2 ||x-x0||^2 instead.
+    for (const DenseVector& guess : {DenseVector(DenseVector::Random(cols) * RealScalar(3)), DenseVector(xref)}) {
+      x = lsmr.solveWithGuess(b, guess);
+      VERIFY_IS_EQUAL(lsmr.info(), Success);
+      VERIFY_IS_APPROX(x, xref);
+    }
   }
 }
 
