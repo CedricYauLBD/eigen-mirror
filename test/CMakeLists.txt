@@ -124,6 +124,11 @@ if(EIGEN_TEST_MATRIX_DIR)
   endif()
 endif()
 
+# Set before the first ei_add_test: a test registered while this is unset gets
+# no label and is not a dependency of BuildOfficial.
+set_property(GLOBAL PROPERTY EIGEN_CURRENT_SUBPROJECT "Official")
+add_custom_target(BuildOfficial)
+
 set(SPARSE_LIBS " ")
 
 find_package(CHOLMOD)
@@ -243,9 +248,6 @@ endif()
 if(TEST_LIB)
   add_definitions("-DEIGEN_EXTERN_INSTANTIATIONS=1")
 endif()
-
-set_property(GLOBAL PROPERTY EIGEN_CURRENT_SUBPROJECT "Official")
-add_custom_target(BuildOfficial)
 
 # Not an ei_add_test: this checks values produced by the configure step itself,
 # so it compares what the enclosing project() call left in this scope.
