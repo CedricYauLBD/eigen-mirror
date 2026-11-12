@@ -109,6 +109,25 @@ void test_async_multithread_chip() {
   }
 }
 
+// A trace has no block or packet access of its own, so the thread-pool executor sizes the work from its cost alone.
+template <int DataLayout>
+void test_multithread_trace() {
+  Tensor<float, 3, DataLayout> in(30, 40, 30);
+  in.setRandom();
+  Tensor<float, 1, DataLayout> out(40);
+
+  PoolDevice pool(internal::random<int>(3, 11), internal::random<int>(3, 11));
+  out.device(pool.device) = in.trace(array<Index, 2>{{0, 2}}) * 2.0f;
+
+  for (int j = 0; j < 40; ++j) {
+    float sum = 0.0f;
+    for (int i = 0; i < 30; ++i) {
+      sum += in(i, j, i);
+    }
+    VERIFY_IS_APPROX(out(j), 2.0f * sum);
+  }
+}
+
 template <bool Async>
 void test_multithread_volume_patch() {
   Tensor<float, 5> in(4, 2, 3, 5, 7);
@@ -1233,6 +1252,8 @@ EIGEN_DECLARE_TEST(tensor_thread_pool) {
   CALL_SUBTEST_2(test_multithread_gemv_transpose<RowMajor>());
 
   CALL_SUBTEST_3(test_async_multithread_chip<>());
+  CALL_SUBTEST_3(test_multithread_trace<ColMajor>());
+  CALL_SUBTEST_3(test_multithread_trace<RowMajor>());
 
   CALL_SUBTEST_4(test_multithread_volume_patch<false>());
   CALL_SUBTEST_4(test_multithread_volume_patch<true>());

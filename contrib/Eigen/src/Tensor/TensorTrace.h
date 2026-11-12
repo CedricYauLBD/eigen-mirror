@@ -205,6 +205,15 @@ struct TensorEvaluator<const TensorTraceOp<Dims, ArgType>, Device> {
 
   EIGEN_STRONG_INLINE void cleanup() { m_impl.cleanup(); }
 
+  // Both coeff() and packet() read the argument one coefficient at a time: m_traceDim reads per output coefficient,
+  // after one div/mul/add per preserved dimension to locate the first one.
+  EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE TensorOpCost costPerCoeff(bool /*vectorized*/) const {
+    const double compute_cost = NumOutputDims * (TensorOpCost::DivCost<Index>() + TensorOpCost::MulCost<Index>() +
+                                                 TensorOpCost::AddCost<Index>()) +
+                                m_traceDim * (TensorOpCost::AddCost<Scalar>() + TensorOpCost::AddCost<Index>());
+    return m_impl.costPerCoeff(false) * m_traceDim + TensorOpCost(0, 0, compute_cost);
+  }
+
   EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE CoeffReturnType coeff(Index index) const {
     // Initialize the result
     CoeffReturnType result = internal::cast<int, CoeffReturnType>(0);
