@@ -175,8 +175,15 @@ EIGEN_STRONG_INLINE void pstoreu<std::complex<float> >(std::complex<float>* to, 
 template <>
 EIGEN_DEVICE_FUNC inline Packet2cf pgather<std::complex<float>, Packet2cf>(const std::complex<float>* from,
                                                                            Index stride) {
+#if EIGEN_GCC15_SLP_BUG
+  // Two 64-bit element loads; the scalar lanes miscompile when both elements hold one complex product, see pset1.
+  const __m128i lo = _mm_loadl_epi64(reinterpret_cast<const __m128i*>(from));
+  const __m128i hi = _mm_loadl_epi64(reinterpret_cast<const __m128i*>(from + stride));
+  return Packet2cf(_mm_castsi128_ps(_mm_unpacklo_epi64(lo, hi)));
+#else
   return Packet2cf(_mm_set_ps(std::imag(from[1 * stride]), std::real(from[1 * stride]), std::imag(from[0 * stride]),
                               std::real(from[0 * stride])));
+#endif
 }
 
 template <>
