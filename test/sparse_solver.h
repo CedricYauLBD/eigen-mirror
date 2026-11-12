@@ -59,13 +59,10 @@ void check_sparse_solving(Solver& solver, const typename Solver::MatrixType& A, 
     }
     x = solver.solve(b);
     if (solver.info() != Success) {
-      std::cerr << "WARNING: sparse solver testing: solving failed (" << typeid(Solver).name() << ")\n";
-      // dump call stack:
-      g_test_level++;
-      VERIFY(solver.info() == Success);
-      g_test_level--;
-      return;
+      std::cerr << "ERROR | sparse solver testing, solving failed (" << typeid(Solver).name() << ")\n";
     }
+    // A solver that does not converge must fail the test: the problems of these tests are well conditioned.
+    VERIFY(solver.info() == Success && "sparse solver testing: solving failed");
     VERIFY(oldb.isApprox(b) && "sparse solver testing: the rhs should not be modified!");
     VERIFY(x.isApprox(refX, test_precision<Scalar>()));
 
@@ -191,9 +188,9 @@ void check_sparse_solving(Eigen::SparseLU<Eigen::SparseMatrix<Scalar>>& solver,
     }
     x1 = solver.solve(b);
     if (solver.info() != Success) {
-      std::cerr << "WARNING | sparse solver testing: solving failed (" << typeid(Solver).name() << ")\n";
-      return;
+      std::cerr << "ERROR | sparse solver testing, solving failed (" << typeid(Solver).name() << ")\n";
     }
+    VERIFY(solver.info() == Success && "sparse solver testing: solving failed");
     VERIFY(oldb.isApprox(b, 0.0) && "sparse solver testing: the rhs should not be modified!");
     VERIFY(x1.isApprox(refX1, test_precision<Scalar>()));
 
@@ -246,6 +243,25 @@ void check_sparse_solving(Eigen::SparseLU<Eigen::SparseMatrix<Scalar>>& solver,
     VERIFY(solver.info() == Success && "solving failed when using Map");
     VERIFY(oldb.isApprox(bm, 0.0) && "sparse solver testing: the rhs should not be modified!");
     VERIFY(xm.isApprox(refX1, test_precision<Scalar>()));
+
+    // Test with a Map and non-unit stride.
+    Eigen::Matrix<Scalar, Eigen::Dynamic, Eigen::Dynamic> out(2 * xm.rows(), 2 * xm.cols());
+    out.setZero();
+    // The outer stride spans DenseRhs's outer dimension, so it must be taken from outerStride()
+    // rather than from rows(): the two differ when DenseRhs is row major.
+    Eigen::Map<DenseRhs, 0, Stride<Eigen::Dynamic, 2>> outm(out.data(), xm.rows(), xm.cols(),
+                                                            Stride<Eigen::Dynamic, 2>(2 * xm.outerStride(), 2));
+    outm = solver.solve(bm);
+    VERIFY(outm.isApprox(refX1, test_precision<Scalar>()));
+
+    // Test a right-hand side with non-unit strides.
+    Eigen::Matrix<Scalar, Eigen::Dynamic, Eigen::Dynamic> bstore(2 * db.rows(), 2 * db.cols());
+    bstore.setZero();
+    Eigen::Map<DenseRhs, 0, Stride<Eigen::Dynamic, 2>> bstrided(bstore.data(), db.rows(), db.cols(),
+                                                                Stride<Eigen::Dynamic, 2>(2 * db.outerStride(), 2));
+    bstrided = db;
+    dx = solver.solve(bstrided);
+    VERIFY(dx.isApprox(refX1, test_precision<Scalar>()));
   }
 
   // if not too large, do some extra check:
@@ -629,12 +645,12 @@ void check_sparse_nonhermitian_determinant(Solver& solver) {
   using Scalar = typename Mat::Scalar;
   using DenseMatrix = Matrix<Scalar, Dynamic, Dynamic>;
 
-  // generate the problem
-  Mat A, halfA;
-  DenseMatrix dA;
-  generate_sparse_nonhermitian_problem(solver, A, halfA, dA, 30);
-
   for (int i = 0; i < g_repeat; i++) {
+    // generate a new problem for each repetition
+    Mat A, halfA;
+    DenseMatrix dA;
+    generate_sparse_nonhermitian_problem(solver, A, halfA, dA, 30);
+
     check_sparse_determinant(solver, A, dA);
     check_sparse_determinant(solver, halfA, dA);
   }
@@ -646,12 +662,12 @@ void check_sparse_nonhermitian_log_abs_determinant(Solver& solver) {
   using Scalar = typename Mat::Scalar;
   using DenseMatrix = Matrix<Scalar, Dynamic, Dynamic>;
 
-  // generate the problem
-  Mat A, halfA;
-  DenseMatrix dA;
-  generate_sparse_nonhermitian_problem(solver, A, halfA, dA, 30);
-
   for (int i = 0; i < g_repeat; i++) {
+    // generate a new problem for each repetition
+    Mat A, halfA;
+    DenseMatrix dA;
+    generate_sparse_nonhermitian_problem(solver, A, halfA, dA, 30);
+
     check_sparse_log_abs_determinant(solver, A, dA);
     check_sparse_log_abs_determinant(solver, halfA, dA);
   }
