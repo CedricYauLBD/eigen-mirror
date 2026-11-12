@@ -1,7 +1,8 @@
 // SPDX-FileCopyrightText: The Eigen Authors
 // SPDX-License-Identifier: MPL-2.0
 
-// Sorting the inner vectors of a compressed matrix: std::sort (sortInnerIndices), double transpose, hash accumulator.
+// Sorting the inner vectors of a compressed matrix: std::sort (sortInnerIndices), double transpose, and
+// internal::sort_inner_vector.
 #include <Eigen/SparseCore>
 #include <benchmark/benchmark.h>
 #include <random>
@@ -66,33 +67,23 @@ static void transpose2(SpMat& m) {
   SpMatR t(m);
   m = t;
 }
-static void hash_sort(SpMat& m) {
+// internal::sort_inner_vector, the sort of the sorted sparse product.
+static void inner_sort(SpMat& m) {
   I* outer = m.outerIndexPtr();
   I* idx = m.innerIndexPtr();
   double* val = m.valuePtr();
-  internal::CompressedStorage<double, I> table;
-  internal::ordered_hash_accumulator<double, I> acc;
+  internal::inner_sort_workspace<double, I> workspace;
   for (Index j = 0; j < m.outerSize(); ++j) {
     Index b = outer[j], e = outer[j + 1];
     if (e - b < 2) continue;
     I lo = idx[b], hi = lo;
-    bool sorted = true;
+    Index descents = 0;
     for (Index k = b + 1; k < e; ++k) {
-      sorted &= idx[k - 1] < idx[k];
+      descents += idx[k] < idx[k - 1];
       lo = std::min(lo, idx[k]);
       hi = std::max(hi, idx[k]);
     }
-    if (sorted) continue;
-    Index size = acc.size(lo, hi, e - b);
-    if (table.allocatedSize() < size) table.reserve(size);
-    acc.init(table.indexPtr(), table.valuePtr(), lo, hi, e - b);
-    for (Index k = b; k < e; ++k) {
-      bool ins;
-      acc.findOrInsert(idx[k], ins) = val[k];
-    }
-    Index n = acc.compact();
-    std::copy(table.indexPtr(), table.indexPtr() + n, idx + b);
-    std::copy(table.valuePtr(), table.valuePtr() + n, val + b);
+    internal::sort_inner_vector(idx + b, val + b, e - b, lo, hi, descents, workspace);
   }
 }
 using Fn = void (*)(SpMat&);
@@ -116,5 +107,5 @@ static void BM(benchmark::State& s) {
 }
 BENCHMARK_TEMPLATE(BM, std_sort)->DenseRange(0, 5)->Unit(benchmark::kMillisecond);
 BENCHMARK_TEMPLATE(BM, transpose2)->DenseRange(0, 5)->Unit(benchmark::kMillisecond);
-BENCHMARK_TEMPLATE(BM, hash_sort)->DenseRange(0, 5)->Unit(benchmark::kMillisecond);
+BENCHMARK_TEMPLATE(BM, inner_sort)->DenseRange(0, 5)->Unit(benchmark::kMillisecond);
 BENCHMARK_MAIN();

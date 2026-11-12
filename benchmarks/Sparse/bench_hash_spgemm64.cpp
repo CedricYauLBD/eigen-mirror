@@ -214,45 +214,6 @@ static void borrowed_product(const SpMat& A, const SpMat& B, SpMat& C) {
   C.resizeNonZeros(nz);
 }
 
-// borrowed_product through internal::ordered_hash_accumulator.
-static void class_product(const SpMat& A, const SpMat& B, SpMat& C) {
-  const Index rows = A.rows(), cols = B.cols();
-  const I* Ap = A.outerIndexPtr();
-  const I* Ai = A.innerIndexPtr();
-  const double* Ax = A.valuePtr();
-  internal::ordered_hash_accumulator<double, I> acc;
-  C.resize(rows, cols);
-  C.reserve(A.nonZeros() + B.nonZeros());
-  I* Cp = C.outerIndexPtr();
-  I nz = 0;
-  for (Index j = 0; j < cols; ++j) {
-    Cp[j] = nz;
-    I lo = I(rows), hi = -1, bound = 0;
-    for (SpMat::InnerIterator it(B, j); it; ++it) {
-      const I k = it.index(), b = Ap[k], e = Ap[k + 1];
-      if (b == e) continue;
-      lo = std::min(lo, Ai[b]);
-      hi = std::max(hi, Ai[e - 1]);
-      bound += e - b;
-    }
-    if (bound == 0) continue;
-    const Index size = acc.size(lo, hi, bound);
-    if (C.data().allocatedSize() < nz + size) {
-      C.resizeNonZeros(nz);
-      C.data().reserve(std::max<Index>(size, nz));
-    }
-    acc.init(C.innerIndexPtr() + nz, C.valuePtr() + nz, lo, hi, bound);
-    for (SpMat::InnerIterator it(B, j); it; ++it) {
-      const double y = it.value();
-      const I k = it.index();
-      for (I p = Ap[k]; p < Ap[k + 1]; ++p) acc.coeffRef(Ai[p]) += Ax[p] * y;
-    }
-    nz += I(acc.compact());
-  }
-  Cp[cols] = nz;
-  C.resizeNonZeros(nz);
-}
-
 static void dense_product(const SpMat& A, const SpMat& B, SpMat& C) {
   const Index rows = A.rows(), cols = B.cols();
   const I* Ap = A.outerIndexPtr();
@@ -329,5 +290,4 @@ BENCHMARK_TEMPLATE(BM, hash_product<IntDivUnsigned>)->DenseRange(0, 4)->Unit(ben
 #endif
 BENCHMARK_TEMPLATE(BM, hash_product<FixedPoint>)->DenseRange(0, 4)->Unit(benchmark::kMillisecond);
 BENCHMARK_TEMPLATE(BM, borrowed_product<FixedPoint>)->DenseRange(0, 4)->Unit(benchmark::kMillisecond);
-BENCHMARK(BM<class_product>)->DenseRange(0, 4)->Unit(benchmark::kMillisecond);
 BENCHMARK_MAIN();
