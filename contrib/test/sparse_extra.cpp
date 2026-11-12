@@ -106,6 +106,54 @@ void sparse_extra(const SparseMatrixType& ref) {
   }*/
 }
 
+// The setter imports the target's coefficients and writes the result back, so the target may be in either storage
+// mode, with or without coefficients, when the setter is constructed.
+template <typename SetterType, typename SparseMatrixType>
+void check_random_setter_target_modes() {
+  using Scalar = typename SparseMatrixType::Scalar;
+  using DenseMatrix = Matrix<Scalar, Dynamic, Dynamic>;
+  const Index n = 70;
+  for (int prefill = 0; prefill < 2; ++prefill) {
+    for (int uncompressed = 0; uncompressed < 2; ++uncompressed) {
+      SparseMatrixType m(n, n);
+      DenseMatrix ref = DenseMatrix::Zero(n, n);
+      if (prefill) {
+        for (Index i = 0; i < n; i += 3) {
+          m.insert(i, (i * 7) % n) = Scalar(1 + i);
+          ref(i, (i * 7) % n) = Scalar(1 + i);
+        }
+        if (!uncompressed) m.makeCompressed();
+      } else if (uncompressed) {
+        m.reserve(Matrix<int, Dynamic, 1>::Constant(n, 4));
+      }
+      VERIFY_IS_EQUAL(m.isCompressed(), !uncompressed);
+      {
+        SetterType w(m);
+        for (Index k = 0; k < 200; ++k) {
+          const Index i = (k * 37) % n, j = (k * 11 + 5) % n;
+          w(i, j) += Scalar(k + 1);
+          ref(i, j) += Scalar(k + 1);
+        }
+      }
+      VERIFY(m.isCompressed());
+      VERIFY(m.innerIndicesAreSorted());
+      VERIFY_IS_EQUAL(m.nonZeros(), (ref.array() != Scalar(0)).count());
+      VERIFY_IS_EQUAL(DenseMatrix(m), ref);
+    }
+  }
+}
+
+template <typename SparseMatrixType>
+void check_random_setter_target_modes() {
+  check_random_setter_target_modes<RandomSetter<SparseMatrixType, StdMapTraits>, SparseMatrixType>();
+  check_random_setter_target_modes<RandomSetter<SparseMatrixType, StdUnorderedMapTraits>, SparseMatrixType>();
+  check_random_setter_target_modes<RandomSetter<SparseMatrixType>, SparseMatrixType>();
+#ifdef EIGEN_GOOGLEHASH_SUPPORT
+  check_random_setter_target_modes<RandomSetter<SparseMatrixType, GoogleDenseHashMapTraits>, SparseMatrixType>();
+  check_random_setter_target_modes<RandomSetter<SparseMatrixType, GoogleSparseHashMapTraits>, SparseMatrixType>();
+#endif
+}
+
 template <typename SparseMatrixType>
 void check_marketio() {
   using DenseMatrix = Matrix<typename SparseMatrixType::Scalar, Dynamic, Dynamic>;
@@ -244,6 +292,11 @@ EIGEN_DECLARE_TEST(sparse_extra) {
     CALL_SUBTEST_5((check_marketio_vector<Matrix<std::complex<double>, Dynamic, 1> >()));
 
     CALL_SUBTEST_6((check_sparse_inverse<double>()));
+
+    CALL_SUBTEST_7((check_random_setter_target_modes<SparseMatrix<double, ColMajor, int> >()));
+    CALL_SUBTEST_7((check_random_setter_target_modes<SparseMatrix<double, RowMajor, int> >()));
+    CALL_SUBTEST_7((check_random_setter_target_modes<SparseMatrix<std::complex<float>, ColMajor, long int> >()));
+    CALL_SUBTEST_7((check_random_setter_target_modes<SparseMatrix<float, RowMajor, long int> >()));
 
     TEST_SET_BUT_UNUSED_VARIABLE(s);
   }
