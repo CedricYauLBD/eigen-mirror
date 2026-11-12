@@ -413,28 +413,28 @@ class SparseLU : public SparseSolverBase<SparseLU<MatrixType_, OrderingType_>>,
 
   /** \brief Give the sign of the determinant.
    *
-   * \returns A number representing the sign of the determinant
+   * \returns A number representing the sign of the determinant: -1, 0 or 1 for a real scalar type, and
+   * det / |det| (0 if det = 0) for a complex one. It cannot overflow or underflow, unlike determinant().
    *
    * \sa absDeterminant(), logAbsDeterminant()
    */
   Scalar signDeterminant() const {
     eigen_assert(m_factorizationIsOk && "The matrix should be factorized first.");
     // Initialize with the determinant of the row matrix
-    Index det = 1;
+    Scalar det = Scalar(1);
     // Note that the diagonal blocks of U are stored in supernodes,
     // which are available in the  L part :)
     for (Index j = 0; j < this->cols(); ++j) {
       for (typename SCMatrix::InnerIterator it(m_Lstore, j); it; ++it) {
         if (it.index() == j) {
-          if (it.value() < 0)
-            det = -det;
-          else if (it.value() == 0)
-            return 0;
+          const Scalar pivotSign = numext::sign(it.value());
+          if (pivotSign == Scalar(0)) return Scalar(0);
+          det *= pivotSign;
           break;
         }
       }
     }
-    return det * m_detPermR * m_detPermC;
+    return det * Scalar(m_detPermR * m_detPermC);
   }
 
   /** \brief Give the determinant.

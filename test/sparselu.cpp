@@ -199,11 +199,59 @@ void test_sparselu_tiny_fill_estimate() {
   }
 }
 
+// signDeterminant() is det / |det|: complex for complex scalars, and the other determinants agree with a dense one.
+template <typename T>
+void test_sparselu_determinants() {
+  typedef typename NumTraits<T>::Real Real;
+  typedef Matrix<T, Dynamic, Dynamic> DenseMatrix;
+  SparseLU<SparseMatrix<T> > lu;
+  for (int repeat = 0; repeat < 5; ++repeat) {
+    const Index size = internal::random<Index>(1, 30);
+    DenseMatrix dA = DenseMatrix::Random(size, size);
+    dA = (dA.array().abs() < Real(0.3)).select(T(0), dA);
+    dA.diagonal() = (dA.diagonal().array() == T(0)).select(T(1), dA.diagonal());
+    SparseMatrix<T> A = dA.sparseView();
+    A.makeCompressed();
+    check_sparse_determinant(lu, A, dA);
+    check_sparse_abs_determinant(lu, A, dA);
+    check_sparse_log_abs_determinant(lu, A, dA);
+    const T refDet = dA.determinant();
+    VERIFY(numext::abs(lu.signDeterminant() - numext::sign(refDet)) <= Real(1e-3));
+    VERIFY(numext::abs(numext::abs(lu.signDeterminant()) - Real(1)) <= Real(1e-3));
+  }
+
+  // The determinant of a cyclic permutation matrix with entries of magnitude s over- or underflows, its sign does not.
+  const Real scales[] = {(std::numeric_limits<Real>::min)() * Real(1 << 10),
+                         (std::numeric_limits<Real>::max)() / Real(1 << 10)};
+  for (Real s : scales) {
+    for (Index n : {5, 6}) {
+      SparseMatrix<T> A(n, n);
+      T phase = T(1);
+      for (Index i = 0; i < n; ++i) {
+        const T p = numext::sign(internal::random<T>());
+        phase *= p;
+        A.insert((i + 1) % n, i) = T(s) * p;
+      }
+      A.makeCompressed();
+      lu.compute(A);
+      VERIFY_IS_EQUAL(lu.info(), Success);
+      const T expected = (n % 2 == 0) ? T(-1) * phase : phase;  // sign of the n-cycle is (-1)^(n-1)
+      VERIFY(numext::abs(lu.signDeterminant() - expected) <= Real(1e-3));
+      VERIFY(numext::abs(numext::real(lu.logAbsDeterminant()) - Real(n) * numext::log(s)) <=
+             Real(1e-3) * Real(n) * numext::abs(numext::log(s)));
+    }
+  }
+}
+
 EIGEN_DECLARE_TEST(sparselu) {
   CALL_SUBTEST_1(test_sparselu_T<float>());
   CALL_SUBTEST_2(test_sparselu_T<double>());
   CALL_SUBTEST_3(test_sparselu_T<std::complex<float> >());
   CALL_SUBTEST_4(test_sparselu_T<std::complex<double> >());
+  CALL_SUBTEST_1(test_sparselu_determinants<float>());
+  CALL_SUBTEST_2(test_sparselu_determinants<double>());
+  CALL_SUBTEST_3(test_sparselu_determinants<std::complex<float> >());
+  CALL_SUBTEST_4(test_sparselu_determinants<std::complex<double> >());
   CALL_SUBTEST_5(test_sparselu_rowmajor_compressed_input<float>());
   CALL_SUBTEST_6(test_sparselu_rowmajor_compressed_input<double>());
   CALL_SUBTEST_7(test_sparselu_colmajor_uncompressed_input<float>());
