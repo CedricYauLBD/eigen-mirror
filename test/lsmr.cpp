@@ -231,6 +231,31 @@ void test_lsmr_tolerances() {
   }
 }
 
+// The iteration limit is honored, including 0: LSMR used to perform one iteration before testing it.
+template <typename T>
+void test_lsmr_max_iterations() {
+  using DenseMatrix = Matrix<T, Dynamic, Dynamic>;
+  using DenseVector = Matrix<T, Dynamic, 1>;
+  const Index rows = 30, cols = 12;
+  const DenseMatrix A = DenseMatrix::Random(rows, cols);
+  const DenseVector b = DenseVector::Random(rows);
+  const DenseVector guess = DenseVector::Random(cols);
+  for (Index maxit : {0, 1, 2}) {
+    LSMR<DenseMatrix> lsmr(A);
+    lsmr.setMaxIterations(maxit);
+    DenseVector x = lsmr.solve(b);
+    VERIFY(x.allFinite());
+    VERIFY_LE(lsmr.iterations(), maxit);
+    VERIFY_IS_EQUAL(lsmr.info(), NoConvergence);
+    if (maxit == 0) {
+      VERIFY(x.isZero());
+      x = lsmr.solveWithGuess(b, guess);
+      VERIFY_IS_EQUAL(lsmr.iterations(), Index(0));
+      VERIFY_IS_EQUAL(x, guess);
+    }
+  }
+}
+
 EIGEN_DECLARE_TEST(lsmr) {
   CALL_SUBTEST_1(test_lsmr_T<double>());
   CALL_SUBTEST_2(test_lsmr_T<std::complex<double> >());
@@ -243,4 +268,6 @@ EIGEN_DECLARE_TEST(lsmr) {
   CALL_SUBTEST_9(test_lsmr_minnorm<std::complex<double> >());
   CALL_SUBTEST_10(test_lsmr_guess<double>());
   CALL_SUBTEST_11(test_lsmr_tolerances<double>());
+  CALL_SUBTEST_12(test_lsmr_max_iterations<double>());
+  CALL_SUBTEST_12(test_lsmr_max_iterations<std::complex<double> >());
 }

@@ -93,8 +93,8 @@ bool gmres(const MatrixType& mat, const Rhs& rhs, Dest& x, const Preconditioner&
   const RealScalar rhsNorm = numext::maxi((x.squaredNorm() == 0) ? r0Norm : precond.solve(rhs).norm(), considerAsZero);
   const RealScalar threshold = numext::maxi(tol * rhsNorm, considerAsZero);
 
-  // is initial guess already good enough?
-  if (r0Norm < threshold) {
+  // is initial guess already good enough, or is no iteration allowed?
+  if (r0Norm < threshold || maxIters <= 0) {
     tol_error = r0Norm / rhsNorm;
     return true;
   }
@@ -164,7 +164,7 @@ bool gmres(const MatrixType& mat, const Rhs& rhs, Dest& x, const Preconditioner&
     H.col(k - 1).head(k) = v.head(k);
 
     tol_error = numext::abs(w(k)) / rhsNorm;
-    bool stop = (k == m || tol_error < tol || iters == maxIters);
+    bool stop = (k == m || tol_error <= tol || iters >= maxIters);
 
     if (stop || k == restart) {
       // solve upper triangular system

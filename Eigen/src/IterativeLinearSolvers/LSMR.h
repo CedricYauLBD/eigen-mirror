@@ -112,6 +112,12 @@ EIGEN_DONT_INLINE Index lsmr(const MatrixType& mat, const Rhs& rhs, Dest& x, con
     return 0;  // istop = 0
   }
 
+  if (maxIters <= 0) {
+    // No iteration is allowed: x is returned as given, with no reduction of ||A^T r|| / (||A|| ||r||) to report.
+    tol_error = one;
+    return 7;
+  }
+
   // dx accumulates the correction (in z-space when a preconditioner is used).
   // The remaining n-vectors are only needed once we start iterating.
   VectorType dx = VectorType::Zero(n);
