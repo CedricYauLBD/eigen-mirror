@@ -699,11 +699,16 @@ class SparseMatrix : public SparseCompressedBase<SparseMatrix<Scalar_, Options_,
 
   /** Resizes the matrix to a \a rows x \a cols matrix leaving old values untouched.
    *
-   * If the sizes of the matrix are decreased, then the matrix is turned to \b uncompressed-mode
-   * and the storage of the out of bounds coefficients is kept and reserved.
+   * The stored entries that lie inside the new sizes are kept; the entries outside them are dropped, and their
+   * storage is not kept. The storage mode is preserved, except in two cases:
+   *  - if either new size is zero, the call is equivalent to resize(): the matrix becomes empty and compressed;
+   *  - if the inner size decreases and a stored entry has an inner index at or beyond the new inner size, the matrix
+   *    is turned to \b uncompressed-mode and the inner vectors that lose entries keep their capacity.
+   *
+   * Decreasing only the outer size, or the inner size when no entry is cut, leaves a compressed matrix compressed.
    * Call makeCompressed() to pack the entries and squeeze extra memory.
    *
-   * \sa reserve(), setZero(), makeCompressed()
+   * \sa resize(), reserve(), setZero(), makeCompressed()
    */
   void conservativeResize(Index rows, Index cols) {
     // If one dimension is null, then there is nothing to be preserved
