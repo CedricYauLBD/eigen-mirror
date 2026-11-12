@@ -240,6 +240,22 @@ void eigensolver_scale_sweep() {
   }
 }
 
+// T = [d, g; 0, 2d] has the eigenvectors (1, 0) and (g / d, 1) / norm: the second one has a component g / d that
+// overflows when d is tiny, though the normalized vector is representable.
+template <typename RealScalar>
+void eigensolver_triangular_overflow() {
+  using MatrixType = Matrix<RealScalar, Dynamic, Dynamic>;
+  const RealScalar eps = NumTraits<RealScalar>::epsilon();
+  const RealScalar d = RealScalar(16) * (std::numeric_limits<RealScalar>::min)();
+  const RealScalar g = RealScalar(1024);
+  MatrixType A0(2, 2);
+  A0 << d, g, RealScalar(0), RealScalar(2) * d;
+  EigenSolver<MatrixType> eig(A0);
+  VERIFY_IS_EQUAL(eig.info(), Success);
+  VERIFY(eig.eigenvectors().allFinite());
+  VERIFY((eigensolver_scaled_residual<RealScalar>(A0, RealScalar(1), eig)) <= RealScalar(100) * eps);
+}
+
 EIGEN_DECLARE_TEST(eigensolver_generic) {
   int s = 0;
   for (int i = 0; i < g_repeat; i++) {
@@ -287,6 +303,8 @@ EIGEN_DECLARE_TEST(eigensolver_generic) {
 
   CALL_SUBTEST_5(eigensolver_scale_sweep<float>());
   CALL_SUBTEST_5(eigensolver_scale_sweep<double>());
+  CALL_SUBTEST_5(eigensolver_triangular_overflow<float>());
+  CALL_SUBTEST_5(eigensolver_triangular_overflow<double>());
 
   TEST_SET_BUT_UNUSED_VARIABLE(s);
 }

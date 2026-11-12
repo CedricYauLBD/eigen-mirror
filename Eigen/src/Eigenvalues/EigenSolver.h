@@ -520,10 +520,15 @@ void EigenSolver<MatrixType>::doComputeEigenvectors() {
         } else {
           l = i;
           if (eivalues.coeff(i).imag() == Scalar(0)) {
-            if (w != Scalar(0))
-              matT.coeffRef(i, n) = -r / w;
-            else
-              matT.coeffRef(i, n) = -r / (eps * norm);
+            const Scalar divisor = w != Scalar(0) ? w : eps * norm;
+            // |r / divisor| > max would overflow the component. The column is determined up to a factor, so scale
+            // the components computed so far, and r with them, by f = |divisor| / |r| to make |x_i| = 1.
+            if (numext::abs(r) > numext::abs(divisor) * NumTraits<Scalar>::highest() && (numext::isfinite)(r)) {
+              const Scalar f = numext::abs(divisor) / numext::abs(r);
+              matT.col(n).tail(size - i - 1) *= f;
+              r *= f;
+            }
+            matT.coeffRef(i, n) = -r / divisor;
           } else  // Solve real equations
           {
             Scalar x = matT.coeff(i, i + 1);
