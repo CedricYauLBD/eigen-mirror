@@ -1243,12 +1243,71 @@ void test_sparse_vector_dense_product() {
   VERIFY_IS_APPROX(res, ref);
 }
 
+// The inner iterator of a triangular view yields the entries of the view once and is inert after its end, also for the
+// unit diagonal that the view adds. The dense-times-sparse kernels increment an iterator past its end.
+template <int Order, int Mode>
+void check_sparse_triangular_view_products(Index n) {
+  typedef SparseMatrix<double, Order> SM;
+  typedef Matrix<double, Dynamic, Dynamic> DenseMat;
+  typedef TriangularView<const SM, Mode> View;
+  DenseMat D = (DenseMat::Random(n, n).array().abs() < 0.5).select(DenseMat::Random(n, n), 0.0);
+  SM A = D.sparseView();
+  A.makeCompressed();
+  const DenseMat T = D.template triangularView<Mode>();
+  const DenseMat v = DenseMat::Random(n, 1), B = DenseMat::Random(n, 3), rv = DenseMat::Random(1, n),
+                 C = DenseMat::Random(3, n);
+
+  // Direct iteration, with two increments past the end.
+  const View view = A.template triangularView<Mode>();
+  internal::evaluator<View> eval(view);
+  DenseMat fromIterators = DenseMat::Zero(n, n);
+  for (Index k = 0; k < A.outerSize(); ++k) {
+    Index count = 0;
+    typename internal::evaluator<View>::InnerIterator it(eval, k);
+    for (; it && count <= n; ++it, ++count) fromIterators(it.row(), it.col()) += it.value();
+    VERIFY(count <= n);
+    VERIFY(!it);
+    ++it;
+    VERIFY(!it);
+    ++it;
+    VERIFY(!it);
+  }
+  VERIFY_IS_APPROX(fromIterators, T);
+
+  VERIFY_IS_APPROX(DenseMat(view * v), DenseMat(T * v));
+  VERIFY_IS_APPROX(DenseMat(view * B), DenseMat(T * B));
+  VERIFY_IS_APPROX(DenseMat(rv * view), DenseMat(rv * T));
+  VERIFY_IS_APPROX(DenseMat(C * view), DenseMat(C * T));
+  VERIFY_IS_APPROX(DenseMat(v.transpose() * view), DenseMat(v.transpose() * T));
+
+  // The view of a transposed matrix.
+  const DenseMat Tt = D.transpose().template triangularView<Mode>();
+  VERIFY_IS_APPROX(DenseMat(A.transpose().template triangularView<Mode>() * v), DenseMat(Tt * v));
+  VERIFY_IS_APPROX(DenseMat(A.transpose().template triangularView<Mode>() * B), DenseMat(Tt * B));
+  VERIFY_IS_APPROX(DenseMat(rv * A.transpose().template triangularView<Mode>()), DenseMat(rv * Tt));
+  VERIFY_IS_APPROX(DenseMat(C * A.transpose().template triangularView<Mode>()), DenseMat(C * Tt));
+}
+
+template <int Order>
+void check_sparse_triangular_view_products_all_modes() {
+  for (Index n : {1, 2, 5}) {
+    check_sparse_triangular_view_products<Order, Lower>(n);
+    check_sparse_triangular_view_products<Order, Upper>(n);
+    check_sparse_triangular_view_products<Order, UnitLower>(n);
+    check_sparse_triangular_view_products<Order, UnitUpper>(n);
+    check_sparse_triangular_view_products<Order, StrictlyLower>(n);
+    check_sparse_triangular_view_products<Order, StrictlyUpper>(n);
+  }
+}
+
 EIGEN_DECLARE_TEST(sparse_product) {
   sparse_structured_view_product_sfinae<SparseMatrix<double, ColMajor>>();
   sparse_structured_view_product_sfinae<SparseMatrix<double, RowMajor>>();
 
   for (int i = 0; i < g_repeat; i++) {
     CALL_SUBTEST_1((test_sparse_vector_dense_product<>()));
+    CALL_SUBTEST_1((check_sparse_triangular_view_products_all_modes<ColMajor>()));
+    CALL_SUBTEST_1((check_sparse_triangular_view_products_all_modes<RowMajor>()));
     CALL_SUBTEST_1((test_pruned_product_row_vector<>()));
     CALL_SUBTEST_1((test_sparse_product_mul_assign<>()));
     CALL_SUBTEST_1((sparse_product<SparseMatrix<double, ColMajor>>()));

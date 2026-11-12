@@ -119,6 +119,11 @@ struct unary_evaluator<TriangularView<ArgType, Mode>, IteratorBased> : evaluator
           return *this;
         }
       }
+      // Once the diagonal has been returned and the entries are exhausted, the iterator stays at its end. Otherwise
+      // the code below would arm the unit diagonal again, as Base is then past the diagonal.
+      EIGEN_IF_CONSTEXPR (HasUnitDiag && !SkipFirst) {
+        if (!(*this)) return *this;
+      }
       Base::operator++();
       EIGEN_IF_CONSTEXPR (HasUnitDiag && !SkipFirst) {
         if ((!Base::operator bool()) || Base::index() >= Base::outer()) {
