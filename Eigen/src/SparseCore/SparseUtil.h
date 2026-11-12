@@ -240,6 +240,7 @@ class monotone_hash {
 // Empty slots hold highest(), above any index, so a probe tests one comparison per slot.
 template <typename Scalar, typename StorageIndex>
 class ordered_hash_accumulator {
+  // Used by value only: in C++14 a static constexpr member that is bound to a reference needs a definition.
   static constexpr StorageIndex kEmpty = NumTraits<StorageIndex>::highest();
   // compact() tests this many slots at once for being all empty.
   static constexpr Index kBlock = 16;
@@ -265,7 +266,7 @@ class ordered_hash_accumulator {
     // slots than size() reserves for it.
     bool direct = is_direct(lo, hi, maxKeys);
     rehash(direct ? maxKeys : numext::maxi<Index>(1, numext::mini(expectedKeys, maxKeys)));
-    std::fill_n(keys, table_size(m_hash, m_capacity), kEmpty);
+    std::fill_n(keys, table_size(m_hash, m_capacity), StorageIndex(kEmpty));
   }
   void init(StorageIndex* keys, Scalar* values, StorageIndex lo, StorageIndex hi, Index maxKeys) {
     init(keys, values, lo, hi, maxKeys, maxKeys);
@@ -433,14 +434,14 @@ class ordered_hash_accumulator {
     Index next = 0;
     for (Index src = size - n; src < size; ++src) {
       Index s = numext::maxi(m_hash(m_keys[src]), next);
-      std::fill(m_keys + next, m_keys + s, kEmpty);
+      std::fill(m_keys + next, m_keys + s, StorageIndex(kEmpty));
       if (s != src) {
         m_keys[s] = m_keys[src];
         m_values[s] = std::move(m_values[src]);
       }
       next = s + 1;
     }
-    std::fill(m_keys + next, m_keys + size, kEmpty);
+    std::fill(m_keys + next, m_keys + size, StorageIndex(kEmpty));
     m_top = next - 1;
   }
 
