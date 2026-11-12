@@ -204,6 +204,42 @@ void eigensolver_generic_extra() {
   }
 }
 
+// max |A V - V D| / (max|A| max|V|) for the eigenpairs of the matrix A0 scaled by `scale`, computed in the scale-free
+// coordinates A0, D / scale, so that the check itself cannot overflow.
+template <typename RealScalar>
+RealScalar eigensolver_scaled_residual(const Matrix<RealScalar, Dynamic, Dynamic>& A0, RealScalar scale,
+                                       const EigenSolver<Matrix<RealScalar, Dynamic, Dynamic>>& eig) {
+  using Complex = std::complex<RealScalar>;
+  using ComplexMatrix = Matrix<Complex, Dynamic, Dynamic>;
+  const ComplexMatrix& V = eig.eigenvectors();
+  const ComplexMatrix scaledEigenvalues = (eig.eigenvalues() / scale).matrix();
+  const ComplexMatrix residual = A0.template cast<Complex>() * V - V * scaledEigenvalues.col(0).asDiagonal();
+  return residual.cwiseAbs().maxCoeff() / (A0.cwiseAbs().maxCoeff() * V.cwiseAbs().maxCoeff());
+}
+
+// A real matrix with complex pairs must give finite eigenvectors with a small residual at every scale: the
+// back-substitution squares entries of T, which overflows or underflows far outside the normal range of the squares.
+template <typename RealScalar>
+void eigensolver_scale_sweep() {
+  using MatrixType = Matrix<RealScalar, Dynamic, Dynamic>;
+  const Index n = 6;
+  const RealScalar eps = NumTraits<RealScalar>::epsilon();
+  const int minExp = std::numeric_limits<RealScalar>::min_exponent - 1 + std::numeric_limits<RealScalar>::digits / 2;
+  const int maxExp = std::numeric_limits<RealScalar>::max_exponent - 6;
+  const int step = std::numeric_limits<RealScalar>::digits / 4;
+  MatrixType A0 = RealScalar(0.3) * MatrixType::Random(n, n);
+  A0.template topLeftCorner<2, 2>() << RealScalar(0), RealScalar(1.5), RealScalar(-1.5), RealScalar(0);
+  A0.template block<2, 2>(2, 2) << RealScalar(1), RealScalar(2), RealScalar(-2), RealScalar(1);
+  for (int e = minExp; e <= maxExp; e += step) {
+    const RealScalar scale = std::ldexp(RealScalar(1), e);
+    const MatrixType A = A0 * scale;
+    EigenSolver<MatrixType> eig(A);
+    VERIFY_IS_EQUAL(eig.info(), Success);
+    VERIFY(eig.eigenvectors().allFinite());
+    VERIFY((eigensolver_scaled_residual<RealScalar>(A0, scale, eig)) <= RealScalar(100 * n) * eps);
+  }
+}
+
 EIGEN_DECLARE_TEST(eigensolver_generic) {
   int s = 0;
   for (int i = 0; i < g_repeat; i++) {
@@ -248,6 +284,9 @@ EIGEN_DECLARE_TEST(eigensolver_generic) {
   });
 
   CALL_SUBTEST_2(eigensolver_generic_extra<0>());
+
+  CALL_SUBTEST_5(eigensolver_scale_sweep<float>());
+  CALL_SUBTEST_5(eigensolver_scale_sweep<double>());
 
   TEST_SET_BUT_UNUSED_VARIABLE(s);
 }

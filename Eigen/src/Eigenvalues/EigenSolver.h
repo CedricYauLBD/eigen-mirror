@@ -473,16 +473,36 @@ void EigenSolver<MatrixType>::doComputeEigenvectors() {
   const Index size = eivec.cols();
   const Scalar eps = NumTraits<Scalar>::epsilon();
 
-  const Scalar norm = internal::hessenberg_abs_sum<Upper>(matT);
+  Scalar norm = internal::hessenberg_abs_sum<Upper>(matT);
 
   // Backsubstitute to find vectors of upper triangular form
   if (norm == Scalar(0)) {
     return;
   }
 
+  // The back-substitution squares and multiplies entries of T, which overflows or underflows once the entries are
+  // outside about [sqrt(min/eps), sqrt(max/(8n))]. The eigenvectors of T are those of T/s for a power of two s, so
+  // scale T and the eigenvalues together. Since max|t_ij| <= norm <= n^2 max|t_ij|, the test below is a cheap
+  // sufficient condition and the ordinary case does no further work.
+  const Scalar safeMin = numext::sqrt((std::numeric_limits<Scalar>::min)() / eps);
+  const Scalar safeMax = numext::sqrt(NumTraits<Scalar>::highest() / Scalar(8 * size));
+  EigenvalueType scaledEivalues;
+  bool scaled = false;
+  if (!(norm <= safeMax && norm >= Scalar(size) * Scalar(size) * safeMin)) {
+    Scalar maxCoeff(0);
+    for (Index j = 0; j < size; ++j)
+      maxCoeff = numext::maxi(maxCoeff, matT.col(j).head(numext::mini(j + 2, size)).cwiseAbs().maxCoeff());
+    const auto factors = internal::safe_scaling<Scalar>::scale_in_place(matT, maxCoeff);
+    scaledEivalues = m_eivalues;
+    internal::safe_scaling<Scalar>::scale_in_place(scaledEivalues, maxCoeff, factors);
+    norm = internal::hessenberg_abs_sum<Upper>(matT);
+    scaled = true;
+  }
+  const EigenvalueType& eivalues = scaled ? scaledEivalues : m_eivalues;
+
   for (Index n = size - 1; n >= 0; n--) {
-    Scalar p = m_eivalues.coeff(n).real();
-    Scalar q = m_eivalues.coeff(n).imag();
+    Scalar p = eivalues.coeff(n).real();
+    Scalar q = eivalues.coeff(n).imag();
 
     // Scalar vector
     if (q == Scalar(0)) {
@@ -494,12 +514,12 @@ void EigenSolver<MatrixType>::doComputeEigenvectors() {
         Scalar w = matT.coeff(i, i) - p;
         Scalar r = matT.row(i).segment(l, n - l + 1).dot(matT.col(n).segment(l, n - l + 1));
 
-        if (m_eivalues.coeff(i).imag() < Scalar(0)) {
+        if (eivalues.coeff(i).imag() < Scalar(0)) {
           lastw = w;
           lastr = r;
         } else {
           l = i;
-          if (m_eivalues.coeff(i).imag() == Scalar(0)) {
+          if (eivalues.coeff(i).imag() == Scalar(0)) {
             if (w != Scalar(0))
               matT.coeffRef(i, n) = -r / w;
             else
@@ -508,8 +528,8 @@ void EigenSolver<MatrixType>::doComputeEigenvectors() {
           {
             Scalar x = matT.coeff(i, i + 1);
             Scalar y = matT.coeff(i + 1, i);
-            Scalar denom = (m_eivalues.coeff(i).real() - p) * (m_eivalues.coeff(i).real() - p) +
-                           m_eivalues.coeff(i).imag() * m_eivalues.coeff(i).imag();
+            Scalar denom = (eivalues.coeff(i).real() - p) * (eivalues.coeff(i).real() - p) +
+                           eivalues.coeff(i).imag() * eivalues.coeff(i).imag();
             Scalar t = (x * lastr - lastw * r) / denom;
             matT.coeffRef(i, n) = t;
             if (numext::abs(x) > numext::abs(lastw))
@@ -545,13 +565,13 @@ void EigenSolver<MatrixType>::doComputeEigenvectors() {
         Scalar sa = matT.row(i).segment(l, n - l + 1).dot(matT.col(n).segment(l, n - l + 1));
         Scalar w = matT.coeff(i, i) - p;
 
-        if (m_eivalues.coeff(i).imag() < Scalar(0)) {
+        if (eivalues.coeff(i).imag() < Scalar(0)) {
           lastw = w;
           lastra = ra;
           lastsa = sa;
         } else {
           l = i;
-          if (m_eivalues.coeff(i).imag() == RealScalar(0)) {
+          if (eivalues.coeff(i).imag() == RealScalar(0)) {
             ComplexScalar cc = ComplexScalar(-ra, -sa) / ComplexScalar(w, q);
             matT.coeffRef(i, n - 1) = numext::real(cc);
             matT.coeffRef(i, n) = numext::imag(cc);
@@ -559,9 +579,9 @@ void EigenSolver<MatrixType>::doComputeEigenvectors() {
             // Solve complex equations
             Scalar x = matT.coeff(i, i + 1);
             Scalar y = matT.coeff(i + 1, i);
-            Scalar vr = (m_eivalues.coeff(i).real() - p) * (m_eivalues.coeff(i).real() - p) +
-                        m_eivalues.coeff(i).imag() * m_eivalues.coeff(i).imag() - q * q;
-            Scalar vi = (m_eivalues.coeff(i).real() - p) * Scalar(2) * q;
+            Scalar vr = (eivalues.coeff(i).real() - p) * (eivalues.coeff(i).real() - p) +
+                        eivalues.coeff(i).imag() * eivalues.coeff(i).imag() - q * q;
+            Scalar vi = (eivalues.coeff(i).real() - p) * Scalar(2) * q;
             if ((vr == Scalar(0)) && (vi == Scalar(0)))
               vr =
                   eps * norm * (numext::abs(w) + numext::abs(q) + numext::abs(x) + numext::abs(y) + numext::abs(lastw));
