@@ -3695,6 +3695,60 @@ void packetmath_binary_sign_subnormals() {
   }
 }
 
+#if defined(EIGEN_VECTORIZE_AVX2)
+// Packet4d <-> Packet4l casts, which are an intrinsic with AVX-512DQ+VL and bit manipulation or a scalar loop
+// otherwise, against the scalar casts at the edges of the int64 range and of the double significand.
+void packetmath_cast_double_int64_edges() {
+  using internal::Packet4d;
+  using internal::Packet4l;
+  const double doubles[] = {0.0,
+                            -0.0,
+                            0.5,
+                            -0.5,
+                            0.9999999999999999,
+                            -0.9999999999999999,
+                            1.0,
+                            -1.0,
+                            1.5,
+                            -1.5,
+                            4503599627370495.5,
+                            -4503599627370495.5,
+                            4503599627370496.0,
+                            9007199254740992.0,
+                            4611686018427387904.0,
+                            -4611686018427387904.0,
+                            9223372036854774784.0,
+                            -9223372036854774784.0,
+                            -9223372036854775808.0,
+                            std::numeric_limits<double>::denorm_min(),
+                            -std::numeric_limits<double>::denorm_min()};
+  const int64_t integers[] = {0,
+                              1,
+                              -1,
+                              9007199254740993LL,
+                              -9007199254740993LL,
+                              9007199254740995LL,
+                              4611686018427387905LL,
+                              NumTraits<int64_t>::highest(),
+                              NumTraits<int64_t>::lowest(),
+                              NumTraits<int64_t>::highest() - 1};
+  constexpr int kDoubles = sizeof(doubles) / sizeof(doubles[0]);
+  constexpr int kIntegers = sizeof(integers) / sizeof(integers[0]);
+  EIGEN_ALIGN_MAX double d[4], d_out[4];
+  EIGEN_ALIGN_MAX int64_t l[4], l_out[4];
+  for (int first = 0; first < kDoubles; ++first) {
+    for (int i = 0; i < 4; ++i) d[i] = doubles[(first + 5 * i) % kDoubles];
+    internal::pstore(l_out, internal::pcast<Packet4d, Packet4l>(internal::pload<Packet4d>(d)));
+    for (int i = 0; i < 4; ++i) VERIFY_IS_EQUAL(l_out[i], static_cast<int64_t>(d[i]));
+  }
+  for (int first = 0; first < kIntegers; ++first) {
+    for (int i = 0; i < 4; ++i) l[i] = integers[(first + 3 * i) % kIntegers];
+    internal::pstore(d_out, internal::pcast<Packet4l, Packet4d>(internal::pload<Packet4l>(l)));
+    for (int i = 0; i < 4; ++i) VERIFY_IS_EQUAL(d_out[i], static_cast<double>(l[i]));
+  }
+}
+#endif
+
 // Calls test() with subnormal inputs flushed to zero, where the hardware can.
 template <typename Test>
 void packetmath_with_flushed_inputs(Test test) {
@@ -3943,6 +3997,9 @@ EIGEN_DECLARE_TEST(packetmath) {
   CALL_SUBTEST_2(packetmath_binary_sign_subnormals<double>());
   CALL_SUBTEST_1(packetmath_with_flushed_inputs(packetmath_binary_sign_subnormals<float>));
   CALL_SUBTEST_2(packetmath_with_flushed_inputs(packetmath_binary_sign_subnormals<double>));
+#if defined(EIGEN_VECTORIZE_AVX2)
+  CALL_SUBTEST_9(packetmath_cast_double_int64_edges());
+#endif
 
 #if defined(EIGEN_VECTORIZE_AVX) || defined(EIGEN_VECTORIZE_AVX512) || defined(EIGEN_VECTORIZE_NEON) || \
     defined(EIGEN_VECTORIZE_ALTIVEC) || defined(EIGEN_VECTORIZE_VSX)
