@@ -339,7 +339,6 @@ class EigenSolver {
 template <typename MatrixType>
 typename EigenSolver<MatrixType>::PlainMatrixType EigenSolver<MatrixType>::pseudoEigenvalueMatrix() const {
   eigen_assert(m_isInitialized && "EigenSolver is not initialized.");
-  const RealScalar precision = RealScalar(2) * NumTraits<RealScalar>::epsilon();
   const Index n = m_eivalues.rows();
   PlainMatrixType matD = PlainMatrixType::Zero(n, n);
   Index i = 0;
@@ -347,7 +346,8 @@ typename EigenSolver<MatrixType>::PlainMatrixType EigenSolver<MatrixType>::pseud
     RealScalar real = numext::real(m_eivalues.coeff(i));
     RealScalar imag = numext::imag(m_eivalues.coeff(i));
     matD.coeffRef(i, i) = real;
-    if (!internal::isMuchSmallerThan(imag, real, precision)) {
+    // The eigenvalue of a real scalar block has an exactly zero imaginary part, whatever the size of the real part.
+    if (!numext::is_exactly_zero(imag)) {
       matD.coeffRef(i, i + 1) = imag;
       matD.coeffRef(i + 1, i) = -imag;
       matD.coeffRef(i + 1, i + 1) = real;
@@ -365,13 +365,11 @@ template <typename MatrixType>
 typename EigenSolver<MatrixType>::EigenvectorsType EigenSolver<MatrixType>::eigenvectors() const {
   eigen_assert(m_isInitialized && "EigenSolver is not initialized.");
   eigen_assert(m_eigenvectorsOk && "The eigenvectors have not been computed together with the eigenvalues.");
-  const RealScalar precision = RealScalar(2) * NumTraits<RealScalar>::epsilon();
   const PlainMatrixType& eivec = m_realSchur.m_matU;
   Index n = eivec.cols();
   EigenvectorsType matV(n, n);
   for (Index j = 0; j < n; ++j) {
-    if (internal::isMuchSmallerThan(numext::imag(m_eivalues.coeff(j)), numext::real(m_eivalues.coeff(j)), precision) ||
-        j + 1 == n) {
+    if (numext::is_exactly_zero(numext::imag(m_eivalues.coeff(j))) || j + 1 == n) {
       // we have a real eigen value
       matV.col(j) = eivec.col(j).template cast<ComplexScalar>();
       matV.col(j).normalize();
