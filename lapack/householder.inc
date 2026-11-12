@@ -115,7 +115,8 @@ EIGEN_LAPACK_FUNC(larf)
   const bool applyleft = (SIDE(*side) == LEFT);
 
   // Trim trailing zeros of v; for INCV < 0 its last entry is v[0].
-  EIGEN_BLAS_INT lastv = applyleft ? *m : *n;
+  const EIGEN_BLAS_INT len = applyleft ? *m : *n;
+  EIGEN_BLAS_INT lastv = len;
   EIGEN_BLAS_INT idx = *incv > 0 ? (lastv - 1) * *incv : 0;
   while (lastv > 0 && v[idx] == Scalar(0)) {
     --lastv;
@@ -143,7 +144,8 @@ EIGEN_LAPACK_FUNC(larf)
   if (*incv > 0) {
     apply_reflector(make_vector(v, lastv, *incv));
   } else {
-    auto v_reversed = make_vector(v, lastv, -*incv);
+    // v(i) lies at offset (len - 1 - i) |INCV|, so the retained v(0:lastv-1) start at offset (len - lastv) |INCV|.
+    auto v_reversed = make_vector(v + Eigen::Index(len - lastv) * (-*incv), lastv, -*incv);
     apply_reflector(v_reversed.reverse());
   }
 }
