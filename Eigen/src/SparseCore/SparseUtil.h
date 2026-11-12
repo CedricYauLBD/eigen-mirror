@@ -459,19 +459,148 @@ class ordered_hash_accumulator {
   Index m_top = 0;
 };
 
+template <typename Scalar, typename StorageIndex>
+class CompressedStorage;
+
+// The scratch storage of sort_inner_vector and merge_buckets, kept between calls.
+template <typename Scalar, typename StorageIndex>
+struct inner_sort_workspace {
+  // The average number of entries per bucket: with one entry per bucket the counters cost as much as the entries,
+  // and a long bucket is slow to sort by insertion.
+  static constexpr Index kBucketLoad = 4;
+  // A bucket with more entries than this holds a cluster and is not sorted by insertion. Splitting it must make at
+  // least two buckets, or the split would not end.
+  static constexpr Index kBucketMax = 8;
+  // Makes room for n entries in storage.
+  static void reserve(CompressedStorage<Scalar, StorageIndex>& storage, Index n) {
+    if (storage.allocatedSize() < n) storage.reserve(n);
+  }
+  // The entries in their buckets, and a second array of the same extent that an overfull bucket is split into.
+  CompressedStorage<Scalar, StorageIndex> buckets, split;
+  // A direct table.
+  CompressedStorage<Scalar, StorageIndex> table;
+  // cursor[base + b] is the end of bucket b, for the buckets of one split; the next split follows them.
+  Matrix<Index, Dynamic, 1> cursor;
+  ordered_hash_accumulator<Scalar, StorageIndex> acc;
+};
+
+// The hash that sends the indices of n entries in [lo, hi] to their buckets.
+template <typename Scalar, typename StorageIndex>
+monotone_hash<StorageIndex> bucket_hash(StorageIndex lo, StorageIndex hi, Index n) {
+  Index buckets = n / inner_sort_workspace<Scalar, StorageIndex>::kBucketLoad;
+  return monotone_hash<StorageIndex>(lo, hi, numext::maxi<Index>(1, buckets));
+}
+
+// Moves the n entries (srcIndices[k], srcValues[k]), with indices in [lo, hi], to their buckets in (dstIndices,
+// dstValues), in the order of arrival within a bucket. Returns the number of buckets and sets cursor[base + b] to the
+// end of bucket b; bucket 0 begins at 0.
+template <typename Scalar, typename StorageIndex>
+Index split_into_buckets(const StorageIndex* srcIndices, Scalar* srcValues, Index n, StorageIndex lo, StorageIndex hi,
+                         StorageIndex* dstIndices, Scalar* dstValues, Matrix<Index, Dynamic, 1>& cursor, Index base) {
+  monotone_hash<StorageIndex> hash = bucket_hash<Scalar>(lo, hi, n);
+  Index buckets = hash.range();
+  if (cursor.size() < base + buckets + 1) cursor.conservativeResize(base + buckets + 1);
+  // ends[b + 1] counts bucket b, then ends[b] is where its next entry goes.
+  Index* ends = cursor.data() + base;
+  std::fill_n(ends, buckets + 1, Index(0));
+  for (Index k = 0; k < n; ++k) ++ends[hash(srcIndices[k]) + 1];
+  for (Index b = 1; b < buckets; ++b) ends[b + 1] += ends[b];
+  for (Index k = 0; k < n; ++k) {
+    Index position = ends[hash(srcIndices[k])]++;
+    dstIndices[position] = srcIndices[k];
+    dstValues[position] = std::move(srcValues[k]);
+  }
+  return buckets;
+}
+
+// Appends the entries of the buckets to (indices, values) from position count, sorted by index and with the values
+// of equal indices summed, and returns the new count. Bucket b is [cursor[base + b - 1], cursor[base + b]) of
+// (bucketIndices, bucketValues), bucket 0 beginning at 0, and the indices of a bucket are below those of the next.
+// (splitIndices, splitValues) has the extent of the buckets; both are overwritten. cursor is workspace.cursor.
+//
+// A bucket is sorted by insertion. One with more than kBucketMax entries holds a cluster, which a hash over all the
+// buckets could not spread. It goes through a direct table if it is dense in its own range, and is otherwise split
+// again over that range, so the work stays linear in its size.
+template <typename Scalar, typename StorageIndex>
+Index merge_buckets(StorageIndex* bucketIndices, Scalar* bucketValues, StorageIndex* splitIndices, Scalar* splitValues,
+                    inner_sort_workspace<Scalar, StorageIndex>& workspace, Index base, Index buckets,
+                    StorageIndex* indices, Scalar* values, Index count) {
+  using Workspace = inner_sort_workspace<Scalar, StorageIndex>;
+  constexpr Index kBucketMax = Workspace::kBucketMax;
+  EIGEN_STATIC_ASSERT(Workspace::kBucketMax >= 2 * Workspace::kBucketLoad, AN_OVERFULL_BUCKET_MUST_SPLIT_IN_TWO)
+  Index begin = 0;
+  for (Index b = 0; b < buckets; ++b) {
+    Index end = workspace.cursor[base + b];
+    Index n = end - begin;
+    if (n > kBucketMax) {
+      StorageIndex lo = bucketIndices[begin], hi = bucketIndices[begin];
+      for (Index p = begin + 1; p < end; ++p) {
+        lo = numext::mini(lo, bucketIndices[p]);
+        hi = numext::maxi(hi, bucketIndices[p]);
+      }
+      ordered_hash_accumulator<Scalar, StorageIndex>& acc = workspace.acc;
+      if (acc.direct(lo, hi, n)) {
+        Workspace::reserve(workspace.table, acc.size(lo, hi, n));
+        acc.init(workspace.table.indexPtr(), workspace.table.valuePtr(), lo, hi, n);
+        for (Index p = begin; p < end; ++p) {
+          bool inserted;
+          Scalar& value = acc.findOrInsert(bucketIndices[p], inserted);
+          if (inserted)
+            value = std::move(bucketValues[p]);
+          else
+            value += bucketValues[p];
+        }
+        Index distinct = acc.compact();
+        std::copy(workspace.table.indexPtr(), workspace.table.indexPtr() + distinct, indices + count);
+        std::move(workspace.table.valuePtr(), workspace.table.valuePtr() + distinct, values + count);
+        count += distinct;
+      } else {
+        // The split has at least two buckets, the first with lo and the last with hi, so each is smaller than this
+        // one.
+        Index next = base + buckets + 1;
+        Index parts = split_into_buckets(bucketIndices + begin, bucketValues + begin, n, lo, hi, splitIndices + begin,
+                                         splitValues + begin, workspace.cursor, next);
+        count = merge_buckets(splitIndices + begin, splitValues + begin, bucketIndices + begin, bucketValues + begin,
+                              workspace, next, parts, indices, values, count);
+      }
+      begin = end;
+      continue;
+    }
+    Index first = count;
+    for (Index p = begin; p < end; ++p) {
+      StorageIndex i = bucketIndices[p];
+      Index q = count;
+      while (q > first && indices[q - 1] > i) --q;
+      if (q > first && indices[q - 1] == i) {
+        values[q - 1] += bucketValues[p];
+        continue;
+      }
+      for (Index t = count; t > q; --t) {
+        indices[t] = indices[t - 1];
+        values[t] = std::move(values[t - 1]);
+      }
+      indices[q] = i;
+      values[q] = std::move(bucketValues[p]);
+      ++count;
+    }
+    begin = end;
+  }
+  return count;
+}
+
 // Sorts the n distinct entries (indices[k], values[k]) by index, given the lowest and highest index and the number of
 // descents, the positions k with indices[k] < indices[k - 1]: the entries form descents + 1 increasing runs.
 //
 // - No descent: sorted.
-// - Up to kSmall entries: insertion sort, unless they fill half of their span, where the table is direct and sorts
-//   them without a comparison.
+// - Up to kSmall entries: insertion sort, unless they fill half of their span.
 // - Few runs: insertion sort, which moves an entry only past the larger ones before it, within a budget of moves.
 //   Long interleaved runs exhaust it.
-// - Otherwise, and for what the budget leaves unsorted: an ordered_hash_accumulator in table, storage with
-//   allocatedSize(), reserve(), indexPtr() and valuePtr() like CompressedStorage.
-template <typename Scalar, typename StorageIndex, typename Table>
+// - Otherwise, and for what the budget leaves unsorted: a direct table if the entries are dense in their span, which
+//   sorts them without a comparison, and buckets if they are not.
+template <typename Scalar, typename StorageIndex>
 void sort_inner_vector(StorageIndex* indices, Scalar* values, Index n, StorageIndex lo, StorageIndex hi, Index descents,
-                       Table& table, ordered_hash_accumulator<Scalar, StorageIndex>& acc) {
+                       inner_sort_workspace<Scalar, StorageIndex>& workspace) {
+  using Workspace = inner_sort_workspace<Scalar, StorageIndex>;
   constexpr Index kSmall = 64;
   if (descents == 0) return;
   bool small = n <= kSmall && Index(hi) - Index(lo) + 1 > 2 * n;
@@ -494,16 +623,25 @@ void sort_inner_vector(StorageIndex* indices, Scalar* values, Index n, StorageIn
     }
   }
   if (sortedEnd == n) return;
-  Index size = acc.size(lo, hi, n);
-  if (table.allocatedSize() < size) table.reserve(size);
-  acc.init(table.indexPtr(), table.valuePtr(), lo, hi, n);
-  for (Index k = 0; k < n; ++k) {
-    bool inserted;
-    acc.findOrInsert(indices[k], inserted) = std::move(values[k]);
+  ordered_hash_accumulator<Scalar, StorageIndex>& acc = workspace.acc;
+  if (acc.direct(lo, hi, n)) {
+    Workspace::reserve(workspace.table, acc.size(lo, hi, n));
+    acc.init(workspace.table.indexPtr(), workspace.table.valuePtr(), lo, hi, n);
+    for (Index k = 0; k < n; ++k) {
+      bool inserted;
+      acc.findOrInsert(indices[k], inserted) = std::move(values[k]);
+    }
+    acc.compact();
+    std::copy(workspace.table.indexPtr(), workspace.table.indexPtr() + n, indices);
+    std::move(workspace.table.valuePtr(), workspace.table.valuePtr() + n, values);
+    return;
   }
-  acc.compact();
-  std::copy(table.indexPtr(), table.indexPtr() + n, indices);
-  std::move(table.valuePtr(), table.valuePtr() + n, values);
+  Workspace::reserve(workspace.buckets, n);
+  Workspace::reserve(workspace.split, n);
+  Index buckets = split_into_buckets(indices, values, n, lo, hi, workspace.buckets.indexPtr(),
+                                     workspace.buckets.valuePtr(), workspace.cursor, 0);
+  merge_buckets(workspace.buckets.indexPtr(), workspace.buckets.valuePtr(), workspace.split.indexPtr(),
+                workspace.split.valuePtr(), workspace, 0, buckets, indices, values, 0);
 }
 
 }  // end namespace internal
