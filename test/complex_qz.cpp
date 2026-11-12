@@ -509,7 +509,7 @@ EIGEN_DECLARE_TEST(complex_qz) {
     Eigen::Matrix3cf A_3x3, B_3x3;
     A_3x3.setRandom();
     B_3x3.setRandom();
-    B_3x3.col(i % 3).setRandom();
+    B_3x3.col(i % 3).setZero();
     CALL_SUBTEST_1(complex_qz(A_2x2, B_2x2));
     CALL_SUBTEST_2(complex_qz(A_3x3, B_3x3));
 
