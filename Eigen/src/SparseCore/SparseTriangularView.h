@@ -61,7 +61,10 @@ class TriangularViewImpl<MatrixType, Mode, Sparse> : public SparseMatrixBase<Tri
   template <typename OtherDerived>
   void solveInPlace(MatrixBase<OtherDerived>& other) const;
 
-  /** Applies the inverse of \c *this to the sparse vector or matrix \a other, "in-place" */
+  /** Applies the inverse of \c *this to the sparse vector or matrix \a other, "in-place"
+   *
+   * The nested sparse matrix must be column-major; a row-major one does not compile. A row-major \a other is solved
+   * through a column-major copy. */
   template <typename OtherDerived>
   void solveInPlace(SparseMatrixBase<OtherDerived>& other) const;
 };
