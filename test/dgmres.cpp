@@ -144,6 +144,57 @@ void test_dgmres_iterations_T() {
   }
 }
 
+// With several right-hand sides, info() is the most severe status over the columns: NumericalIssue, then
+// NoConvergence, then Success. It used to be overwritten by whichever of NumericalIssue and NoConvergence came last.
+template <typename T>
+void test_dgmres_multi_rhs_info() {
+  using Mat = SparseMatrix<T>;
+  using DenseMat = Matrix<T, Dynamic, Dynamic>;
+  // A nilpotent block, for which b = e0 breaks down (NumericalIssue), and a general 2 x 2 block, for which b = (0, 0,
+  // 1, 1/2) needs two iterations, so it stops short with the one iteration allowed below (NoConvergence).
+  Mat A(4, 4);
+  A.insert(0, 1) = T(1);
+  A.insert(2, 2) = T(2);
+  A.insert(2, 3) = T(1);
+  A.insert(3, 2) = T(-1);
+  A.insert(3, 3) = T(3);
+  A.makeCompressed();
+  DenseMat cols = DenseMat::Zero(4, 3);  // column 0: Success (b = 0), 1: NoConvergence, 2: NumericalIssue
+  cols(2, 1) = T(1);
+  cols(3, 1) = T(0.5);
+  cols(0, 2) = T(1);
+  const ComputationInfo expected[3] = {Success, NoConvergence, NumericalIssue};
+
+  DGMRES<Mat, IdentityPreconditioner> solver;
+  solver.setMaxIterations(1);
+  solver.setTolerance(1e-14);
+  solver.compute(A);
+  for (int c = 0; c < 3; ++c) {
+    solver.solve(cols.col(c)).eval();
+    VERIFY_IS_EQUAL(solver.info(), expected[c]);
+  }
+
+  // Every ordered choice of two or three of the columns, in dense and sparse destinations.
+  const int orders[][3] = {{0, 1, 2}, {0, 2, 1}, {1, 0, 2}, {1, 2, 0}, {2, 0, 1}, {2, 1, 0}};
+  for (const auto& order : orders) {
+    for (int count = 2; count <= 3; ++count) {
+      DenseMat B(4, count);
+      ComputationInfo worst = Success;
+      for (int j = 0; j < count; ++j) {
+        B.col(j) = cols.col(order[j]);
+        // The enumerators are not ordered by severity.
+        if (expected[order[j]] == NumericalIssue || (expected[order[j]] == NoConvergence && worst == Success))
+          worst = expected[order[j]];
+      }
+      const DenseMat X = solver.solve(B);
+      VERIFY(X.allFinite());
+      VERIFY_IS_EQUAL(solver.info(), worst);
+      const Mat Xs = solver.solve(B.sparseView());
+      VERIFY_IS_EQUAL(solver.info(), worst);
+    }
+  }
+}
+
 // The Arnoldi coefficient is h(i,j) = v_i^H A v_j; computing its conjugate broke the orthogonalization for complex
 // scalars, so restarted DGMRES needed about twice the iterations of the equivalent GMRES(30).
 template <typename = void>
@@ -297,6 +348,8 @@ EIGEN_DECLARE_TEST(dgmres) {
   CALL_SUBTEST_5(test_dgmres_iterations_T<double>());
   CALL_SUBTEST_6(test_dgmres_iterations_T<std::complex<double> >());
   CALL_SUBTEST_6(test_dgmres_complex_arnoldi<>());
+  CALL_SUBTEST_9(test_dgmres_multi_rhs_info<double>());
+  CALL_SUBTEST_9(test_dgmres_multi_rhs_info<std::complex<double> >());
   CALL_SUBTEST_7((test_dgmres_deflation<double, IdentityPreconditioner>(0.0)));
   CALL_SUBTEST_7((test_dgmres_deflation<double, DiagonalPreconditioner<double> >(0.0)));
   CALL_SUBTEST_7(test_dgmres_deflation_conjugate_pair<>());

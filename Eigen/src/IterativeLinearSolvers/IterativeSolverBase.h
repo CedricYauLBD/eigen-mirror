@@ -34,6 +34,14 @@ MatrixType random_orthonormal_basis(Index rows, Index cols) {
   return qr.householderQ() * MatrixType::Identity(rows, cols);
 }
 
+// The more severe of two solver statuses: NumericalIssue, then NoConvergence, then Success. The enumerators are not
+// ordered by severity.
+inline ComputationInfo most_severe_info(ComputationInfo a, ComputationInfo b) {
+  if (a == NumericalIssue || b == NumericalIssue) return NumericalIssue;
+  if (a == NoConvergence || b == NoConvergence) return NoConvergence;
+  return a == Success ? b : a;
+}
+
 template <typename RealScalar>
 EIGEN_DEVICE_FUNC RealScalar iterative_solver_scaling_factor(RealScalar norm) {
   // Scale only when forming a quadratic recurrence term from norm may underflow or overflow.
@@ -300,7 +308,10 @@ class IterativeSolverBase : public SparseSolverBase<Derived> {
     derived()._solve_vector_with_guess_impl(b, x);
   }
 
-  /** \returns Success if the iterations converged, and NoConvergence otherwise. */
+  /** \returns Success if the iterations converged, NumericalIssue if the solver broke down, and NoConvergence
+   * otherwise. With several right-hand sides, it is the most severe status over the columns: NumericalIssue if any
+   * column broke down, else NoConvergence if any did not converge, else Success. iterations() and error() then
+   * describe the last column. */
   ComputationInfo info() const {
     eigen_assert(m_isInitialized && "IterativeSolverBase is not initialized.");
     return m_info;
@@ -328,12 +339,8 @@ class IterativeSolverBase : public SparseSolverBase<Derived> {
       derived()._solve_vector_with_guess_impl(tb, tx);
       tmp.col(k) = tx.sparseView(0);
 
-      // The call to _solve_vector_with_guess_impl updates m_info, so if it failed for a previous column
-      // we need to restore it to the worst value.
-      if (m_info == NumericalIssue)
-        global_info = NumericalIssue;
-      else if (m_info == NoConvergence)
-        global_info = NoConvergence;
+      // The call to _solve_vector_with_guess_impl updates m_info, so keep the most severe status over the columns.
+      global_info = internal::most_severe_info(global_info, m_info);
     }
     m_info = global_info;
     dest.swap(tmp);
@@ -352,12 +359,8 @@ class IterativeSolverBase : public SparseSolverBase<Derived> {
       typename Rhs::ConstColXpr bk(b, k);
       derived()._solve_vector_with_guess_impl(bk, xk);
 
-      // The call to _solve_vector_with_guess_impl updates m_info, so if it failed for a previous column
-      // we need to restore it to the worst value.
-      if (m_info == NumericalIssue)
-        global_info = NumericalIssue;
-      else if (m_info == NoConvergence)
-        global_info = NoConvergence;
+      // The call to _solve_vector_with_guess_impl updates m_info, so keep the most severe status over the columns.
+      global_info = internal::most_severe_info(global_info, m_info);
     }
     m_info = global_info;
   }
