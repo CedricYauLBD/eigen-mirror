@@ -223,7 +223,10 @@ struct TensorEvaluator<const TensorPatchOp<PatchDim, ArgType>, Device> {
     inputIndices[0] += (patchIndices[0] + patchOffsets[0]);
     inputIndices[1] += (patchIndices[1] + patchOffsets[1]);
 
-    if (inputIndices[1] - inputIndices[0] == PacketSize - 1) {
+    // The input is contiguous only along the inner patch dimension; a packet that crosses into the next patch row
+    // is gathered, even if its first and last coefficients happen to be PacketSize - 1 apart.
+    const Index inner_size = m_dimensions[static_cast<int>(Layout) == static_cast<int>(ColMajor) ? 0 : NumDims - 1];
+    if (index % inner_size + PacketSize <= inner_size) {
       PacketReturnType rslt = m_impl.template packet<Unaligned>(inputIndices[0]);
       return rslt;
     } else {
