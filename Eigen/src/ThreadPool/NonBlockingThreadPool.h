@@ -430,6 +430,14 @@ class ThreadPoolTempl : public Eigen::ThreadPoolInterface {
     // We already did best-effort emptiness check in Steal, so prepare for
     // blocking.
     ec_.Prewait();
+    // Cancel() sets cancelled_ and then notifies, so this check, which follows Prewait(), either sees it or is
+    // observed by that Notify(). Without it a worker that passed the check in WorkerLoop() before Cancel() and
+    // reaches here after its Notify() blocks for good once the other workers have left without blocking: the
+    // destructor does not notify a cancelled pool, and blocked_ never reaches num_threads_.
+    if (cancelled_) {
+      ec_.CancelWait();
+      return false;
+    }
     // Now do a reliable emptiness check.
     int victim = NonEmptyQueueIndex();
     if (victim != -1) {

@@ -178,6 +178,44 @@ static void test_cancel_while_task_schedules() {
   }
 }
 
+// A worker that passed the cancellation check of its loop may reach WaitForWork() after Cancel() has notified the
+// waiters. It must see the cancellation after Prewait(): the other workers leave without blocking, so nothing would
+// wake it again, and the destructor would wait for it forever. The window is narrow, so run many short lifetimes with
+// a Cancel() at a random point, in a thread that a hang cannot take the test down with: the test fails when the
+// lifetimes stop completing.
+static void test_cancel_races_with_idle_workers() {
+  std::atomic<bool> finished(false);
+  std::atomic<int> completed(0);
+  std::thread driver([&] {
+    for (int iter = 0; iter < 3000; ++iter) {
+      {
+        ThreadPool tp(2 + iter % 3);
+        const int tasks = internal::random<int>(0, 4);
+        for (int i = 0; i < tasks; ++i) {
+          const int micros = internal::random<int>(0, 50);
+          tp.Schedule([micros] {
+            const auto end = std::chrono::steady_clock::now() + std::chrono::microseconds(micros);
+            while (std::chrono::steady_clock::now() < end) {
+            }
+          });
+        }
+        for (int i = internal::random<int>(0, 100); i > 0; --i) std::this_thread::yield();
+        tp.Cancel();
+      }  // The destructor returns only when every worker has exited.
+      completed = iter + 1;
+    }
+    finished = true;
+  });
+  int seen = 0;
+  while (!finished) {
+    const bool progress = spin_wait([&] { return finished.load() || completed.load() > seen; }, 30);
+    if (!progress) std::cerr << "no pool was destroyed after iteration " << seen << "\n";
+    VERIFY(progress);
+    seen = completed.load();
+  }
+  driver.join();
+}
+
 static void test_pool_partitions() {
   const int kThreads = 2;
 
@@ -264,6 +302,7 @@ EIGEN_DECLARE_TEST(threads_non_blocking_thread_pool) {
   CALL_SUBTEST(test_parallelism(false));
   CALL_SUBTEST(test_cancel());
   CALL_SUBTEST(test_cancel_while_task_schedules());
+  CALL_SUBTEST(test_cancel_races_with_idle_workers());
   CALL_SUBTEST(test_pool_partitions());
   CALL_SUBTEST(test_maybe_get_task_from_other_pool());
 }
