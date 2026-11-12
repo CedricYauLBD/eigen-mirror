@@ -128,6 +128,26 @@ void test_multithread_trace() {
   }
 }
 
+// A TensorRef is a lazily evaluated read through a virtual coefficient accessor.
+template <int DataLayout>
+void test_multithread_tensor_ref() {
+  Tensor<float, 2, DataLayout> in(50, 60);
+  in.setRandom();
+  TensorRef<Tensor<float, 2, DataLayout>> ref(in);
+  Tensor<float, 2, DataLayout> out(50, 60);
+
+  PoolDevice pool(internal::random<int>(3, 11), internal::random<int>(3, 11));
+  out.device(pool.device) = ref * 2.0f;
+  for (Index i = 0; i < in.size(); ++i) {
+    VERIFY_IS_EQUAL(out.data()[i], 2.0f * in.data()[i]);
+  }
+
+  out.device(pool.device) = ref;
+  for (Index i = 0; i < in.size(); ++i) {
+    VERIFY_IS_EQUAL(out.data()[i], in.data()[i]);
+  }
+}
+
 template <bool Async>
 void test_multithread_volume_patch() {
   Tensor<float, 5> in(4, 2, 3, 5, 7);
@@ -1254,6 +1274,8 @@ EIGEN_DECLARE_TEST(tensor_thread_pool) {
   CALL_SUBTEST_3(test_async_multithread_chip<>());
   CALL_SUBTEST_3(test_multithread_trace<ColMajor>());
   CALL_SUBTEST_3(test_multithread_trace<RowMajor>());
+  CALL_SUBTEST_3(test_multithread_tensor_ref<ColMajor>());
+  CALL_SUBTEST_3(test_multithread_tensor_ref<RowMajor>());
 
   CALL_SUBTEST_4(test_multithread_volume_patch<false>());
   CALL_SUBTEST_4(test_multithread_volume_patch<true>());

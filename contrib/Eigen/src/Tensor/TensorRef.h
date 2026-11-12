@@ -381,6 +381,11 @@ struct TensorEvaluator<const TensorRef<Derived>, Device> {
 
   EIGEN_STRONG_INLINE void cleanup() {}
 
+  // The cost of the evaluator behind the reference is not known here; charge one coefficient load.
+  EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE TensorOpCost costPerCoeff(bool /*vectorized*/) const {
+    return TensorOpCost(sizeof(CoeffReturnType), 0, 0);
+  }
+
   EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE CoeffReturnType coeff(Index index) const { return m_ref.coeff(index); }
 
   EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE Scalar& coeffRef(Index index) { return m_ref.coeffRef(index); }
