@@ -256,6 +256,40 @@ void check_sparse_inverse() {
   VERIFY_IS_APPROX(scaled_before_view, view_before_scaled);
 }
 
+// The Takahashi recurrence uses bilinear (unconjugated) sums, so this needs entries with nonzero imaginary parts to
+// tell a conjugated dot product from the right one.
+template <typename Scalar>
+void check_sparse_inverse_random_entries() {
+  using RealScalar = typename NumTraits<Scalar>::Real;
+  using MatrixType = SparseMatrix<Scalar>;
+  const Index n = 40;
+
+  std::vector<Triplet<Scalar> > triplets;
+  for (Index i = 0; i < n; ++i) {
+    triplets.emplace_back(i, i, Scalar(RealScalar(8)) + internal::random<Scalar>());
+    for (int k = 0; k < 4; ++k) {
+      const Index j = internal::random<Index>(0, n - 1);
+      if (j != i) triplets.emplace_back(i, j, internal::random<Scalar>());
+    }
+    if (i + 1 < n) triplets.emplace_back(i, i + 1, internal::random<Scalar>());
+  }
+  MatrixType A(n, n);
+  A.setFromTriplets(triplets.begin(), triplets.end());
+
+  const MatrixType sparseInv = SparseInverse<Scalar>().compute(A).inverse();
+  const Matrix<Scalar, Dynamic, Dynamic> inv = Matrix<Scalar, Dynamic, Dynamic>(A).inverse();
+
+  VERIFY_IS_EQUAL(sparseInv.rows(), n);
+  VERIFY(sparseInv.nonZeros() >= A.nonZeros());
+  const RealScalar tolerance =
+      RealScalar(64) * RealScalar(n) * NumTraits<Scalar>::epsilon() * inv.cwiseAbs().maxCoeff();
+  for (Index j = 0; j < sparseInv.outerSize(); ++j) {
+    for (typename MatrixType::InnerIterator it(sparseInv, j); it; ++it) {
+      VERIFY(numext::abs(it.value() - inv(it.row(), it.col())) <= tolerance);
+    }
+  }
+}
+
 EIGEN_DECLARE_TEST(sparse_extra) {
   for (int i = 0; i < g_repeat; i++) {
     int s = Eigen::internal::random<int>(1, 50);
@@ -292,6 +326,9 @@ EIGEN_DECLARE_TEST(sparse_extra) {
     CALL_SUBTEST_5((check_marketio_vector<Matrix<std::complex<double>, Dynamic, 1> >()));
 
     CALL_SUBTEST_6((check_sparse_inverse<double>()));
+    CALL_SUBTEST_6((check_sparse_inverse_random_entries<double>()));
+    CALL_SUBTEST_6((check_sparse_inverse_random_entries<std::complex<double> >()));
+    CALL_SUBTEST_6((check_sparse_inverse_random_entries<std::complex<float> >()));
 
     CALL_SUBTEST_7((check_random_setter_target_modes<SparseMatrix<double, ColMajor, int> >()));
     CALL_SUBTEST_7((check_random_setter_target_modes<SparseMatrix<double, RowMajor, int> >()));
