@@ -164,8 +164,6 @@ void check_sparse_solving(Solver& solver, const typename Solver::MatrixType& A, 
   }
 }
 
-#endif  // EIGEN_TEST_SPARSE_SOLVER_H
-
 // specialization of generic check_sparse_solving for SuperLU in order to also test adjoint and transpose solves
 template <typename Scalar, typename Rhs, typename DenseMat, typename DenseRhs>
 void check_sparse_solving(Eigen::SparseLU<Eigen::SparseMatrix<Scalar>>& solver,
@@ -852,3 +850,5 @@ void check_sparse_leastsquare_solving(Solver& solver) {
     }
   }
 }
+
+#endif  // EIGEN_TEST_SPARSE_SOLVER_H
