@@ -1259,6 +1259,7 @@ void test_multithread_zero_dim_contraction() {
   tensor_test::test_zero_dim_contraction_multidims<DataLayout, float>(assign);
   tensor_test::test_zero_dim_contraction_outer_zeros<DataLayout, float>(assign);
   tensor_test::test_zero_dim_contraction_output_kernel<DataLayout, float>(assign);
+  tensor_test::test_rank0_operand_contraction<DataLayout>(assign);
 }
 
 EIGEN_DECLARE_TEST(tensor_thread_pool) {
