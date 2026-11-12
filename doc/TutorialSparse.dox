@@ -293,6 +293,7 @@ dm2 = sm1.selfadjointView<Lower>() * dm1;        // if only the lower part of sm
 sm3 = sm1 * sm2;
 sm3 = 4 * sm1.adjoint() * sm2;
     \endcode
+    The result is compressed and its inner indices are sorted. Its storage is grown while the product is computed and is not shrunk afterwards, so `sm3` can hold more capacity than `sm3.nonZeros()` entries. A copy of `sm3` holds exactly its entries.
     The second algorithm prunes on the fly the explicit zeros, or the values smaller than a given threshold. It is enabled and controlled through the `prune()` functions:
     \code
 sm3 = (sm1 * sm2).pruned();                  // removes numerical zeros

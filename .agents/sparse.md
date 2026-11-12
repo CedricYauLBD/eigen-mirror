@@ -69,8 +69,9 @@ into a sparse destination. So `Q`, unlike `R`, comes out sorted.
   replacing them. All four take an optional functor for combining duplicates; the default sums them.
 - `insert()` requires that the entry not already exist. Use `coeffRef()` when it might exist. Before inserting in random
   order, call `reserve(const SizesType&)`: the sequential fast path applies only when outer indices increase.
-- The sparse-sparse product selectors keep the result sorted on purpose. They choose between inserting in sorted order
-  and an unsorted pass followed by a transpose round-trip, which sorts as a side effect
+- The sparse-sparse product selectors keep the result sorted on purpose. Six of the eight combinations of storage
+  orders run a kernel that builds each inner vector sorted. When both operands have the storage order that the result
+  lacks, an unsorted kernel runs and the storage-order change of the result sorts it
   ([`ConservativeSparseSparseProduct.h`](../Eigen/src/SparseCore/ConservativeSparseSparseProduct.h)). A new product,
   permutation, or assembly path must also leave the indices sorted. `sortInnerIndices()` and `innerIndicesAreSorted()`
   on `SparseCompressedBase` are the tools for this. Check `innerIndicesAreSorted()` in a test, not only in reasoning.
@@ -88,7 +89,9 @@ tolerance. So the two produce different patterns from the same operands, and a t
 does not transfer to the other.
 
 Neither product reserves the exact result size in advance. The conservative product starts from the heuristic
-`nonZerosEstimate()` sum, documented at its definition, and grows or over-allocates from there.
+`nonZerosEstimate()` sum, documented at its definition, and grows from there by doubling. It does not shrink the
+storage afterwards, so the result of `C = A * B` can hold more capacity than `C.nonZeros()` entries. Do not assert that
+`data().allocatedSize()` equals `nonZeros()` after a product.
 
 Threaded SpMV is opt-in: [`Eigen/SparseCore`](../Eigen/SparseCore) includes `ThreadedSparseProduct.h` and
 `Eigen/ThreadPool` only when `EIGEN_USE_THREADS` is defined. Its tests are in `test/sparse_threaded_product.cpp`, and
