@@ -144,9 +144,18 @@ EIGEN_STRONG_INLINE Packet2cf ploadu<Packet2cf>(const std::complex<float>* from)
 
 template <>
 EIGEN_STRONG_INLINE Packet2cf pset1<Packet2cf>(const std::complex<float>& from) {
+#if EIGEN_GCC15_SLP_BUG && defined(EIGEN_VECTORIZE_SSE3)
+  // With FMA (which implies SSE3), GCC 15.1/15.2 miscompile _mm_set_ps(im, re, im, re) when from is a complex product
+  // computed in the same function, e.g. Matrix2cf v * v.inverse(); see EIGEN_GCC15_SLP_BUG. Broadcasting the complex as
+  // one 64-bit element (a single movddup) keeps re and im out of the SLP group. _mm_loadl_epi64 loads through __m128i,
+  // which is __may_alias__.
+  const __m128i lo64 = _mm_loadl_epi64(reinterpret_cast<const __m128i*>(&from));
+  return Packet2cf(_mm_castpd_ps(_mm_movedup_pd(_mm_castsi128_pd(lo64))));
+#else
   const float re = std::real(from);
   const float im = std::imag(from);
   return Packet2cf(_mm_set_ps(im, re, im, re));
+#endif
 }
 
 template <>

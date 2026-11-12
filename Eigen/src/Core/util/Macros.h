@@ -958,6 +958,18 @@
 #endif
 #endif
 
+// GCC 15.1 and 15.2 SLP-vectorize some code wrongly; GCC 15.3 and 16 are correct. One defect is GCC PR
+// tree-optimization/124802, fixed for 15.3 by https://gcc.gnu.org/g:8d8e8cd6fbed9029e996a8d7298aa82fd453345e: with FMA,
+// the lanes {re, im, re, im} of one complex product re = a0*b0 - a1*b1, im = a0*b1 + a1*b0 come out as
+// {p0*p0 - p1, ...}, p0 = a0*b0, p1 = a1*b1. MinGW's GCC 15.2 miscompiles the TRMV of #3214 too, but
+// EIGEN_COMP_GNUC_STRICT leaves MinGW out.
+#if (EIGEN_COMP_GNUC_STRICT || (EIGEN_COMP_MINGW && !EIGEN_COMP_CLANG)) && EIGEN_COMP_GNUC >= 1500 && \
+    EIGEN_COMP_GNUC < 1530
+#define EIGEN_GCC15_SLP_BUG 1
+#else
+#define EIGEN_GCC15_SLP_BUG 0
+#endif
+
 #ifndef EIGEN_DONT_INLINE
 #if EIGEN_COMP_GNUC
 #define EIGEN_DONT_INLINE __attribute__((noinline))
