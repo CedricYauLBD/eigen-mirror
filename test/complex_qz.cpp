@@ -33,24 +33,16 @@ void generate_random_matrix_pair(const Index dim, MatrixType& A, MatrixType& B) 
 
 template <typename MatrixType>
 void complex_qz(const MatrixType& A, const MatrixType& B) {
-  using std::abs;
   const Index dim = A.rows();
   ComplexQZ<MatrixType> qz(A, B);
   VERIFY_IS_EQUAL(qz.info(), Success);
   auto T = qz.matrixT(), S = qz.matrixS();
+  // S and T are documented as upper triangular: the strictly lower triangles must be exactly zero, not merely O(eps).
   bool is_all_zero_T = true, is_all_zero_S = true;
-  using RealScalar = typename MatrixType::RealScalar;
-  RealScalar tol = dim * 10 * NumTraits<RealScalar>::epsilon();
   for (Index j = 0; j < dim; j++) {
     for (Index i = j + 1; i < dim; i++) {
-      if (std::abs(T(i, j)) > tol) {
-        std::cerr << std::abs(T(i, j)) << std::endl;
-        is_all_zero_T = false;
-      }
-      if (std::abs(S(i, j)) > tol) {
-        std::cerr << std::abs(S(i, j)) << std::endl;
-        is_all_zero_S = false;
-      }
+      if (!numext::is_exactly_zero(T(i, j))) is_all_zero_T = false;
+      if (!numext::is_exactly_zero(S(i, j))) is_all_zero_S = false;
     }
   }
   VERIFY_IS_EQUAL(is_all_zero_T, true);
