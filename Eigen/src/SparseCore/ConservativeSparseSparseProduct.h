@@ -18,9 +18,9 @@ namespace Eigen {
 
 namespace internal {
 
+// Computes res = lhs * rhs. The inner vectors of res are not sorted.
 template <typename Lhs, typename Rhs, typename ResultType, bool ReverseProduct = false>
-static void conservative_sparse_sparse_product_impl(const Lhs& lhs, const Rhs& rhs, ResultType& res,
-                                                    bool sortedInsertion = false) {
+static void conservative_sparse_sparse_product_impl(const Lhs& lhs, const Rhs& rhs, ResultType& res) {
   using LhsScalar = typename remove_all_t<Lhs>::Scalar;
   using RhsScalar = typename remove_all_t<Rhs>::Scalar;
   using ResScalar = typename remove_all_t<ResultType>::Scalar;
@@ -69,38 +69,10 @@ static void conservative_sparse_sparse_product_impl(const Lhs& lhs, const Rhs& r
           product.accumulate(values[i], x, y);
       }
     }
-    if (!sortedInsertion) {
-      // unordered insertion
-      for (Index k = 0; k < nnz; ++k) {
-        Index i = indices[k];
-        res.insertBackByOuterInnerUnordered(j, i) = values[i];
-        mask[i] = false;
-      }
-    } else {
-      // alternative ordered insertion code:
-      const Index t200 = rows / 11;  // 11 == (log2(200)*1.39)
-      const Index t = (rows * 100) / 139;
-
-      // if the result is sparse enough => use a quick sort
-      // otherwise => loop through the entire vector
-      // In order to avoid to perform an expensive log2 when the
-      // result is clearly very sparse we use a linear bound up to 200.
-      if ((nnz < 200 && nnz < t200) || nnz * numext::log2(int(nnz)) < t) {
-        if (nnz > 1) std::sort(indices, indices + nnz);
-        for (Index k = 0; k < nnz; ++k) {
-          Index i = indices[k];
-          res.insertBackByOuterInner(j, i) = values[i];
-          mask[i] = false;
-        }
-      } else {
-        // dense path
-        for (Index i = 0; i < rows; ++i) {
-          if (mask[i]) {
-            mask[i] = false;
-            res.insertBackByOuterInner(j, i) = values[i];
-          }
-        }
-      }
+    for (Index k = 0; k < nnz; ++k) {
+      Index i = indices[k];
+      res.insertBackByOuterInnerUnordered(j, i) = values[i];
+      mask[i] = false;
     }
   }
   res.finalize();
@@ -122,6 +94,8 @@ static void conservative_sparse_sparse_product_impl(const Lhs& lhs, const Rhs& r
 //
 // A vector is marked unless the previous one had at least kUnmarkedMin distinct indices, with at most two products
 // each; the first one is not marked. The marker is allocated when the first vector is marked.
+//
+// The storage of res grows by doubling and is not shrunk at the end, so res can hold more capacity than entries.
 template <typename Lhs, typename Rhs, typename ResultType, bool ReverseProduct = false>
 static void conservative_sparse_sparse_product_sorted_impl(const Lhs& lhs, const Rhs& rhs, ResultType& res) {
   using LhsScalar = typename remove_all_t<Lhs>::Scalar;
@@ -296,7 +270,7 @@ template <typename Lhs, typename Rhs, typename ResultType,
           int ResStorageOrder = (traits<ResultType>::Flags & RowMajorBit) ? RowMajor : ColMajor>
 struct conservative_sparse_sparse_product_selector;
 
-// The hash kernel yields sorted vectors in the storage order of its operands, so each selector below converts at
+// The sorted kernel yields sorted vectors in the storage order of its operands, so each selector below converts at
 // most one operand. When both operands have the storage order the result lacks, the unsorted kernel runs and the
 // storage-order change of the result sorts it.
 template <typename Lhs, typename Rhs, typename ResultType>

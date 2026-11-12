@@ -390,7 +390,8 @@ Index split_into_buckets(const StorageIndex* srcIndices, Scalar* srcValues, Inde
 //
 // A bucket is sorted by insertion. One with more than kBucketMax entries holds a cluster, which a hash over all the
 // buckets could not spread. It goes through a direct table if it is dense in its own range, and is otherwise split
-// again over that range, so the work stays linear in its size.
+// again over that range. A split has at least two buckets, each with about half of the range or less, so n entries
+// cost O(n d) for d nested splits, d <= log2(hi - lo); d is 1 unless clusters lie within clusters.
 template <typename Scalar, typename StorageIndex>
 Index merge_buckets(StorageIndex* bucketIndices, Scalar* bucketValues, StorageIndex* splitIndices, Scalar* splitValues,
                     inner_sort_workspace<Scalar, StorageIndex>& workspace, Index base, Index buckets,
