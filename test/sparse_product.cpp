@@ -1375,7 +1375,7 @@ void sparse_product_large() {
       {400, 400, 200, 60, 60, Scattered},    // 3600 products on 400 rows: marked, sorted through a direct table
       {40000, 300, 200, 100, 30, Pooled},    // 3000 products on 900 scattered rows: marked, sorted in buckets
       {5000, 500, 500, 20, 2, Run},          // two runs of 20: marked, then in order or sorted by insertion
-      {20000, 300, 300, 40, 1, Run},         // one run of 40: marked and already sorted
+      {20000, 300, 100, 40, 1, Run},         // one run of 40: marked and already sorted; few rhs entries
   };
   for (const Shape& shape : shapes) {
     SparseMatrix<double> a = random_matrix(shape.rows, shape.mid, shape.lhsPerColumn, shape.pattern);

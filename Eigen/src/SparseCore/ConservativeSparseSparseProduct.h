@@ -143,11 +143,16 @@ static void conservative_sparse_sparse_product_sorted_impl(const Lhs& lhs, const
   evaluator<Lhs> lhsEval(lhs);
   evaluator<Rhs> rhsEval(rhs);
 
-  // The size and the index range of each lhs vector bound those of each result vector.
+  // The size and the index range of each lhs vector bound those of each result vector. A product with few rhs
+  // entries must not cost a pass over the whole lhs, so they are found when a vector is first used, unless the rhs
+  // has an entry per lhs vector or more: then one pass in storage order is faster than first uses in rhs order.
   ei_declare_aligned_stack_constructed_variable(Index, lhsCount, mid, 0);
   ei_declare_aligned_stack_constructed_variable(StorageIndex, lhsLo, mid, 0);
   ei_declare_aligned_stack_constructed_variable(StorageIndex, lhsHi, mid, 0);
-  for (Index k = 0; k < mid; ++k) {
+  const bool scanAll = rhsEval.nonZerosEstimate() >= mid;
+  ei_declare_aligned_stack_constructed_variable(bool, lhsKnown, scanAll ? 0 : mid, 0);
+  if (!scanAll) std::fill_n(lhsKnown, mid, false);
+  auto scan_lhs = [&](Index k) {
     Index count = 0;
     StorageIndex lo = NumTraits<StorageIndex>::highest(), hi = 0;
     for (LhsIterator lhsIt(lhsEval, k); lhsIt; ++lhsIt, ++count) {
@@ -157,7 +162,16 @@ static void conservative_sparse_sparse_product_sorted_impl(const Lhs& lhs, const
     lhsCount[k] = count;
     lhsLo[k] = lo;
     lhsHi[k] = hi;
-  }
+  };
+  if (scanAll)
+    for (Index k = 0; k < mid; ++k) scan_lhs(k);
+  auto lhs_count = [&](Index k) {
+    if (!scanAll && !lhsKnown[k]) {
+      scan_lhs(k);
+      lhsKnown[k] = true;
+    }
+    return lhsCount[k];
+  };
 
   res.setZero();
   res.data().reserve(lhsEval.nonZerosEstimate() + rhsEval.nonZerosEstimate());
@@ -173,7 +187,7 @@ static void conservative_sparse_sparse_product_sorted_impl(const Lhs& lhs, const
     Index start = nnz;
     outer[j] = convert_index<StorageIndex>(start);
     Index maxKeys = 0;
-    for (RhsIterator rhsIt(rhsEval, j); rhsIt; ++rhsIt) maxKeys += lhsCount[rhsIt.index()];
+    for (RhsIterator rhsIt(rhsEval, j); rhsIt; ++rhsIt) maxKeys += lhs_count(rhsIt.index());
     if (maxKeys == 0) continue;
 
     StorageIndex lo = NumTraits<StorageIndex>::highest(), hi = 0;
