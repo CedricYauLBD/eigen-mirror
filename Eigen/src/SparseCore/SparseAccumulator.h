@@ -372,43 +372,27 @@ Index prune_inner_vector(StorageIndex* indices, Scalar* values, Index n, const K
 }
 
 // Builds the inner vectors of a compressed sparse matrix one after the other in its storage, each as a sum of terms
-// with sorted indices and without the entries that a predicate rejects. A term is a sparse vector; the terms of a
-// sparse product are the scaled vectors of the left operand.
+// with sorted indices and without the entries a predicate rejects. A term is a sparse vector. The storage grows by
+// doubling and is not shrunk.
 //
-// Terms describes one sum:
-//   Index count() const;                                   the number of terms
-//   Index maxEntries() const;                              the number of entries of all terms together
-//   void range(StorageIndex& lo, StorageIndex& hi) const;  the lowest and highest index, if maxEntries() > 0
-//   Term term(Index t) const;                              term t, for t < 2
-//   template <typename F> void forEachTerm(const F& f) const;   f(Term) for each term in order
-// and Term iterates over the entries of one term:
-//   explicit operator bool() const; Term& operator++(); StorageIndex index() const;
-//   void assignTo(Scalar& value) const; void addTo(Scalar& value) const;
+// Terms describes one sum, Term iterates over the entries of one term:
+//   Terms: Index count(), Index maxEntries(), void range(StorageIndex& lo, StorageIndex& hi), Term term(Index t) for
+//          t < 2, void forEachTerm(const F& f) calling f(Term) in order
+//   Term:  explicit operator bool(), operator++(), StorageIndex index(), void assignTo(Scalar&), void addTo(Scalar&)
 //
-// A sum of one or two terms is merged if their indices are strictly increasing: one term needs no accumulator and two
-// merge in order. After the direct referencing of Parger et al., "spECK", PPoPP 2020, doi:10.1145/3332466.3374521,
-// and the row merging of Gremse et al., SIAM J. Sci. Comput. 37(1), 2015, doi:10.1137/130948811. Any other sum is
-// built in one of three ways:
+// A sum of one or two terms with strictly increasing indices is merged: one term needs no accumulator and two merge
+// in order. After the direct referencing of Parger et al., "spECK", PPoPP 2020, doi:10.1145/3332466.3374521, and the
+// row merging of Gremse et al., SIAM J. Sci. Comput. 37(1), 2015, doi:10.1137/130948811. Any other sum is
+// - marked: a marker of the inner dimension locates each index in the vector, so an entry costs one lookup however
+//   many terms it sums, and the distinct entries are sorted afterwards. For short vectors and repeated indices.
+// - direct: a direct_accumulator sums the entries. For long vectors that are dense in their range.
+// - appended: each entry goes to the bucket of its index and the buckets are sorted and summed (merge_buckets). For
+//   long vectors that are sparse in their range.
+// A vector is marked unless the previous one had at least kUnmarkedMin distinct indices with at most two entries
+// each; the first is not marked. A vector that would be marked is direct if hi - lo + 1 <= kDirectRatio * (distinct
+// indices of the previous vector): the table then replaces the sort, as the dense accumulation of spECK does.
 //
-// - Marked: a marker of the inner dimension locates each index in the vector being built, so an entry costs one
-//   lookup however many terms it sums; the distinct entries are sorted afterwards (sort_inner_vector), which is
-//   free when they arrive in order. This is the faster way for short vectors and for repeated indices.
-// - Direct: a direct_accumulator, which holds index i at slot i - lo, sums the entries, with no work proportional to
-//   the inner dimension. This is the faster way for long vectors that are dense in their range.
-// - Appended: every entry is written to the bucket of its index, in the order of arrival, and each bucket is then
-//   sorted and its equal indices summed (merge_buckets). The buckets split [lo, hi] evenly, so they follow one
-//   another in the result and a bucket's work is local to it. This is the faster way for long vectors that are
-//   sparse in their range.
-//
-// A vector is marked unless the previous one had at least kUnmarkedMin distinct indices, with at most two entries
-// each; the first one is not marked. The marker is allocated when the first vector is marked. A vector that would be
-// marked is direct instead if hi - lo + 1 <= kDirectRatio * (distinct indices of the previous vector): the table
-// then replaces the sort, as the dense accumulation of spECK does.
-//
-// The predicate sees the finished sum of each index, so a vector is pruned once it is complete, before the next one
-// starts behind it. sparse_product_keep_all compiles the pass out.
-//
-// The storage grows by doubling and is not shrunk, so it can hold more capacity than entries.
+// The predicate must see the finished sum of an index, so each vector is pruned once it is complete.
 template <typename Scalar, typename StorageIndex>
 class sparse_accumulator {
   using Storage = CompressedStorage<Scalar, StorageIndex>;
