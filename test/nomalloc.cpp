@@ -178,6 +178,18 @@ void selfadjoint_eigensolver_large_fixed_no_malloc() {
   VERIFY_IS_EQUAL(solver.info(), Eigen::Success);
 }
 
+// The temporary of a gemv-like product with a strided operand is a static buffer for fixed sizes, also when nothing
+// needs aligning (EIGEN_DONT_VECTORIZE, EIGEN_MAX_ALIGN_BYTES=0): the buffer is never null, which would fall back to
+// the allocator (here, with the stack limit at 0, the heap).
+void gemv_static_buffer() {
+  internal::gemv_static_vector_if<double, 4, 4, true> buffer;
+  VERIFY(buffer.data() != nullptr);
+  const Matrix4d m = Matrix4d::Random();
+  Matrix4d r = Matrix4d::Zero();
+  r.col(0).noalias() -= m.adjoint().template triangularView<Upper>() * m.row(0).adjoint();
+  r.col(0).noalias() -= m.adjoint().template selfadjointView<Upper>() * m.row(0).adjoint();
+}
+
 // A rank-2 update and a selfadjoint matrix-vector product with unit-stride operands read them in place: no packing
 // buffer is needed, also where the temporaries are heap allocated (EIGEN_NO_ALLOCA) and over-aligned.
 template <typename Scalar>
@@ -286,6 +298,7 @@ EIGEN_DECLARE_TEST(nomalloc) {
   CALL_SUBTEST_10(selfadjoint_eigensolver_large_fixed_no_malloc<double>());
 
   CALL_SUBTEST_5(test_zerosized());
+  CALL_SUBTEST_13(gemv_static_buffer());
   CALL_SUBTEST_12(selfadjoint_direct_operands_no_malloc<float>());
   CALL_SUBTEST_12(selfadjoint_direct_operands_no_malloc<double>());
   CALL_SUBTEST_12(selfadjoint_direct_operands_no_malloc<std::complex<float>>());
