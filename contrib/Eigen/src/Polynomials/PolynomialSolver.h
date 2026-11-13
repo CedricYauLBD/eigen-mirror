@@ -291,10 +291,10 @@ class PolynomialSolverBase {
  *
  * The eigenvalues of the balanced companion matrix of the polynomial give first approximations of
  * the roots. Ehrlich-Aberth iterations on the polynomial itself target a residual within the rounding
- * error of evaluation, with a finite sweep limit and an initial-estimate fallback for unfinished
- * iterates whose residual increased. The roots of a real polynomial are returned as real numbers or exact
- * conjugate pairs. A root of multiplicity \f$ m \f$ can only be located to about
- * \f$ \varepsilon^{1/m} \f$.
+ * error of evaluation, with a finite sweep limit and an initial-estimate fallback for iterates whose
+ * residual increased, or that would leave Cauchy's bound on the root moduli. Coincident estimates keep their
+ * eigenvalues. The roots of a real polynomial are returned as real numbers or exact conjugate pairs. A root of
+ * multiplicity \f$ m \f$ can only be located to about \f$ \varepsilon^{1/m} \f$.
  */
 template <typename Scalar_, int Deg_>
 class PolynomialSolver : public PolynomialSolverBase<Scalar_, Deg_> {
@@ -392,7 +392,11 @@ class PolynomialSolver : public PolynomialSolverBase<Scalar_, Deg_> {
         }
       }
     }
+    // Cauchy's bound on the moduli of the roots: |z| <= 1 + max_k |a_k / a_n|.
+    const RealScalar rootBound = (RealScalar(1) + (poly.head(n).cwiseAbs() / numext::abs(poly[n])).maxCoeff()) *
+                                 (RealScalar(1) + RealScalar(4) * eps);  // margin for the rounding of the sum
     Array<bool, Deg_, 1> active = Array<bool, Deg_, 1>::Constant(n, true);
+    Array<bool, Deg_, 1> stepped = Array<bool, Deg_, 1>::Constant(n, false);
     RootType value, derivative;
     for (int sweep = 0; sweep < maxSweeps; ++sweep) {
       bool moving = false;
@@ -413,25 +417,39 @@ class PolynomialSolver : public PolynomialSolverBase<Scalar_, Deg_> {
           active[i] = false;
           continue;
         }
+        // The repulsion sum has no term for a coincident estimate (the zero eigenvalues of a polynomial with a tiny
+        // cluster of roots), so the step would no longer separate the iterates: the denominator can vanish or the
+        // iterate can land on another root. Such an estimate keeps its eigenvalue, as does a pole of the correction.
         RootType repulsion(0);
+        bool coincident = false;
         for (Index j = 0; j < n; ++j) {
           const RootType gap = z - m_roots[j];
-          if (j != i && gap != RootType(0)) repulsion += RootType(1) / gap;
+          if (j == i) continue;
+          if (gap == RootType(0)) {
+            coincident = true;
+            break;
+          }
+          repulsion += RootType(1) / gap;
         }
         const RootType denominator = RootType(1) - newton * repulsion;
-        const RootType refined = z - (denominator == RootType(0) ? newton : RootType(newton / denominator));
-        if ((numext::isfinite)(numext::abs(refined))) {
+        if (coincident || denominator == RootType(0)) {
+          active[i] = false;
+          continue;
+        }
+        const RootType refined = z - RootType(newton / denominator);
+        if ((numext::isfinite)(numext::abs(refined)) && !(numext::abs(refined) > rootBound)) {
           m_roots[i] = refined;
+          stepped[i] = true;
           moving = true;
         } else {
           active[i] = false;
         }
       }
-      if (!moving) return;
+      if (!moving) break;
     }
-    // Keep improvements to slowly converging multiple roots, but reject a larger residual at the sweep cap.
+    // Keep improvements, but never return an estimate whose residual is larger than that of its eigenvalue.
     for (Index i = 0; i < n; ++i) {
-      if (!active[i]) continue;
+      if (!stepped[i]) continue;
       RootType initialValue;
       evaluate(poly, m_roots[i], value, derivative, false);
       evaluate(poly, m_eigenSolver.eigenvalues()[i], initialValue, derivative, false);
