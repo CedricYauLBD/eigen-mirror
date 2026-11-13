@@ -687,7 +687,7 @@ EIGEN_DEVICE_FUNC inline typename MatrixBase<Derived>::PlainObject quaternion_no
   using Scalar = typename traits<Derived>::Scalar;
   const typename MatrixBase<Derived>::PlainObject x = v;
   const Scalar n2 = x.squaredNorm();
-  if (n2 > (numext::numeric_limits<Scalar>::min)() && n2 <= Scalar(NumTraits<Scalar>::highest())) {
+  if (n2 > (numext::numeric_limits<Scalar>::min)() && n2 <= NumTraits<Scalar>::highest()) {
     return x / numext::sqrt(n2);
   }
   return x.stableNormalized();
