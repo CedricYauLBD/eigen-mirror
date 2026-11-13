@@ -439,6 +439,25 @@ void polynomialsolver_separated_roots() {
   }
 }
 
+// When the companion matrix cannot be formed (|a_k / a_n| overflows) or the eigenvalue computation fails, the
+// solver reports one NaN root per degree instead of an empty root vector.
+template <typename Scalar>
+void polynomialsolver_companion_failure() {
+  using Real = typename NumTraits<Scalar>::Real;
+  Matrix<Scalar, 3, 1>
+      fixed_poly;  // finite, with roots of modulus sqrt(2 highest), but a_0 / a_2 = 2 highest overflows
+  fixed_poly << Scalar(NumTraits<Real>::highest() / Real(2)), Scalar(0), Scalar(Real(0.25));
+  PolynomialSolver<Scalar, 2> fixed_solver(fixed_poly);
+  VERIFY_IS_EQUAL(fixed_solver.roots().size(), 2);
+  for (Index i = 0; i < 2; ++i) VERIFY((numext::isnan)(fixed_solver.roots()[i]));
+
+  Matrix<Scalar, Dynamic, 1> poly(4);
+  poly << Scalar(1), Scalar(NumTraits<Real>::quiet_NaN()), Scalar(2), Scalar(1);
+  PolynomialSolver<Scalar, Dynamic> solver(poly);
+  VERIFY_IS_EQUAL(solver.roots().size(), 3);
+  for (Index i = 0; i < 3; ++i) VERIFY((numext::isnan)(solver.roots()[i]));
+}
+
 template <typename Polynomial, typename Roots>
 void polynomialsolver_verify_root_set(const Polynomial& poly, const Roots& expected) {
   using Scalar = typename Polynomial::Scalar;
@@ -541,6 +560,8 @@ EIGEN_DECLARE_TEST(polynomialsolver) {
   CALL_SUBTEST_15(polynomialsolver_zero_cluster<>());
   CALL_SUBTEST_15(polynomialsolver_root_bound<>());
   CALL_SUBTEST_15(polynomialsolver_separated_roots<>());
+  CALL_SUBTEST_15(polynomialsolver_companion_failure<double>());
+  CALL_SUBTEST_15(polynomialsolver_companion_failure<std::complex<double>>());
   CALL_SUBTEST_16(polynomialsolver_real_part_is_another_root<float>());
   CALL_SUBTEST_23(polynomialsolver_real_part_is_another_root<double>());
   CALL_SUBTEST_24(polynomialsolver_real_part_is_another_root<std::complex<double>>());

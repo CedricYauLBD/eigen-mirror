@@ -319,7 +319,12 @@ class PolynomialSolver : public PolynomialSolverBase<Scalar_, Deg_> {
       internal::companion<Scalar, Deg_> companion(poly);
       companion.balance();
       m_eigenSolver.compute(companion.denseMatrix());
-      eigen_assert(m_eigenSolver.info() == Eigen::Success);
+      if (m_eigenSolver.info() != Eigen::Success) {
+        // A companion entry a_k / a_n that overflows, or a non-finite coefficient: one NaN root per degree.
+        m_roots.setConstant(poly.size() - 1,
+                            RootType(NumTraits<RealScalar>::quiet_NaN(), NumTraits<RealScalar>::quiet_NaN()));
+        return;
+      }
       m_roots = m_eigenSolver.eigenvalues();
       // Uniform coefficient scaling must not overflow or underflow the refinement's Horner recurrences.
       const RealScalar scale = poly.realView().cwiseAbs().maxCoeff();
