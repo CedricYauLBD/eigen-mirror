@@ -515,6 +515,39 @@ void sort_inner_vector(StorageIndex* indices, Scalar* values, Index n, StorageIn
                 workspace.split.valuePtr(), workspace, 0, buckets, indices, values, 0);
 }
 
+// The entries a sparse product stores: all of them, or those with !(|value| <= tolerance), which keeps a NaN.
+struct sparse_product_keep_all {
+  template <typename Scalar>
+  constexpr bool operator()(const Scalar&) const {
+    return true;
+  }
+};
+template <typename RealScalar>
+struct sparse_product_keep_above {
+  RealScalar tolerance;
+  template <typename Scalar>
+  bool operator()(const Scalar& value) const {
+    return !(numext::abs(value) <= tolerance);
+  }
+};
+
+// Removes the entries (indices[k], values[k]), k < n, whose value keep rejects, keeps the order of the others and
+// returns their number. With a marker, sets marker[i] = -1 for every index i at or after the first removed entry.
+template <typename Scalar, typename StorageIndex, typename Keep>
+Index prune_inner_vector(StorageIndex* indices, Scalar* values, Index n, const Keep& keep,
+                         StorageIndex* marker = nullptr) {
+  Index kept = 0;
+  while (kept < n && keep(values[kept])) ++kept;
+  for (Index k = kept; k < n; ++k) {
+    if (marker != nullptr) marker[indices[k]] = StorageIndex(-1);
+    if (!keep(values[k])) continue;
+    indices[kept] = indices[k];
+    values[kept] = move_if_assignable(values[k]);
+    ++kept;
+  }
+  return kept;
+}
+
 }  // end namespace internal
 
 /** \ingroup SparseCore_Module

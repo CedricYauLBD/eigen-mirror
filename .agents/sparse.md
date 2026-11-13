@@ -81,12 +81,20 @@ into a sparse destination. So `Q`, unlike `R`, comes out sorted.
 
 ## Products
 
-`A * B` on two sparse operands uses the conservative product; `(A * B).pruned()` selects the pruning product in
-[`SparseSparseProductWithPruning.h`](../Eigen/src/SparseCore/SparseSparseProductWithPruning.h) instead. The two
-differ in results, not only in speed. The conservative product stores every entry that the operands' sparsity patterns
-generate, even one whose sum cancels to exactly zero. The pruning product drops finished values at or below its
-tolerance. So the two produce different patterns from the same operands, and a test or benchmark written against one
-does not transfer to the other.
+`A * B` on two sparse operands uses the conservative product; `(A * B).pruned()` is the pruned product. Both run the
+kernels in [`ConservativeSparseSparseProduct.h`](../Eigen/src/SparseCore/ConservativeSparseSparseProduct.h), which
+take a `Keep` predicate over the finished value of each entry: `sparse_product_keep_all` for the conservative product,
+`sparse_product_keep_above` for the pruned one. The two differ in results. The conservative product stores every entry
+that the operands' sparsity patterns generate, even one whose sum cancels to exactly zero. The pruned product drops
+finished values at or below its tolerance. So the two produce different patterns from the same operands, and a test
+written against one does not transfer to the other.
+
+When you change where the predicate runs, apply it only to the finished sum of an index. A partial sum can be small
+while the final sum is large. `prune_inner_vector` therefore filters each inner vector once it is complete.
+
+When you remove entries from a vector that the marked path built, reset their markers. The marker holds positions in
+the result storage, so a stale marker at or past the new end of the vector makes the next vector add to a wrong entry.
+`prune_inner_vector` takes the marker for this, and `test/sparse_product.cpp` fails without the reset.
 
 Neither product reserves the exact result size in advance. The conservative product starts from the heuristic
 `nonZerosEstimate()` sum, documented at its definition, and grows from there by doubling. It does not shrink the

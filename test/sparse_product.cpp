@@ -604,10 +604,7 @@ void test_mixed_storage() {
   test_mixed_storage_imp<ColMajor, ColMajor, ColMajor>();
 }
 
-// The pruned sparse*sparse product accumulates each column into an AmbiVector,
-// which stores its coefficients either in a dense buffer or in a linked list of
-// (index, value) nodes depending on the estimated density. Both storage modes
-// must construct, move, and destroy the coefficients properly for
+// The pruned sparse*sparse product must construct, move, and destroy the coefficients properly for
 // non-trivially-copyable scalars (issue #2873).
 template <typename = void>
 void test_pruned_product_custom_scalar() {
@@ -615,8 +612,6 @@ void test_pruned_product_custom_scalar() {
   using DenseMat = Matrix<AnnoyingScalar, Dynamic, Dynamic>;
   int instances_before = AnnoyingScalar::instances;
   {
-    // Low density runs the AmbiVector in linked-list mode, high density in
-    // dense-buffer mode.
     for (double density : {0.02, 0.3}) {
       const Index n = 50;
       SpMat A(n, n), B(n, n);
@@ -630,8 +625,7 @@ void test_pruned_product_custom_scalar() {
       DenseMat refC = DenseMat(A).lazyProduct(DenseMat(B));
       VERIFY_IS_APPROX(DenseMat(C), refC);
     }
-    // A single dense column in a large matrix overflows the initial node
-    // capacity and exercises the linked-list reallocation path.
+    // A single long column in a large matrix.
     {
       const Index n = 1200;
       SpMat A(n, n), B(n, n);
@@ -648,284 +642,9 @@ void test_pruned_product_custom_scalar() {
   VERIFY_IS_EQUAL(AnnoyingScalar::instances, instances_before);
 }
 
-// setZero() drops the AmbiVector's whole linked list, and the pruned product
-// reaches it through init(), which drops the list too. Neither may abandon the
-// coefficients the dropped nodes own, and neither may leave a node behind for
-// the next coeffRef() to construct over.
+// A long vector whose lowest index arrives last.
 template <typename = void>
-void test_ambivector_discard_custom_scalar() {
-  using AmbiVec = internal::AmbiVector<AnnoyingScalar, int>;
-  const Index n = 32;
-  int instances_before = AnnoyingScalar::instances;
-  {
-    AmbiVec v(n);
-    for (int discard = 0; discard < 2; ++discard) {
-      v.init(IsSparse);
-      v.restart();
-      for (Index i = 0; i < n; i += 3) v.coeffRef(i) = AnnoyingScalar(float(i) + 1.0f);
-      VERIFY_IS_EQUAL(v.nonZeros(), (n + 2) / 3);
-
-      if (discard == 0)
-        v.setZero();
-      else
-        v.init(IsSparse);
-      VERIFY_IS_EQUAL(v.nonZeros(), 0);
-
-      // Reinserting must find storage no live node occupies.
-      v.restart();
-      v.coeffRef(1) = AnnoyingScalar(5.0f);
-      VERIFY_IS_APPROX(v.coeff(1), AnnoyingScalar(5.0f));
-      VERIFY_IS_APPROX(v.coeff(0), AnnoyingScalar(0.0f));
-    }
-  }
-  VERIFY_IS_EQUAL(AnnoyingScalar::instances, instances_before);
-}
-
-// resize() reuses its allocation whenever the new size still fits, and the
-// sub-vector bounds an iterator walks describe the size the vector had before.
-template <typename = void>
-void test_ambivector_resize_bounds() {
-  using AmbiVec = internal::AmbiVector<double, int>;
-  {
-    AmbiVec v(20);
-    v.init(IsDense);
-    v.setZero();
-    v.coeffRef(15) = 15.0;
-
-    // Shrinking below the coefficient just written: iteration must end at the
-    // new size rather than reaching a coefficient that is no longer part of the
-    // vector.
-    v.resize(10);
-    VERIFY_IS_EQUAL(v.size(), 10);
-    v.init(IsDense);
-    Index count = 0;
-    for (AmbiVec::Iterator it(v); it; ++it) {
-      VERIFY(it.index() < v.size());
-      ++count;
-    }
-    VERIFY_IS_EQUAL(count, 0);
-  }
-  {
-    // Growing within the spare capacity: iteration must reach the coefficients
-    // the new size added.
-    AmbiVec v(10);
-    v.init(IsDense);
-    v.setZero();
-    v.resize(20);
-    VERIFY_IS_EQUAL(v.size(), 20);
-    v.init(IsDense);
-    v.setZero();
-    v.coeffRef(19) = 19.0;
-    Index count = 0;
-    for (AmbiVec::Iterator it(v); it; ++it) {
-      VERIFY_IS_EQUAL(it.index(), 19);
-      VERIFY_IS_APPROX(it.value(), 19.0);
-      ++count;
-    }
-    VERIFY_IS_EQUAL(count, 1);
-  }
-}
-
-#if defined(EIGEN_EXCEPTIONS)
-namespace ambivector_throwing {
-struct scalar_exception {};
-
-// A scalar that counts its live instances and can be made to throw from the
-// constructor AmbiVector builds a node's coefficient with, or from relocating an
-// already stored coefficient when the list outgrows its capacity. Relocation is
-// keyed on a nonzero source value, which a freshly built node never has, so that
-// each flag selects exactly one of the two paths whether or not the compiler
-// elides the initialization of a node's coefficient from Scalar(0).
-struct ThrowingScalar {
-  static int live;
-  static bool throw_on_construction;
-  static bool throw_on_relocation;
-
-  float value;
-
-  ThrowingScalar() : value(0) { ++live; }
-  ThrowingScalar(int v) : value(float(v)) {
-    if (throw_on_construction) throw scalar_exception();
-    ++live;
-  }
-  ThrowingScalar(const ThrowingScalar& other) : value(other.value) {
-    if (throw_on_relocation && other.value != 0) throw scalar_exception();
-    ++live;
-  }
-  ThrowingScalar(ThrowingScalar&& other) {
-    if (throw_on_relocation && other.value != 0) throw scalar_exception();
-    value = other.value;
-    ++live;
-  }
-  ThrowingScalar& operator=(const ThrowingScalar& other) {
-    value = other.value;
-    return *this;
-  }
-  ThrowingScalar& operator=(ThrowingScalar&& other) {
-    value = other.value;
-    return *this;
-  }
-  ~ThrowingScalar() { --live; }
-};
-
-int ThrowingScalar::live = 0;
-bool ThrowingScalar::throw_on_construction = false;
-bool ThrowingScalar::throw_on_relocation = false;
-}  // namespace ambivector_throwing
-
-// A coefficient that fails to construct leaves no node: the count of live nodes
-// the destructor walks may not include it, and the vector must remain usable.
-template <typename = void>
-void test_ambivector_failed_insertion() {
-  using ambivector_throwing::ThrowingScalar;
-  using AmbiVec = internal::AmbiVector<ThrowingScalar, int>;
-  const int live_before = ThrowingScalar::live;
-  {
-    AmbiVec v(8);
-    v.init(IsSparse);
-    v.restart();
-
-    ThrowingScalar::throw_on_construction = true;
-    bool threw = false;
-    try {
-      v.coeffRef(0);
-    } catch (const ambivector_throwing::scalar_exception&) {
-      threw = true;
-    }
-    ThrowingScalar::throw_on_construction = false;
-    VERIFY(threw);
-    VERIFY_IS_EQUAL(v.nonZeros(), 0);
-
-    v.restart();
-    v.coeffRef(0) = ThrowingScalar(3);
-    v.coeffRef(4) = ThrowingScalar(4);
-    VERIFY_IS_EQUAL(v.nonZeros(), 2);
-
-    // The same for the two remaining insertion branches, which reach a node through the list
-    // rather than starting one: a new lowest index, and an index past the last node.
-    v.setZero();
-    v.restart();
-    v.coeffRef(5) = ThrowingScalar(5);
-
-    ThrowingScalar::throw_on_construction = true;
-    threw = false;
-    try {
-      v.coeffRef(0);
-    } catch (const ambivector_throwing::scalar_exception&) {
-      threw = true;
-    }
-    ThrowingScalar::throw_on_construction = false;
-    VERIFY(threw);
-    VERIFY_IS_EQUAL(v.nonZeros(), 1);
-
-    ThrowingScalar::throw_on_construction = true;
-    threw = false;
-    try {
-      v.coeffRef(7);
-    } catch (const ambivector_throwing::scalar_exception&) {
-      threw = true;
-    }
-    ThrowingScalar::throw_on_construction = false;
-    VERIFY(threw);
-    VERIFY_IS_EQUAL(v.nonZeros(), 1);
-
-    v.restart();
-    v.coeffRef(0) = ThrowingScalar(1);
-    v.coeffRef(7) = ThrowingScalar(7);
-    VERIFY_IS_EQUAL(v.nonZeros(), 3);
-  }
-  VERIFY_IS_EQUAL(ThrowingScalar::live, live_before);
-}
-
-// A throwing relocation must release the buffer it was relocating into and
-// leave the capacity describing the buffer the vector still owns, so that the
-// next insertion relocates again instead of writing past its end. The leak
-// itself shows up under a leak checker; the retry below is what fails when the
-// capacity has already been advanced.
-template <typename = void>
-void test_ambivector_failed_reallocation() {
-  using ambivector_throwing::ThrowingScalar;
-  using AmbiVec = internal::AmbiVector<ThrowingScalar, int>;
-  const int live_before = ThrowingScalar::live;
-  {
-    // Sized so that the initial node capacity is a fraction of the vector's own
-    // size, which is what makes the reallocation path reachable at all.
-    const Index n = 1200;
-    AmbiVec v(n);
-    v.init(IsSparse);
-    v.restart();
-
-    // Insert until the list has to grow, which is the first insertion that
-    // relocates an already stored coefficient and therefore the first that
-    // throws.
-    ThrowingScalar::throw_on_relocation = true;
-    Index inserted = 0;
-    bool threw = false;
-    while (!threw) {
-      VERIFY(inserted < n);
-      try {
-        // In C++14 mode, NVHPC 22.9 through at least 26.5 do not destroy the right-hand temporary if a combined
-        // assignment's coeffRef() throws.
-        ThrowingScalar& value = v.coeffRef(inserted);
-        value = ThrowingScalar(1);
-        ++inserted;
-      } catch (const ambivector_throwing::scalar_exception&) {
-        threw = true;
-      }
-    }
-    ThrowingScalar::throw_on_relocation = false;
-    VERIFY(inserted > 0);
-    VERIFY_IS_EQUAL(v.nonZeros(), inserted);
-
-    // Same insertion again, now relocating for real.
-    v.restart();
-    v.coeffRef(inserted) = ThrowingScalar(2);
-    VERIFY_IS_EQUAL(v.nonZeros(), inserted + 1);
-  }
-  VERIFY_IS_EQUAL(ThrowingScalar::live, live_before);
-}
-
-// An insertion at the front of a list that has filled its capacity must relocate the list first, not write a node
-// past its end. Descending indices make every insertion a front insertion. A write past the end is invisible
-// without a sanitizer, but the relocation it skips is not: it throws here.
-template <typename = void>
-void test_ambivector_front_insertion_relocates() {
-  using ambivector_throwing::ThrowingScalar;
-  using AmbiVec = internal::AmbiVector<ThrowingScalar, int>;
-  const int live_before = ThrowingScalar::live;
-  {
-    const Index n = 1200;  // a list capacity of a third of n
-    AmbiVec v(n);
-    v.init(IsSparse);
-    v.restart();
-
-    ThrowingScalar::throw_on_relocation = true;
-    Index inserted = 0;
-    bool threw = false;
-    while (!threw && inserted < n / 2) {
-      try {
-        ThrowingScalar& value = v.coeffRef(n - 1 - inserted);
-        value = ThrowingScalar(1);
-        ++inserted;
-      } catch (const ambivector_throwing::scalar_exception&) {
-        threw = true;
-      }
-    }
-    ThrowingScalar::throw_on_relocation = false;
-    VERIFY(threw);
-    VERIFY_IS_EQUAL(v.nonZeros(), inserted);
-
-    v.restart();
-    v.coeffRef(n - 1 - inserted) = ThrowingScalar(2);
-    VERIFY_IS_EQUAL(v.nonZeros(), inserted + 1);
-  }
-  VERIFY_IS_EQUAL(ThrowingScalar::live, live_before);
-}
-#endif  // EIGEN_EXCEPTIONS
-
-// A list that fills its initial capacity must grow before an insertion at its front.
-template <typename = void>
-void test_ambivector_front_insertion_growth() {
+void test_pruned_product_front_insertion() {
   const int n = 1000;
   SparseMatrix<double> A(n, 2), B(2, 100);
   for (int i = 1; i <= n / 2; ++i) A.insert(i, 0) = 1.0;
@@ -935,6 +654,31 @@ void test_ambivector_front_insertion_growth() {
   SparseMatrix<double> C = (A * B).pruned();
   VERIFY_IS_EQUAL(C.nonZeros(), n / 2 + 1);
   VERIFY_IS_APPROX(MatrixXd(C.toDense()), MatrixXd(A.toDense() * B.toDense()));
+}
+
+// Result vectors whose products arrive out of order and all cancel, between vectors that keep entries: an emptied
+// vector must leave nothing behind for the next one.
+template <typename = void>
+void test_pruned_product_cancelled_vector() {
+  SparseMatrix<double> A(12, 4), B(4, 5);
+  A.insert(5, 0) = 1.0;
+  A.insert(9, 0) = 1.0;
+  A.insert(2, 1) = 1.0;
+  A.insert(2, 2) = -1.0;
+  A.insert(5, 2) = -1.0;
+  A.insert(9, 2) = -1.0;
+  A.insert(9, 3) = 3.0;
+  A.insert(5, 3) = 2.0;
+  for (Index j : {0, 2, 3})
+    for (Index k = 0; k < 3; ++k) B.insert(k, j) = 1.0;
+  B.insert(0, 1) = 1.0;
+  B.insert(3, 1) = 1.0;
+  B.insert(3, 4) = 1.0;
+  B.insert(1, 4) = 1.0;
+  SparseMatrix<double> C = (A * B).pruned();
+  VERIFY_IS_EQUAL(C.innerIndicesAreSorted(), C.outerSize());
+  VERIFY_IS_EQUAL(C.nonZeros(), Index(5));
+  VERIFY_IS_EQUAL((MatrixXd(C) - MatrixXd(A) * MatrixXd(B)).norm(), 0.0);
 }
 
 template <typename = void>
@@ -1127,7 +871,7 @@ void test_sparse_diagonal_products() {
   }
 }
 
-// Pruned selects the pruning kernel and drops the entries whose product row or column is empty.
+// Pruned selects the pruned product and drops the entries whose product row or column is empty.
 template <bool Pruned, int LOrder, int ROrder, int DstOrder>
 void test_sparse_product_operand_order() {
   using Scalar = noncommutative_scalar::NoncommutingBlock;
@@ -1147,8 +891,8 @@ void test_sparse_product_operand_order() {
     SparseMatrix<Scalar, DstOrder> sparse(2, 2), publicSparse;
     Matrix<Scalar, Dynamic, Dynamic, DstOrder> dense;
     if (Pruned) {
-      internal::sparse_sparse_product_with_pruning_selector<decltype(lhs), decltype(rhs), decltype(sparse)>::run(
-          lhs, rhs, sparse, 0.0);
+      internal::conservative_sparse_sparse_product_selector<decltype(lhs), decltype(rhs), decltype(sparse)>::run(
+          lhs, rhs, sparse, internal::sparse_product_keep_above<double>{0.0});
       publicSparse = (lhs * rhs).pruned(Scalar(0), 0.0);
     } else {
       sparse = lhs * rhs;
@@ -1340,7 +1084,8 @@ void check_sparse_triangular_view_products_all_modes() {
 // rarely repeat go through a direct table if they are dense in their range, and are otherwise appended to buckets.
 // A bucket is sorted by insertion; one that a cluster overfills goes through a direct table or is split again. The
 // other vectors are marked and then sorted: already in order, by insertion, through a direct table, or in buckets.
-// The reference sums the same products through setFromTriplets.
+// The reference sums the same products through setFromTriplets. The entries are signed, so some sums cancel, and
+// the pruned product must drop exactly those at or below its tolerance on each of the paths.
 template <int LhsOrder, int RhsOrder, int ResOrder>
 void sparse_product_large() {
   using Triplets = std::vector<Triplet<double>>;
@@ -1357,7 +1102,8 @@ void sparse_product_large() {
         if (pattern == Run) i = (first + k) % rows;
         if (pattern == Window) i = (first + internal::random<Index>(0, 2999)) % rows;
         if (pattern == Pooled) i = ((j % 3) * 7919 + ((j * 37 + k * 3) % 300) * 127) % rows;
-        triplets.emplace_back(i, j, double(1 + (i + 3 * j + k) % 7));
+        Index v = (i + 3 * j + k) % 7 - 3;
+        triplets.emplace_back(i, j, double(v == 0 ? 4 : v));
       }
     }
     SparseMatrix<double> m(rows, cols);
@@ -1397,6 +1143,18 @@ void sparse_product_large() {
     VERIFY_IS_EQUAL(res.nonZeros(), ref.nonZeros());
     // integer-valued entries: the sums are exact in any order
     VERIFY_IS_EQUAL((res - ref).norm(), 0.0);
+
+    // The pruned product drops the sums v with |v| <= tolerance: exact zeros, then also 1 and 2.
+    for (double tolerance : {0.0, 2.5}) {
+      SparseMatrix<double, ResOrder> prunedRef = ref;
+      prunedRef.prune([tolerance](Index, Index, double v) { return numext::abs(v) > tolerance; });
+      SparseMatrix<double, ResOrder> pruned = (lhs * rhs).pruned(1.0, tolerance);
+      VERIFY(pruned.isCompressed());
+      VERIFY_IS_EQUAL(pruned.innerIndicesAreSorted(), pruned.outerSize());
+      VERIFY_IS_EQUAL(pruned.nonZeros(), prunedRef.nonZeros());
+      VERIFY_IS_EQUAL((pruned - prunedRef).norm(), 0.0);
+      if (tolerance > 0.0) VERIFY(pruned.nonZeros() < res.nonZeros());
+    }
   }
 }
 
@@ -1496,6 +1254,24 @@ void sparse_product_long_vectors(bool unsortedOperands) {
     for (typename SparseMatrix<Scalar, ResOrder, StorageIndex>::InnerIterator it(res, j); it; ++it) {
       auto found = ref.find(Entry(it.row(), it.col()));
       mismatches += found == ref.end() || !(found->second == it.value());
+    }
+  VERIFY_IS_EQUAL(mismatches, Index(0));
+
+  // The pruned product keeps exactly the entries above its tolerance.
+  using RealScalar = typename NumTraits<Scalar>::Real;
+  const RealScalar tolerance = RealScalar(12);
+  Index expected = 0;
+  for (const auto& e : ref) expected += !(numext::abs(e.second) <= tolerance);
+  VERIFY(expected > 0 && expected < Index(ref.size()));
+  SparseMatrix<Scalar, ResOrder, StorageIndex> pruned = (lhs * rhs).pruned(Scalar(1), tolerance);
+  VERIFY(pruned.isCompressed());
+  VERIFY_IS_EQUAL(pruned.innerIndicesAreSorted(), pruned.outerSize());
+  VERIFY_IS_EQUAL(pruned.nonZeros(), expected);
+  mismatches = 0;
+  for (Index j = 0; j < pruned.outerSize(); ++j)
+    for (typename SparseMatrix<Scalar, ResOrder, StorageIndex>::InnerIterator it(pruned, j); it; ++it) {
+      auto found = ref.find(Entry(it.row(), it.col()));
+      mismatches += found == ref.end() || !(found->second == it.value()) || numext::abs(it.value()) <= tolerance;
     }
   VERIFY_IS_EQUAL(mismatches, Index(0));
 }
@@ -1610,14 +1386,8 @@ EIGEN_DECLARE_TEST(sparse_product) {
     CALL_SUBTEST_11((test_sparse_product_operand_order<true, RowMajor, RowMajor, RowMajor>()));
 
     CALL_SUBTEST_6((test_pruned_product_custom_scalar<>()));
-    CALL_SUBTEST_6((test_ambivector_discard_custom_scalar<>()));
-    CALL_SUBTEST_6((test_ambivector_resize_bounds<>()));
-    CALL_SUBTEST_6((test_ambivector_front_insertion_growth<>()));
-#if defined(EIGEN_EXCEPTIONS)
-    CALL_SUBTEST_6((test_ambivector_failed_insertion<>()));
-    CALL_SUBTEST_6((test_ambivector_failed_reallocation<>()));
-    CALL_SUBTEST_6((test_ambivector_front_insertion_relocates<>()));
-#endif
+    CALL_SUBTEST_6((test_pruned_product_front_insertion<>()));
+    CALL_SUBTEST_6((test_pruned_product_cancelled_vector<>()));
   }
   CALL_SUBTEST_3((sparse_product_long_vectors_all_orders<double, int>()));
   CALL_SUBTEST_4((sparse_product_long_vectors_all_orders<double, short>()));

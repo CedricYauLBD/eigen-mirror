@@ -202,10 +202,55 @@ static void BM_ccr(benchmark::State& s) {
   }
   s.SetLabel(k.name);
 }
+// (A * B).pruned(1, tolerance), col*col->col. Arg 1 selects the tolerance: 0 drops only exact zeros, 1 is the median
+// magnitude of the entries of A * B and drops about half of them.
+static void BM_ccc_pruned(benchmark::State& s) {
+  const PCase& k = pcases()[s.range(0)];
+  SpMat C = k.A * k.B;
+  double tolerance = 0.0;
+  if (s.range(1) == 1 && C.nonZeros() > 0) {
+    std::vector<double> magnitudes(C.valuePtr(), C.valuePtr() + C.nonZeros());
+    for (double& v : magnitudes) v = std::abs(v);
+    std::nth_element(magnitudes.begin(), magnitudes.begin() + magnitudes.size() / 2, magnitudes.end());
+    tolerance = magnitudes[magnitudes.size() / 2];
+  }
+  Index full = C.nonZeros();
+  for (auto _ : s) {
+    C = (k.A * k.B).pruned(1.0, tolerance);
+    benchmark::DoNotOptimize(C.valuePtr());
+  }
+  Index expected = 0;
+  SpMat ref = k.A * k.B;
+  for (Index p = 0; p < ref.nonZeros(); ++p) expected += !(std::abs(ref.valuePtr()[p]) <= tolerance);
+  if (C.nonZeros() != expected) s.SkipWithError("pruned product keeps the wrong number of entries");
+  s.counters["kept"] = full == 0 ? 1.0 : double(C.nonZeros()) / double(full);
+  s.SetLabel(k.name);
+}
+static void BM_rrr_pruned(benchmark::State& s) {
+  const PCase& k = pcases()[s.range(0)];
+  SpMatR A = k.A, B = k.B, C;
+  for (auto _ : s) {
+    C = (A * B).pruned();
+    benchmark::DoNotOptimize(C.valuePtr());
+  }
+  s.SetLabel(k.name);
+}
+static void BM_ccr_pruned(benchmark::State& s) {
+  const PCase& k = pcases()[s.range(0)];
+  SpMatR C;
+  for (auto _ : s) {
+    C = (k.A * k.B).pruned();
+    benchmark::DoNotOptimize(C.valuePtr());
+  }
+  s.SetLabel(k.name);
+}
 BENCHMARK(BM_ccc)->DenseRange(0, 21)->Unit(benchmark::kMillisecond);
 BENCHMARK(BM_rrr)->DenseRange(0, 7)->Unit(benchmark::kMillisecond);
 BENCHMARK(BM_rcc)->DenseRange(0, 7)->Unit(benchmark::kMillisecond);
 BENCHMARK(BM_ccr)->DenseRange(0, 7)->Unit(benchmark::kMillisecond);
+BENCHMARK(BM_ccc_pruned)->ArgsProduct({benchmark::CreateDenseRange(0, 21, 1), {0, 1}})->Unit(benchmark::kMillisecond);
+BENCHMARK(BM_rrr_pruned)->DenseRange(0, 7)->Unit(benchmark::kMillisecond);
+BENCHMARK(BM_ccr_pruned)->DenseRange(0, 7)->Unit(benchmark::kMillisecond);
 
 struct TCase {
   const char* name;

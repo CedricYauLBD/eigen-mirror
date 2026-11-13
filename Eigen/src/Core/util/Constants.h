@@ -366,7 +366,7 @@ enum Sequential_t { Sequential };
 enum Default_t { Default };
 
 /** \internal \ingroup enums
- * Used in AmbiVector. */
+ * Unused: the storage modes of the removed internal::AmbiVector. Kept so that code naming them still compiles. */
 enum AmbiVectorMode { IsDense = 0, IsSparse };
 
 /** \ingroup enums
