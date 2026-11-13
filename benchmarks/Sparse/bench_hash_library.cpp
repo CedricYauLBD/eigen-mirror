@@ -161,6 +161,15 @@ static std::vector<PCase>& pcases() {
       std::vector<Trip> one{Trip(7, 0, 2.0)};
       c.push_back({"rand20k_200_x_col1", randmat(20000, 20000, 200, 24), fromT(20000, 1, one)});
     }
+    // Right operands with one entry per vector, so each result vector is one scaled vector of the left operand: a
+    // sparse diagonal scaling, and a selection of every second column of a matrix too tall for a cached marker.
+    {
+      std::vector<Trip> d, e;
+      for (I k = 0; k < L.cols(); ++k) d.emplace_back(k, k, 1.0 + (k % 3));
+      c.push_back({"lap2d500_x_diag", L, fromT(L.cols(), L.cols(), d)});
+      for (I k = 0; k < W.cols() / 2; ++k) e.emplace_back(2 * k, k, 2.0);
+      c.push_back({"rand2M_8_x_select", W, fromT(W.cols(), W.cols() / 2, e)});
+    }
   }
   return c;
 }
@@ -244,11 +253,11 @@ static void BM_ccr_pruned(benchmark::State& s) {
   }
   s.SetLabel(k.name);
 }
-BENCHMARK(BM_ccc)->DenseRange(0, 21)->Unit(benchmark::kMillisecond);
+BENCHMARK(BM_ccc)->DenseRange(0, 23)->Unit(benchmark::kMillisecond);
 BENCHMARK(BM_rrr)->DenseRange(0, 7)->Unit(benchmark::kMillisecond);
 BENCHMARK(BM_rcc)->DenseRange(0, 7)->Unit(benchmark::kMillisecond);
 BENCHMARK(BM_ccr)->DenseRange(0, 7)->Unit(benchmark::kMillisecond);
-BENCHMARK(BM_ccc_pruned)->ArgsProduct({benchmark::CreateDenseRange(0, 21, 1), {0, 1}})->Unit(benchmark::kMillisecond);
+BENCHMARK(BM_ccc_pruned)->ArgsProduct({benchmark::CreateDenseRange(0, 23, 1), {0, 1}})->Unit(benchmark::kMillisecond);
 BENCHMARK(BM_rrr_pruned)->DenseRange(0, 7)->Unit(benchmark::kMillisecond);
 BENCHMARK(BM_ccr_pruned)->DenseRange(0, 7)->Unit(benchmark::kMillisecond);
 

@@ -681,6 +681,44 @@ void test_pruned_product_cancelled_vector() {
   VERIFY_IS_EQUAL((MatrixXd(C) - MatrixXd(A) * MatrixXd(B)).norm(), 0.0);
 }
 
+// Result vectors of one or two operand vectors are merged, which needs sorted operand vectors without a repeated
+// index. An operand that breaks this must take the general path and give the same product.
+template <typename = void>
+void test_sparse_product_few_terms_unsorted() {
+  const Index rows = 200, mid = 12, cols = 30;
+  SparseMatrix<double> A(rows, mid), B(mid, cols);
+  for (Index k = 0; k < mid; ++k)
+    for (Index q = 0; q < 20; ++q) A.coeffRef((7 * q + 13 * k) % rows, k) = double(1 + (q + k) % 5);
+  A.makeCompressed();
+  for (Index j = 0; j < cols; ++j) {
+    B.coeffRef(j % mid, j) = 2.0;
+    if (j % 3) B.coeffRef((5 * j + 1) % mid, j) = -1.0;
+  }
+  B.makeCompressed();
+  MatrixXd ref = MatrixXd(A) * MatrixXd(B);
+  for (int variant = 0; variant < 3; ++variant) {
+    SparseMatrix<double> lhs = A;
+    // 1: every vector reversed; 2: one index out of place in every other vector.
+    for (Index k = 0; k < mid; ++k) {
+      Index begin = lhs.outerIndexPtr()[k], end = lhs.outerIndexPtr()[k + 1];
+      if (variant == 1) {
+        std::reverse(lhs.innerIndexPtr() + begin, lhs.innerIndexPtr() + end);
+        std::reverse(lhs.valuePtr() + begin, lhs.valuePtr() + end);
+      } else if (variant == 2 && k % 2 == 0) {
+        std::swap(lhs.innerIndexPtr()[begin + 3], lhs.innerIndexPtr()[end - 1]);
+        std::swap(lhs.valuePtr()[begin + 3], lhs.valuePtr()[end - 1]);
+      }
+    }
+    SparseMatrix<double> C = lhs * B;
+    VERIFY_IS_EQUAL(C.innerIndicesAreSorted(), C.outerSize());
+    VERIFY_IS_EQUAL((MatrixXd(C) - ref).norm(), 0.0);
+    SparseMatrix<double> P = (lhs * B).pruned();
+    VERIFY_IS_EQUAL(P.innerIndicesAreSorted(), P.outerSize());
+    VERIFY_IS_EQUAL((MatrixXd(P) - ref).norm(), 0.0);
+    VERIFY(P.nonZeros() <= C.nonZeros());
+  }
+}
+
 template <typename = void>
 void test_pruned_product_row_vector() {
   SparseMatrix<double> A(4, 3);
@@ -1116,13 +1154,15 @@ void sparse_product_large() {
   };
   const Shape shapes[] = {
       {3000, 3000, 300, 40, 40, Scattered},  // about 1200 distinct indices of 1600 products on 3000 rows: direct
-      {60000, 200, 200, 300, 2, Scattered},  // 600 products on 60000 rows: appended, buckets sorted by insertion
+      {60000, 200, 200, 300, 3, Scattered},  // 900 products on 60000 rows: appended, buckets sorted by insertion
       {200000, 300, 200, 100, 4, Run},       // four runs of 100: appended, each cluster through a direct table
       {400000, 300, 200, 60, 4, Window},     // four windows of 60: appended, each cluster split again
-      {400, 400, 200, 60, 60, Scattered},    // 3600 products on 400 rows: marked, sorted through a direct table
+      {400, 400, 200, 60, 60, Scattered},    // 3600 products on 400 rows: marked, then direct as dense in its range
       {40000, 300, 200, 100, 30, Pooled},    // 3000 products on 900 scattered rows: marked, sorted in buckets
-      {5000, 500, 500, 20, 2, Run},          // two runs of 20: marked, then in order or sorted by insertion
-      {20000, 300, 100, 40, 1, Run},         // one run of 40: marked and already sorted; few rhs entries
+      {5000, 500, 500, 20, 3, Run},          // three runs of 20: marked, then in order or sorted by insertion
+      {5000, 500, 500, 20, 2, Run},          // two runs of 20: merged
+      {60000, 200, 200, 300, 2, Scattered},  // two scattered vectors of 300: merged
+      {20000, 300, 100, 40, 1, Run},         // one run of 40: copied; few rhs entries
   };
   for (const Shape& shape : shapes) {
     SparseMatrix<double> a = random_matrix(shape.rows, shape.mid, shape.lhsPerColumn, shape.pattern);
@@ -1388,6 +1428,7 @@ EIGEN_DECLARE_TEST(sparse_product) {
     CALL_SUBTEST_6((test_pruned_product_custom_scalar<>()));
     CALL_SUBTEST_6((test_pruned_product_front_insertion<>()));
     CALL_SUBTEST_6((test_pruned_product_cancelled_vector<>()));
+    CALL_SUBTEST_6((test_sparse_product_few_terms_unsorted<>()));
   }
   CALL_SUBTEST_3((sparse_product_long_vectors_all_orders<double, int>()));
   CALL_SUBTEST_4((sparse_product_long_vectors_all_orders<double, short>()));

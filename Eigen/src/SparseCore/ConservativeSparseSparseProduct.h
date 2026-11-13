@@ -18,8 +18,63 @@ namespace Eigen {
 
 namespace internal {
 
+// Writes lhs(:, k0) * y0, plus lhs(:, k1) * y1 if two, to (indices, values) by a two-way merge that sums equal
+// indices, and returns the number of entries. Returns -1 if the output is not strictly increasing, which happens
+// when an operand vector is unsorted or repeats an index; the output is then unspecified.
+//
+// One vector needs no accumulator, and two sorted vectors merge in order, so neither needs a sort. This is the
+// "direct referencing" of M. Parger, M. Winter, D. Mlakar and M. Steinberger, "spECK: accelerating GPU sparse
+// matrix-matrix multiplication through lightweight analysis", PPoPP 2020, doi:10.1145/3332466.3374521, and one step
+// of the row merging of F. Gremse, A. Hoefter, L. O. Schwen, F. Kiessling and U. Naumann, "GPU-accelerated sparse
+// matrix-matrix multiplication by iterative row merging", SIAM J. Sci. Comput. 37(1), 2015, doi:10.1137/130948811.
+template <typename LhsEvaluator, typename RhsScalar, typename Product, typename StorageIndex, typename ResScalar>
+Index sparse_product_merge_vectors(const LhsEvaluator& lhsEval, Index k0, const RhsScalar& y0, Index k1,
+                                   const RhsScalar& y1, bool two, const Product& product, StorageIndex* indices,
+                                   ResScalar* values) {
+  using LhsIterator = typename LhsEvaluator::InnerIterator;
+  Index n = 0;
+  bool increasing = true;
+  StorageIndex last = 0;
+  auto append = [&](StorageIndex i) {
+    increasing &= n == 0 || last < i;
+    last = i;
+    indices[n++] = i;
+  };
+  LhsIterator a(lhsEval, k0);
+  if (two) {
+    LhsIterator b(lhsEval, k1);
+    while (a && b) {
+      StorageIndex ia = StorageIndex(a.index()), ib = StorageIndex(b.index());
+      if (ia <= ib) {
+        values[n] = product(a.value(), y0);
+        if (ia == ib) {
+          product.accumulate(values[n], b.value(), y1);
+          ++b;
+        }
+        ++a;
+        append(ia);
+      } else {
+        values[n] = product(b.value(), y1);
+        ++b;
+        append(ib);
+      }
+    }
+    for (; b; ++b) {
+      values[n] = product(b.value(), y1);
+      append(StorageIndex(b.index()));
+    }
+  }
+  for (; a; ++a) {
+    values[n] = product(a.value(), y0);
+    append(StorageIndex(a.index()));
+  }
+  return increasing ? n : Index(-1);
+}
+
 // Computes res = lhs * rhs with sorted inner vectors and no transpose, without the entries that keep rejects. Each
-// vector of res is built in res's own free storage, in one of three ways:
+// vector of res is built in res's own free storage. A vector with one or two products per index at most, because
+// the rhs vector has one or two entries, is merged (sparse_product_merge_vectors) if the lhs vectors are sorted.
+// Any other is built in one of three ways:
 //
 // - Marked: a marker of the inner dimension locates each index in the vector being built, so a coefficient costs one
 //   lookup however many products it sums; the distinct entries are sorted afterwards (sort_inner_vector), which is
@@ -33,7 +88,10 @@ namespace internal {
 //   sparse in their range.
 //
 // A vector is marked unless the previous one had at least kUnmarkedMin distinct indices, with at most two products
-// each; the first one is not marked. The marker is allocated when the first vector is marked.
+// each; the first one is not marked. The marker is allocated when the first vector is marked. A vector that would be
+// marked is direct instead if its range holds at most kDirectRatio slots per distinct index of the previous vector:
+// the table then replaces the sort of a long vector, whatever the number of products per index. spECK (see
+// sparse_product_merge_vectors) chooses a dense accumulator over [min, max] by the same density, for the same reason.
 //
 // keep sees the finished sum of each index, so a vector is pruned once it is complete (prune_inner_vector), before
 // the next one starts behind it. sparse_product_keep_all compiles the pass out.
@@ -102,23 +160,48 @@ static void conservative_sparse_sparse_product_sorted_impl(const Lhs& lhs, const
   direct_accumulator<ResScalar, StorageIndex>& acc = workspace.acc;
   Index nnz = 0;
   bool marked = false;
+  // The number of distinct indices of the previous non-empty vector, before pruning.
+  Index prevKeys = 0;
   for (Index j = 0; j < cols; ++j) {
     Index start = nnz;
     outer[j] = convert_index<StorageIndex>(start);
-    Index maxKeys = 0;
-    for (RhsIterator rhsIt(rhsEval, j); rhsIt; ++rhsIt) maxKeys += lhs_count(rhsIt.index());
+    Index maxKeys = 0, terms = 0;
+    for (RhsIterator rhsIt(rhsEval, j); rhsIt; ++rhsIt, ++terms) maxKeys += lhs_count(rhsIt.index());
     if (maxKeys == 0) continue;
 
     Index keys;
+    if (terms <= 2) {
+      if (res.data().allocatedSize() < nnz + maxKeys) {
+        res.data().resize(nnz);
+        res.data().reserve(numext::maxi(maxKeys, nnz));
+      }
+      StorageIndex* indices = res.data().indexPtr() + start;
+      ResScalar* values = res.data().valuePtr() + start;
+      RhsIterator first(rhsEval, j), second(rhsEval, j);
+      if (terms == 2) ++second;
+      keys = sparse_product_merge_vectors(lhsEval, first.index(), first.value(), second.index(), second.value(),
+                                          terms == 2, product, indices, values);
+      if (keys >= 0) {
+        nnz = start + prune_inner_vector(indices, values, keys, keep);
+        marked = keys < kUnmarkedMin || 2 * keys < maxKeys;
+        prevKeys = keys;
+        continue;
+      }
+    }
+
     StorageIndex lo = NumTraits<StorageIndex>::highest(), hi = 0;
-    if (!marked) {
+    bool direct = false;
+    if (!marked || prevKeys >= kUnmarkedMin) {
       for (RhsIterator rhsIt(rhsEval, j); rhsIt; ++rhsIt) {
         Index k = rhsIt.index();
         if (lhsCount[k] == 0) continue;
         lo = numext::mini(lo, lhsLo[k]);
         hi = numext::maxi(hi, lhsHi[k]);
       }
-      if (acc.direct(lo, hi, maxKeys)) {
+      direct = acc.direct(lo, hi, marked ? prevKeys : maxKeys);
+    }
+    if (direct || !marked) {
+      if (direct) {
         Index size = acc.size(lo, hi);
         if (res.data().allocatedSize() < nnz + size) {
           res.data().resize(nnz);
@@ -206,6 +289,7 @@ static void conservative_sparse_sparse_product_sorted_impl(const Lhs& lhs, const
       sort_inner_vector(indices + start, values + start, nnz - start, lo, hi, descents, workspace);
     }
     marked = keys < kUnmarkedMin || 2 * keys < maxKeys;
+    prevKeys = keys;
   }
   outer[cols] = convert_index<StorageIndex>(nnz);
   res.data().resize(nnz);
