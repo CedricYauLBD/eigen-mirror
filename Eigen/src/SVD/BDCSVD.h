@@ -444,13 +444,7 @@ EIGEN_DONT_INLINE BDCSVD<MatrixType, Options>& BDCSVD<MatrixType, Options>::comp
   // Unscaling with maxCoeff keeps singular values that land in the subnormal range under FTZ. The count follows it, as
   // a value above the smallest normal number in the scaled frame can unscale to exactly 0.
   internal::safe_scaling<RealScalar>::unscale_in_place(m_singularValues, maxCoeff, factors);
-  m_nonzeroSingularValues = diagSize();
-  for (Index i = 0; i < diagSize(); i++) {
-    if (numext::is_exactly_zero_no_flush(m_singularValues.coeff(i))) {
-      m_nonzeroSingularValues = i;
-      break;
-    }
-  }
+  m_nonzeroSingularValues = internal::count_nonzero_singular_values(m_singularValues);
 
   //**** step 4 - Finalize unitaries U and V
   if (m_isTranspose)
@@ -563,13 +557,7 @@ EIGEN_DONT_INLINE BDCSVD<MatrixType, Options>& BDCSVD<MatrixType, Options>::comp
     if (m_info == Success || m_info == NoConvergence) {
       internal::safe_scaling<RealScalar>::unscale_to(m_singularValues, smallSvd.singularValues(), maxCoeff, factors);
       // The count follows the unscaling: a value that is nonzero in the scaled frame can unscale to exactly 0.
-      m_nonzeroSingularValues = diagSize();
-      for (Index i = 0; i < diagSize(); i++) {
-        if (numext::is_exactly_zero_no_flush(m_singularValues.coeff(i))) {
-          m_nonzeroSingularValues = i;
-          break;
-        }
-      }
+      m_nonzeroSingularValues = internal::count_nonzero_singular_values(m_singularValues);
       if (computeU()) m_matrixU = smallSvd.matrixU();
       if (computeV()) m_matrixV = smallSvd.matrixV();
     }
@@ -614,13 +602,7 @@ EIGEN_DONT_INLINE BDCSVD<MatrixType, Options>& BDCSVD<MatrixType, Options>::comp
   // Unscaling with maxCoeff keeps singular values that land in the subnormal range under FTZ. The count follows it, as
   // a value above the smallest normal number in the scaled frame can unscale to exactly 0.
   internal::safe_scaling<RealScalar>::unscale_in_place(m_singularValues, maxCoeff, factors);
-  m_nonzeroSingularValues = diagSize();
-  for (Index i = 0; i < diagSize(); i++) {
-    if (numext::is_exactly_zero_no_flush(m_singularValues.coeff(i))) {
-      m_nonzeroSingularValues = i;
-      break;
-    }
-  }
+  m_nonzeroSingularValues = internal::count_nonzero_singular_values(m_singularValues);
 
   //**** Copy U and V directly (no Householder to apply).
   // D&C computes B^T = naiveU * S * naiveV^T, so B = naiveV * S * naiveU^T.

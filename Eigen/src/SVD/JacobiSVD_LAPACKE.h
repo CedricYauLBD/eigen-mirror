@@ -104,13 +104,7 @@ namespace Eigen {
     } else {                                                                                                        \
       m_info = Success;                                                                                             \
       if (computeV()) m_matrixV = localV.adjoint();                                                                 \
-      /* The values come back in descending order: count the leading ones that are not exactly 0. */                \
-      for (Index i = 0; i < diagSize(); i++) {                                                                      \
-        if (numext::is_exactly_zero_no_flush(m_singularValues.coeff(i))) {                                          \
-          m_nonzeroSingularValues = i;                                                                              \
-          break;                                                                                                    \
-        }                                                                                                           \
-      }                                                                                                             \
+      m_nonzeroSingularValues = internal::count_nonzero_singular_values(m_singularValues);                          \
     }                                                                                                               \
     m_isInitialized = true;                                                                                         \
     return *this;                                                                                                   \
