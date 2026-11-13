@@ -137,7 +137,7 @@ bool gmres(const MatrixType& mat, const Rhs& rhs, Dest& x, const Preconditioner&
       v.tail(m - i).applyHouseholderOnTheLeft(H.col(i).tail(m - i - 1), tau.coeffRef(i), workspace.data());
     }
 
-    if (v.tail(m - k).norm() != 0.0 && k <= restart) {
+    if (v.tail(m - k).norm() != RealScalar(0) && k <= restart) {
       // generate new Householder vector
       Ref<VectorType> Hk_tail = H.col(k).tail(m - k - 1);
       v.tail(m - k).makeHouseholder(Hk_tail, tau.coeffRef(k), beta);

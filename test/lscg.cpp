@@ -44,6 +44,9 @@ void test_lscg_T() {
 
   CALL_SUBTEST(check_sparse_leastsquare_solving(lscg_rowmajor_diag));
   CALL_SUBTEST(check_sparse_leastsquare_solving(lscg_rowmajor_I));
+
+  CALL_SUBTEST(check_sparse_zero_tolerance(lscg_colmajor_diag));
+  CALL_SUBTEST(check_sparse_zero_tolerance(lscg_rowmajor_I));
 }
 
 void test_lscg_extreme_rhs() {
@@ -67,10 +70,20 @@ void test_lscg_extreme_rhs() {
   }
 }
 
+// See check_sparse_small_rhs: the solvers returned NoConvergence or an inaccurate x for small |b|.
+template <typename = void>
+void test_lscg_small_rhs() {
+  LeastSquaresConjugateGradient<SparseMatrix<double> > solver_double;
+  LeastSquaresConjugateGradient<SparseMatrix<float> > solver_float;
+  check_sparse_small_rhs(solver_double);
+  check_sparse_small_rhs(solver_float);
+}
+
 EIGEN_DECLARE_TEST(lscg) {
   CALL_SUBTEST_1(test_lscg_T<double>());
   CALL_SUBTEST_2(test_lscg_T<std::complex<double> >());
   CALL_SUBTEST_3(test_least_square_diagonal_preconditioner_zero_columns<double>());
   CALL_SUBTEST_4(test_least_square_diagonal_preconditioner_zero_columns<std::complex<double> >());
   CALL_SUBTEST_5(test_lscg_extreme_rhs());
+  CALL_SUBTEST_5(test_lscg_small_rhs<>());
 }

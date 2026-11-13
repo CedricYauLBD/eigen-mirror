@@ -851,4 +851,96 @@ void check_sparse_leastsquare_solving(Solver& solver) {
   }
 }
 
+// Solves systems with tolerance 0, which asks the solver to iterate until the residual vanishes or maxIterations() is
+// reached. The matrices have an exhausted Krylov space after one to a few steps (identity, three distinct eigenvalues),
+// or reach a residual below the range of squares well before the iteration limit (diagonal, tridiagonal, with an
+// iteration limit well above their size). The solvers used to divide by the zero residual and return NaN, or aborted in
+// an assertion.
+template <typename Solver>
+void check_sparse_zero_tolerance(Solver& solver) {
+  using Mat = typename Solver::MatrixType;
+  using Scalar = typename Mat::Scalar;
+  using RealScalar = typename NumTraits<Scalar>::Real;
+  using DenseVector = Matrix<Scalar, Dynamic, 1>;
+
+  for (int kind = 0; kind < 4; ++kind) {
+    const Index n = kind == 3 ? 8 : 12;
+    std::vector<Triplet<Scalar>> triplets;
+    for (Index i = 0; i < n; ++i) {
+      Scalar d(1);
+      if (kind == 1) d = Scalar(1 + i % 3);
+      if (kind == 2) d = Scalar(1 + i);
+      if (kind == 3) d = Scalar(4 + i);
+      triplets.emplace_back(i, i, d);
+      if (kind == 3 && i + 1 < n) {
+        triplets.emplace_back(i, i + 1, Scalar(1));
+        triplets.emplace_back(i + 1, i, Scalar(1));
+      }
+    }
+    Mat A(n, n);
+    A.setFromTriplets(triplets.begin(), triplets.end());
+    const DenseVector xt = DenseVector::LinSpaced(n, Scalar(1), Scalar(2));
+    const DenseVector b = A * xt;
+    // Every system is SPD with condition number below 12, so a residual of 100 n eps bounds the rounding error.
+    const RealScalar bound = RealScalar(100) * RealScalar(n) * NumTraits<RealScalar>::epsilon() * b.norm();
+
+    for (Index maxit : {Index(-1), Index(300)}) {
+      solver.setTolerance(0);
+      solver.setMaxIterations(maxit);
+      solver.compute(A);
+      const DenseVector x = solver.solve(b);
+      VERIFY(x.allFinite());
+      VERIFY((numext::isfinite)(solver.error()));
+      // The tolerance is met only by a residual of exactly 0, so the solver reports Success then and NoConvergence
+      // otherwise; a breakdown at the exact solution is not a numerical issue.
+      VERIFY(solver.info() == Success || solver.info() == NoConvergence);
+      VERIFY_LE(solver.iterations(), solver.maxIterations());
+      VERIFY_LE((b - A * x).norm(), bound);
+    }
+  }
+}
+
+// Solves A x = b for b = s A xt with A = tridiag(-1, 4, -1), n = 40, and |b| so small that tol |b| is below sqrt(min),
+// though |b| is a normal number: a stopping threshold raised to an absolute floor, to keep a tolerance of 0 from
+// dividing by zero, would then exceed tol |b|, and the solvers returned NoConvergence or an inaccurate x without
+// reaching the tolerance (|b| < 1e-12 in float at the default tolerance). Each solver must reach Success with a forward
+// error of at most 1000 cond^2 tol (cond(A) <= 3), at its default tolerance and at a loose one.
+template <typename Solver>
+void check_sparse_small_rhs(const Solver&) {
+  using Mat = typename Solver::MatrixType;
+  using Scalar = typename Mat::Scalar;
+  using RealScalar = typename NumTraits<Scalar>::Real;
+  using DenseVector = Matrix<Scalar, Dynamic, 1>;
+
+  const Index n = 40;
+  std::vector<Triplet<Scalar>> triplets;
+  for (Index i = 0; i < n; ++i) {
+    triplets.emplace_back(i, i, Scalar(4));
+    if (i + 1 < n) {
+      triplets.emplace_back(i, i + 1, Scalar(-1));
+      triplets.emplace_back(i + 1, i, Scalar(-1));
+    }
+  }
+  Mat A(n, n);
+  A.setFromTriplets(triplets.begin(), triplets.end());
+  const DenseVector xt = DenseVector::Random(n);
+  const DenseVector b0 = A * xt;
+
+  const RealScalar eps = NumTraits<RealScalar>::epsilon();
+  const RealScalar sqrtMin = numext::sqrt((std::numeric_limits<RealScalar>::min)());
+  const RealScalar looseTol = RealScalar(1e-2) * numext::sqrt(eps);
+  // tol |b| < sqrt(min) at the default tolerance for s1, and at the loose one for s1 and s2.
+  const RealScalar s1 = sqrtMin / eps / RealScalar(1000), s2 = s1 / RealScalar(30);
+  for (int c = 0; c < 3; ++c) {
+    const RealScalar s = c == 2 ? s2 : s1;
+    const DenseVector b = s * b0;
+    Solver solver(A);
+    if (c > 0) solver.setTolerance(looseTol);
+    const DenseVector x = solver.solve(b);
+    VERIFY(x.allFinite());
+    VERIFY_IS_EQUAL(solver.info(), Success);
+    VERIFY_LE((x / s - xt).stableNorm(), RealScalar(9000) * solver.tolerance() * xt.stableNorm());
+  }
+}
+
 #endif  // EIGEN_TEST_SPARSE_SOLVER_H

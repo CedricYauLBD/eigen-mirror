@@ -62,7 +62,10 @@ EIGEN_DONT_INLINE void least_square_conjugate_gradient(const MatrixType& mat, co
   // Keep the quadratic recurrence terms representable for very small or large residuals.
   const RealScalar residualScale = internal::iterative_solver_scaling_factor(residualNorm);
   normal_residual /= residualScale;
-  threshold /= residualScale;
+  // The threshold and the floor are in units of the scaled residual; the floor makes tol_error = 0 stop where the
+  // squares of the residual would underflow.
+  threshold = internal::iterative_solver_threshold(tol, RealScalar(rhsNorm / residualScale),
+                                                   internal::iterative_solver_residual_floor<RealScalar>());
 
   VectorType p(n);
   p = precond.solve(normal_residual);  // initial search direction

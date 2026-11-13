@@ -23,6 +23,9 @@ void test_gmres_T() {
   //   CALL_SUBTEST( check_sparse_square_solving(gmres_colmajor_I)     );
   CALL_SUBTEST(check_sparse_square_solving(gmres_colmajor_ilut));
   // CALL_SUBTEST( check_sparse_square_solving(gmres_colmajor_ssor)     );
+
+  CALL_SUBTEST(check_sparse_zero_tolerance(gmres_colmajor_diag));
+  CALL_SUBTEST(check_sparse_zero_tolerance(gmres_colmajor_ilut));
 }
 
 template <typename = void>
@@ -125,6 +128,15 @@ void test_gmres_max_iterations() {
   }
 }
 
+// See check_sparse_small_rhs: the solvers returned NoConvergence or an inaccurate x for small |b|.
+template <typename = void>
+void test_gmres_small_rhs() {
+  GMRES<SparseMatrix<double>, DiagonalPreconditioner<double> > solver_double;
+  GMRES<SparseMatrix<float>, DiagonalPreconditioner<float> > solver_float;
+  check_sparse_small_rhs(solver_double);
+  check_sparse_small_rhs(solver_float);
+}
+
 EIGEN_DECLARE_TEST(gmres) {
   CALL_SUBTEST_1(test_gmres_T<double>());
   CALL_SUBTEST_2(test_gmres_T<std::complex<double> >());
@@ -132,4 +144,5 @@ EIGEN_DECLARE_TEST(gmres) {
   CALL_SUBTEST_4(test_gmres_large_restart<>());
   CALL_SUBTEST_4(test_zero_rhs());
   CALL_SUBTEST_4(test_gmres_max_iterations<>());
+  CALL_SUBTEST_4(test_gmres_small_rhs<>());
 }

@@ -63,7 +63,8 @@ bool idrstabl(const MatrixType &mat, const Rhs &rhs, Dest &x, const Precondition
   const Index maxIters = iters;
 
   const RealScalar rhs_norm = rhs.stableNorm();
-  const RealScalar tol = tol_error * rhs_norm;
+  const RealScalar tol = internal::iterative_solver_threshold(tol_error, rhs_norm,
+                                                              internal::iterative_solver_residual_floor<RealScalar>());
 
   if (rhs_norm == 0) {
     /*

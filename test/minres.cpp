@@ -32,6 +32,9 @@ void test_minres_T() {
   CALL_SUBTEST(check_sparse_spd_solving(minres_colmajor_upper_diag));
   CALL_SUBTEST(check_sparse_spd_solving(minres_colmajor_uplo_diag));
 
+  CALL_SUBTEST(check_sparse_zero_tolerance(minres_colmajor_uplo_diag));
+  CALL_SUBTEST(check_sparse_zero_tolerance(minres_colmajor_lower_I));
+
   // TO DO: symmetric semi-definite matrix
   // TO DO: symmetric indefinite matrix
 }
@@ -57,7 +60,17 @@ void test_minres_extreme_rhs() {
   }
 }
 
+// See check_sparse_small_rhs: the solvers returned NoConvergence or an inaccurate x for small |b|.
+template <typename = void>
+void test_minres_small_rhs() {
+  MINRES<SparseMatrix<double>, Lower | Upper, DiagonalPreconditioner<double> > solver_double;
+  MINRES<SparseMatrix<float>, Lower | Upper, DiagonalPreconditioner<float> > solver_float;
+  check_sparse_small_rhs(solver_double);
+  check_sparse_small_rhs(solver_float);
+}
+
 EIGEN_DECLARE_TEST(minres) {
   CALL_SUBTEST_1(test_minres_T<double>());
   CALL_SUBTEST_3(test_minres_extreme_rhs());
+  CALL_SUBTEST_4(test_minres_small_rhs<>());
 }

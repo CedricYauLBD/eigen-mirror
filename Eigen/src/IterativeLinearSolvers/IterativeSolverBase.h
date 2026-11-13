@@ -50,6 +50,23 @@ EIGEN_DEVICE_FUNC RealScalar iterative_solver_scaling_factor(RealScalar norm) {
   return norm < sqrtMin || norm > sqrtMax ? norm : RealScalar(1);
 }
 
+// The least residual norm that a stopping rule can ask for. Recurrences that form squares of residual norms underflow
+// below it, so a tolerance of 0 ("iterate until the residual vanishes") must stop here, not at the first denormal.
+template <typename RealScalar>
+EIGEN_DEVICE_FUNC RealScalar iterative_solver_residual_floor() {
+  return numext::sqrt((std::numeric_limits<RealScalar>::min)());
+}
+
+// The stopping threshold tol |b| for the residual, raised to min(floor, eps |b|). The raise exists only so that a
+// tolerance of 0, or below what the recurrences can resolve, stops where the residual underflows instead of dividing by
+// zero. It never exceeds eps |b|, which a solver cannot reach anyway, so it leaves every tolerance tol >= eps unchanged
+// whatever the size of b, where an absolute floor would exceed tol |b| for small |b| (|b| < 1e-12 in float at the
+// default tolerance).
+template <typename RealScalar>
+EIGEN_DEVICE_FUNC RealScalar iterative_solver_threshold(RealScalar tol, RealScalar norm, RealScalar floor) {
+  return numext::maxi(RealScalar(tol * norm), numext::mini(floor, RealScalar(NumTraits<RealScalar>::epsilon() * norm)));
+}
+
 template <typename MatrixType, bool MatrixFree = !internal::is_ref_compatible<MatrixType>::value>
 class generic_matrix_wrapper;
 
@@ -235,6 +252,8 @@ class IterativeSolverBase : public SparseSolverBase<Derived> {
    * LSMR bounds |A'(Ax-b)|/(|A| |Ax-b|).
    * The default value is the machine precision given by NumTraits<Scalar>::epsilon(), unless the solver documents
    * another; IDRS derives its default from the size of the matrix.
+   * A tolerance of 0 asks for iterating until the residual vanishes or maxIterations() is reached. The solvers stop
+   * earlier when it underflows or the Krylov space is exhausted, and return a finite solution.
    */
   Derived& setTolerance(const RealScalar& tolerance) {
     m_tolerance = tolerance;

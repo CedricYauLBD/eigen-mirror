@@ -27,6 +27,9 @@ void test_lsmr_T() {
 
   CALL_SUBTEST(check_sparse_square_solving(lsmr_rowmajor_I));
   CALL_SUBTEST(check_sparse_leastsquare_solving(lsmr_rowmajor_diag));
+
+  CALL_SUBTEST(check_sparse_zero_tolerance(lsmr_colmajor_I));
+  CALL_SUBTEST(check_sparse_zero_tolerance(lsmr_colmajor_diag));
 }
 
 // LSMR on dense, rectangular, overdetermined problems: the solution must match
@@ -265,6 +268,15 @@ void test_lsmr_max_iterations() {
   }
 }
 
+// See check_sparse_small_rhs: the solvers returned NoConvergence or an inaccurate x for small |b|.
+template <typename = void>
+void test_lsmr_small_rhs() {
+  LSMR<SparseMatrix<double> > solver_double;
+  LSMR<SparseMatrix<float> > solver_float;
+  check_sparse_small_rhs(solver_double);
+  check_sparse_small_rhs(solver_float);
+}
+
 EIGEN_DECLARE_TEST(lsmr) {
   CALL_SUBTEST_1(test_lsmr_T<double>());
   CALL_SUBTEST_2(test_lsmr_T<std::complex<double> >());
@@ -279,4 +291,5 @@ EIGEN_DECLARE_TEST(lsmr) {
   CALL_SUBTEST_11(test_lsmr_tolerances<double>());
   CALL_SUBTEST_12(test_lsmr_max_iterations<double>());
   CALL_SUBTEST_12(test_lsmr_max_iterations<std::complex<double> >());
+  CALL_SUBTEST_12(test_lsmr_small_rhs<>());
 }

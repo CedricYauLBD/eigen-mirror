@@ -48,7 +48,10 @@ EIGEN_DONT_INLINE void minres(const MatrixType& mat, const Rhs& rhs, Dest& x, co
   // initialize
   const Index maxIters(iters);                      // initialize maxIters to iters
   const Index N(mat.cols());                        // the size of the matrix
-  const RealScalar threshold(tol_error * rhsNorm);  // convergence threshold (compared to residualNorm)
+  // convergence threshold (compared to residualNorm), raised to at most the smallest normal number so that tol_error =
+  // 0 stops
+  const RealScalar threshold(
+      internal::iterative_solver_threshold(tol_error, rhsNorm, RealScalar((std::numeric_limits<RealScalar>::min)())));
 
   // Initialize preconditioned Lanczos
   VectorType v_old(N);                // will be initialized inside loop
@@ -67,7 +70,7 @@ EIGEN_DONT_INLINE void minres(const MatrixType& mat, const Rhs& rhs, Dest& x, co
   VectorType w(N);                         // will be initialized inside loop
   VectorType w_new(precond.solve(v_new));  // initialize w_new
   RealScalar beta_new2(v_new.dot(w_new));
-  eigen_assert(beta_new2 >= 0.0 && "PRECONDITIONER IS NOT POSITIVE DEFINITE");
+  eigen_assert(beta_new2 >= RealScalar(0) && "PRECONDITIONER IS NOT POSITIVE DEFINITE");
   RealScalar beta_new(numext::sqrt(beta_new2));
   const RealScalar beta_one(beta_new);
   // Initialize other variables
@@ -103,7 +106,7 @@ EIGEN_DONT_INLINE void minres(const MatrixType& mat, const Rhs& rhs, Dest& x, co
     v_new -= alpha * v;            // overwrite v_new
     w_new = precond.solve(v_new);  // overwrite w_new
     beta_new2 = v_new.dot(w_new);  // compute beta_new
-    eigen_assert(beta_new2 >= 0.0 && "PRECONDITIONER IS NOT POSITIVE DEFINITE");
+    eigen_assert(beta_new2 >= RealScalar(0) && "PRECONDITIONER IS NOT POSITIVE DEFINITE");
     beta_new = numext::sqrt(beta_new2);  // compute beta_new
 
     // Givens rotation

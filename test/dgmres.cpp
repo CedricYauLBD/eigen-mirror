@@ -23,6 +23,9 @@ void test_dgmres_T() {
   //   CALL_SUBTEST( check_sparse_square_solving(dgmres_colmajor_I)     );
   CALL_SUBTEST(check_sparse_square_solving(dgmres_colmajor_ilut));
   // CALL_SUBTEST( check_sparse_square_solving(dgmres_colmajor_ssor)     );
+
+  CALL_SUBTEST(check_sparse_zero_tolerance(dgmres_colmajor_diag));
+  CALL_SUBTEST(check_sparse_zero_tolerance(dgmres_colmajor_ilut));
 }
 
 // Regression: Arnoldi breakdown used to divide by zero (producing NaN in the
@@ -340,6 +343,15 @@ void test_dgmres_deflation_small() {
   VERIFY_IS_APPROX(A * x, b);
 }
 
+// See check_sparse_small_rhs: the solvers returned NoConvergence or an inaccurate x for small |b|.
+template <typename = void>
+void test_dgmres_small_rhs() {
+  DGMRES<SparseMatrix<double>, DiagonalPreconditioner<double> > solver_double;
+  DGMRES<SparseMatrix<float>, DiagonalPreconditioner<float> > solver_float;
+  check_sparse_small_rhs(solver_double);
+  check_sparse_small_rhs(solver_float);
+}
+
 EIGEN_DECLARE_TEST(dgmres) {
   CALL_SUBTEST_1(test_dgmres_T<double>());
   CALL_SUBTEST_2(test_dgmres_T<std::complex<double> >());
@@ -357,4 +369,5 @@ EIGEN_DECLARE_TEST(dgmres) {
   CALL_SUBTEST_8((test_dgmres_deflation<std::complex<double>, IdentityPreconditioner>(std::complex<double>(0, 1))));
   CALL_SUBTEST_8((test_dgmres_deflation<std::complex<double>, DiagonalPreconditioner<std::complex<double> > >(
       std::complex<double>(0, 1))));
+  CALL_SUBTEST_9(test_dgmres_small_rhs<>());
 }

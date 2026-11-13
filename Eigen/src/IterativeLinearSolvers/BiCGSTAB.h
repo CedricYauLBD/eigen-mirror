@@ -51,7 +51,8 @@ bool bicgstab(const MatrixType& mat, const Rhs& rhs, Dest& x, const Precondition
     return true;
   }
 
-  RealScalar tol = tol_error * rhs_norm;
+  RealScalar tol = internal::iterative_solver_threshold(tol_error, rhs_norm,
+                                                        internal::iterative_solver_residual_floor<RealScalar>());
 
   Scalar rho(1);
   Scalar alpha(0);
