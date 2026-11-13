@@ -1129,6 +1129,55 @@ void alpha_zero_skips_kernel() {
     y.noalias() += neg_zero * (A * x);
     VERIFY_IS_CWISE_EQUAL(y, y_ref);
   }
+
+  // A matrix with a single runtime row (column) times a vector takes an inner-product shortcut that must honor the
+  // same contract; the zero factor is spelled as alpha, on the matrix, or on the vector.
+  {
+    using Mat = Matrix<Scalar, Dynamic, Dynamic>;
+    using RowVec = Matrix<Scalar, 1, Dynamic>;
+    Mat A = Mat::Random(1, k);
+    Mat B = Mat::Random(k, 1);
+    Vec x = Vec::Random(k);
+    RowVec z = RowVec::Random(k);
+    A(0, 0) = nan;
+    B(1, 0) = inf;
+    x(1) = inf;
+    z(0) = nan;
+    for (const Scalar& zero : {pos_zero, neg_zero}) {
+      Vec y = Vec::Random(1);
+      const Vec y_ref = y;
+      y.noalias() += zero * (A * x);
+      VERIFY_IS_CWISE_EQUAL(y, y_ref);
+      y.noalias() -= zero * (A * x);
+      VERIFY_IS_CWISE_EQUAL(y, y_ref);
+      y.noalias() += (zero * A) * x;
+      VERIFY_IS_CWISE_EQUAL(y, y_ref);
+      y.noalias() += A * (x * zero);
+      VERIFY_IS_CWISE_EQUAL(y, y_ref);
+      y.noalias() = zero * (A * x);
+      VERIFY_IS_CWISE_EQUAL(y, Vec::Zero(1));
+
+      RowVec r = RowVec::Random(1);
+      const RowVec r_ref = r;
+      r.noalias() += zero * (z * B);
+      VERIFY_IS_CWISE_EQUAL(r, r_ref);
+      r.noalias() -= zero * (z * B);
+      VERIFY_IS_CWISE_EQUAL(r, r_ref);
+      r.noalias() += (zero * z) * B;
+      VERIFY_IS_CWISE_EQUAL(r, r_ref);
+      r.noalias() += z * (B * zero);
+      VERIFY_IS_CWISE_EQUAL(r, r_ref);
+      r.noalias() = zero * (z * B);
+      VERIFY_IS_CWISE_EQUAL(r, RowVec::Zero(1));
+    }
+    // A nonzero alpha still evaluates the product.
+    Vec y = Vec::Zero(1);
+    y.noalias() += Scalar(2) * (A * x);
+    VERIFY((numext::isnan)(y(0)));
+    RowVec r = RowVec::Zero(1);
+    r.noalias() += Scalar(2) * (z * B);
+    VERIFY((numext::isnan)(r(0)));
+  }
 }
 
 template <typename RealScalar, int Options>

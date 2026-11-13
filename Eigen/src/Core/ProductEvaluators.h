@@ -600,6 +600,10 @@ struct generic_product_impl<Lhs, Rhs, DenseShape, DenseShape, GemvProduct>
                                                         std::true_type) {
     // Fallback to inner product if both the lhs and rhs is a runtime vector.
     if (lhs.rows() == 1 && rhs.cols() == 1) {
+      // Same zero-factor contract as the kernels below: a zero must not multiply the operands.
+      if (numext::is_exactly_zero(alpha) || blas_traits<Lhs>::hasZeroScalarFactor(lhs) ||
+          blas_traits<Rhs>::hasZeroScalarFactor(rhs))
+        return;
       dst.coeffRef(0, 0) += alpha * lhs.row(0).conjugate().dot(rhs.col(0));
       return;
     }
