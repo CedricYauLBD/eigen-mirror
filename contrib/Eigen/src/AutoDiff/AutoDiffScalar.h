@@ -162,7 +162,7 @@ class AutoDiffScalar
   template <typename OtherDerType>
   inline AutoDiffScalar& operator=(const AutoDiffScalar<OtherDerType>& other) {
     m_value = other.value();
-    m_derivatives = other.derivatives();
+    assignDerivatives(other.derivatives());
     return *this;
   }
 
@@ -338,6 +338,22 @@ class AutoDiffScalar
   }
 
  protected:
+  // The right-hand side of `x = x + y` or `x += y` is an expression that reads x's derivatives. When the vectors differ
+  // in length, assigning it directly would resize (free) m_derivatives before the expression is read, so evaluate
+  // first. Same-size and fixed-size assignments resize nothing and are evaluated coefficient by coefficient as before.
+  template <typename OtherDerivatives>
+  void assignDerivatives(const OtherDerivatives& other) {
+    EIGEN_IF_CONSTEXPR (int(DerType::SizeAtCompileTime) == Dynamic &&
+                        !std::is_same<internal::remove_all_t<OtherDerivatives>, typename DerType::PlainObject>::value) {
+      if (m_derivatives.size() != 0 && m_derivatives.size() != other.size()) {
+        const typename DerType::PlainObject evaluated = other;
+        m_derivatives = evaluated;
+        return;
+      }
+    }
+    m_derivatives = other;
+  }
+
   Scalar m_value;
   DerType m_derivatives;
 };
