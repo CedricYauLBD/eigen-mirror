@@ -278,6 +278,46 @@ void test_empty() {
   VERIFY_IS_EQUAL(y.size(), 0);
 }
 
+// ---- Empty A with beta != 0: y = beta * y -----------------------------------
+
+template <typename Scalar>
+void test_empty_beta(Index rows, Index cols) {
+  using SpMat = SparseMatrix<Scalar, ColMajor, int>;
+  using Vec = Matrix<Scalar, Dynamic, 1>;
+  using Mat = Matrix<Scalar, Dynamic, Dynamic>;
+  using RealScalar = typename NumTraits<Scalar>::Real;
+
+  SpMat A(rows, cols);
+  A.makeCompressed();
+  const Scalar alpha = gpu_test::make_test_value<Scalar>(RealScalar(2), RealScalar(1));
+  const Scalar betas[] = {gpu_test::make_test_value<Scalar>(RealScalar(3), RealScalar(-2)), Scalar(1), Scalar(0)};
+
+  gpu::Context gctx;
+  gpu::SparseContext<Scalar> ctx(gctx);
+  for (const Scalar& beta : betas) {
+    // SpMV through multiply(), and transposed.
+    Vec x = Vec::Random(cols), y = Vec::Random(rows);
+    auto d_x = gpu::DeviceMatrix<Scalar>::fromHost(x, gctx.stream());
+    auto d_y = gpu::DeviceMatrix<Scalar>::fromHost(y, gctx.stream());
+    ctx.multiply(A, d_x, d_y, alpha, beta);
+    VERIFY_IS_APPROX(Vec(d_y.toHost(gctx.stream())), Vec(beta * y));
+
+    Vec xt = Vec::Random(rows), yt = Vec::Random(cols);
+    auto d_xt = gpu::DeviceMatrix<Scalar>::fromHost(xt, gctx.stream());
+    auto d_yt = gpu::DeviceMatrix<Scalar>::fromHost(yt, gctx.stream());
+    ctx.multiply(A, d_xt, d_yt, alpha, beta, gpu::GpuOp::Trans);
+    VERIFY_IS_APPROX(Vec(d_yt.toHost(gctx.stream())), Vec(beta * yt));
+
+    // SpMM through the uploaded view.
+    Mat X = Mat::Random(cols, 3), Y = Mat::Random(rows, 3);
+    ctx.deviceView(A);
+    auto d_X = gpu::DeviceMatrix<Scalar>::fromHost(X, gctx.stream());
+    auto d_Y = gpu::DeviceMatrix<Scalar>::fromHost(Y, gctx.stream());
+    ctx.spmm_device_exec(d_X, d_Y, alpha, beta);
+    VERIFY_IS_APPROX(Mat(d_Y.toHost(gctx.stream())), Mat(beta * Y));
+  }
+}
+
 // ---- gpu::DeviceMatrix SpMV (no host roundtrip) ----------------------------------
 
 template <typename Scalar>
@@ -609,6 +649,8 @@ void test_scalar() {
   CALL_SUBTEST(test_pattern_replacement<Scalar>(64));
   CALL_SUBTEST(test_reuse<Scalar>(64));
   CALL_SUBTEST(test_empty<Scalar>());
+  CALL_SUBTEST(test_empty_beta<Scalar>(16, 16));
+  CALL_SUBTEST(test_empty_beta<Scalar>(12, 20));
   CALL_SUBTEST(test_spmv_device<Scalar>(64));
   CALL_SUBTEST(test_spmv_expr<Scalar>(64));
   CALL_SUBTEST(test_spmv_affine_expr<Scalar>(64));

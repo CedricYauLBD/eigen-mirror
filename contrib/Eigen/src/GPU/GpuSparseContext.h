@@ -707,11 +707,17 @@ class SparseContext {
     eigen_assert(d_x.rows() * d_x.cols() == x_size);
 
     if (m == 0 || n == 0 || cached_nnz_ == 0) {
-      // Empty A reduces SpMV to y <- beta*y; SparseContext owns no cuBLAS
-      // handle for the scale, so the beta != 0 case must be handled by the caller.
-      eigen_assert(beta == Scalar(0) && "SpMV with empty A and beta != 0 is unsupported; scale d_y externally");
-      if (d_y.rows() * d_y.cols() != y_size) d_y.resize(y_size, 1);
-      d_y.setZero(stream_);
+      // Empty A reduces SpMV to y <- beta*y. SparseContext owns no cuBLAS handle, so the scale runs on the
+      // thread-local Context; the events on d_y order it against this context's stream. A d_y of the wrong
+      // size is new storage with no value to scale, like cusparse with beta == 0.
+      if (d_y.rows() * d_y.cols() != y_size) {
+        d_y.resize(y_size, 1);
+        d_y.setZero(stream_);
+      } else if (beta == Scalar(0)) {
+        d_y.setZero(stream_);
+      } else if (beta != Scalar(1)) {
+        d_y.scale(Context::threadLocal(), beta);
+      }
       return;
     }
 
@@ -749,9 +755,14 @@ class SparseContext {
     eigen_assert(d_X.rows() == k_op);
 
     if (m_op == 0 || n == 0 || cached_nnz_ == 0) {
-      eigen_assert(beta == Scalar(0) && "SpMM with empty A and beta != 0 is unsupported; scale d_Y externally");
-      if (d_Y.rows() != m_op || d_Y.cols() != n) d_Y.resize(m_op, n);
-      d_Y.setZero(stream_);
+      if (d_Y.rows() != m_op || d_Y.cols() != n) {
+        d_Y.resize(m_op, n);
+        d_Y.setZero(stream_);
+      } else if (beta == Scalar(0)) {
+        d_Y.setZero(stream_);
+      } else if (beta != Scalar(1)) {
+        d_Y.scale(Context::threadLocal(), beta);
+      }
       return;
     }
 
@@ -1074,8 +1085,7 @@ DeviceMatrix<Scalar_>& DeviceMatrix<Scalar_>::operator=(const SpMVAffineExpr<Sca
   // The product accumulates into a copy of the addend; when the addend is the destination
   // itself (d_r = d_r - d_A * d_x) cuSPARSE's beta accumulates in place.
   if (&addend != this) copyFrom(Context::threadLocal(), addend);
-  // With no stored entries the expression is beta * addend, which spmv_device_exec cannot
-  // form: SparseContext owns no cuBLAS handle to scale d_y by beta.
+  // With no stored entries the expression is beta * addend: scale the copy, no cuSPARSE call needed.
   if (view.nonZeros() == 0 || view.rows() == 0 || view.cols() == 0) {
     if (expr.beta() != Scalar_(1)) scale(Context::threadLocal(), expr.beta());
     return *this;
