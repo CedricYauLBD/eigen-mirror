@@ -352,12 +352,10 @@ template <typename Kernel, int Traversal = Kernel::AssignmentTraits::Traversal,
 struct dense_assignment_loop {
   // Always inlined so the loop lands in the caller that owns the evaluators (see the slice traversal).
   EIGEN_DEVICE_FUNC static EIGEN_ALWAYS_INLINE constexpr void run(Kernel& kernel) {
-#ifdef __cpp_lib_is_constant_evaluated
     if (internal::is_constant_evaluated())
       dense_assignment_loop_impl<Kernel, Traversal == AllAtOnceTraversal ? AllAtOnceTraversal : DefaultTraversal,
                                  NoUnrolling>::run(kernel);
     else
-#endif
       dense_assignment_loop_impl<Kernel, Traversal, Unrolling>::run(kernel);
   }
 };
@@ -565,7 +563,7 @@ struct dense_assignment_loop_impl<Kernel, LinearVectorizedTraversal, CompleteUnr
   static constexpr int Size = Kernel::AssignmentTraits::SizeAtCompileTime;
   static constexpr int AlignedSize = numext::round_down(Size, PacketSize);
 
-  EIGEN_DEVICE_FUNC static EIGEN_STRONG_INLINE constexpr void run(Kernel& kernel) {
+  EIGEN_DEVICE_FUNC static EIGEN_STRONG_INLINE void run(Kernel& kernel) {
     copy_using_evaluator_linearvec_CompleteUnrolling<Kernel, 0, AlignedSize>::run(kernel);
     // Partial-packet tail. Unlike the NoUnrolling case above, here the size is a
     // compile-time constant and the loop is fully unrolled, so the tail is a
@@ -884,7 +882,7 @@ class generic_dense_assignment_kernel {
                                                         : outer;
   }
 
-  EIGEN_DEVICE_FUNC const Scalar* dstDataPtr() const { return m_dstExpr.data(); }
+  EIGEN_DEVICE_FUNC constexpr const Scalar* dstDataPtr() const { return m_dstExpr.data(); }
 
  protected:
   DstEvaluatorType& m_dst;
@@ -910,8 +908,9 @@ class restricted_packet_dense_assignment_kernel
   using AssignmentTraits = copy_using_evaluator_traits<DstEvaluatorTypeT, SrcEvaluatorTypeT, Functor, 4>;
   using PacketType = typename AssignmentTraits::PacketType;
 
-  EIGEN_DEVICE_FUNC restricted_packet_dense_assignment_kernel(DstEvaluatorTypeT& dst, const SrcEvaluatorTypeT& src,
-                                                              const Functor& func, DstXprType& dstExpr)
+  EIGEN_DEVICE_FUNC constexpr restricted_packet_dense_assignment_kernel(DstEvaluatorTypeT& dst,
+                                                                        const SrcEvaluatorTypeT& src,
+                                                                        const Functor& func, DstXprType& dstExpr)
       : Base(dst, src, func, dstExpr) {}
 };
 
@@ -974,7 +973,8 @@ EIGEN_DEVICE_FUNC EIGEN_ALWAYS_INLINE constexpr void call_dense_assignment_loop(
 }
 
 template <typename DstXprType, typename SrcXprType>
-EIGEN_DEVICE_FUNC EIGEN_ALWAYS_INLINE void call_dense_assignment_loop(DstXprType& dst, const SrcXprType& src) {
+EIGEN_DEVICE_FUNC EIGEN_ALWAYS_INLINE constexpr void call_dense_assignment_loop(DstXprType& dst,
+                                                                                const SrcXprType& src) {
   call_dense_assignment_loop(dst, src, internal::assign_op<typename DstXprType::Scalar, typename SrcXprType::Scalar>());
 }
 
@@ -1018,7 +1018,7 @@ EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE constexpr void call_assignment(Dst& dst, c
   call_assignment(dst, src, internal::assign_op<typename Dst::Scalar, typename Src::Scalar>());
 }
 template <typename Dst, typename Src>
-EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE void call_assignment(const Dst& dst, const Src& src) {
+EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE constexpr void call_assignment(const Dst& dst, const Src& src) {
   call_assignment(dst, src, internal::assign_op<typename Dst::Scalar, typename Src::Scalar>());
 }
 
@@ -1064,8 +1064,9 @@ EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE constexpr void call_assignment_no_alias(Ds
 }
 
 template <typename Dst, typename Src, typename Func>
-EIGEN_DEVICE_FUNC EIGEN_ALWAYS_INLINE void call_restricted_packet_assignment_no_alias(Dst& dst, const Src& src,
-                                                                                      const Func& func) {
+EIGEN_DEVICE_FUNC EIGEN_ALWAYS_INLINE constexpr void call_restricted_packet_assignment_no_alias(Dst& dst,
+                                                                                                const Src& src,
+                                                                                                const Func& func) {
   using DstEvaluatorType = evaluator<Dst>;
   using SrcEvaluatorType = typename dense_assignment_source_evaluator<DstEvaluatorType, Src>::type;
   using Kernel = restricted_packet_dense_assignment_kernel<DstEvaluatorType, SrcEvaluatorType, Func>;
@@ -1104,7 +1105,7 @@ EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE constexpr void call_assignment_no_alias_no
 
 // forward declaration
 template <typename Dst, typename Src>
-EIGEN_DEVICE_FUNC void check_for_aliasing(const Dst& dst, const Src& src);
+EIGEN_DEVICE_FUNC constexpr void check_for_aliasing(const Dst& dst, const Src& src);
 
 // Generic Dense to Dense assignment
 // Note that the last template argument "Weak" is needed to make it possible to perform
@@ -1130,8 +1131,8 @@ struct Assignment<DstXprType, CwiseNullaryOp<scalar_constant_op<typename DstXprT
   using NullaryOp = scalar_constant_op<Scalar>;
   using SrcXprType = CwiseNullaryOp<NullaryOp, SrcPlainObject>;
   using Functor = assign_op<Scalar, Scalar>;
-  EIGEN_DEVICE_FUNC static EIGEN_STRONG_INLINE void run(DstXprType& dst, const SrcXprType& src,
-                                                        const Functor& /*func*/) {
+  EIGEN_DEVICE_FUNC static EIGEN_STRONG_INLINE constexpr void run(DstXprType& dst, const SrcXprType& src,
+                                                                  const Functor& /*func*/) {
     eigen_fill_impl<DstXprType>::run(dst, src);
   }
 };
@@ -1143,8 +1144,8 @@ struct Assignment<DstXprType, CwiseNullaryOp<scalar_zero_op<typename DstXprType:
   using NullaryOp = scalar_zero_op<Scalar>;
   using SrcXprType = CwiseNullaryOp<NullaryOp, SrcPlainObject>;
   using Functor = assign_op<Scalar, Scalar>;
-  EIGEN_DEVICE_FUNC static EIGEN_STRONG_INLINE void run(DstXprType& dst, const SrcXprType& src,
-                                                        const Functor& /*func*/) {
+  EIGEN_DEVICE_FUNC static EIGEN_STRONG_INLINE constexpr void run(DstXprType& dst, const SrcXprType& src,
+                                                                  const Functor& /*func*/) {
     eigen_zero_impl<DstXprType>::run(dst, src);
   }
 };
@@ -1155,7 +1156,7 @@ struct Assignment<DstXprType, CwiseNullaryOp<scalar_zero_op<typename DstXprType:
 // both partial specialization+SFINAE without ambiguous specialization
 template <typename DstXprType, typename SrcXprType, typename Functor, typename Weak>
 struct Assignment<DstXprType, SrcXprType, Functor, EigenBase2EigenBase, Weak> {
-  EIGEN_DEVICE_FUNC static EIGEN_STRONG_INLINE void run(
+  EIGEN_DEVICE_FUNC static EIGEN_STRONG_INLINE constexpr void run(
       DstXprType& dst, const SrcXprType& src,
       const internal::assign_op<typename DstXprType::Scalar, typename SrcXprType::Scalar>& /*func*/) {
     Index dstRows = src.rows();
@@ -1169,7 +1170,7 @@ struct Assignment<DstXprType, SrcXprType, Functor, EigenBase2EigenBase, Weak> {
   // NOTE The following two functions are templated to avoid their instantiation if not needed
   //      This is needed because some expressions supports evalTo only and/or have 'void' as scalar type.
   template <typename SrcScalarType>
-  EIGEN_DEVICE_FUNC static EIGEN_STRONG_INLINE void run(
+  EIGEN_DEVICE_FUNC static EIGEN_STRONG_INLINE constexpr void run(
       DstXprType& dst, const SrcXprType& src,
       const internal::add_assign_op<typename DstXprType::Scalar, SrcScalarType>& /*func*/) {
     Index dstRows = src.rows();
@@ -1181,7 +1182,7 @@ struct Assignment<DstXprType, SrcXprType, Functor, EigenBase2EigenBase, Weak> {
   }
 
   template <typename SrcScalarType>
-  EIGEN_DEVICE_FUNC static EIGEN_STRONG_INLINE void run(
+  EIGEN_DEVICE_FUNC static EIGEN_STRONG_INLINE constexpr void run(
       DstXprType& dst, const SrcXprType& src,
       const internal::sub_assign_op<typename DstXprType::Scalar, SrcScalarType>& /*func*/) {
     Index dstRows = src.rows();

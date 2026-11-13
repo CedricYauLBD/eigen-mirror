@@ -280,7 +280,7 @@ static std::vector<std::string> eigen_assert_list;
     if (report_on_cerr_on_assert_failure) std::cerr << #a << " " __FILE__ << "(" << __LINE__ << ")\n";              \
     Eigen::no_more_assert = true;                                                                                   \
     EIGEN_THROW_X(Eigen::eigen_assert_exception());                                                                 \
-  } else if (Eigen::internal::push_assert) {                                                                        \
+  } else if (!Eigen::internal::is_constant_evaluated() && Eigen::internal::push_assert) {                           \
     eigen_assert_list.push_back(std::string(EIGEN_MAKESTRING(__FILE__) " (" EIGEN_MAKESTRING(__LINE__) ") : " #a)); \
   }
 

@@ -44,6 +44,7 @@ EIGEN_DECLARE_TEST(constexpr) {
   static_assert(mat(0, 0) == 1);
   static_assert(mat(0) == 1);
   static_assert(mat.coeff(0, 1) == 2);
+
   constexpr Array33i arr({{1, 2, 3}, {4, 5, 6}, {7, 8, 9}});
   static_assert(arr(0, 0) == 1);
   static_assert(arr(0) == 1);
@@ -55,7 +56,9 @@ EIGEN_DECLARE_TEST(constexpr) {
   VERIFY_IS_EQUAL(vec.size(), 3);
   static_assert(vec.coeff(0, 1) == 2);
 
-  // Check assignment. A wrapper struct is used to avoid copy elision.
+  // Check assignment. A wrapper struct is used to avoid copy elision. GCC 10 can't evaluate a read of a member
+  // subobject through EigenBase::derived() when this reached EigenBase through PlainObjectBase.
+#if !(EIGEN_COMP_GNUC_STRICT && EIGEN_COMP_GNUC < 1100)
   constexpr ConstexprTest<double, 2> obj1(Matrix2d({{1, 2}, {3, 4}}));
   VERIFY_IS_EQUAL(obj1.A.size(), 4);
   static_assert(obj1.A(0, 0) == 1);
@@ -76,6 +79,7 @@ EIGEN_DECLARE_TEST(constexpr) {
   constexpr ConstexprArrayMoveTest<double, 2> arr_move_obj(Array22d({{1, 2}, {3, 4}}));
   static_assert(arr_move_obj.A(0, 0) == 1);
   static_assert(arr_move_obj.A.coeff(0, 1) == 2);
+#endif
 
   // Also check dynamic size arrays/matrices with fixed-size storage (currently
   // only works if all elements are initialized, since otherwise the compiler
@@ -84,6 +88,7 @@ EIGEN_DECLARE_TEST(constexpr) {
   VERIFY_IS_EQUAL(dyn_mat.size(), 9);
   static_assert(dyn_mat(0, 0) == 1);
   static_assert(dyn_mat.coeff(0, 1) == 2);
+
   constexpr Array<int, Eigen::Dynamic, Eigen::Dynamic, 0, 3, 3> dyn_arr({{1, 2, 3}, {4, 5, 6}, {7, 8, 9}});
   static_assert(dyn_arr(0, 0) == 1);
   static_assert(dyn_arr(0) == 1);
@@ -109,6 +114,12 @@ EIGEN_DECLARE_TEST(constexpr) {
   static_assert(mat_scaled(0, 0) == 2);
   static_assert(mat_scaled(1, 1) == 10);
   static_assert(mat_scaled(2, 2) == 18);
+
+  // Test matrix multiplication.
+  constexpr Matrix3i mat_mult = mat_a * mat_b;
+  static_assert(mat_mult(0, 0) == 30);
+  static_assert(mat_mult(1, 1) == 69);
+  static_assert(mat_mult(2, 2) == 90);
 
 #endif  // __cpp_constexpr >= 201907L
 }

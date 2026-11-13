@@ -75,14 +75,20 @@ EIGEN_DEVICE_FUNC constexpr std::make_unsigned_t<T> unsigned_abs(const T& x) {
 
 // floor(a b / 2^64).
 template <typename Unsigned, std::enable_if_t<sizeof(Unsigned) == 8, int> = 0>
-EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE Unsigned umulhi(Unsigned a, Unsigned b) {
+EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE constexpr Unsigned umulhi(Unsigned a, Unsigned b) {
+#if defined(EIGEN_GPU_COMPILE_PHASE) || defined(EIGEN_SYCL_DEVICE_ONLY) || \
+    (EIGEN_COMP_MSVC && (EIGEN_ARCH_x86_64 || EIGEN_ARCH_ARM64))
+  if (!is_constant_evaluated()) {
 #if defined(EIGEN_GPU_COMPILE_PHASE)
-  return __umul64hi(a, b);
+    return __umul64hi(a, b);
 #elif defined(EIGEN_SYCL_DEVICE_ONLY)
-  return cl::sycl::mul_hi(static_cast<uint64_t>(a), static_cast<uint64_t>(b));
-#elif EIGEN_COMP_MSVC && (EIGEN_ARCH_x86_64 || EIGEN_ARCH_ARM64)
-  return __umulh(a, b);
-#elif EIGEN_HAS_BUILTIN_INT128
+    return cl::sycl::mul_hi(static_cast<uint64_t>(a), static_cast<uint64_t>(b));
+#else
+    return __umulh(a, b);
+#endif
+  }
+#endif
+#if EIGEN_HAS_BUILTIN_INT128 && !defined(EIGEN_GPU_COMPILE_PHASE) && !defined(EIGEN_SYCL_DEVICE_ONLY)
   return static_cast<Unsigned>((static_cast<__uint128_t>(a) * b) >> 64);
 #else
   // Hacker's Delight, 2nd ed., Fig. 8-2: with 32-bit digits, u and w stay below 2^64.
@@ -95,11 +101,11 @@ EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE Unsigned umulhi(Unsigned a, Unsigned b) {
 
 // floor(r 2^k / d) for r < d, which fits in k bits.
 template <typename Unsigned, std::enable_if_t<(sizeof(Unsigned) < 8), int> = 0>
-EIGEN_DEVICE_FUNC Unsigned div_shifted(Unsigned r, Unsigned d) {
+EIGEN_DEVICE_FUNC constexpr Unsigned div_shifted(Unsigned r, Unsigned d) {
   return static_cast<Unsigned>((static_cast<uint64_t>(r) << (CHAR_BIT * sizeof(Unsigned))) / d);
 }
 template <typename Unsigned, std::enable_if_t<sizeof(Unsigned) == 8, int> = 0>
-EIGEN_DEVICE_FUNC Unsigned div_shifted(Unsigned r, Unsigned d) {
+EIGEN_DEVICE_FUNC constexpr Unsigned div_shifted(Unsigned r, Unsigned d) {
 #if EIGEN_HAS_BUILTIN_INT128 && !defined(EIGEN_GPU_COMPILE_PHASE) && !defined(__SYCL_DEVICE_ONLY__)
   return static_cast<Unsigned>((static_cast<__uint128_t>(r) << 64) / d);
 #else
