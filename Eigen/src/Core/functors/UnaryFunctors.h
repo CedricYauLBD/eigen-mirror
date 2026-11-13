@@ -449,11 +449,12 @@ struct scalar_ldexp_op {
     const int digits = NumTraits<Scalar>::digits();
     const int bound = NumTraits<Scalar>::max_exponent() - NumTraits<Scalar>::min_exponent() + digits;
     const Scalar exponent = static_cast<Scalar>(m_exponent);
-    const bool exact = bound < (1 << (digits < 24 ? digits : 24));  // 24: avoids overflowing int
+    const int pow2_digits = 1 << (digits < 24 ? digits : 24);  // 2^digits; the cap at 2^24 avoids overflowing int
+    const bool exact = bound < pow2_digits;
     if (exact || m_exponent > bound || m_exponent < -bound || static_cast<double>(exponent) == m_exponent) {
       return internal::pldexp(a, pset1<Packet>(exponent));
     }
-    const int step = m_exponent < 0 ? -(1 << digits) : (1 << digits);
+    const int step = m_exponent < 0 ? -pow2_digits : pow2_digits;
     return internal::pldexp(internal::pldexp(a, pset1<Packet>(static_cast<Scalar>(m_exponent - step))),
                             pset1<Packet>(static_cast<Scalar>(step)));
   }
