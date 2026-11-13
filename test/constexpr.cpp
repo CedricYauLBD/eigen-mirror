@@ -56,7 +56,9 @@ EIGEN_DECLARE_TEST(constexpr) {
   VERIFY_IS_EQUAL(vec.size(), 3);
   static_assert(vec.coeff(0, 1) == 2);
 
-  // Check assignment. A wrapper struct is used to avoid copy elision.
+  // Check assignment. A wrapper struct is used to avoid copy elision. GCC 10 can't evaluate a read of a member
+  // subobject through EigenBase::derived() when this reached EigenBase through PlainObjectBase.
+#if !(EIGEN_COMP_GNUC_STRICT && EIGEN_COMP_GNUC < 1100)
   constexpr ConstexprTest<double, 2> obj1(Matrix2d({{1, 2}, {3, 4}}));
   VERIFY_IS_EQUAL(obj1.A.size(), 4);
   static_assert(obj1.A(0, 0) == 1);
@@ -77,6 +79,7 @@ EIGEN_DECLARE_TEST(constexpr) {
   constexpr ConstexprArrayMoveTest<double, 2> arr_move_obj(Array22d({{1, 2}, {3, 4}}));
   static_assert(arr_move_obj.A(0, 0) == 1);
   static_assert(arr_move_obj.A.coeff(0, 1) == 2);
+#endif
 
   // Also check dynamic size arrays/matrices with fixed-size storage (currently
   // only works if all elements are initialized, since otherwise the compiler
