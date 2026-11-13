@@ -629,8 +629,7 @@ EIGEN_DEFINE_FUNCTION_ALLOWING_MULTIPLE_DEFINITIONS Packet generic_atan(const Pa
 // smaller than either point (the error at the clamp is stated at ptanh_float and ptanh_double). Packets use pmadd,
 // which is deterministic.
 template <typename T>
-EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE T ptanh_saturate(const T& x, const T& tanh_x, const T&, std::false_type) {
-  EIGEN_UNUSED_VARIABLE(x);
+EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE T ptanh_saturate(const T&, const T& tanh_x, const T&, std::false_type) {
   return tanh_x;
 }
 template <typename T>
@@ -656,9 +655,8 @@ template <typename T>
 EIGEN_DEFINE_FUNCTION_ALLOWING_MULTIPLE_DEFINITIONS T ptanh_float(const T& a_x) {
   // Clamp the inputs to the range [-c, c] and set everything
   // outside that range to 1.0. The value c is chosen as the smallest
-  // floating point argument such that the approximation is exactly 1,
-  // which is short of where tanh rounds to 1. This saves clamping the
-  // value at the end.
+  // floating point argument such that the approximation is exactly 1.
+  // This saves clamping the value at the end.
 #ifdef EIGEN_VECTORIZE_FMA
   constexpr float kClamp = 8.01773357391357422f;
 #else
@@ -760,9 +758,8 @@ template <typename T>
 EIGEN_DEFINE_FUNCTION_ALLOWING_MULTIPLE_DEFINITIONS T ptanh_double(const T& a_x) {
   // Clamp the inputs to the range [-c, c] and set everything
   // outside that range to 1.0. The value c is chosen as the smallest
-  // floating point argument such that the approximation is exactly 1,
-  // which is short of where tanh rounds to 1. This saves clamping the
-  // value at the end.
+  // floating point argument such that the approximation is exactly 1.
+  // This saves clamping the value at the end.
 #ifdef EIGEN_VECTORIZE_FMA
   constexpr double kClamp = 17.6610191624600077;
 #else
