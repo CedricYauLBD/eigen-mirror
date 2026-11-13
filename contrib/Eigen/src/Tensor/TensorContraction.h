@@ -576,22 +576,8 @@ struct TensorContractionEvaluatorBase {
       }
     }
 
-    // A rank-0 operand has no strides: its arrays have no element to initialize.
-    array<Index, LDims> lhs_strides;
-    EIGEN_IF_CONSTEXPR (LDims > 0) {
-      lhs_strides[0] = 1;
-      for (int i = 0; i < LDims - 1; ++i) {
-        lhs_strides[i + 1] = lhs_strides[i] * eval_left_dims[i];
-      }
-    }
-
-    array<Index, RDims> rhs_strides;
-    EIGEN_IF_CONSTEXPR (RDims > 0) {
-      rhs_strides[0] = 1;
-      for (int i = 0; i < RDims - 1; ++i) {
-        rhs_strides[i + 1] = rhs_strides[i] * eval_right_dims[i];
-      }
-    }
+    const DSizes<Index, LDims> lhs_strides = internal::strides<ColMajor>(eval_left_dims);
+    const DSizes<Index, RDims> rhs_strides = internal::strides<ColMajor>(eval_right_dims);
 
     m_i_size = 1;
     m_j_size = 1;
