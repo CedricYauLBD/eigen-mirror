@@ -437,8 +437,9 @@ void check_exp_family_accuracy() {
                                             Scalar(0.1), Scalar(0.7), Scalar(3)};
   // The largest finite results of exp and expm1 need a scale 2^m with m at the top of the exponent range.
   const Scalar exp_edge = is_float ? Scalar(88.38) : Scalar(709.1);
-  const std::vector<Scalar> large_values = {exp_edge, is_float ? Scalar(88.5) : Scalar(709.5),
-                                            is_float ? Scalar(88.72) : Scalar(709.78), Scalar(10), Scalar(-10)};
+  const std::vector<Scalar> large_values = {
+      exp_edge,    is_float ? Scalar(88.5) : Scalar(709.5), is_float ? Scalar(88.72) : Scalar(709.78), Scalar(10),
+      Scalar(-10), is_float ? Scalar(-80) : Scalar(-700)};
   // Arguments up to the largest finite value, where asinh and acosh switch to log(2 x) without squaring x.
   const std::vector<Scalar> huge_values = {is_float ? Scalar(1e10) : Scalar(1e150),
                                            is_float ? Scalar(1e30) : Scalar(1e300),
@@ -462,9 +463,7 @@ void check_exp_family_accuracy() {
   // Every call runs, so that one failure report lists all the functions that are wrong.
   bool passed = true;
   passed &= check_fastmath_accuracy("exp", small_values, exp_fn, exp_ref);
-  // On a target without fma, -ffast-math fuses the two products of the range reduction of exp and loses its low bits
-  // for large |x|, so only the overflow edge of float is covered here.
-  if (is_float) passed &= check_fastmath_accuracy("exp", large_values, exp_fn, exp_ref);
+  passed &= check_fastmath_accuracy("exp", large_values, exp_fn, exp_ref);
   passed &= check_fastmath_accuracy("expm1", small_values, expm1_fn, expm1_ref);
   passed &= check_fastmath_accuracy("expm1", large_values, expm1_fn, expm1_ref);
   passed &= check_fastmath_accuracy("log1p", small_values, log1p_fn, log1p_ref);
@@ -546,14 +545,19 @@ template <typename Scalar>
 void check_complex_exp_overflow() {
   using Complex = std::complex<Scalar>;
   const bool is_float = std::is_same<Scalar, float>::value;
-  // Real parts above x_overflow of pexp_complex, the bound of the split, which lies 4 epsilon below ln(highest): the
-  // value after it, ln(highest), where exp(x) is the largest finite value, and larger ones.
+  // Real parts at x_overflow of pexp_complex, the bound of the split, which lies 4 epsilon below ln(highest), and next
+  // to it; ln(highest), where exp(x) is the largest finite value; and larger ones. Up to x_overflow exp(x) is computed
+  // by the packet exp.
   using Bits = typename numext::get_integer_by_size<sizeof(Scalar)>::unsigned_type;
   const Scalar x_overflow = Scalar(NumTraits<Scalar>::max_exponent()) * Scalar(EIGEN_LN2) *
                             (Scalar(1) - Scalar(4) * NumTraits<Scalar>::epsilon());
   const Bits x_overflow_bits = numext::bit_cast<Bits>(x_overflow);
   const std::vector<Scalar> x_values = {
-      is_float ? Scalar(89) : Scalar(710), is_float ? Scalar(92) : Scalar(720), is_float ? Scalar(95) : Scalar(735),
+      is_float ? Scalar(89) : Scalar(710),
+      is_float ? Scalar(92) : Scalar(720),
+      is_float ? Scalar(95) : Scalar(735),
+      numext::bit_cast<Scalar>(Bits(x_overflow_bits - 1)),
+      x_overflow,
       numext::bit_cast<Scalar>(Bits(x_overflow_bits + 1)),
       static_cast<Scalar>(::logl(static_cast<long double>(NumTraits<Scalar>::highest())))};
   const Scalar y_values[] = {Scalar(1.5707963267948966), Scalar(3.141592653589793), Scalar(-1.5707963267948966),

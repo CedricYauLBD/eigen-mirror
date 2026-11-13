@@ -512,6 +512,7 @@ EIGEN_DEFINE_FUNCTION_ALLOWING_MULTIPLE_DEFINITIONS Packet pexp_float(const Pack
   const Packet cst_cephes_exp_C1 = pset1<Packet>(-0.693359375f);
   const Packet cst_cephes_exp_C2 = pset1<Packet>(2.12194440e-4f);
   Packet r = pmadd(m, cst_cephes_exp_C1, x);
+  pbarrier(r);  // -ffast-math would otherwise fuse the two products into m (C1 + C2), which rounds.
   r = pmadd(m, cst_cephes_exp_C2, r);
 
   Packet y = pexp_float_reduced(r);
@@ -632,6 +633,7 @@ EIGEN_DEFINE_FUNCTION_ALLOWING_MULTIPLE_DEFINITIONS Packet pexp_double(const Pac
   // n*log(2) out in two steps, i.e. n*C1 + n*C2, C1+C2=log2 to get the last
   // digits right.
   x = pnmadd(fx, cst_cephes_exp_C1, x);
+  pbarrier(x);  // -ffast-math would otherwise fuse the two products into fx (C1 + C2), which rounds.
   x = pnmadd(fx, cst_cephes_exp_C2, x);
 
   x = pexp_double_reduced(x);
