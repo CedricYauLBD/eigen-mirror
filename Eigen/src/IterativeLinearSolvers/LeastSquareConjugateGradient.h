@@ -18,6 +18,18 @@ namespace Eigen {
 
 namespace internal {
 
+/** \internal The number of terms of a dot product of A' r: the average number of nonzeros per column of A when A
+ * exposes nonZeros() (for a dense matrix that is its number of rows), and else the number of rows. */
+template <typename RealScalar, typename MatrixType>
+auto least_square_dot_length(const MatrixType& mat, int) -> decltype(RealScalar(mat.nonZeros())) {
+  return numext::maxi(RealScalar(1),
+                      RealScalar(RealScalar(mat.nonZeros()) / RealScalar(numext::maxi(mat.cols(), Index(1)))));
+}
+template <typename RealScalar, typename MatrixType>
+RealScalar least_square_dot_length(const MatrixType& mat, long) {
+  return RealScalar(mat.rows());
+}
+
 /** \internal Low-level conjugate gradient algorithm for least-square problems
  * \param mat The matrix A
  * \param rhs The right hand side vector b
@@ -26,9 +38,12 @@ namespace internal {
  *                approximation of A'Ax=b (regardless of b)
  * \param iters On input the max number of iteration, on output the number of performed iterations.
  * \param tol_error On input the tolerance error, on output an estimation of the relative error.
+ * \return true if \a tol_error meets the tolerance, or if the normal-equation residual has reached its rounding floor
+ *         \f$ \sqrt{L}\, \epsilon \|A\| \|r\| \f$, L the number of nonzeros per column of A, below which it
+ *         cannot be resolved.
  */
 template <typename MatrixType, typename Rhs, typename Dest, typename Preconditioner>
-EIGEN_DONT_INLINE void least_square_conjugate_gradient(const MatrixType& mat, const Rhs& rhs, Dest& x,
+EIGEN_DONT_INLINE bool least_square_conjugate_gradient(const MatrixType& mat, const Rhs& rhs, Dest& x,
                                                        const Preconditioner& precond, Index& iters,
                                                        typename Dest::RealScalar& tol_error) {
   using RealScalar = typename Dest::RealScalar;
@@ -49,20 +64,24 @@ EIGEN_DONT_INLINE void least_square_conjugate_gradient(const MatrixType& mat, co
     x.setZero();
     iters = 0;
     tol_error = 0;
-    return;
+    return true;
   }
   RealScalar threshold = tol * rhsNorm;
   RealScalar residualNorm = normal_residual.stableNorm();
   if (residualNorm == 0 || residualNorm < threshold) {
     iters = 0;
     tol_error = residualNorm / rhsNorm;
-    return;
+    return true;
   }
 
   // Keep the quadratic recurrence terms representable for very small or large residuals.
   const RealScalar residualScale = internal::iterative_solver_scaling_factor(residualNorm);
   normal_residual /= residualScale;
-  threshold /= residualScale;
+  residualNorm /= residualScale;
+  // The threshold and the floor are in units of the scaled residual; the floor makes tol_error = 0 stop where the
+  // squares of the residual would underflow.
+  threshold = internal::iterative_solver_threshold(tol, RealScalar(rhsNorm / residualScale),
+                                                   internal::iterative_solver_residual_floor<RealScalar>());
 
   VectorType p(n);
   p = precond.solve(normal_residual);  // initial search direction
@@ -70,10 +89,32 @@ EIGEN_DONT_INLINE void least_square_conjugate_gradient(const MatrixType& mat, co
   VectorType z(n), tmp(m);
   RealScalar absNew = numext::real(normal_residual.dot(p));  // the square of the absolute value of r scaled by invM
   Index i = 0;
+  // The gradient A' r cannot be resolved below about sqrt(L) eps |A| |r|, the rounding error of its dot products of L
+  // terms, the nonzeros of a column of A (Higham and Mary, SIAM J. Sci. Comput. 41(5), 2019), and CG iterates on that
+  // noise past it and can diverge (Hestenes and Stiefel 1952; Bjorck, Numerical Methods for Least Squares Problems,
+  // SIAM 1996). |A| is bounded below by |A p| / |p|. The floor is in units of the scaled normal residual. The squares
+  // of p and r / scale cost one pass each, and are not used if they overflow.
+  const RealScalar eps = NumTraits<RealScalar>::epsilon();
+  const RealScalar sqrtLength = numext::sqrt(internal::least_square_dot_length<RealScalar>(mat, 0));
+  RealScalar normA(0);
+  const auto gradientFloor = [&](RealScalar apNorm) {
+    const RealScalar pNorm2 = p.squaredNorm();
+    if (pNorm2 > RealScalar(0) && (numext::isfinite)(pNorm2))
+      normA = numext::maxi(normA, RealScalar(apNorm / numext::sqrt(pNorm2)));
+    const RealScalar rNorm2 = (residual / residualScale).squaredNorm();
+    return (numext::isfinite)(rNorm2) ? RealScalar(sqrtLength * eps * normA * numext::sqrt(rNorm2)) : RealScalar(0);
+  };
+  bool atFloor = false;
   while (i < maxIters) {
     tmp.noalias() = mat * p;
 
-    Scalar alpha = absNew / tmp.squaredNorm();             // the amount we travel on dir
+    const RealScalar tmpNorm2 = tmp.squaredNorm();
+    Scalar alpha = absNew / tmpNorm2;  // the amount we travel on dir
+    if (!(tmpNorm2 > RealScalar(0)) || !(numext::isfinite)(numext::real(alpha))) {
+      // A p vanishes, so the step is not defined: p is numerically in the null space of A.
+      atFloor = residualNorm <= gradientFloor(numext::sqrt(tmpNorm2));
+      break;
+    }
     x += (residualScale * alpha) * p;                      // update solution
     residual -= (residualScale * alpha) * tmp;             // update residual
     normal_residual.noalias() = mat.adjoint() * residual;  // update residual of the normal equation
@@ -81,6 +122,12 @@ EIGEN_DONT_INLINE void least_square_conjugate_gradient(const MatrixType& mat, co
 
     residualNorm = normal_residual.stableNorm();
     if (residualNorm < threshold) break;
+
+    // Past the floor the gradient is noise: stop with the current iterate, which is as good as any later one.
+    if (residualNorm <= gradientFloor(numext::sqrt(tmpNorm2))) {
+      atFloor = true;
+      break;
+    }
 
     z = precond.solve(normal_residual);  // approximately solve for "A'A z = normal_residual"
 
@@ -92,6 +139,7 @@ EIGEN_DONT_INLINE void least_square_conjugate_gradient(const MatrixType& mat, co
   }
   tol_error = residualNorm / (rhsNorm / residualScale);
   iters = i;
+  return tol_error <= tol || atFloor;
 }
 
 }  // namespace internal
@@ -127,6 +175,12 @@ struct traits<LeastSquaresConjugateGradient<MatrixType_, Preconditioner_> > {
   * The maximal number of iterations and tolerance value can be controlled via the setMaxIterations()
   * and setTolerance() methods. The defaults are twice the number of columns of the matrix for the maximal
   * number of iterations and NumTraits<Scalar>::epsilon() for the tolerance.
+  *
+  * The tolerance bounds the normal-equation residual \f$ |A'(Ax-b)|/|A'b| \f$, which cannot be evaluated below its
+  * rounding error, about \f$ \sqrt{L}\, \epsilon |A| |Ax-b| \f$ for a matrix A with L nonzeros per column (m for a
+  * dense m x n matrix). The iteration stops with Success when the residual reaches that floor, as it can only iterate
+  * on rounding noise past it, so a tolerance below the floor, such as the default, is met whenever the solution is as
+  * accurate as the arithmetic permits.
   *
   * This class can be used as the direct solver classes. Here is a typical usage example:
     \code
@@ -188,8 +242,9 @@ class LeastSquaresConjugateGradient
     m_iterations = Base::maxIterations();
     m_error = Base::m_tolerance;
 
-    internal::least_square_conjugate_gradient(matrix(), b, x, Base::m_preconditioner, m_iterations, m_error);
-    m_info = m_error <= Base::m_tolerance ? Success : NoConvergence;
+    const bool converged =
+        internal::least_square_conjugate_gradient(matrix(), b, x, Base::m_preconditioner, m_iterations, m_error);
+    m_info = converged ? Success : NoConvergence;
   }
 };
 

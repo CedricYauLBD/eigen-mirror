@@ -95,7 +95,9 @@ bool idrs(const MatrixType& A, const Rhs& b, Dest& x, const Preconditioner& prec
   const RealScalar mp = RealScalar(1e3) * NumTraits<Scalar>::epsilon();
 
   // Compute initial residual
-  const RealScalar tolb = tol * normb;  // Relative tolerance
+  // Relative tolerance, at least the residual floor so that tol = 0 stops at a vanishing residual
+  const RealScalar tolb =
+      internal::iterative_solver_threshold(tol, normb, internal::iterative_solver_residual_floor<RealScalar>());
   VectorType r = b - A * x;
 
   VectorType x_s, r_s;
@@ -129,8 +131,8 @@ bool idrs(const MatrixType& A, const Rhs& b, Dest& x, const Preconditioner& prec
   // r and x follow separate recurrences, and A U(:,k) = G(:,k) holds only up to the rounding error of the
   // bi-orthogonalization, which grows with cond(A) and with the cancellation in G(:,k). The recurrence residual can
   // then fall below the tolerance while b - A x does not. Accept convergence only when b - A x confirms it, and restart
-  // from the current iterate otherwise. A restart counts as an iteration, which bounds their number. A residual that is
-  // not finite ends the iteration, and the caller reports NoConvergence.
+  // from the current iterate otherwise, unless no iteration is left. A restart counts as an iteration, which bounds
+  // their number by maxit. A residual that is not finite ends the iteration, and the caller reports NoConvergence.
   const auto done = [&]() {
     if (!(numext::isfinite)(normr)) {
       return true;
@@ -143,7 +145,7 @@ bool idrs(const MatrixType& A, const Rhs& b, Dest& x, const Preconditioner& prec
     }
     r.noalias() = b - A * x;
     normr = r.stableNorm();
-    if (normr <= tolb) {
+    if (normr <= tolb || iter >= maxit) {
       return true;
     }
     if (smoothing) {

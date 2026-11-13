@@ -19,6 +19,11 @@ void test_idrs_T() {
 
   CALL_SUBTEST(check_sparse_square_solving(idrs_colmajor_diag));
   CALL_SUBTEST(check_sparse_square_solving(idrs_colmajor_ilut));
+
+  CALL_SUBTEST(check_sparse_zero_tolerance(idrs_colmajor_diag));
+  CALL_SUBTEST(check_sparse_zero_tolerance(idrs_colmajor_ilut));
+
+  CALL_SUBTEST(check_sparse_default_tolerance(idrs_colmajor_diag));
 }
 
 // Residual smoothing used to scale its line search by |t| instead of |t|^2 and diverged.
@@ -133,6 +138,15 @@ void test_idrs_default_tolerance() {
   VERIFY_IS_EQUAL(solver.iterations(), 0);
 }
 
+// See check_sparse_small_rhs: the solvers returned NoConvergence or an inaccurate x for small |b|.
+template <typename = void>
+void test_idrs_small_rhs() {
+  IDRS<SparseMatrix<double>, DiagonalPreconditioner<double> > solver_double;
+  IDRS<SparseMatrix<float>, DiagonalPreconditioner<float> > solver_float;
+  check_sparse_small_rhs(solver_double);
+  check_sparse_small_rhs(solver_float);
+}
+
 EIGEN_DECLARE_TEST(idrs) {
   CALL_SUBTEST_1(test_idrs_T<double>());
   CALL_SUBTEST_2(test_idrs_T<std::complex<double> >());
@@ -144,4 +158,5 @@ EIGEN_DECLARE_TEST(idrs) {
   CALL_SUBTEST_2(test_idrs_true_residual<std::complex<double> >());
   CALL_SUBTEST_1(test_idrs_default_tolerance<double>());
   CALL_SUBTEST_2(test_idrs_default_tolerance<std::complex<double> >());
+  CALL_SUBTEST_1(test_idrs_small_rhs<>());
 }
