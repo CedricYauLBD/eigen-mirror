@@ -1267,7 +1267,7 @@ struct scalar_bitwise_not_op {
     return bitwise_unary_impl<Scalar>::run_not(a);
   }
   template <typename Packet>
-  EIGEN_STRONG_INLINE Packet packetOp(const Packet& a) const {
+  EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE Packet packetOp(const Packet& a) const {
     return pandnot(ptrue(a), a);
   }
 };
