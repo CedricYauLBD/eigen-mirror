@@ -390,6 +390,64 @@ void test_fwd_padding(int nfft) {
   VERIFY_IS_APPROX(actual, expected);
 }
 
+// An empty operand has an empty transform; no backend can plan a transform of length zero.
+template <typename T>
+void test_empty_operands() {
+  using Complex = typename FFT<T>::Complex;
+  using RealVector = Matrix<T, Dynamic, 1>;
+  using ComplexVector = Matrix<Complex, Dynamic, 1>;
+  using RealRowVector = Matrix<T, 1, Dynamic>;
+  using ComplexRowVector = Matrix<Complex, 1, Dynamic>;
+
+  for (int half = 0; half < 2; ++half) {
+    FFT<T> fft;
+    if (half) fft.SetFlag(fft.HalfSpectrum);
+
+    RealVector real_in(0);
+    ComplexVector complex_in(0), complex_out(3);
+    fft.fwd(complex_out, real_in);
+    VERIFY_IS_EQUAL(complex_out.size(), 0);
+    complex_out.resize(3);
+    fft.fwd(complex_out, complex_in);
+    VERIFY_IS_EQUAL(complex_out.size(), 0);
+    VERIFY_IS_EQUAL(fft.fwd(real_in).size(), 0);
+
+    RealVector real_out(3);
+    fft.inv(real_out, complex_in);
+    VERIFY_IS_EQUAL(real_out.size(), 0);
+    complex_out.resize(3);
+    fft.inv(complex_out, complex_in);
+    VERIFY_IS_EQUAL(complex_out.size(), 0);
+
+    RealRowVector real_row_in(0), real_row_out(3);
+    ComplexRowVector complex_row_in(0), complex_row_out(3);
+    fft.fwd(complex_row_out, real_row_in);
+    VERIFY_IS_EQUAL(complex_row_out.size(), 0);
+    complex_row_out.resize(3);
+    fft.inv(real_row_out, complex_row_in);
+    VERIFY_IS_EQUAL(real_row_out.size(), 0);
+
+    std::vector<T> real_vector;
+    std::vector<Complex> complex_vector, complex_vector_out(3);
+    std::vector<T> real_vector_out(3);
+    fft.fwd(complex_vector_out, real_vector);
+    VERIFY_IS_EQUAL(complex_vector_out.size(), size_t(0));
+    complex_vector_out.resize(3);
+    fft.fwd(complex_vector_out, complex_vector);
+    VERIFY_IS_EQUAL(complex_vector_out.size(), size_t(0));
+    fft.inv(real_vector_out, complex_vector);
+    VERIFY_IS_EQUAL(real_vector_out.size(), size_t(0));
+    std::vector<Complex> complex_vector_back(3);
+    fft.inv(complex_vector_back, complex_vector);
+    VERIFY_IS_EQUAL(complex_vector_back.size(), size_t(0));
+
+    // An explicit length pads the empty operand with zeros.
+    fft.fwd(complex_out, real_in, 4);
+    VERIFY_IS_EQUAL(complex_out.size(), half ? 3 : 4);
+    VERIFY(complex_out.isZero());
+  }
+}
+
 inline void test_return_by_value(int len) {
   VectorXf in;
   VectorXf in1;
@@ -612,6 +670,8 @@ EIGEN_DECLARE_TEST(FFTW) {
   CALL_SUBTEST(test_strided_row_operands<double>(32));
   CALL_SUBTEST(test_strided_row_operands<double>(2 * 3 * 4 * 5));
   CALL_SUBTEST(test_return_by_value(32));
+  CALL_SUBTEST(test_empty_operands<float>());
+  CALL_SUBTEST(test_empty_operands<double>());
   // Regression test for #1537 -- reuse one FFT object for both real and
   // complex inputs of the same size.
   CALL_SUBTEST(test_reuse_real_and_complex<float>(32));

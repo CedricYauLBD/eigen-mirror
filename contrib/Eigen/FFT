@@ -272,11 +272,15 @@ class FFT {
   inline void ClearFlag(Flag f) { m_flag &= (~(int)f); }
 
   inline void fwd(Complex* dst, const Scalar* src, Index nfft) {
+    if (nfft <= 0) return;  // the backends cannot plan an empty transform
     m_impl.fwd(dst, src, static_cast<int>(nfft));
     if (HasFlag(HalfSpectrum) == false) ReflectSpectrum(dst, nfft);
   }
 
-  inline void fwd(Complex* dst, const Complex* src, Index nfft) { m_impl.fwd(dst, src, static_cast<int>(nfft)); }
+  inline void fwd(Complex* dst, const Complex* src, Index nfft) {
+    if (nfft <= 0) return;
+    m_impl.fwd(dst, src, static_cast<int>(nfft));
+  }
 
 #if defined EIGEN_FFTW_DEFAULT || defined EIGEN_POCKETFFT_DEFAULT || defined EIGEN_DUCCFFT_DEFAULT || \
     defined EIGEN_MKL_DEFAULT
@@ -287,13 +291,13 @@ class FFT {
   inline void fwd(std::vector<Complex>& dst, const std::vector<Input_>& src) {
     EIGEN_IF_CONSTEXPR (NumTraits<Input_>::IsComplex == 0) {
       if (HasFlag(HalfSpectrum))
-        dst.resize((src.size() >> 1) + 1);  // half the bins + Nyquist bin
+        dst.resize(src.empty() ? 0 : (src.size() >> 1) + 1);  // half the bins + Nyquist bin
       else
         dst.resize(src.size());
     } else {
       dst.resize(src.size());
     }
-    fwd(&dst[0], &src[0], src.size());
+    fwd(dst.data(), src.data(), src.size());
   }
 
   template <typename InputDerived, typename ComplexDerived>
@@ -314,7 +318,7 @@ class FFT {
 
     Index dst_size = nfft;
     EIGEN_IF_CONSTEXPR (NumTraits<src_type>::IsComplex == 0) {
-      if (HasFlag(HalfSpectrum)) {
+      if (HasFlag(HalfSpectrum) && nfft > 0) {
         dst_size = (nfft >> 1) + 1;
       }
     }
@@ -358,11 +362,13 @@ class FFT {
   }
 
   inline void inv(Complex* dst, const Complex* src, Index nfft) {
+    if (nfft <= 0) return;
     m_impl.inv(dst, src, static_cast<int>(nfft));
     if (HasFlag(Unscaled) == false) scale(dst, Scalar(1. / nfft), nfft);  // scale the time series
   }
 
   inline void inv(Scalar* dst, const Complex* src, Index nfft) {
+    if (nfft <= 0) return;
     m_impl.inv(dst, src, static_cast<int>(nfft));
     if (HasFlag(Unscaled) == false) scale(dst, Scalar(1. / nfft), nfft);  // scale the time series
   }
@@ -385,11 +391,12 @@ class FFT {
 
     if (nfft < 1) {  // automatic FFT size determination
       if (realfft && HasFlag(HalfSpectrum))
-        nfft = 2 * (src.size() - 1);  // assume even fft size
+        nfft = src.size() > 0 ? 2 * (src.size() - 1) : 0;  // assume even fft size
       else
         nfft = src.size();
     }
     internal::fft_resize_as_vector(dst, nfft, src.rows() == 1);
+    if (nfft == 0) return;
 
     // check for nfft that does not fit the input data size
     Index resize_input = (realfft && HasFlag(HalfSpectrum)) ? ((nfft / 2 + 1) - src.size()) : (nfft - src.size());
@@ -443,10 +450,12 @@ class FFT {
 
   template <typename Output_>
   inline void inv(std::vector<Output_>& dst, const std::vector<Complex>& src, Index nfft = -1) {
-    if (nfft < 1)
-      nfft = (NumTraits<Output_>::IsComplex == 0 && HasFlag(HalfSpectrum)) ? 2 * (src.size() - 1) : src.size();
+    if (nfft < 1) {
+      nfft = src.size();
+      if (NumTraits<Output_>::IsComplex == 0 && HasFlag(HalfSpectrum)) nfft = nfft > 0 ? 2 * (nfft - 1) : 0;
+    }
     dst.resize(nfft);
-    inv(&dst[0], &src[0], nfft);
+    inv(dst.data(), src.data(), nfft);
   }
 
 #if defined EIGEN_FFTW_DEFAULT || defined EIGEN_POCKETFFT_DEFAULT || defined EIGEN_DUCCFFT_DEFAULT || \
