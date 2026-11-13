@@ -903,23 +903,24 @@ void integer_norms() {
 
   // The root is exact beyond the 53 bits of double. For r = 2^18 + 1, a sum of cubes r^3 - 1 has floor(cbrt) = r - 1.
   if (sizeof(Scalar) >= 8) {
-    const Scalar r = Scalar(262145);
-    Scalar remainder = r * r * r - 1;
+    // In int64_t, so that the branch compiles without overflow for the narrower integer scalars too.
+    const int64_t r = 262145;
+    int64_t remainder = r * r * r - 1;
     std::vector<Scalar> parts;
     while (remainder > 0) {
-      Scalar c = Scalar(std::cbrt(double(remainder)));
+      int64_t c = int64_t(std::cbrt(double(remainder)));
       while ((c + 1) * (c + 1) * (c + 1) <= remainder) ++c;
       while (c * c * c > remainder) --c;
-      parts.push_back(c);
+      parts.push_back(Scalar(c));
       remainder -= c * c * c;
     }
     Vec cubes(Index(parts.size()));
     for (Index i = 0; i < cubes.size(); ++i) cubes(i) = parts[size_t(i)];
-    VERIFY_IS_EQUAL(cubes.cwiseAbs2().cwiseProduct(cubes.cwiseAbs()).sum(), r * r * r - 1);
-    VERIFY_IS_EQUAL(cubes.template lpNorm<3>(), r - 1);
+    VERIFY_IS_EQUAL(cubes.cwiseAbs2().cwiseProduct(cubes.cwiseAbs()).sum(), Scalar(r * r * r - 1));
+    VERIFY_IS_EQUAL(cubes.template lpNorm<3>(), Scalar(r - 1));
     Vec at_root(1);
-    at_root << r;  // r^3 does not exceed the sum
-    VERIFY_IS_EQUAL(at_root.template lpNorm<3>(), r);
+    at_root << Scalar(r);  // r^3 does not exceed the sum
+    VERIFY_IS_EQUAL(at_root.template lpNorm<3>(), Scalar(r));
   }
 
   // A p outside the documented domain terminates.
