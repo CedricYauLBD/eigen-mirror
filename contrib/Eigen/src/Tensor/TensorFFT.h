@@ -282,11 +282,22 @@ struct TensorEvaluator<const TensorFFTOp<FFT, ArgType, FFTResultType, FFTDir>, D
           is_power_of_two ? nullptr : (ComplexScalar*)m_device.allocate(sizeof(ComplexScalar) * (line_len + 1));
       if (!is_power_of_two) {
         // Bluestein chirp factors t_n = exp(sqrt(-1) * pi * n^2 / line_len),
-        // n = 0..line_len. Computed in double for accuracy and cast down.
+        // n = 0..line_len. Computed in double for accuracy and cast down. The angle is reduced first,
+        //   t_n = exp(sqrt(-1) * pi * r_n / line_len),  r_n = n^2 mod 2 line_len,
+        // since pi n^2 / line_len grows to pi line_len and its rounding error would carry into every factor.
+        // r_n and the increment s_n = 2n + 1 mod 2 line_len follow r_{n+1} = r_n + s_n, s_{n+1} = s_n + 2 (mod
+        // 2 line_len) without forming n^2.
+        const Index two_len = 2 * line_len;
+        Index reduced_square = 0;
+        Index square_step = 1;
         for (Index j = 0; j < line_len + 1; ++j) {
-          double arg = ((EIGEN_PI * j) * j) / line_len;
+          double arg = (EIGEN_PI * static_cast<double>(reduced_square)) / line_len;
           std::complex<double> tmp(numext::cos(arg), numext::sin(arg));
           pos_j_base_powered[j] = static_cast<ComplexScalar>(tmp);
+          reduced_square += square_step;
+          if (reduced_square >= two_len) reduced_square -= two_len;
+          square_step += 2;
+          if (square_step >= two_len) square_step -= two_len;
         }
         // The b-sequence and its forward FFT depend only on n, m, and the
         // FFT direction — compute once and reuse for every line.
