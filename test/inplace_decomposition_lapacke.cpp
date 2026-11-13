@@ -6,6 +6,7 @@
 #include <Eigen/Cholesky>
 #include <Eigen/Eigenvalues>
 #include <Eigen/LU>
+#include <Eigen/QR>
 
 namespace {
 int real_schur_calls = 0;
@@ -13,6 +14,7 @@ int complex_schur_calls = 0;
 int selfadjoint_calls = 0;
 int potrf_calls = 0;
 int getrf_calls = 0;
+int geqp3_calls = 0;
 const double* factor_data = nullptr;
 lapack_int factor_lda = 0;
 }  // namespace
@@ -46,6 +48,25 @@ extern "C" lapack_int LAPACKE_dgetrf(int, lapack_int m, lapack_int n, double* a,
   factor_lda = lda;
   for (lapack_int i = 0; i < (std::min)(m, n); ++i) ipiv[i] = i + 1;
   return 0;
+}
+
+// LAPACKE rejects a NaN input with info = -4 before touching the matrix. The mock does the same for any input, so the
+// binding has to fall back to Eigen's own algorithm and still produce a valid decomposition.
+extern "C" lapack_int LAPACKE_dgeqp3(int, lapack_int, lapack_int, double*, lapack_int, lapack_int*, double*) {
+  ++geqp3_calls;
+  return -4;
+}
+
+void colpiv_qr_lapacke_rejected_input() {
+  const MatrixXd A = MatrixXd::Random(6, 4);
+  const VectorXd b = A * VectorXd::Random(4);
+  const int geqp3Before = geqp3_calls;
+  ColPivHouseholderQR<MatrixXd> qr(A);
+  VERIFY_IS_EQUAL(geqp3_calls, geqp3Before + 1);
+  VERIFY_IS_EQUAL(qr.rank(), Index(4));
+  const MatrixXd R = qr.matrixR().triangularView<Upper>();
+  VERIFY_IS_APPROX(qr.householderQ() * R, A * qr.colsPermutation());
+  VERIFY_IS_APPROX(A * qr.solve(b), b);
 }
 
 // LAPACK addresses a matrix by its leading dimension only, so an in-place factorization of a Ref with an inner stride
@@ -108,6 +129,7 @@ void inplace_plain_lapacke_dispatch() {
 EIGEN_DECLARE_TEST(inplace_decomposition_lapacke) {
   inplace_plain_lapacke_dispatch<ColMajor>();
   inplace_plain_lapacke_dispatch<RowMajor>();
+  colpiv_qr_lapacke_rejected_input();
   inplace_lapacke_inner_stride<ColMajor>();
   inplace_lapacke_inner_stride<RowMajor>();
 }
