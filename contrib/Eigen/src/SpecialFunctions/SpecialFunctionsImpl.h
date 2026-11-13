@@ -874,6 +874,13 @@ EIGEN_DEVICE_FUNC static EIGEN_STRONG_INLINE Scalar main_igamma_term(Scalar a, S
   return numext::exp(logax);
 }
 
+/* Clamp a probability to [0, 1], passing NaN through: numext::maxi(0, NaN) is 0, which would turn a failed
+ * evaluation into a confident answer. */
+template <typename Scalar>
+EIGEN_DEVICE_FUNC static EIGEN_STRONG_INLINE Scalar igamma_clamp_to_unit_interval(Scalar r) {
+  return (numext::isnan)(r) ? r : numext::mini(Scalar(1), numext::maxi(Scalar(0), r));
+}
+
 template <typename Scalar, IgammaComputationMode mode>
 EIGEN_DEVICE_FUNC constexpr int igamma_num_iterations() {
   /* Returns the maximum number of internal iterations for igamma computation.
@@ -1144,7 +1151,7 @@ struct igammac_impl {
     if ((x < one) || (x < a)) {
       // Clamp to [0,1] since 1-igamma can produce tiny negative values
       // due to floating-point cancellation for extreme arguments.
-      return numext::mini(one, numext::maxi(zero, one - igamma_series_impl<Scalar, VALUE>::run(a, x)));
+      return igamma_clamp_to_unit_interval(one - igamma_series_impl<Scalar, VALUE>::run(a, x));
     }
 
     return igammac_cf_impl<Scalar, VALUE>::run(a, x);
@@ -1185,7 +1192,7 @@ struct igamma_generic_impl {
       if (mode == VALUE) {
         // Clamp to [0,1] since 1-igammac can produce tiny negative values
         // due to floating-point cancellation for extreme arguments.
-        return numext::mini(one, numext::maxi(zero, one - ret));
+        return igamma_clamp_to_unit_interval(one - ret);
       } else {
         return -ret;
       }
@@ -1195,7 +1202,7 @@ struct igamma_generic_impl {
     if (mode == VALUE) {
       // Clamp to [0,1] since accumulated series terms can slightly exceed 1.0
       // due to floating-point rounding for extreme arguments.
-      return numext::mini(one, numext::maxi(zero, ret));
+      return igamma_clamp_to_unit_interval(ret);
     }
     return ret;
   }

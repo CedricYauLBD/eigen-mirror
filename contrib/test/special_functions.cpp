@@ -541,6 +541,53 @@ void custom_scalar_erf_erfc() {
   }
 }
 
+// For huge a and x one ulp apart the continued fraction overflows and produces an internal NaN, which the clamping of
+// igamma to [0, 1] used to turn into 0 (igammac returned the NaN). The true values are P = 1 and Q = 0 (x - a is
+// ~1e8 standard deviations): the answer must be that or NaN, in the scalar and the array paths, never a silent 0.
+template <typename Scalar>
+void test_igamma_internal_nan() {
+  const Scalar a = Scalar(sizeof(Scalar) == 4 ? 1e30 : 1e300);
+  const Scalar x = std::nextafter(a, std::numeric_limits<Scalar>::infinity());
+  const Array<Scalar, Dynamic, 1> av = Array<Scalar, Dynamic, 1>::Constant(5, a),
+                                  xv = Array<Scalar, Dynamic, 1>::Constant(5, x);
+  const Array<Scalar, Dynamic, 1> pv = igamma(av, xv), qv = igammac(av, xv);
+  const Scalar p[2] = {numext::igamma(a, x), pv(4)}, q[2] = {numext::igammac(a, x), qv(4)};
+  for (int i = 0; i < 2; ++i) {
+    VERIFY((numext::isnan)(p[i]) || p[i] == Scalar(1));
+    VERIFY((numext::isnan)(q[i]) || q[i] == Scalar(0));
+  }
+}
+
+// Limiting values, in the scalar and the array code paths. NaN must not be turned into a number by the clamping of
+// igamma to [0, 1].
+template <typename Scalar>
+void test_igamma_limits() {
+  const Scalar inf = std::numeric_limits<Scalar>::infinity();
+  const Scalar nan = std::numeric_limits<Scalar>::quiet_NaN();
+  const Scalar a_in[] = {Scalar(1), Scalar(1), inf, inf, Scalar(3), nan, Scalar(3), nan};
+  const Scalar x_in[] = {inf, Scalar(0), Scalar(1), Scalar(0), inf, Scalar(2), nan, nan};
+  // igamma, igammac
+  const Scalar p_ref[] = {Scalar(1), Scalar(0), Scalar(0), Scalar(0), Scalar(1), nan, nan, nan};
+  const Scalar q_ref[] = {Scalar(0), Scalar(1), Scalar(1), Scalar(1), Scalar(0), nan, nan, nan};
+  const int n = 8;
+  Array<Scalar, Dynamic, 1> a = Map<const Array<Scalar, Dynamic, 1>>(a_in, n);
+  Array<Scalar, Dynamic, 1> x = Map<const Array<Scalar, Dynamic, 1>>(x_in, n);
+  const Array<Scalar, Dynamic, 1> p = igamma(a, x), q = igammac(a, x);
+  for (int i = 0; i < n; ++i) {
+    for (int path = 0; path < 2; ++path) {
+      const Scalar ps = path ? p(i) : numext::igamma(a_in[i], x_in[i]);
+      const Scalar qs = path ? q(i) : numext::igammac(a_in[i], x_in[i]);
+      if ((numext::isnan)(p_ref[i])) {
+        VERIFY((numext::isnan)(ps));
+        VERIFY((numext::isnan)(qs));
+      } else {
+        VERIFY_IS_EQUAL(ps, p_ref[i]);
+        VERIFY_IS_EQUAL(qs, q_ref[i]);
+      }
+    }
+  }
+}
+
 template <typename Scalar>
 void test_special_functions_edge_cases() {
   const Scalar plusinf = std::numeric_limits<Scalar>::infinity();
@@ -678,9 +725,13 @@ EIGEN_DECLARE_TEST(special_functions) {
   CALL_SUBTEST_1(ndtri_tail_accuracy<float>());
   CALL_SUBTEST_1(array_special_functions<ArrayXf>());
   CALL_SUBTEST_1(test_special_functions_edge_cases<float>());
+  CALL_SUBTEST_1(test_igamma_limits<float>());
+  CALL_SUBTEST_1(test_igamma_internal_nan<float>());
   CALL_SUBTEST_2(ndtri_tail_accuracy<double>());
   CALL_SUBTEST_2(array_special_functions<ArrayXd>());
   CALL_SUBTEST_2(test_special_functions_edge_cases<double>());
+  CALL_SUBTEST_2(test_igamma_limits<double>());
+  CALL_SUBTEST_2(test_igamma_internal_nan<double>());
   CALL_SUBTEST_3(scalar_ndtri<long double>());
   CALL_SUBTEST_4(scalar_erf_erfc<long double>());
   CALL_SUBTEST_5(custom_scalar_erf_erfc());
