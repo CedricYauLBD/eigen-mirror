@@ -153,7 +153,7 @@ void quaternion(void) {
   VERIFY_IS_APPROX(-v1.normalized(), (q2.setFromTwoVectors(v1, -v1) * v1).normalized());
   // exactly opposite vectors rotate by pi about v1.unitOrthogonal()
   VERIFY_IS_APPROX(q2.coeffs(), (Matrix<Scalar, 4, 1>() << v1.normalized().unitOrthogonal(), Scalar(0)).finished());
-  // nearly opposite vectors, within dummy_precision of the antipodal branch: the axis must be orthogonal to both
+  // nearly opposite vectors: the axis must be orthogonal to both
   v3 = -v1 + v1.unitOrthogonal() * (v1.norm() * Scalar(std::is_same<Scalar, float>::value ? 3e-3 : 1e-6));
   VERIFY_IS_APPROX(v3.normalized(), (q2.setFromTwoVectors(v1, v3) * v1).normalized());
   if (std::is_same<Scalar, double>::value) {
@@ -474,7 +474,9 @@ void quaternion_product_fma() {
 }
 
 // Checks that Quaternion::FromTwoVectors(a, b) is a unit quaternion that rotates the direction of a to the direction of
-// b, against a long double reference built from the rounded inputs, up to 16 eps.
+// b, against a long double reference built from the rounded inputs. The tolerance is 16 eps. The largest rotation error
+// measured is 9.2 eps and the largest norm error 2 eps (float and double; 3e6 random inputs with pi - angle in
+// [eps^3, 16 eps] and 20000 repeats of the sweep below), so the tolerance leaves a factor of 1.7.
 template <typename Scalar>
 void check_from_two_vectors(const Matrix<Scalar, 3, 1>& a, const Matrix<Scalar, 3, 1>& b) {
   using LongDouble = long double;
@@ -489,6 +491,73 @@ void check_from_two_vectors(const Matrix<Scalar, 3, 1>& a, const Matrix<Scalar, 
   const Scalar rotation_error = Scalar((ql * a_unit - b_unit).norm());
   VERIFY(norm_error <= tolerance);
   VERIFY(rotation_error <= tolerance);
+}
+
+// Accuracy of Quaternion::FromTwoVectors over the whole range of angles between the two vectors, in particular close to
+// pi, where 1 + v0.v1 and v0 x v1 cancel, and around pi/2, where the formula changes.
+template <typename Scalar>
+void quaternion_two_vectors_accuracy() {
+  using LongDouble = long double;
+  using Vector3 = Matrix<Scalar, 3, 1>;
+  using Vector3L = Matrix<LongDouble, 3, 1>;
+  const LongDouble pi = LongDouble(3.141592653589793238462643383279502884L);
+  const double eps = double(NumTraits<Scalar>::epsilon());
+
+  // Vectors a and b at the angle pi - delta (cos = -cos(delta)) or at an angle with the given cosine, with random
+  // axis and random norms.
+  auto random_pair = [&](LongDouble cos_angle, LongDouble sin_angle, Vector3& a, Vector3& b) {
+    Vector3L axis = Vector3L::Random().normalized();
+    Vector3L perp = Vector3L::Random();
+    perp = (perp - perp.dot(axis) * axis).normalized();
+    const LongDouble sa = std::pow(LongDouble(10), LongDouble(internal::random<double>(-2, 2)));
+    const LongDouble sb = std::pow(LongDouble(10), LongDouble(internal::random<double>(-2, 2)));
+    a = (sa * axis).template cast<Scalar>();
+    b = (sb * (cos_angle * axis + sin_angle * perp)).template cast<Scalar>();
+  };
+
+  // delta from 1 down to far below eps (exactly antipodal after rounding), and a coarse sweep of the angle from 0 to
+  // pi.
+  std::vector<LongDouble> deltas;
+  for (int k = 0; k < 2 * NumTraits<Scalar>::digits() + 4; ++k)
+    deltas.push_back(std::pow(LongDouble(2), -LongDouble(k) / 2));
+  for (int k = 0; k <= 32; ++k) deltas.push_back(pi * LongDouble(k) / LongDouble(32));
+  deltas.push_back(0);
+  for (size_t i = 0; i < deltas.size(); ++i) {
+    for (int trial = 0; trial < 4; ++trial) {
+      Vector3 a, b;
+      random_pair(-std::cos(deltas[i]), std::sin(deltas[i]), a, b);
+      check_from_two_vectors(a, b);
+    }
+  }
+
+  // A dense band of delta in [eps^3, 16 eps], where |v0 + v1| is a few eps and the cross product is mostly rounding
+  // noise.
+  for (int i = 0; i < 4096; ++i) {
+    const LongDouble delta =
+        std::pow(LongDouble(2), LongDouble(internal::random<double>(3 * std::log2(eps), std::log2(eps) + 4)));
+    Vector3 a, b;
+    random_pair(-std::cos(delta), std::sin(delta), a, b);
+    check_from_two_vectors(a, b);
+  }
+
+  // Cosines of +-k eps around the switch between the two formulas at cos = 0.
+  for (int k = 0; k <= 16; k = (k == 0 ? 1 : 2 * k)) {
+    for (int sign = -1; sign <= 1; sign += 2) {
+      const LongDouble c = LongDouble(sign) * LongDouble(k) * LongDouble(eps);
+      Vector3 a, b;
+      random_pair(c, std::sqrt(1 - c * c), a, b);
+      check_from_two_vectors(a, b);
+    }
+  }
+
+  // Pairs where the projection of the cross product onto the plane orthogonal to v0 must be done twice: with one
+  // projection they have errors of 24 eps and 34 eps in some builds (the rounding of the normalization decides).
+  check_from_two_vectors<Scalar>(
+      Vector3(Scalar(0.40689840912818909), Scalar(-0.12618118524551392), Scalar(-0.97086304426193237)),
+      Vector3(Scalar(-0.40689828991889954), Scalar(0.12618115544319153), Scalar(0.97086280584335327)));
+  check_from_two_vectors<Scalar>(
+      Vector3(Scalar(-0.27598738739370821), Scalar(0.08133442155882098), Scalar(0.11249741522661272)),
+      Vector3(Scalar(0.27598738739370815), Scalar(-0.081334421558820966), Scalar(-0.11249741522661269)));
 }
 
 // The inputs of FromTwoVectors need not be normalized: this holds for magnitudes whose square or whose squared norm is
@@ -571,6 +640,7 @@ EIGEN_DECLARE_TEST(geo_quaternion) {
     CALL_SUBTEST_1((quaternion<float, DontAlign>()));
     CALL_SUBTEST_1((quaternionAlignment<float>()));
     CALL_SUBTEST_1(mapQuaternion<float>());
+    CALL_SUBTEST_1(quaternion_two_vectors_accuracy<float>());
     EIGEN_TEST_OVERFLOW_HANDLING(CALL_SUBTEST_1(quaternion_two_vectors_extreme_scale<float>()));
     EIGEN_TEST_OVERFLOW_HANDLING(CALL_SUBTEST_1(quaternion_scaled_axis_extreme_norm<float>()));
 
@@ -579,6 +649,7 @@ EIGEN_DECLARE_TEST(geo_quaternion) {
     CALL_SUBTEST_2((quaternion<double, DontAlign>()));
     CALL_SUBTEST_2((quaternionAlignment<double>()));
     CALL_SUBTEST_2(mapQuaternion<double>());
+    CALL_SUBTEST_2(quaternion_two_vectors_accuracy<double>());
     EIGEN_TEST_OVERFLOW_HANDLING(CALL_SUBTEST_2(quaternion_two_vectors_extreme_scale<double>()));
     EIGEN_TEST_OVERFLOW_HANDLING(CALL_SUBTEST_2(quaternion_scaled_axis_extreme_norm<double>()));
 

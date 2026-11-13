@@ -712,12 +712,26 @@ EIGEN_DEVICE_FUNC inline Derived& QuaternionBase<Derived>::setFromTwoVectors(con
   Vector3 v1 = internal::quaternion_normalized(b);
   Scalar c = v1.dot(v0);
 
-  // if dot == -1, vectors are nearly opposites: an axis orthogonal to v0 alone does not send v0 to v1.
-  // => rotate through a direction m orthogonal to v0, so that both v0 -> m and m -> v1 are ~90 degree rotations.
-  // With u = v0.unitOrthogonal() and m = u x v0, both legs turn about v0 x m = u, so v1 = -v0 still gives (0, u).
-  if (c < Scalar(-1) + NumTraits<Scalar>::dummy_precision()) {
-    const Vector3 m = v0.unitOrthogonal().cross(v0);
-    coeffs() = (Quaternion<Scalar>::FromTwoVectors(m, v1) * Quaternion<Scalar>::FromTwoVectors(v0, m)).coeffs();
+  if (c < Scalar(0)) {
+    // phi in (pi/2, pi]: q = (sin(phi/2) n, cos(phi/2)) with cos(phi/2) = |v0 + v1| / 2, whose absolute error ~ eps
+    // moves the angle by ~ eps since sin(phi/2) >= 1/sqrt(2). (s = 2 cos(phi/2) below has relative error
+    // eps / (1 + c).) n = v0 x v1 projected twice onto the plane orthogonal to v0 and normalized: one projection
+    // leaves ~ eps |v0 x v1| along v0, not small against the projected vector when |v0 + v1| is a few eps.
+    // For |v0 + v1| <= 4 eps, v0 x v1 is mostly noise and any axis orthogonal to v0 moves q v0 by at most 2 |v0 + v1|.
+    const Scalar sum2 = (v0 + v1).squaredNorm();
+    const Scalar cos_half = numext::sqrt(Scalar(0.25) * sum2);
+    Vector3 axis = v0.cross(v1);
+    axis -= axis.dot(v0) * v0;
+    axis -= axis.dot(v0) * v0;
+    const Scalar axis_norm2 = axis.squaredNorm();
+    if (sum2 > numext::abs2(Scalar(4) * NumTraits<Scalar>::epsilon()) &&
+        axis_norm2 > (numext::numeric_limits<Scalar>::min)()) {
+      axis /= numext::sqrt(axis_norm2);
+    } else {
+      axis = v0.unitOrthogonal();
+    }
+    this->vec() = numext::sqrt((Scalar(1) - cos_half) * (Scalar(1) + cos_half)) * axis;
+    this->w() = cos_half;
     return derived();
   }
   Vector3 axis = v0.cross(v1);
