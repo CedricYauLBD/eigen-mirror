@@ -607,16 +607,15 @@ namespace internal {
 
 template <typename Scalar, typename RealScalar>
 struct arpack_wrapper {
-  static inline void saupd(int *ido, char *bmat, int *n, char *which, int *nev, RealScalar *tol, Scalar *resid,
-                           int *ncv, Scalar *v, int *ldv, int *iparam, int *ipntr, Scalar *workd, Scalar *workl,
-                           int *lworkl, int *info) {
+  // Unsupported scalar types: the parameters are those of ssaupd_/sseupd_, all unused.
+  static inline void saupd(int *, char *, int *, char *, int *, RealScalar *, Scalar *, int *, Scalar *, int *, int *,
+                           int *, Scalar *, Scalar *, int *, int *) {
     EIGEN_STATIC_ASSERT(!NumTraits<Scalar>::IsComplex, NUMERIC_TYPE_MUST_BE_REAL)
   }
 
-  static inline void seupd(int *rvec, char *All, int *select, Scalar *d, Scalar *z, int *ldz, RealScalar *sigma,
-                           char *bmat, int *n, char *which, int *nev, RealScalar *tol, Scalar *resid, int *ncv,
-                           Scalar *v, int *ldv, int *iparam, int *ipntr, Scalar *workd, Scalar *workl, int *lworkl,
-                           int *ierr) {
+  static inline void seupd(int *, char *, int *, Scalar *, Scalar *, int *, RealScalar *, char *, int *, char *, int *,
+                           RealScalar *, Scalar *, int *, Scalar *, int *, int *, int *, Scalar *, Scalar *, int *,
+                           int *) {
     EIGEN_STATIC_ASSERT(!NumTraits<Scalar>::IsComplex, NUMERIC_TYPE_MUST_BE_REAL)
   }
 };
@@ -648,7 +647,7 @@ struct arpack_wrapper<double, double> {
   static inline void seupd(int *rvec, char *All, int *select, double *d, double *z, int *ldz, double *sigma, char *bmat,
                            int *n, char *which, int *nev, double *tol, double *resid, int *ncv, double *v, int *ldv,
                            int *iparam, int *ipntr, double *workd, double *workl, int *lworkl, int *ierr) {
-    dseupd_(rvec, All, select, d, v, ldv, sigma, bmat, n, which, nev, tol, resid, ncv, v, ldv, iparam, ipntr, workd,
+    dseupd_(rvec, All, select, d, z, ldz, sigma, bmat, n, which, nev, tol, resid, ncv, v, ldv, iparam, ipntr, workd,
             workl, lworkl, ierr);
   }
 };
@@ -691,11 +690,11 @@ struct OP<MatrixSolver, MatrixType, Scalar, true> {
 
 template <typename MatrixSolver, typename MatrixType, typename Scalar>
 struct OP<MatrixSolver, MatrixType, Scalar, false> {
-  static inline void applyOP(MatrixSolver &OP, const MatrixType &A, int n, Scalar *in, Scalar *out) {
+  static inline void applyOP(MatrixSolver &, const MatrixType &, int, Scalar *, Scalar *) {
     eigen_assert(false && "Should never be in here...");
   }
 
-  static inline void project(MatrixSolver &OP, int n, int k, Scalar *vecs) {
+  static inline void project(MatrixSolver &, int, int, Scalar *) {
     eigen_assert(false && "Should never be in here...");
   }
 };
