@@ -953,7 +953,9 @@ struct hash<Eigen::bfloat16> {
 #endif
 
 // Warp shuffle overloads for Eigen::bfloat16.
-// HIP uses non-sync __shfl variants; CUDA has native __nv_bfloat16 support in __shfl_sync.
+// HIP uses non-sync __shfl variants. Eigen::bfloat16 has no conversion to the CUDA __nv_bfloat16 type, so on CUDA the
+// 16 raw bits travel through the 32-bit __shfl_*_sync overloads. Without these overloads a bfloat16 argument converts
+// to float, and a shuffle of a bfloat16 value returns a float.
 // Note that the following are __device__ - only functions.
 #if defined(EIGEN_HIPCC)
 
@@ -985,7 +987,37 @@ __device__ EIGEN_STRONG_INLINE Eigen::bfloat16 __shfl_xor(Eigen::bfloat16 var, i
 
 #endif  // HIP
 
-#endif  // __shfl*
+#elif defined(EIGEN_CUDACC)
+
+__device__ EIGEN_STRONG_INLINE Eigen::bfloat16 __shfl_sync(unsigned mask, Eigen::bfloat16 var, int srcLane,
+                                                           int width = warpSize) {
+  const int ivar = static_cast<int>(Eigen::numext::bit_cast<Eigen::numext::uint16_t>(var));
+  return Eigen::numext::bit_cast<Eigen::bfloat16>(
+      static_cast<Eigen::numext::uint16_t>(__shfl_sync(mask, ivar, srcLane, width)));
+}
+
+__device__ EIGEN_STRONG_INLINE Eigen::bfloat16 __shfl_up_sync(unsigned mask, Eigen::bfloat16 var, unsigned int delta,
+                                                              int width = warpSize) {
+  const int ivar = static_cast<int>(Eigen::numext::bit_cast<Eigen::numext::uint16_t>(var));
+  return Eigen::numext::bit_cast<Eigen::bfloat16>(
+      static_cast<Eigen::numext::uint16_t>(__shfl_up_sync(mask, ivar, delta, width)));
+}
+
+__device__ EIGEN_STRONG_INLINE Eigen::bfloat16 __shfl_down_sync(unsigned mask, Eigen::bfloat16 var, unsigned int delta,
+                                                                int width = warpSize) {
+  const int ivar = static_cast<int>(Eigen::numext::bit_cast<Eigen::numext::uint16_t>(var));
+  return Eigen::numext::bit_cast<Eigen::bfloat16>(
+      static_cast<Eigen::numext::uint16_t>(__shfl_down_sync(mask, ivar, delta, width)));
+}
+
+__device__ EIGEN_STRONG_INLINE Eigen::bfloat16 __shfl_xor_sync(unsigned mask, Eigen::bfloat16 var, int laneMask,
+                                                               int width = warpSize) {
+  const int ivar = static_cast<int>(Eigen::numext::bit_cast<Eigen::numext::uint16_t>(var));
+  return Eigen::numext::bit_cast<Eigen::bfloat16>(
+      static_cast<Eigen::numext::uint16_t>(__shfl_xor_sync(mask, ivar, laneMask, width)));
+}
+
+#endif  // HIP vs CUDA
 
 #if defined(EIGEN_HIPCC)
 EIGEN_STRONG_INLINE __device__ Eigen::bfloat16 __ldg(const Eigen::bfloat16* ptr) {
