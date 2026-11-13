@@ -443,6 +443,43 @@ void qr_empty() {
   VERIFY_IS_EQUAL(cod.rank(), Index(0));
 }
 
+// The rank, and with it the Z reflectors, of a complete orthogonal decomposition are fixed by compute(): a threshold
+// set afterwards applies to the next compute() and leaves the decomposition and its solutions unchanged.
+template <typename MatrixType>
+void cod_set_threshold_after_compute() {
+  using Scalar = typename MatrixType::Scalar;
+  using RealScalar = typename MatrixType::RealScalar;
+  const Index rows = 8, cols = 6;
+  MatrixType A = MatrixType::Random(rows, cols);
+  A.col(cols - 1) = A.col(0) + Scalar(RealScalar(1e-6)) * MatrixType::Random(rows, 1);
+  const MatrixType b = MatrixType::Random(rows, 2);
+
+  CompleteOrthogonalDecomposition<MatrixType> cod(A);
+  VERIFY_IS_EQUAL(cod.rank(), cols);
+  const MatrixType x_full = cod.solve(b);
+  cod.setThreshold(RealScalar(1e-4));
+  VERIFY_IS_EQUAL(cod.rank(), cols);
+  VERIFY_IS_APPROX(cod.solve(b), x_full);
+  VERIFY(cod.matrixZ().isUnitary());
+
+  cod.compute(A);
+  VERIFY_IS_EQUAL(cod.rank(), cols - 1);
+  CompleteOrthogonalDecomposition<MatrixType> reference;
+  reference.setThreshold(RealScalar(1e-4));
+  reference.compute(A);
+  VERIFY_IS_EQUAL(reference.rank(), cols - 1);
+  const MatrixType x_deficient = cod.solve(b);
+  VERIFY_IS_APPROX(x_deficient, reference.solve(b));
+  VERIFY(cod.matrixZ().isUnitary());
+
+  // Going back to the default threshold does not change a decomposition that has already been computed either.
+  cod.setThreshold(Default);
+  VERIFY_IS_EQUAL(cod.rank(), cols - 1);
+  VERIFY_IS_APPROX(cod.solve(b), x_deficient);
+  VERIFY_IS_EQUAL(cod.dimensionOfKernel(), Index(1));
+  VERIFY(!cod.isInjective());
+}
+
 EIGEN_DECLARE_TEST(qr_colpivoting) {
   for (int i = 0; i < g_repeat; i++) {
     CALL_SUBTEST_1(qr<MatrixXf>());
@@ -488,6 +525,8 @@ EIGEN_DECLARE_TEST(qr_colpivoting) {
   // Test problem size constructors
   CALL_SUBTEST_9(ColPivHouseholderQR<MatrixXf>(10, 20));
   CALL_SUBTEST_2(qr_empty<MatrixXd>());
+  CALL_SUBTEST_2(cod_set_threshold_after_compute<MatrixXd>());
+  CALL_SUBTEST_3(cod_set_threshold_after_compute<MatrixXcd>());
 
   CALL_SUBTEST_1(qr_kahan_matrix<MatrixXf>());
   CALL_SUBTEST_2(qr_kahan_matrix<MatrixXd>());
