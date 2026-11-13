@@ -188,7 +188,8 @@ template <>
 EIGEN_STRONG_INLINE Packet2Xi ploadquad<Packet2Xi>(const numext::int32_t* from) {
   Packet2Xu idx =
       __riscv_vsrl_vx_u32m2(__riscv_vid_v_u32m2(unpacket_traits<Packet2Xi>::size), 2, unpacket_traits<Packet2Xi>::size);
-  return __riscv_vrgather_vv_i32m2(pload<Packet2Xi>(from), idx, unpacket_traits<Packet2Xi>::size);
+  return __riscv_vrgather_vv_i32m2(__riscv_vle32_v_i32m2(from, (unpacket_traits<Packet2Xi>::size + 3) / 4), idx,
+                                   unpacket_traits<Packet2Xi>::size);
 }
 
 template <>
@@ -529,7 +530,8 @@ template <>
 EIGEN_STRONG_INLINE Packet2Xf ploadquad<Packet2Xf>(const float* from) {
   Packet2Xu idx =
       __riscv_vsrl_vx_u32m2(__riscv_vid_v_u32m2(unpacket_traits<Packet2Xf>::size), 2, unpacket_traits<Packet2Xf>::size);
-  return __riscv_vrgather_vv_f32m2(pload<Packet2Xf>(from), idx, unpacket_traits<Packet2Xf>::size);
+  return __riscv_vrgather_vv_f32m2(__riscv_vle32_v_f32m2(from, (unpacket_traits<Packet2Xf>::size + 3) / 4), idx,
+                                   unpacket_traits<Packet2Xf>::size);
 }
 
 template <>
@@ -841,7 +843,8 @@ template <>
 EIGEN_STRONG_INLINE Packet2Xl ploadquad<Packet2Xl>(const numext::int64_t* from) {
   Packet2Xul idx =
       __riscv_vsrl_vx_u64m2(__riscv_vid_v_u64m2(unpacket_traits<Packet2Xl>::size), 2, unpacket_traits<Packet2Xl>::size);
-  return __riscv_vrgather_vv_i64m2(pload<Packet2Xl>(from), idx, unpacket_traits<Packet2Xl>::size);
+  return __riscv_vrgather_vv_i64m2(__riscv_vle64_v_i64m2(from, (unpacket_traits<Packet2Xl>::size + 3) / 4), idx,
+                                   unpacket_traits<Packet2Xl>::size);
 }
 
 template <>
@@ -1183,7 +1186,7 @@ template <>
 EIGEN_STRONG_INLINE Packet2Xd ploadquad<Packet2Xd>(const double* from) {
   Packet2Xul idx =
       __riscv_vsrl_vx_u64m2(__riscv_vid_v_u64m2(unpacket_traits<Packet2Xd>::size), 2, unpacket_traits<Packet2Xd>::size);
-  return __riscv_vrgather_vv_f64m2(__riscv_vlmul_ext_v_f64m1_f64m2(pload<Packet1Xd>(from)), idx,
+  return __riscv_vrgather_vv_f64m2(__riscv_vle64_v_f64m2(from, (unpacket_traits<Packet2Xd>::size + 3) / 4), idx,
                                    unpacket_traits<Packet2Xd>::size);
 }
 
@@ -1501,7 +1504,8 @@ template <>
 EIGEN_STRONG_INLINE Packet2Xs ploadquad<Packet2Xs>(const numext::int16_t* from) {
   Packet2Xsu idx =
       __riscv_vsrl_vx_u16m2(__riscv_vid_v_u16m2(unpacket_traits<Packet2Xs>::size), 2, unpacket_traits<Packet2Xs>::size);
-  return __riscv_vrgather_vv_i16m2(pload<Packet2Xs>(from), idx, unpacket_traits<Packet2Xs>::size);
+  return __riscv_vrgather_vv_i16m2(__riscv_vle16_v_i16m2(from, (unpacket_traits<Packet2Xs>::size + 3) / 4), idx,
+                                   unpacket_traits<Packet2Xs>::size);
 }
 
 template <>
