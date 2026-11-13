@@ -70,6 +70,107 @@ void test_lscg_extreme_rhs() {
   }
 }
 
+// Checks a least-squares solve at the default tolerance eps, which is below the rounding error of the normal-equation
+// residual A'(b - A x) for these problems, against the dense minimum-norm solution. Past the rounding floor
+// eps |A| |r| of that residual, LeastSquaresConjugateGradient used to keep iterating on rounding noise and diverge: the
+// solution became non-finite or 1e57 times too large within 100 iterations, with both preconditioners, and info() was
+// NoConvergence. It now stops there and reports Success.
+template <typename Preconditioner>
+void check_lscg_rounding_floor(const MatrixXd& A, const VectorXd& b) {
+  const double eps = NumTraits<double>::epsilon();
+  const VectorXd ref = A.completeOrthogonalDecomposition().solve(b);
+  const VectorXd sv = JacobiSVD<MatrixXd>(A).singularValues();
+  const double normA = sv(0);
+  double smin = sv(0);
+  for (Index i = 0; i < sv.size(); ++i)
+    if (sv(i) > 1e-12 * normA) smin = sv(i);
+  const double cond = normA / smin;
+  // The forward error of a stable least-squares solve is about eps cond (1 + cond |r| / (|A| |x|)).
+  const double bound = 100 * eps * cond * (1 + cond * (b - A * ref).norm() / (normA * ref.norm())) * ref.norm();
+
+  LeastSquaresConjugateGradient<MatrixXd, Preconditioner> solver(A);
+  solver.setMaxIterations(100);
+  for (int guess = 0; guess < 2; ++guess) {
+    // A guess in the row space keeps the solution the minimum-norm one.
+    const VectorXd x = guess ? VectorXd(solver.solveWithGuess(b, VectorXd(0.5 * ref))) : VectorXd(solver.solve(b));
+    VERIFY(x.allFinite());
+    VERIFY_IS_EQUAL(solver.info(), Success);
+    VERIFY(solver.iterations() < 100);
+    VERIFY_LE((x - ref).norm(), bound);
+  }
+}
+
+template <typename = void>
+void test_lscg_rounding_floor() {
+  // A 10 x 2 sparse problem with condition number 1.35, in which the least-squares solution is small compared with b.
+  MatrixXd A = MatrixXd::Zero(10, 2);
+  A(0, 0) = 5.0181430310712383;
+  A(1, 0) = -0.75470211299957013;
+  A(1, 1) = 6.7666925831808298;
+  A(2, 0) = 0.59203245963326534;
+  A(2, 1) = 0.64548853512802173;
+  A(6, 0) = 0.20796378805872262;
+  A(7, 0) = 0.83399352431452956;
+  A(9, 0) = 0.44383881999646535;
+  VectorXd b = VectorXd::Zero(10);
+  b(2) = -0.31680664972850403;
+  b(6) = 5.1520653518359332;
+  b(8) = 0.57896647511858745;
+  check_lscg_rounding_floor<LeastSquareDiagonalPreconditioner<double> >(A, b);
+  check_lscg_rounding_floor<IdentityPreconditioner>(A, b);
+
+  // A zero column.
+  MatrixXd Z(9, 2);
+  Z << -2, 0, 3, 0, -2, 0, -2, 0, 3, 0, -2, 0, 0, 0, 3, 0, 1, 0;
+  VectorXd bz(9);
+  bz << 2, -2, -3, 3, 3, 4, 2, 4, -2;
+  check_lscg_rounding_floor<LeastSquareDiagonalPreconditioner<double> >(Z, bz);
+  check_lscg_rounding_floor<IdentityPreconditioner>(Z, bz);
+
+  // Two identical columns, so that A'A is singular.
+  MatrixXd D(5, 2);
+  D << -3, -3, -3, -3, -1, -1, -2, -2, 0, 0;
+  VectorXd bd(5);
+  bd << 3, -2, -4, 3, 1;
+  check_lscg_rounding_floor<LeastSquareDiagonalPreconditioner<double> >(D, bd);
+  check_lscg_rounding_floor<IdentityPreconditioner>(D, bd);
+}
+
+// info() is Success only if the solution meets the tolerance on the normal-equation residual, or its residual has
+// reached the rounding floor c eps |A| |r|, for rank-deficient and inconsistent problems and for tolerances 1e-8, eps
+// and 0, whatever the number of iterations allowed.
+template <typename = void>
+void test_lscg_truthful_info() {
+  const double eps = NumTraits<double>::epsilon();
+  const Index m = 12, n = 5;
+  MatrixXd A = MatrixXd::Random(m, n);
+  A.col(3) = A.col(0) + A.col(1);                              // rank n - 1
+  const MatrixXd Ar = A.leftCols(2) * MatrixXd::Random(2, n);  // rank 2, for the last problem
+  for (int problem = 0; problem < 2; ++problem) {
+    const MatrixXd& M = problem ? Ar : A;
+    const double normM = JacobiSVD<MatrixXd>(M).singularValues()(0);
+    const VectorXd b = VectorXd::Random(m);  // inconsistent
+    for (double tol : {1e-8, eps, 0.0}) {
+      for (Index maxit : {Index(3), Index(50), Index(1000)}) {
+        LeastSquaresConjugateGradient<MatrixXd> solver(M);
+        solver.setTolerance(tol);
+        solver.setMaxIterations(maxit);
+        const VectorXd x = solver.solve(b);
+        VERIFY(x.allFinite());
+        VERIFY_LE(solver.iterations(), maxit);
+        const VectorXd r = b - M * x;
+        const double gradient = (M.adjoint() * r).norm();
+        if (solver.info() == Success) {
+          // The recurrence residual and the one computed here differ by rounding, hence the factor 20.
+          VERIFY_LE(gradient, numext::maxi(tol * (M.adjoint() * b).norm(), 20 * eps * normM * r.norm()));
+        }
+        // The solution is a least-squares solution to working accuracy, or the iteration limit was reached.
+        if (maxit == 1000) VERIFY_LE(gradient, 1e4 * eps * normM * (b.norm() + normM * x.norm()));
+      }
+    }
+  }
+}
+
 // See check_sparse_small_rhs: the solvers returned NoConvergence or an inaccurate x for small |b|.
 template <typename = void>
 void test_lscg_small_rhs() {
@@ -79,11 +180,58 @@ void test_lscg_small_rhs() {
   check_sparse_small_rhs(solver_float);
 }
 
+// For a sparse matrix the gradient A'(b - A x) is computed from dot products of the few nonzeros of a column, so its
+// rounding error is far below the sqrt(m) eps |A| |r| of a dense matrix with m rows, and the solver must not stop
+// before it is as small as sqrt(L) eps |A| |r| for L nonzeros per column. It used to stop at the dense floor: for a
+// 20000 x 200 matrix with 5 nonzeros per column the error of x was 1.8e-13, 400 times that of the solver without the
+// floor.
+template <typename Preconditioner>
+void check_lscg_sparse_tall(const SparseMatrix<double>& A, const VectorXd& b) {
+  const double eps = NumTraits<double>::epsilon();
+  const MatrixXd D(A);
+  const VectorXd ref = D.completeOrthogonalDecomposition().solve(b);
+  const VectorXd sv = JacobiSVD<MatrixXd>(D).singularValues();
+  const double normA = sv(0), sigmaMin = sv(sv.size() - 1), cond = normA / sigmaMin;
+  const double length = double(A.nonZeros()) / double(A.cols());
+
+  LeastSquaresConjugateGradient<SparseMatrix<double>, Preconditioner> solver(A);
+  const VectorXd x = solver.solve(b);
+  VERIFY(x.allFinite());
+  VERIFY_IS_EQUAL(solver.info(), Success);
+  // The gradient is at working accuracy, which bounds the error of x by |g| / sigma_min^2, besides the rounding error
+  // of the reference.
+  const VectorXd r = b - A * x;
+  const double gradientBound = numext::sqrt(length) * eps * normA * r.norm();
+  VERIFY_LE((A.adjoint() * r).norm(), gradientBound);
+  VERIFY_LE((x - ref).norm(), gradientBound / (sigmaMin * sigmaMin) + 10 * eps * cond * ref.norm());
+}
+
+template <typename = void>
+void test_lscg_sparse_tall() {
+  const Index m = 5000, n = 50;
+  std::vector<Triplet<double> > triplets;
+  for (Index j = 0; j < n; ++j) {
+    for (Index k = 0; k < 4; ++k)
+      triplets.emplace_back((j * 997 + k * 1543 + 17) % m, j, 1.0 + double((7 * j + 3 * k) % 11) / 11.0);
+    triplets.emplace_back(j * (m / n), j, 5.0);
+  }
+  SparseMatrix<double> A(m, n);
+  A.setFromTriplets(triplets.begin(), triplets.end());
+  VectorXd b(m);
+  for (Index i = 0; i < m; ++i)
+    b(i) = numext::sin(0.37 * double(i)) + 0.5 * numext::cos(1.3 * double(i));  // inconsistent
+  check_lscg_sparse_tall<LeastSquareDiagonalPreconditioner<double> >(A, b);
+  check_lscg_sparse_tall<IdentityPreconditioner>(A, b);
+}
+
 EIGEN_DECLARE_TEST(lscg) {
   CALL_SUBTEST_1(test_lscg_T<double>());
   CALL_SUBTEST_2(test_lscg_T<std::complex<double> >());
   CALL_SUBTEST_3(test_least_square_diagonal_preconditioner_zero_columns<double>());
   CALL_SUBTEST_4(test_least_square_diagonal_preconditioner_zero_columns<std::complex<double> >());
   CALL_SUBTEST_5(test_lscg_extreme_rhs());
+  CALL_SUBTEST_5(test_lscg_rounding_floor<>());
+  CALL_SUBTEST_5(test_lscg_truthful_info<>());
+  CALL_SUBTEST_5(test_lscg_sparse_tall<>());
   CALL_SUBTEST_5(test_lscg_small_rhs<>());
 }
