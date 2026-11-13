@@ -1424,6 +1424,55 @@ void fixed_gemm_workspace() {
   internal::set_is_malloc_allowed(true);
 }
 
+// (A * B)^T = B^T * A^T and (A * B)^H = B^H * A^H expand into a product of the reversed operands, which sums
+// b(k,j) * a(i,k) instead of a(i,k) * b(k,j). That is only valid when the scalar product commutes.
+template <typename Scalar, int Order>
+void quaternion_transposed_product() {
+  using MatrixType = Matrix<Scalar, Dynamic, Dynamic, Order>;
+  const MatrixType a =
+      MatrixType::NullaryExpr(3, 2, [](Index i, Index j) { return Scalar(i + 1, 2 * j - 1, i - j, 1); });
+  const MatrixType b =
+      MatrixType::NullaryExpr(2, 4, [](Index i, Index j) { return Scalar(3 - j, i + j, 1 - i, j * j); });
+  MatrixType expected(a.rows(), b.cols()), expectedT(b.cols(), a.rows()), expectedH(b.cols(), a.rows());
+  for (Index i = 0; i < a.rows(); ++i) {
+    for (Index j = 0; j < b.cols(); ++j) {
+      Scalar sum(0);
+      for (Index k = 0; k < a.cols(); ++k) sum += a(i, k) * b(k, j);
+      expected(i, j) = sum;
+      expectedT(j, i) = sum;
+      expectedH(j, i) = numext::conj(sum);
+    }
+  }
+  MatrixType t = (a * b).transpose();
+  VERIFY(t == expectedT);
+  VERIFY(MatrixType((a * b).transpose().eval()) == expectedT);
+  VERIFY(MatrixType((a * b).adjoint()) == expectedH);
+  t.setZero();
+  t.noalias() = (a * b).transpose();
+  VERIFY(t == expectedT);
+  t.setZero();
+  t.noalias() += (a * b).adjoint();
+  VERIFY(t == expectedH);
+  t = Scalar(0, 1, 0, 0) * (a * b).transpose();
+  for (Index k = 0; k < t.size(); ++k) VERIFY(t(k) == Scalar(0, 1, 0, 0) * expectedT(k));
+}
+
+// Built-in scalars commute and keep the expanded form, without a temporary for the product.
+template <typename Scalar>
+void commutative_transposed_product_expression() {
+  using MatrixType = Matrix<Scalar, Dynamic, Dynamic>;
+  using TransposeType = Transpose<const MatrixType>;
+  using ProductType = Product<MatrixType, MatrixType, DefaultProduct>;
+  STATIC_CHECK((std::is_same<decltype(std::declval<const ProductType&>().transpose()),
+                             Product<TransposeType, TransposeType, DefaultProduct>>::value));
+}
+
+void noncommutative_transposed_product_expression() {
+  using QMatrix = Matrix<noncommutative_scalar::Quaternion, Dynamic, Dynamic>;
+  using QProduct = Product<QMatrix, QMatrix, DefaultProduct>;
+  STATIC_CHECK((std::is_same<decltype(std::declval<const QProduct&>().transpose()), Transpose<const QProduct>>::value));
+}
+
 template <int Order>
 void quaternion_unit_scale() {
   using Q = noncommutative_scalar::Quaternion;
@@ -1461,6 +1510,11 @@ void ordered_gemv_scale_cost() {
 }
 
 EIGEN_DECLARE_TEST(product_extra) {
+  CALL_SUBTEST_20((quaternion_transposed_product<noncommutative_scalar::Quaternion, ColMajor>()));
+  CALL_SUBTEST_20((quaternion_transposed_product<noncommutative_scalar::Quaternion, RowMajor>()));
+  CALL_SUBTEST_20(commutative_transposed_product_expression<double>());
+  CALL_SUBTEST_20(commutative_transposed_product_expression<std::complex<double>>());
+  CALL_SUBTEST_20(noncommutative_transposed_product_expression());
   CALL_SUBTEST_20((ordered_gemv_scale_cost<ColMajor, false>()));
   CALL_SUBTEST_20((ordered_gemv_scale_cost<RowMajor, false>()));
   CALL_SUBTEST_20((ordered_gemv_scale_cost<ColMajor, true>()));
