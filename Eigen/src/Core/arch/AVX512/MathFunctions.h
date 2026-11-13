@@ -49,18 +49,45 @@ EIGEN_STRONG_INLINE Packet16bf pldexp(const Packet16bf& a, const Packet16bf& exp
 }
 
 #if EIGEN_FAST_MATH
+// psqrt(x) = x * rsqrt(x) from an approximation of rsqrt(x), as generic_sqrt_newton_step computes it, except that the
+// lanes to return unchanged (x = +-0 and +inf) are found from the bits of the approximation, rsqrt14/rsqrt28 being
+//   +-inf for +-0 and for a subnormal x flushed by DAZ, 0 for +inf, and never subnormal.
+// A compare of x with zero would be wrong under DAZ: the compiler may assume no flush happens, test the bits of x, miss
+// the flushed lane and return x * inf = NaN. Integer compares of the approximation also survive -ffinite-math-only.
+template <typename Packet, int Steps>
+EIGEN_STRONG_INLINE Packet rsqrt_newton_refine(const Packet& x, const Packet& approx_rsqrt) {
+  using Scalar = typename unpacket_traits<Packet>::type;
+  const Packet one_point_five = pset1<Packet>(Scalar(1.5));
+  const Packet minus_half = pset1<Packet>(Scalar(-0.5));
+  Packet rsqrt = approx_rsqrt;
+  for (int step = 0; step < Steps; ++step) {
+    rsqrt = pmul(rsqrt, pmadd(pmul(minus_half, rsqrt), pmul(x, rsqrt), one_point_five));
+  }
+  return rsqrt;
+}
+
 template <>
 EIGEN_DEFINE_FUNCTION_ALLOWING_MULTIPLE_DEFINITIONS Packet16f psqrt<Packet16f>(const Packet16f& x) {
-  return generic_sqrt_newton_step<Packet16f>::run(x, _mm512_rsqrt14_ps(x));
+  const Packet16f approx = _mm512_rsqrt14_ps(x);
+  const __m512i abs_bits = _mm512_and_si512(_mm512_castps_si512(approx), _mm512_set1_epi32(0x7fffffff));
+  const __mmask16 return_x = _mm512_cmpeq_epi32_mask(abs_bits, _mm512_setzero_si512()) |
+                             _mm512_cmpeq_epi32_mask(abs_bits, _mm512_set1_epi32(0x7f800000));
+  return _mm512_mask_blend_ps(return_x, pmul(x, rsqrt_newton_refine<Packet16f, 1>(x, approx)), x);
 }
 
 template <>
 EIGEN_DEFINE_FUNCTION_ALLOWING_MULTIPLE_DEFINITIONS Packet8d psqrt<Packet8d>(const Packet8d& x) {
 #ifdef EIGEN_VECTORIZE_AVX512ER
-  return generic_sqrt_newton_step<Packet8d, /*Steps=*/1>::run(x, _mm512_rsqrt28_pd(x));
+  const Packet8d approx = _mm512_rsqrt28_pd(x);
+  constexpr int kSteps = 1;
 #else
-  return generic_sqrt_newton_step<Packet8d, /*Steps=*/2>::run(x, _mm512_rsqrt14_pd(x));
+  const Packet8d approx = _mm512_rsqrt14_pd(x);
+  constexpr int kSteps = 2;
 #endif
+  const __m512i abs_bits = _mm512_and_si512(_mm512_castpd_si512(approx), _mm512_set1_epi64(0x7fffffffffffffffLL));
+  const __mmask8 return_x = _mm512_cmpeq_epi64_mask(abs_bits, _mm512_setzero_si512()) |
+                            _mm512_cmpeq_epi64_mask(abs_bits, _mm512_set1_epi64(0x7ff0000000000000LL));
+  return _mm512_mask_blend_pd(return_x, pmul(x, rsqrt_newton_refine<Packet8d, kSteps>(x, approx)), x);
 }
 #else
 template <>
