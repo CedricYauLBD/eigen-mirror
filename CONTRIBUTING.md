@@ -3,8 +3,9 @@
 Eigen is written and maintained by volunteers. Contributions — code, documentation, bug triage, tests on uncommon platforms, design feedback — are all welcome.
 
 This document is the human-facing on-ramp. [`AGENTS.md`](AGENTS.md) is the AI-facing repository contract and routes
-readers to focused guides for testing, numerical work, performance, SIMD/GPU, Tensor/ThreadPool, and CI. Those guides
-are also useful to human contributors working in the corresponding areas.
+readers to focused guides for coding conventions, testing, numerical and sparse work, performance, SIMD/GPU,
+Tensor/ThreadPool, documentation, CI, and merge requests. Those guides are also useful to human contributors working in
+the corresponding areas.
 
 ## Where Eigen lives
 
@@ -21,9 +22,9 @@ are also useful to human contributors working in the corresponding areas.
 You don't have to write C++ to help.
 
 - **Answer questions** on Discord. New users often ask things that point at gaps in our documentation — patches to fill those gaps are very welcome.
-- **Triage bugs.** Reproduce reports, ask reporters for missing details (compiler, OS, ISA, minimal example), and weigh in on issues labelled [`decision needed`](https://gitlab.com/libeigen/eigen/-/issues?label_name%5B%5D=decision+needed). Issues labelled [`contributions welcome`](https://gitlab.com/libeigen/eigen/-/issues?label_name%5B%5D=contributions+welcome) are good entry points.
+- **Triage bugs.** Reproduce reports, ask reporters for missing details (compiler, OS, ISA, minimal example), and weigh in on issues labeled [`decision needed`](https://gitlab.com/libeigen/eigen/-/issues?label_name%5B%5D=decision+needed). Issues labeled [`contributions welcome`](https://gitlab.com/libeigen/eigen/-/issues?label_name%5B%5D=contributions+welcome) are good entry points.
 - **Run the test suite** on rarely-tested compilers, OSes, or architectures and report failures. The nightly matrix is visible in the CI pipelines link above.
-- **Improve documentation** — both the Doxygen reference (comments in headers) and the prose pages at <https://gitlab.com/libeigen/libeigen.gitlab.io>.
+- **Improve documentation** — the Doxygen reference (comments in headers) and the manual pages, snippets, and examples under `doc/`; see [`.agents/docs.md`](.agents/docs.md). The project site has its own repository, <https://gitlab.com/libeigen/libeigen.gitlab.io>.
 - **Contribute code** — bug fixes, new features, new tests, new benchmarks. See below.
 
 ## Submitting a merge request
@@ -42,7 +43,7 @@ You don't have to write C++ to help.
    ```
 4. **Make your changes**, with tests (and a benchmark if it's a performance-sensitive change — see [Tests and benchmarks](#tests-and-benchmarks)).
 5. **Format** with `clang-format-17` (see [Coding standards](#coding-standards)).
-6. **Commit** with an `Area: short imperative subject` message (see [Commit messages](#commit-messages)). Stage files by path — don't use `git add -A`.
+6. **Commit** with an `Area: Short imperative subject` message (see [Commit messages](#commit-messages)). Stage files by path — don't use `git add -A`.
 7. **Push** to your fork and open a merge request against `libeigen/eigen` `master`.
 8. **Be patient and responsive.** Reviewers are volunteers; reviews can take a while. If your MR is being ignored for a long time, don't be shy about pinging it.
 
@@ -72,7 +73,7 @@ For focused build recipes, test registration, split-test mechanics, and assertio
 
 - **Every new feature lands with tests.** Bug fixes should add a regression test that fails before the fix and passes after.
 - **Performance-sensitive changes land with a benchmark** under `benchmarks/` or `contrib/benchmarks/`. Don't defer benchmarks to a follow-up MR.
-- **Cover numerical corner cases**, not just typical inputs: ±0, ±∞, NaN, subnormals, domain boundaries, near-overflow / underflow values. Decomposition and solver tests should exercise ill-conditioned and structured matrices (Hilbert, Vandermonde, rank-deficient, near-singular, Jordan blocks, …). The bar is matching LAPACK on conditioning, pivoting strategy, and backward stability. Standard references: Higham's *Accuracy and Stability of Numerical Algorithms* / *Functions of Matrices*, Golub & van Loan's *Matrix Computations*.
+- **Cover numerical corner cases**, not just typical inputs: ±0, ±∞, NaN, subnormals, domain boundaries, near-overflow / underflow values. Decomposition and solver tests should exercise ill-conditioned and structured matrices (Hilbert, Vandermonde, rank-deficient, near-singular, Jordan blocks, …); see [Quality bar](#quality-bar). Standard references: Higham's *Accuracy and Stability of Numerical Algorithms* / *Functions of Matrices*, Golub & van Loan's *Matrix Computations*.
 - **New SIMD intrinsics need a `test/packetmath.cpp` entry** (or `contrib/test/special_packetmath.cpp` for special functions), and a specialization in every architecture backend that supports the type. `Eigen/src/Core/arch/Default/` holds generic SIMD implementations shared across backends; scalar fallbacks live in `Eigen/src/Core/GenericPacketMath.h` and `Eigen/src/Core/MathFunctions.h`.
 - **Benchmarking discipline.** Benchmarks on a loaded system are meaningless. Before running one: check `uptime` shows a low load average, finish or cancel background builds, and never run two benchmark binaries in the same shell invocation (parallel or chained with `&&`). Run each in its own shell, take medians within a binary, and optionally alternate (A, B, A, B) across separate invocations to detect drift.
 
@@ -81,34 +82,46 @@ For focused build recipes, test registration, split-test mechanics, and assertio
 Eigen has a few hard rules that catch contributors most often. The repository-wide rules are in
 [`AGENTS.md`](AGENTS.md#non-negotiable-rules), which also routes to task-specific guidance. The short version:
 
-1. **Header-only contract.** Never `#include` anything under `Eigen/src/...` or `contrib/Eigen/src/...` — `InternalHeaderCheck.h` makes that a hard compile error. User code reaches implementation only through the umbrella headers (`Eigen/Core`, `Eigen/Dense`, `Eigen/SVD`, …).
-2. **Preserve `EIGEN_DEVICE_FUNC`** on coefficient-level methods. Dropping it silently breaks CUDA / HIP / SYCL builds and rarely shows up in local testing.
-3. **Format with `clang-format-17` exactly** — Google base, 120 columns, configured in `.clang-format`. Newer or older
+1. **Header-only contract.** User code, examples, and public-behavior tests reach implementation only through the umbrella headers (`Eigen/Core`, `Eigen/Dense`, `Eigen/SVD`, …), never through files under `Eigen/src/...` or `contrib/Eigen/src/...`. Most of those files include `InternalHeaderCheck.h`, which raises a compile error when one is included without its module's umbrella header; the paths are private even where that guard is absent.
+2. **C++14 baseline.** Supported headers must compile as C++14: no `if constexpr` (use `EIGEN_IF_CONSTEXPR`), structured bindings, fold expressions, or class template argument deduction. The exception is a backend behind a preprocessor guard with a documented newer requirement. See [`.agents/conventions.md`](.agents/conventions.md).
+3. **Preserve `EIGEN_DEVICE_FUNC`** on coefficient-level methods. Dropping it silently breaks CUDA / HIP / SYCL builds and rarely shows up in local testing.
+4. **Format with `clang-format-17` exactly** — Google base, 120 columns, configured in `.clang-format`. Newer or older
    `clang-format` will diff against CI. CI checks changed lines (`git clang-format --diff --commit <base>`), and the
-   tree is not uniformly clang-format-17 clean. Inspect the selected files' diffs to exclude unrelated changes, then
-   run `git clang-format --binary clang-format-17 --force <base-sha> -- <files>`; `--force` permits unstaged edits.
+   tree is not uniformly clang-format-17 clean. The check is advisory: a failure shows as a warning on the
+   `checkformat:lint` job instead of blocking the pipeline, so fix it before asking for review. Inspect the selected
+   files' diffs to exclude unrelated changes, then run
+   `git clang-format --binary clang-format-17 --force <base-sha> -- <files>`; `--force` permits unstaged edits.
    Format new, untracked files with `clang-format-17 -i <files>` because Git's diff omits them. Follow the checks in
    [`.agents/ci.md`](.agents/ci.md). `scripts/format.sh` is for an intentional whole-tree pass.
-4. **Don't apply general C++ "modernize" cleanups.** No `modernize-*` / `cppcoreguidelines-*` clang-tidy fixes, no replacing `EIGEN_STRONG_INLINE` with `inline`, no reordering includes (`.clang-format` has `SortIncludes: false`). Eigen's conventions are encoded in `.clang-format`'s `StatementMacros` and `AttributeMacros` lists — don't "fix" their indentation.
-5. **Tests use `test/main.h`, not gtest** (today — see migration note above). `VERIFY_*` assertions, `CALL_SUBTEST_N` / `EIGEN_TEST_PART_N` for splitting, `EIGEN_DECLARE_TEST(<name>) { ... }` as the entry point.
-6. **`auto` traps.** `auto x = A + B;` captures a lazy expression holding references that can dangle. Use `.eval()` or an explicit type. Similarly, `.noalias()` is a promise from the caller — only use it when the destination doesn't appear on the right side (so `mat.noalias() = mat * mat` is **wrong**).
-7. **Stage commits explicitly.** Don't `git add -A` / `git add .` — the repo root accumulates `.vscode/`, `.idea/`, `build*/`, and other untracked files that must not enter commits. Add by path or with targeted globs.
+5. **Don't apply general C++ "modernize" cleanups.** No `modernize-*` / `cppcoreguidelines-*` clang-tidy fixes, no replacing `EIGEN_STRONG_INLINE` with `inline`, no reordering includes (`.clang-format` has `SortIncludes: false`). Eigen's conventions are encoded in `.clang-format`'s `StatementMacros` and `AttributeMacros` lists — don't "fix" their indentation.
+6. **Tests use `test/main.h`, not gtest** (today — see migration note above). `VERIFY_*` assertions, `CALL_SUBTEST_N` / `EIGEN_TEST_PART_N` for splitting, `EIGEN_DECLARE_TEST(<name>) { ... }` as the entry point.
+7. **`auto` traps.** `auto x = A + B;` captures a lazy expression holding references that can dangle. Use `.eval()` or an explicit type. Similarly, `.noalias()` is a promise from the caller — only use it when the destination doesn't appear on the right side (so `mat.noalias() = mat * mat` is **wrong**).
+8. **Stage commits explicitly.** Don't `git add -A` / `git add .` — the repo root accumulates `.vscode/`, `.idea/`, `build*/`, and other untracked files that must not enter commits. Add by path or with targeted globs.
 
 Naming conventions:
 - Classes: PascalCase (`Matrix`, `BDCSVD`).
 - Methods: camelCase (`coeffRef`, `applyOnTheLeft`).
-- Macros and compile-time constants: `EIGEN_UPPER_CASE` (`EIGEN_DEVICE_FUNC`, `EIGEN_STRONG_INLINE`).
+- Macros: `EIGEN_UPPER_CASE` (`EIGEN_DEVICE_FUNC`, `EIGEN_STRONG_INLINE`).
+- Compile-time constants: `static constexpr` members, not `enum` blocks. `kCamelCase` is accepted alongside the older
+  `snake_case` and `SCREAMING_CASE` spellings.
 - Internal implementation lives in the `Eigen::internal` namespace; public API stays in `Eigen::` or module namespaces.
 - Use `eigen_assert(cond)` for runtime preconditions (not raw `assert`) and `eigen_internal_assert` for internal-only
   invariants gated on `EIGEN_INTERNAL_DEBUGGING`. Compile-time API preconditions use the appropriate
   `EIGEN_STATIC_ASSERT_*` helper or `EIGEN_STATIC_ASSERT(cond, MSG_TOKEN)` to honor `EIGEN_NO_STATIC_ASSERT` and user
   overrides. Use `static_assert(cond, "message")` for unconditional implementation invariants.
 
-The canonical class layout is visible in recent additions such as `contrib/Eigen/src/GPU/DeviceMatrix.h`. Template parameters that get re-exported as public aliases carry a trailing underscore (`template <typename Scalar_, ...>` paired with `using Scalar = Scalar_;` — prefer `using` over `typedef` in new code), member variables use an `m_` prefix (`m_matrix`, `m_isInitialized`), implementation headers under `Eigen/src/...` begin with `// IWYU pragma: private` and `#include "./InternalHeaderCheck.h"`, header guards follow `EIGEN_<NAME>_H`, and implementation detail lives inside nested `namespace Eigen { namespace internal { ... } }`. Public classes carry Doxygen blocks (`\class`, `\brief`, `\tparam`, `\sa`) and link to runnable snippets from `doc/snippets/` via `\include` / `\verbinclude`. When in doubt, copy the style from a recent neighbouring file rather than inventing a new convention.
+The canonical class layout is visible in recent additions such as `contrib/Eigen/src/GPU/DeviceMatrix.h`. Template parameters that get re-exported as public aliases carry a trailing underscore (`template <typename Scalar_, ...>` paired with `using Scalar = Scalar_;` — prefer `using` over `typedef` in new code), member variables use an `m_` prefix (`m_matrix`, `m_isInitialized`), implementation headers under `Eigen/src/...` begin with `// IWYU pragma: private` and `#include "./InternalHeaderCheck.h"`, header guards follow `EIGEN_<NAME>_H`, and implementation detail lives inside nested `namespace Eigen { namespace internal { ... } }`. Public classes carry Doxygen blocks (`\class`, `\brief`, `\tparam`, `\sa`) and link to runnable snippets from `doc/snippets/` via `\include` / `\verbinclude`. When in doubt, copy the style from a recent neighboring file rather than inventing a new convention.
 
 ### License and SPDX/REUSE headers
 
 Every new source file must carry an inline copyright + license header. The `reuse lint` check in the `checkformat:lint` CI job blocks otherwise. Two header styles are in active use; pick whichever fits.
+
+Attributed collectively (the most common form in the tree; use it for files written by multiple contributors, or where individual attribution isn't useful):
+
+```cpp
+// SPDX-FileCopyrightText: The Eigen Authors
+// SPDX-License-Identifier: MPL-2.0
+```
 
 Attributed to an individual contributor:
 
@@ -124,21 +137,7 @@ Attributed to an individual contributor:
 // SPDX-License-Identifier: MPL-2.0
 ```
 
-Attributed collectively (common for files written by multiple contributors, or where individual attribution isn't useful):
-
-```cpp
-// This file is part of Eigen, a lightweight C++ template library
-// for linear algebra.
-//
-// Copyright (C) <year> The Eigen Authors.
-//
-// This Source Code Form is subject to the terms of the Mozilla
-// Public License v. 2.0. If a copy of the MPL was not distributed
-// with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
-// SPDX-License-Identifier: MPL-2.0
-```
-
-Markdown docs, generated files (`*.in`), and binary assets that can't carry inline headers are covered by path annotations in `REUSE.toml` — add your path there if you're creating one.
+Use the file's own comment syntax (`#` in CMake and shell). Markdown docs, generated files (`*.in`), and binary assets that can't carry inline headers are covered by path annotations in `REUSE.toml` — add your path there if you're creating one.
 
 ### Provenance and attribution
 
@@ -161,13 +160,13 @@ This is non-negotiable.
 
 ## Commit messages
 
-Format: `Area: short imperative subject`.
+Format: `Area: Short imperative subject`, with both the area and the subject capitalized.
 
 Examples (from recent history):
-- `BDCSVD: fix edge case`
-- `GPU: Drop direct LruCache.h include from CuBlasSupport.h`
-- `ci: drop CodeRabbit summary`
-- `TriangularView: alias-aware fallback for structured-diagonal product fast path`
+- `Core: Bring the vectorized cbrt within 1 ULP`
+- `SparseCore: Fix expressions on a sparse matrix diagonal under MSVC`
+- `Tests: Split numext into parts to bound its compile memory`
+- `CMake: Remove discontinued ComputeCpp support`
 
 Keep the subject under ~72 characters; use the body for the *why*, not the *what* — the diff already shows what changed. Reference issues by `#<n>` when relevant.
 
@@ -185,7 +184,7 @@ For decompositions and solvers specifically, the bar is matching LAPACK on condi
 
 Some `contrib/` modules carry stability guarantees beyond what the directory name suggests:
 
-- **`contrib/Eigen/Tensor`** and **`Eigen/ThreadPool`** together form TensorFlow's core compute backend. The `contrib/` location means *looser API-stability guarantees* — it does **not** mean low-traffic or low-stakes. Breaking changes to header layout, signatures, semantics, or contraction / reduction kernel performance ripple into every TensorFlow build. Prefer additive changes, keep header paths stable, run `contrib/test/tensor_*` before submitting, and call out any behaviour change prominently in the MR description.
+- **`contrib/Eigen/Tensor`** and **`Eigen/ThreadPool`** together form TensorFlow's core compute backend. The `contrib/` location means *looser API-stability guarantees* — it does **not** mean low-traffic or low-stakes. Breaking changes to header layout, signatures, semantics, or contraction / reduction kernel performance ripple into every TensorFlow build. Prefer additive changes, keep header paths stable, run `contrib/test/tensor_*` before submitting, and call out any behavior change prominently in the MR description.
 
 ## Communication
 
@@ -197,10 +196,12 @@ Some `contrib/` modules carry stability guarantees beyond what the directory nam
 
 - [`AGENTS.md`](AGENTS.md) — repository-wide agent contract, standard workflow, essential Eigen hazards, and the map
   to task-specific guidance.
-- Task guides: [testing](.agents/testing.md), [numerical code](.agents/numerics.md),
-  [benchmarking](.agents/benchmarking.md), [SIMD/GPU](.agents/simd-gpu.md),
-  [Tensor/ThreadPool](.agents/tensor-threadpool.md), [documentation](.agents/docs.md), and
-  [formatting/CI](.agents/ci.md).
+- Task guides: [coding conventions](.agents/conventions.md), [testing](.agents/testing.md),
+  [numerical code](.agents/numerics.md), [sparse](.agents/sparse.md), [benchmarking](.agents/benchmarking.md),
+  [provenance](.agents/provenance.md), [SIMD/GPU](.agents/simd-gpu.md),
+  [Tensor/ThreadPool](.agents/tensor-threadpool.md), [documentation](.agents/docs.md),
+  [formatting/CI](.agents/ci.md), [merge request descriptions](.agents/merge-requests.md), and
+  [answering review comments](.agents/review-response.md).
 - [`README.md`](README.md) — high-level project description and pointers to the websites.
 - [`CHANGELOG.md`](CHANGELOG.md) — release-by-release notes.
 - API reference (nightly): <https://libeigen.gitlab.io/eigen/docs-nightly>.
