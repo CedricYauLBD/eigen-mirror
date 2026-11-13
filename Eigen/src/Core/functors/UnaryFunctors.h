@@ -570,12 +570,16 @@ struct scalar_log2_op {
   }
 
  private:
-  // 0: float, double or long double; 1: std::complex of one of them; 2: any other scalar, user types included.
+  // 0: float, double, long double, half or bfloat16; 1: std::complex of a floating-point type; 2: any other scalar,
+  // user types included.
   static constexpr int kKind =
-      std::is_floating_point<Scalar>::value                                                                ? 0
+      (std::is_floating_point<Scalar>::value || std::is_same<Scalar, half>::value ||
+       std::is_same<Scalar, bfloat16>::value)
+          ? 0
       : std::is_floating_point<RealScalar>::value && std::is_same<Scalar, std::complex<RealScalar>>::value ? 1
                                                                                                            : 2;
-  // std::log2 is exact at powers of two, like plog2; log2(e) * log(a) can be an ulp off there. complex_log2 takes the
+  // std::log2 is exact at powers of two, like plog2; log2(e) * log(a) can be an ulp off there, and two off for half and
+  // bfloat16, which round both factors. numext::log2 of half and bfloat16 goes through float. complex_log2 takes the
   // real part log2|a| from std::log2, like plog2 on complex packets.
   EIGEN_DEVICE_FUNC static Scalar run(const Scalar& a, std::integral_constant<int, 0>) { return numext::log2(a); }
   EIGEN_DEVICE_FUNC static Scalar run(const Scalar& a, std::integral_constant<int, 1>) {
