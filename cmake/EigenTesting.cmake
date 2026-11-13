@@ -567,7 +567,7 @@ endfunction()
 function(ei_get_cxxflags VAR)
   set(flags "")
   # Report requested test options, not an ISA inferred from pointer width or host.
-  foreach(feature IN ITEMS NEON NEON64 ZVECTOR Z14 VSX ALTIVEC MSA LSX SVE SME
+  foreach(feature IN ITEMS NEON NEON64 Z14 VSX ALTIVEC MSA LSX SVE SME
                            SSE2 SSE3 SSSE3 SSE4_1 SSE4_2 AVX AVX2 AVX512 AVX512DQ AVX512FP16 FMA F16C)
     if(EIGEN_TEST_${feature})
       if(feature STREQUAL "SVE" AND NOT "${EIGEN_TEST_SVE_VL}" STREQUAL "")
