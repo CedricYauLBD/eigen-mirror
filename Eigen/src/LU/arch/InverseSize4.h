@@ -50,8 +50,7 @@ namespace Eigen {
 namespace internal {
 
 // The packet kernels below store whole packets along the inner dimension of the result, so they require a unit inner
-// stride. Other destinations are computed into a contiguous temporary and copied. A destination whose inner stride is
-// 1 at compile time takes the kernel unconditionally.
+// stride. Other destinations are computed into a contiguous temporary and copied.
 template <typename ResultType>
 EIGEN_STRONG_INLINE bool inverse_size4_has_unit_inner_stride(const ResultType &result) {
   return ResultType::InnerStrideAtCompileTime == 1 || result.innerStride() == 1;

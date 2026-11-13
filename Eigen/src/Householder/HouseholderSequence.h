@@ -138,8 +138,8 @@ assign_householder_operand(ResultType& res, const EigenBase<OtherDerived>& other
 
 // A real sequence applied to a complex destination, which happens in a product with a complex matrix.
 template <typename SequenceScalar, typename Dest>
-struct hseq_applies_to_complex_parts
-    : bool_constant<!NumTraits<SequenceScalar>::IsComplex && NumTraits<typename Dest::Scalar>::IsComplex> {};
+using hseq_applies_to_complex_parts =
+    bool_constant<!NumTraits<SequenceScalar>::IsComplex && NumTraits<typename Dest::Scalar>::IsComplex>;
 
 // The real matrix holding the real or imaginary part of a destination.
 template <typename SequenceScalar, typename Dest>
@@ -297,7 +297,7 @@ class HouseholderSequence : public EigenBase<HouseholderSequence<VectorsType, Co
   /** \internal */
   template <typename Dest, typename Workspace>
   EIGEN_DEVICE_FUNC void evalTo(Dest& dst, Workspace& workspace) const {
-    evalToImpl(dst, workspace, internal::bool_constant<internal::hseq_applies_to_complex_parts<Scalar, Dest>::value>());
+    evalToImpl(dst, workspace, internal::hseq_applies_to_complex_parts<Scalar, Dest>());
   }
 
  private:
@@ -359,8 +359,7 @@ class HouseholderSequence : public EigenBase<HouseholderSequence<VectorsType, Co
   /** \internal */
   template <typename Dest, typename Workspace>
   inline void applyThisOnTheRight(Dest& dst, Workspace& workspace) const {
-    applyThisOnTheRightImpl(dst, workspace,
-                            internal::bool_constant<internal::hseq_applies_to_complex_parts<Scalar, Dest>::value>());
+    applyThisOnTheRightImpl(dst, workspace, internal::hseq_applies_to_complex_parts<Scalar, Dest>());
   }
 
  private:
@@ -429,8 +428,7 @@ class HouseholderSequence : public EigenBase<HouseholderSequence<VectorsType, Co
   /** \internal */
   template <typename Dest, typename Workspace>
   inline void applyThisOnTheLeft(Dest& dst, Workspace& workspace, bool inputIsIdentity = false) const {
-    applyThisOnTheLeftImpl(dst, workspace, inputIsIdentity,
-                           internal::bool_constant<internal::hseq_applies_to_complex_parts<Scalar, Dest>::value>());
+    applyThisOnTheLeftImpl(dst, workspace, inputIsIdentity, internal::hseq_applies_to_complex_parts<Scalar, Dest>());
   }
 
  private:
