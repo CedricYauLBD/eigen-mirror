@@ -1650,7 +1650,8 @@ struct incbeta_cfe {
   EIGEN_STATIC_ASSERT((std::is_same<Scalar, float>::value || std::is_same<Scalar, double>::value),
                       THIS_TYPE_IS_NOT_SUPPORTED)
 
-  EIGEN_DEVICE_FUNC static EIGEN_STRONG_INLINE Scalar run(Scalar a, Scalar b, Scalar x, bool small_branch) {
+  // xc is 1 - x: for x close to 1 it cannot be recovered from x, so the caller may supply it.
+  EIGEN_DEVICE_FUNC static EIGEN_STRONG_INLINE Scalar run(Scalar a, Scalar b, Scalar x, Scalar xc, bool small_branch) {
     const Scalar big = cephes_helper<Scalar>::big();
     const Scalar machep = cephes_helper<Scalar>::machep();
     const Scalar biginv = cephes_helper<Scalar>::biginv();
@@ -1688,7 +1689,7 @@ struct incbeta_cfe {
       k7 = a + one;
       k8 = a + two;
       k26update = -one;
-      x = x / (one - x);
+      x = x / xc;
     }
 
     pkm2 = zero;
@@ -1750,6 +1751,35 @@ struct incbeta_cfe {
   }
 };
 
+/* log(Gamma(a + b) / (Gamma(a) Gamma(b))) is evaluated as lgamma(a + b) - lgamma(a) - lgamma(b), whose error is about
+ * eps M (log M - 1) for M = max(a, b), the rounding of lgamma(M), which the caller's exp() turns into relative error.
+ * Where that reaches ~0.1, i.e. M >= 1 / (64 eps) (1.3e5 in float, 7e13 in double), the result is garbage and
+ * betainc_stirling_ratio, which has no such cancellation when m = min(a, b) <= M / 4, is used instead. Below that
+ * threshold the sum is kept: its rounding errors are correlated with those of the continued fraction, which uses the
+ * same a + b, and the Stirling form is not systematically better there. The callers apply this only where 1 - x
+ * rounds to 1, the inputs that otherwise hang; every other input keeps the original arithmetic. */
+template <typename Scalar>
+EIGEN_DEVICE_FUNC static EIGEN_STRONG_INLINE bool betainc_use_stirling_ratio(Scalar a, Scalar b) {
+  const Scalar big = numext::maxi(a, b);
+  return big * NumTraits<Scalar>::epsilon() >= Scalar(1.0 / 64) && Scalar(4) * numext::mini(a, b) <= big;
+}
+
+/* Stirling's series (DLMF 5.11.1) with the large terms combined, for L = M + m, M >= 1 / (64 eps):
+ *   lgamma(L) - lgamma(M) = m log M + (L - 1/2) log1p(m / M) - m + (1/12)(1/L - 1/M) - (1/360)(1/L^3 - 1/M^3) + O(M^-5)
+ * and the remaining term is -lgamma(m). */
+template <typename Scalar>
+EIGEN_DEVICE_FUNC static EIGEN_STRONG_INLINE Scalar betainc_stirling_ratio(Scalar a, Scalar b) {
+  const Scalar big = numext::maxi(a, b);
+  const Scalar small = numext::mini(a, b);
+  const Scalar sum = big + small;
+  const Scalar sum_inv = Scalar(1) / sum;
+  const Scalar big_inv = Scalar(1) / big;
+  Scalar d = small * numext::log(big) + (sum - Scalar(0.5)) * numext::log1p(small / big) - small;
+  d += (Scalar(1) / Scalar(12)) * (sum_inv - big_inv) -
+       (Scalar(1) / Scalar(360)) * (sum_inv * sum_inv * sum_inv - big_inv * big_inv * big_inv);
+  return d - lgamma_impl<Scalar>::run(small);
+}
+
 /* Helper functions depending on the Scalar type */
 template <typename Scalar>
 struct betainc_helper {};
@@ -1758,10 +1788,12 @@ template <>
 struct betainc_helper<float> {
   /* Core implementation, assumes a large (> 1.0) */
   EIGEN_DEVICE_FUNC static EIGEN_STRONG_INLINE float incbsa(float aa, float bb, float xx) {
-    float ans, a, b, t, x, onemx;
+    float ans, a, b, t, x, onemx, xc, logx;
     bool reversed_a_b = false;
 
     onemx = 1.0f - xx;
+    // 1 - xx rounds to 1: after reversing, x would be 1 and its complement x / (1 - x) infinite.
+    const bool onemx_is_one = (onemx == 1.0f);
 
     /* see if x is greater than the mean */
     if (xx > (aa / (aa + bb))) {
@@ -1777,25 +1809,36 @@ struct betainc_helper<float> {
       x = xx;
     }
 
+    // In the degenerate case use the exact 1 - x = xx (reversed) or log(1 - xx) = log1p(-xx) in place of the rounded 1.
+    const bool degenerate = reversed_a_b && onemx_is_one;
+    xc = degenerate ? t : 1.0f - x;
+    logx = degenerate ? numext::log1p(-xx) : numext::log(x);
+
     /* Choose expansion for optimal convergence */
     if (b > 10.0f) {
       if (numext::abs(b * x / a) < 0.3f) {
-        t = betainc_helper<float>::incbps(a, b, x);
+        t = betainc_helper<float>::incbps(a, b, x, xc, logx, degenerate ? numext::log(t) : numext::log1p(-x),
+                                          onemx_is_one);
         if (reversed_a_b) t = 1.0f - t;
         return t;
       }
     }
 
+    const float log_t = (onemx_is_one && !reversed_a_b) ? numext::log1p(-xx) : numext::log(t);
     ans = x * (a + b - 2.0f) / (a - 1.0f);
     if (ans < 1.0f) {
-      ans = incbeta_cfe<float>::run(a, b, x, true /* small_branch */);
-      t = b * numext::log(t);
+      ans = incbeta_cfe<float>::run(a, b, x, xc, true /* small_branch */);
+      t = b * log_t;
     } else {
-      ans = incbeta_cfe<float>::run(a, b, x, false /* small_branch */);
-      t = (b - 1.0f) * numext::log(t);
+      ans = incbeta_cfe<float>::run(a, b, x, xc, false /* small_branch */);
+      t = (b - 1.0f) * log_t;
     }
 
-    t += a * numext::log(x) + lgamma_impl<float>::run(a + b) - lgamma_impl<float>::run(a) - lgamma_impl<float>::run(b);
+    if (onemx_is_one && betainc_use_stirling_ratio(a, b)) {
+      t += a * logx + betainc_stirling_ratio(a, b);
+    } else {
+      t += a * logx + lgamma_impl<float>::run(a + b) - lgamma_impl<float>::run(a) - lgamma_impl<float>::run(b);
+    }
     t += numext::log(ans / a);
     t = numext::exp(t);
 
@@ -1803,17 +1846,25 @@ struct betainc_helper<float> {
     return t;
   }
 
-  EIGEN_DEVICE_FUNC static EIGEN_STRONG_INLINE float incbps(float a, float b, float x) {
+  EIGEN_DEVICE_FUNC static EIGEN_STRONG_INLINE float incbps(float a, float b, float x, float xc, float logx,
+                                                            float logxc, bool xc_rounds_to_one) {
     float t, u, y, s;
     const float machep = cephes_helper<float>::machep();
 
-    y = a * numext::log(x) + (b - 1.0f) * numext::log1p(-x) - numext::log(a);
-    y -= lgamma_impl<float>::run(a) + lgamma_impl<float>::run(b);
-    y += lgamma_impl<float>::run(a + b);
+    y = a * logx + (b - 1.0f) * logxc - numext::log(a);
+    if (xc_rounds_to_one && betainc_use_stirling_ratio(a, b)) {
+      y += betainc_stirling_ratio(a, b);
+    } else {
+      y -= lgamma_impl<float>::run(a) + lgamma_impl<float>::run(b);
+      y += lgamma_impl<float>::run(a + b);
+    }
 
-    t = x / (1.0f - x);
+    t = x / xc;
     s = 0.0f;
     u = 1.0f;
+    // Safety net against an endless loop: for b >= 2^24, b -= 1 changes nothing, and a ratio u_{k+1} / u_k of 1 never
+    // decays. Convergent sums need at most b + 1 < 2^24 iterations (thousands for b ~ 5e4 with t b / a ~ 1).
+    int n = 0;
     do {
       b -= 1.0f;
       if (b == 0.0f) {
@@ -1822,7 +1873,7 @@ struct betainc_helper<float> {
       a += 1.0f;
       u *= t * b / a;
       s += u;
-    } while (numext::abs(u) > machep);
+    } while (numext::abs(u) > machep && ++n < (1 << 24));
 
     return numext::exp(y) * (1.0f + s);
   }
@@ -1848,8 +1899,13 @@ struct betainc_impl<float> {
     /* transformation for small aa */
     if (a <= 1.0f) {
       ans = betainc_helper<float>::incbsa(a + 1.0f, b, x);
-      t = a * numext::log(x) + b * numext::log1p(-x) + lgamma_impl<float>::run(a + b) -
-          lgamma_impl<float>::run(a + 1.0f) - lgamma_impl<float>::run(b);
+      if (1.0f - x == 1.0f && betainc_use_stirling_ratio(a + 1.0f, b)) {
+        // Gamma(a + b) / (Gamma(a + 1) Gamma(b)) = Gamma(a + 1 + b) / (Gamma(a + 1) Gamma(b)) / (a + b).
+        t = a * numext::log(x) + b * numext::log1p(-x) + betainc_stirling_ratio(a + 1.0f, b) - numext::log(a + b);
+      } else {
+        t = a * numext::log(x) + b * numext::log1p(-x) + lgamma_impl<float>::run(a + b) -
+            lgamma_impl<float>::run(a + 1.0f) - lgamma_impl<float>::run(b);
+      }
       return (ans + numext::exp(t));
     } else {
       return betainc_helper<float>::incbsa(a, b, x);
@@ -1890,8 +1946,12 @@ struct betainc_helper<double> {
       s = s * t * pow(x, a);
     }
     */
-    t = lgamma_impl<double>::run(a + b) - lgamma_impl<double>::run(a) - lgamma_impl<double>::run(b) + u +
-        numext::log(s);
+    if (1.0 - x == 1.0 && betainc_use_stirling_ratio(a, b)) {
+      t = betainc_stirling_ratio(a, b) + u + numext::log(s);
+    } else {
+      t = lgamma_impl<double>::run(a + b) - lgamma_impl<double>::run(a) - lgamma_impl<double>::run(b) + u +
+          numext::log(s);
+    }
     return numext::exp(t);
   }
 };
@@ -1921,7 +1981,9 @@ struct betainc_impl<double> {
 
     w = 1.0 - xx;
 
-    /* Reverse a and b if x is greater than the mean. */
+    /* Reverse a and b if x is greater than the mean. If 1 - xx rounds to 1, x = w = 1 below and its complement
+     * x / (1 - x) is infinite: use the exact xc = xx instead. */
+    const bool w_is_one = (w == 1.0);
     if (xx > (aa / (aa + bb))) {
       reversed_a_b = true;
       a = bb;
@@ -1948,17 +2010,17 @@ struct betainc_impl<double> {
     /* Choose expansion for better convergence. */
     y = x * (a + b - 2.0) - (a - 1.0);
     if (y < 0.0) {
-      w = incbeta_cfe<double>::run(a, b, x, true /* small_branch */);
+      w = incbeta_cfe<double>::run(a, b, x, reversed_a_b && w_is_one ? xc : 1.0 - x, true /* small_branch */);
     } else {
-      w = incbeta_cfe<double>::run(a, b, x, false /* small_branch */) / xc;
+      w = incbeta_cfe<double>::run(a, b, x, reversed_a_b && w_is_one ? xc : 1.0 - x, false /* small_branch */) / xc;
     }
 
     /* Multiply w by the factor
          a      b   _             _     _
         x  (1-x)   | (a+b) / ( a | (a) | (b) ) .   */
 
-    y = a * numext::log(x);
-    t = b * numext::log(xc);
+    y = a * ((reversed_a_b && w_is_one) ? numext::log1p(-xx) : numext::log(x));
+    t = b * ((xc < 1.0) ? numext::log(xc) : numext::log1p(-xx));
     // TODO: gamma is not directly implemented in Eigen.
     /*
     if ((a + b) < maxgam && numext::abs(y) < maxlog && numext::abs(t) < maxlog)
@@ -1971,7 +2033,11 @@ struct betainc_impl<double> {
     } else {
     */
     /* Resort to logarithms.  */
-    y += t + lgamma_impl<double>::run(a + b) - lgamma_impl<double>::run(a) - lgamma_impl<double>::run(b);
+    if (w_is_one && betainc_use_stirling_ratio(a, b)) {
+      y += t + betainc_stirling_ratio(a, b);
+    } else {
+      y += t + lgamma_impl<double>::run(a + b) - lgamma_impl<double>::run(a) - lgamma_impl<double>::run(b);
+    }
     y += numext::log(w / a);
     t = numext::exp(y);
 

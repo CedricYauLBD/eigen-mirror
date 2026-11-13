@@ -541,6 +541,53 @@ void custom_scalar_erf_erfc() {
   }
 }
 
+// betainc for b so large that 1 - x rounds to 1 in Scalar (x < eps / 2): these used to loop forever or return NaN.
+// References: long double continued fraction (DLMF 8.17.22) with the exact complement of x; a = 1 and a = 1/2 also
+// follow from I_x(1, b) = 1 - (1 - x)^b and I_x(1/2, b) -> erf(sqrt(b x)).
+template <typename Scalar>
+void test_betainc_large_b() {
+  struct Case {
+    double a, b, x, ref;
+  };
+  std::vector<Case> cases;
+  if (sizeof(Scalar) == 4) {
+    cases = {{20.5, 1e10, 3e-9, 0.97205905127192506},
+             {20, 1e10, 3e-9, 0.97812653455614376},
+             {2.5, 1e9, 1e-8, 0.99875026943340965},
+             {30.5, 1e12, 5e-11, 0.99878628135546261},
+             {2.5, 1e9, 2e-9, 0.45058403336738364},
+             {1, 1e9, 1e-9, 0.63212054860815611},
+             {0.5, 1e8, 2e-8, 0.95449973625714398},
+             {11141.5, 7.8e32, 1.26e-20, 1},
+             {3.2e10, 1.05e28, 5.4e-17, 1}};
+  } else {
+    cases = {{20.5, 1e20, 3e-18, 1}, {20, 1e20, 3e-18, 1}, {2.5, 1e17, 2e-17, 0.45058404864721982}};
+  }
+  // The exponent a log x + ... + (b - 1) log1p(-x) + log(Gamma(a + b) / (Gamma(a) Gamma(b))) sums terms of size
+  // a |log x| (and m log M with m = a) that nearly cancel, so the relative error is eps (c0 + c a |log x|), with
+  // c0 = 8 (the cases with value 1 measure 0) and c = 1.5. The measured error is at most 0.12 of this bound (8.9 eps
+  // vs 83 for float (2.5, 1e9, 2e-9) with clang++ -march=x86-64-v3, 14.4 vs 152 for double (2.5, 1e17, 2e-17); g++ and
+  // -ffp-contract=off measure the same or less), i.e. the bound is at least 8 times the error.
+  const double eps = static_cast<double>(NumTraits<Scalar>::epsilon());
+  Array<Scalar, Dynamic, 1> a(cases.size()), b(cases.size()), x(cases.size());
+  for (size_t i = 0; i < cases.size(); ++i) {
+    a(i) = Scalar(cases[i].a);
+    b(i) = Scalar(cases[i].b);
+    x(i) = Scalar(cases[i].x);
+    const Scalar v = numext::betainc(a(i), b(i), x(i));
+    VERIFY(!((numext::isnan)(v)));
+    const Scalar ref = Scalar(cases[i].ref);
+    const double tol = eps * (8 + (cases[i].ref == 1 ? 0.0 : 1.5 * cases[i].a * std::abs(std::log(double(x(i))))));
+    VERIFY(numext::abs(v - ref) <= Scalar(tol) * ref);
+  }
+  Array<Scalar, Dynamic, 1> res = betainc(a, b, x);
+  for (size_t i = 0; i < cases.size(); ++i) {
+    const Scalar ref = Scalar(cases[i].ref);
+    const double tol = eps * (8 + (cases[i].ref == 1 ? 0.0 : 1.5 * cases[i].a * std::abs(std::log(double(x(i))))));
+    VERIFY(numext::abs(res(i) - ref) <= Scalar(tol) * ref);
+  }
+}
+
 // For huge a and x one ulp apart the continued fraction overflows and produces an internal NaN, which the clamping of
 // igamma to [0, 1] used to turn into 0 (igammac returned the NaN). The true values are P = 1 and Q = 0 (x - a is
 // ~1e8 standard deviations): the answer must be that or NaN, in the scalar and the array paths, never a silent 0.
@@ -725,11 +772,13 @@ EIGEN_DECLARE_TEST(special_functions) {
   CALL_SUBTEST_1(ndtri_tail_accuracy<float>());
   CALL_SUBTEST_1(array_special_functions<ArrayXf>());
   CALL_SUBTEST_1(test_special_functions_edge_cases<float>());
+  CALL_SUBTEST_1(test_betainc_large_b<float>());
   CALL_SUBTEST_1(test_igamma_limits<float>());
   CALL_SUBTEST_1(test_igamma_internal_nan<float>());
   CALL_SUBTEST_2(ndtri_tail_accuracy<double>());
   CALL_SUBTEST_2(array_special_functions<ArrayXd>());
   CALL_SUBTEST_2(test_special_functions_edge_cases<double>());
+  CALL_SUBTEST_2(test_betainc_large_b<double>());
   CALL_SUBTEST_2(test_igamma_limits<double>());
   CALL_SUBTEST_2(test_igamma_internal_nan<double>());
   CALL_SUBTEST_3(scalar_ndtri<long double>());
