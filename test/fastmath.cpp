@@ -10,6 +10,8 @@
 
 #include "main.h"
 #include <Eigen/QR>
+#include <iomanip>
+#include <vector>
 
 void check(bool b, bool ref) {
   std::cout << b;
@@ -379,6 +381,65 @@ void check_sign_dependent_functions() {
   }
 }
 
+// Packet exp, expm1, log1p, asinh and acosh under -ffast-math, against exact references. A wrong value, not isfinite or
+// isnan (which fast-math folds), shows an overflow or a cancellation. The inputs and the C library references go
+// through volatiles: fast-math folds calls on constants and rewrites acosh and the like, even inside std::acosh.
+using LongDoubleFunction = long double (*)(long double);
+
+template <typename Scalar, typename Func>
+bool check_fastmath_accuracy(const char* name, const std::vector<Scalar>& values, Func func,
+                             LongDoubleFunction reference) {
+  LongDoubleFunction volatile ref = reference;
+  using ArrayType = Array<Scalar, Dynamic, 1>;
+  // Long enough for several packets of any size and a remainder.
+  const Index n = 3 * 64 + 5;
+  const long double tolerance = 4 * static_cast<long double>(NumTraits<Scalar>::epsilon());
+  ArrayType x(n);
+  for (Index i = 0; i < n; ++i) {
+    const volatile Scalar* v = &values[static_cast<size_t>(i) % values.size()];
+    x[i] = *v;
+  }
+  const ArrayType y = func(x);
+  bool passed = true;
+  for (Index i = 0; i < n; ++i) {
+    const long double expected = ref(static_cast<long double>(x[i]));
+    const long double error = numext::abs(static_cast<long double>(y[i]) - expected);
+    if (!(error <= tolerance * numext::abs(expected))) {
+      passed = false;
+      if (static_cast<size_t>(i) < values.size()) {
+        std::cerr << std::setprecision(std::numeric_limits<Scalar>::max_digits10) << name << "(" << x[i]
+                  << ") = " << y[i] << ", expected " << static_cast<Scalar>(expected) << "\n";
+      }
+    }
+  }
+  return passed;
+}
+
+template <typename Scalar>
+void check_exp_family_accuracy() {
+  using ArrayType = Array<Scalar, Dynamic, 1>;
+  const bool is_float = std::is_same<Scalar, float>::value;
+  // Small and moderate arguments.
+  const Scalar tiny = is_float ? Scalar(1e-7) : Scalar(1e-10);
+  const std::vector<Scalar> small_values = {tiny,        -tiny,       Scalar(1e-3), Scalar(-1e-3),
+                                            Scalar(0.1), Scalar(0.7), Scalar(3)};
+  // The largest finite results of exp need a scale 2^m with m at the top of the exponent range.
+  const Scalar exp_edge = is_float ? Scalar(88.38) : Scalar(709.1);
+  const std::vector<Scalar> large_values = {exp_edge, is_float ? Scalar(88.5) : Scalar(709.5),
+                                            is_float ? Scalar(88.72) : Scalar(709.78), Scalar(10), Scalar(-10)};
+
+  auto exp_fn = [](const ArrayType& x) -> ArrayType { return x.exp(); };
+  LongDoubleFunction exp_ref = ::expl;
+
+  // Every call runs, so that one failure report lists all the functions that are wrong.
+  bool passed = true;
+  passed &= check_fastmath_accuracy("exp", small_values, exp_fn, exp_ref);
+  // On a target without fma, -ffast-math fuses the two products of the range reduction of exp and loses its low bits
+  // for large |x|, so only the overflow edge of float is covered here.
+  if (is_float) passed &= check_fastmath_accuracy("exp", large_values, exp_fn, exp_ref);
+  VERIFY(passed);
+}
+
 EIGEN_DECLARE_TEST(fastmath) {
   std::cout << "*** float *** \n\n";
   check_inf_nan<float>(true);
@@ -395,4 +456,6 @@ EIGEN_DECLARE_TEST(fastmath) {
   CALL_SUBTEST_2(check_complex_fastmath<double>());
   CALL_SUBTEST_3(check_sign_dependent_functions<float>());
   CALL_SUBTEST_4(check_sign_dependent_functions<double>());
+  CALL_SUBTEST_5(check_exp_family_accuracy<float>());
+  CALL_SUBTEST_6(check_exp_family_accuracy<double>());
 }

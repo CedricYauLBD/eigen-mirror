@@ -530,7 +530,10 @@ EIGEN_DEFINE_FUNCTION_ALLOWING_MULTIPLE_DEFINITIONS Packet pexp_float(const Pack
   const PacketI biased_lo = psub(biased_sum, biased_hi);          // (m - m/2) + 127
   const Packet pow2_hi = preinterpret<Packet>(plogical_shift_left<23>(biased_hi));
   const Packet pow2_lo = preinterpret<Packet>(plogical_shift_left<23>(biased_lo));
-  y = pmul(pmul(y, pow2_hi), pow2_lo);
+  // For m = 128, pow2_hi = pow2_lo = 2^64 and y < 1. The barrier keeps -ffast-math from forming 2^64 2^64 = inf.
+  y = pmul(y, pow2_hi);
+  pbarrier(y);
+  y = pmul(y, pow2_lo);
 
   EIGEN_IF_CONSTEXPR (!IsFinite) {
     // Handle NaN: exp(nan) = nan. Use pmax to propagate NaN from input.
