@@ -3799,6 +3799,26 @@ void packetmath_bfloat16_sign_bits() {
 }
 #endif
 
+#if defined(EIGEN_VECTORIZE_ALTIVEC) || defined(EIGEN_VECTORIZE_VSX)
+// Lanes above 65535 saturate and leave the other lanes alone, for every placement of the overflowing lanes among the
+// even and the odd lanes.
+void packetmath_bfloat16_to_unsigned_short_cast() {
+  using BfPacket = internal::Packet8bf;
+  using UsPacket = internal::Packet8us;
+  EIGEN_ALIGN_MAX bfloat16 input[8];
+  EIGEN_ALIGN_MAX numext::uint16_t output[8];
+  for (int overflow = 0; overflow < 256; ++overflow) {
+    for (int i = 0; i < 8; ++i) {
+      input[i] = bfloat16(((overflow >> i) & 1) ? 70000.0f + 1000.0f * i : 10.0f * (i + 1));
+    }
+    internal::pstore(output, internal::pcast<BfPacket, UsPacket>(internal::pload<BfPacket>(input)));
+    for (int i = 0; i < 8; ++i) {
+      VERIFY_IS_EQUAL(output[i], static_cast<numext::uint16_t>(((overflow >> i) & 1) ? 65535 : 10 * (i + 1)));
+    }
+  }
+}
+#endif
+
 #if defined(EIGEN_VECTORIZE_AVX) || defined(EIGEN_VECTORIZE_AVX512) || defined(EIGEN_VECTORIZE_NEON) || \
     defined(EIGEN_VECTORIZE_SME)
 // The bfloat16 arithmetic packets round a float result to nearest even. Check them against that rounding applied to
@@ -4002,6 +4022,10 @@ EIGEN_DECLARE_TEST(packetmath) {
     defined(EIGEN_VECTORIZE_ALTIVEC) || defined(EIGEN_VECTORIZE_VSX)
   CALL_SUBTEST_15(packetmath_bfloat16_sign_bits());
   CALL_SUBTEST_15(packetmath_with_flushed_inputs(packetmath_bfloat16_sign_bits));
+#endif
+
+#if defined(EIGEN_VECTORIZE_ALTIVEC) || defined(EIGEN_VECTORIZE_VSX)
+  CALL_SUBTEST_15(packetmath_bfloat16_to_unsigned_short_cast());
 #endif
 
 #if defined(EIGEN_VECTORIZE_AVX) || defined(EIGEN_VECTORIZE_AVX512) || defined(EIGEN_VECTORIZE_NEON) || \
