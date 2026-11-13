@@ -915,6 +915,28 @@ build:linux:aarch64:clang-14:default:smoketest:
   tags:
     - saas-linux-medium-amd64
 
+######## C++20 Compile-Time Tests ##############################################
+# The compile-time tests check their results with static_assert, so building them is the test; most of their checks
+# need C++20 (constexpr allocation and destructors). Every tier runs this job: the smoke and affected tiers build in
+# the default C++17, and gcc-10 is the oldest libstdc++ in CI, whose library is the least constexpr.
+build:linux:cross:x86-64:gcc-10:cxx20:compile-time:
+  extends: build:linux:cross:x86-64:gcc-10:default
+  image: ${EIGEN_CI_IMAGE_LINUX_AMD64_SMOKETEST_BUILD}
+  variables:
+    EIGEN_CI_SKIP_APT: "true"
+    EIGEN_CI_ADDITIONAL_ARGS: >-
+      -DCMAKE_CXX_STANDARD=20
+    EIGEN_CI_BUILD_TARGET: >-
+      compile_time_evaluation compile_time_decompositions sparse_compile_time_evaluation constexpr
+      contrib_compile_time special_functions_compile_time levenberg_marquardt_compile_time tensor_compile_time
+  rules:
+    - !reference [.rules:libeigen:gpu-schedule-guard, rules]
+    - if: $CI_PIPELINE_SOURCE == "schedule" && $CI_PROJECT_NAMESPACE == "libeigen"
+    - if: $CI_PIPELINE_SOURCE == "web" && $CI_PROJECT_NAMESPACE == "libeigen"
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+  tags:
+    - saas-linux-medium-amd64
+
 ######## MR Affected Tests #####################################################
 # Opt-in via the `affected-tests` label: build every test the merge request diff
 # can reach.  The target list comes from the select:tests job; see
