@@ -2,10 +2,10 @@
 
 Eigen is written and maintained by volunteers. Contributions — code, documentation, bug triage, tests on uncommon platforms, design feedback — are all welcome.
 
-This document is the human-facing on-ramp. [`AGENTS.md`](AGENTS.md) is the AI-facing repository contract and routes
-readers to focused guides for coding conventions, testing, numerical and sparse work, performance, SIMD/GPU,
-Tensor/ThreadPool, documentation, CI, and merge requests. Those guides are also useful to human contributors working in
-the corresponding areas.
+This document is where human contributors should start. [`AGENTS.md`](AGENTS.md) holds the guidance written for AI
+coding agents, and it links to focused guides for coding conventions, testing, numerical and sparse work, performance,
+SIMD/GPU, Tensor/ThreadPool, documentation, CI, and merge requests. Those guides are also useful to human contributors
+working in the corresponding areas.
 
 ## Where Eigen lives
 
@@ -194,8 +194,8 @@ Some `contrib/` modules carry stability guarantees beyond what the directory nam
 
 ## Further reading
 
-- [`AGENTS.md`](AGENTS.md) — repository-wide agent contract, standard workflow, essential Eigen hazards, and the map
-  to task-specific guidance.
+- [`AGENTS.md`](AGENTS.md) — guidance for AI coding agents: the repository-wide rules, the standard workflow, essential
+  Eigen hazards, and links to the task guides.
 - Task guides: [coding conventions](.agents/conventions.md), [testing](.agents/testing.md),
   [numerical code](.agents/numerics.md), [sparse](.agents/sparse.md), [benchmarking](.agents/benchmarking.md),
   [provenance](.agents/provenance.md), [SIMD/GPU](.agents/simd-gpu.md),
