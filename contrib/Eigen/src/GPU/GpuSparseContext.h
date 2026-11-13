@@ -833,7 +833,12 @@ class SparseContext {
   // update, no GPU work).
   void update_dnvec(cusparseDnVecDescr_t& desc, int64_t& cur_size, int64_t size, void* ptr) const {
     if (!desc || cur_size != size) {
-      if (desc) EIGEN_CUSPARSE_CHECK(cusparseDestroyDnVec(desc));
+      if (desc) {
+        // Clear the descriptor first so a throwing check cannot leave a handle that is destroyed again.
+        cusparseDnVecDescr_t old = desc;
+        desc = nullptr;
+        EIGEN_CUSPARSE_CHECK(cusparseDestroyDnVec(old));
+      }
       EIGEN_CUSPARSE_CHECK(cusparseCreateDnVec(&desc, size, ptr, kValueType));
       cur_size = size;
       invalidate_ws_caches();
@@ -845,7 +850,11 @@ class SparseContext {
   void update_dnmat(cusparseDnMatDescr_t& desc, int64_t& cur_rows, int64_t& cur_cols, int64_t rows, int64_t cols,
                     void* ptr) const {
     if (!desc || cur_rows != rows || cur_cols != cols) {
-      if (desc) EIGEN_CUSPARSE_CHECK(cusparseDestroyDnMat(desc));
+      if (desc) {
+        cusparseDnMatDescr_t old = desc;
+        desc = nullptr;
+        EIGEN_CUSPARSE_CHECK(cusparseDestroyDnMat(old));
+      }
       // Column-major with ld = rows.
       EIGEN_CUSPARSE_CHECK(cusparseCreateDnMat(&desc, rows, cols, rows, ptr, kValueType, CUSPARSE_ORDER_COL));
       cur_rows = rows;
@@ -1038,11 +1047,12 @@ class SparseContext {
   // (noexcept destructor).
   void destroy_spmat_descriptor(bool checked) {
     if (spmat_desc_) {
+      cusparseSpMatDescr_t old = spmat_desc_;
+      spmat_desc_ = nullptr;  // before the destroy: a throwing check must not leave a handle that is destroyed again
       if (checked)
-        EIGEN_CUSPARSE_CHECK(cusparseDestroySpMat(spmat_desc_));
+        EIGEN_CUSPARSE_CHECK(cusparseDestroySpMat(old));
       else
-        (void)cusparseDestroySpMat(spmat_desc_);
-      spmat_desc_ = nullptr;
+        (void)cusparseDestroySpMat(old);
     }
     set_descriptor_key(-1, -1, -1, 0);
     invalidate_ws_caches();

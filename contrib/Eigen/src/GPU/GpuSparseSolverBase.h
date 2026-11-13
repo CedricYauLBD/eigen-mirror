@@ -283,7 +283,11 @@ class SparseSolverBase {
     }
     create_cudss_matrix();
 
-    if (data_) EIGEN_CUDSS_CHECK(cudssDataDestroy(handle_, data_));
+    if (data_) {
+      cudssData_t old = data_;
+      data_ = nullptr;
+      EIGEN_CUDSS_CHECK(cudssDataDestroy(handle_, old));
+    }
     EIGEN_CUDSS_CHECK(cudssDataCreate(handle_, &data_));
 
     create_placeholder_dense();
@@ -642,7 +646,12 @@ class SparseSolverBase {
   }
 
   void create_cudss_matrix() {
-    if (d_A_cudss_) EIGEN_CUDSS_CHECK(cudssMatrixDestroy(d_A_cudss_));
+    if (d_A_cudss_) {
+      // Clear the member first: if the destroy or the create below throws, the destructor must not destroy it again.
+      cudssMatrix_t old = d_A_cudss_;
+      d_A_cudss_ = nullptr;
+      EIGEN_CUDSS_CHECK(cudssMatrixDestroy(old));
+    }
 
     constexpr cudss_value_type_t idx_type = to_cudss_data_type(cudss_index_type<StorageIndex>::value);
     constexpr cudss_value_type_t val_type = to_cudss_data_type(cuda_data_type<Scalar>::value);
@@ -664,8 +673,18 @@ class SparseSolverBase {
   void create_placeholder_dense() {
     // A new analysis may change n_, so the cached solve descriptors are stale.
     destroy_solve_descriptors();
-    if (d_x_cudss_) EIGEN_CUDSS_CHECK(cudssMatrixDestroy(d_x_cudss_));
-    if (d_b_cudss_) EIGEN_CUDSS_CHECK(cudssMatrixDestroy(d_b_cudss_));
+    // Clear each member before its destroy so a throwing check cannot leave a handle for the destructor to destroy
+    // again.
+    if (d_x_cudss_) {
+      cudssMatrix_t old = d_x_cudss_;
+      d_x_cudss_ = nullptr;
+      EIGEN_CUDSS_CHECK(cudssMatrixDestroy(old));
+    }
+    if (d_b_cudss_) {
+      cudssMatrix_t old = d_b_cudss_;
+      d_b_cudss_ = nullptr;
+      EIGEN_CUDSS_CHECK(cudssMatrixDestroy(old));
+    }
     constexpr cudss_value_type_t dtype = to_cudss_data_type(cuda_data_type<Scalar>::value);
     EIGEN_CUDSS_CHECK(cudssMatrixCreateDn(&d_x_cudss_, n_, 1, n_, nullptr, dtype, CUDSS_LAYOUT_COL_MAJOR));
     EIGEN_CUDSS_CHECK(cudssMatrixCreateDn(&d_b_cudss_, n_, 1, n_, nullptr, dtype, CUDSS_LAYOUT_COL_MAJOR));

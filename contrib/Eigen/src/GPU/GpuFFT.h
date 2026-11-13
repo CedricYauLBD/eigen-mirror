@@ -389,8 +389,9 @@ class FFT {
 
     cufftHandle plan;
     EIGEN_CUFFT_CHECK(cufftPlan1d(&plan, n, type, /*batch=*/1));
+    internal::CufftPlan owned(plan);  // destroys the plan if a later check throws
     EIGEN_CUFFT_CHECK(cufftSetStream(plan, ctx_->stream()));
-    return plans_.insert(key, internal::CufftPlan(plan))->get();
+    return plans_.insert(key, std::move(owned))->get();
   }
 
   cufftHandle get_plan_2d(int rows, int cols, cufftType type) {
@@ -402,8 +403,9 @@ class FFT {
     // to get the correct 2D transform.
     cufftHandle plan;
     EIGEN_CUFFT_CHECK(cufftPlan2d(&plan, cols, rows, type));
+    internal::CufftPlan owned(plan);  // destroys the plan if a later check throws
     EIGEN_CUFFT_CHECK(cufftSetStream(plan, ctx_->stream()));
-    return plans_.insert(key, internal::CufftPlan(plan))->get();
+    return plans_.insert(key, std::move(owned))->get();
   }
 };
 }  // namespace gpu
