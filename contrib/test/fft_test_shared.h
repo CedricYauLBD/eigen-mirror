@@ -445,6 +445,121 @@ void test_empty_operands() {
     fft.fwd(complex_out, real_in, 4);
     VERIFY_IS_EQUAL(complex_out.size(), half ? 3 : 4);
     VERIFY(complex_out.isZero());
+    fft.inv(real_out, complex_in, 4);
+    VERIFY_IS_EQUAL(real_out.size(), 4);
+    VERIFY(real_out.isZero());
+    fft.inv(complex_out, complex_in, 4);
+    VERIFY_IS_EQUAL(complex_out.size(), 4);
+    VERIFY(complex_out.isZero());
+  }
+}
+
+// Reference for inverting a spectrum X of length M at length N != M. The integer frequencies |f| < min(M, N) / 2 keep
+// their bins. An even min(M, N) also has a Nyquist bin at N / 2: it is the mean of the bins at +-N / 2 when
+// shrinking, and each of the bins at +-M / 2 takes half of the old Nyquist bin when expanding. An odd min(M, N)
+// has none, so the spectrum of a real signal stays Hermitian and the inverse stays real.
+template <typename T>
+Matrix<std::complex<long double>, Dynamic, 1> resampled_inverse_reference(const Matrix<std::complex<T>, Dynamic, 1>& X,
+                                                                          Index N) {
+  using LongComplex = std::complex<long double>;
+  const Index M = X.size();
+  Matrix<LongComplex, Dynamic, 1> Y = Matrix<LongComplex, Dynamic, 1>::Zero(N);
+  const auto bin = [&](Index f) { return LongComplex(X[((f % M) + M) % M]); };
+  const Index m = (std::min)(M, N);
+  if (M == N) {
+    for (Index k = 0; k < N; ++k) Y[k] = bin(k);
+  } else {
+    for (Index f = -((m - 1) / 2); f <= (m - 1) / 2; ++f) Y[((f % N) + N) % N] = bin(f);
+    if (m % 2 == 0) {
+      const Index h = m / 2;
+      if (M > N) {
+        Y[h] = (bin(h) + bin(-h)) * 0.5L;
+      } else {
+        Y[h] = bin(h) * 0.5L;
+        Y[N - h] = Y[h];
+      }
+    }
+  }
+  const long double pi = acos((long double)-1);
+  Matrix<LongComplex, Dynamic, 1> y(N);
+  for (Index n = 0; n < N; ++n) {
+    LongComplex acc = 0;
+    for (Index k = 0; k < N; ++k) acc += Y[k] * polar((long double)1, 2 * pi * ((k * n) % N) / N);
+    y[n] = acc / (long double)N;
+  }
+  return y;
+}
+
+// inv(X, nfft) with nfft different from the length of X truncates or zero-pads the spectrum. The inverse of the
+// spectrum of a real signal must remain real for every parity of the two lengths.
+template <typename T>
+void test_inv_resizes_spectrum() {
+  using Complex = typename FFT<T>::Complex;
+  using RealVector = Matrix<T, Dynamic, 1>;
+  using ComplexVector = Matrix<Complex, Dynamic, 1>;
+  const T eps = NumTraits<T>::epsilon();
+
+  for (Index M = 1; M <= 13; ++M) {
+    for (Index N = 1; N <= 15; ++N) {
+      FFT<T> fft;
+      RealVector x = RealVector::Random(M);
+      ComplexVector hermitian;
+      fft.fwd(hermitian, x);
+      ComplexVector general = ComplexVector::Random(M);
+      // Error of an N-point transform of unit-size coefficients, plus the rounding of the forward transform.
+      const T tolerance = T(16) * T(M + N) * eps;
+
+      const auto reference = resampled_inverse_reference(hermitian, N);
+      RealVector real_result;
+      fft.inv(real_result, hermitian, N);
+      VERIFY_IS_EQUAL(real_result.size(), N);
+      ComplexVector complex_result;
+      fft.inv(complex_result, hermitian, N);
+      VERIFY_IS_EQUAL(complex_result.size(), N);
+      for (Index n = 0; n < N; ++n) {
+        VERIFY(numext::abs(T(reference[n].imag())) <= tolerance);
+        VERIFY(numext::abs(T(reference[n].real()) - real_result[n]) <= tolerance);
+        VERIFY(numext::abs(Complex(reference[n]) - complex_result[n]) <= tolerance);
+      }
+
+      const auto general_reference = resampled_inverse_reference(general, N);
+      fft.inv(complex_result, general, N);
+      for (Index n = 0; n < N; ++n) VERIFY(numext::abs(Complex(general_reference[n]) - complex_result[n]) <= tolerance);
+    }
+  }
+}
+
+// A half spectrum of S bins read as the spectrum of an even-length signal is resampled like its full spectrum. A
+// length with nfft / 2 + 1 == S bins is the native half spectrum of that length and is not resampled.
+template <typename T>
+void test_inv_resizes_half_spectrum() {
+  using Complex = typename FFT<T>::Complex;
+  using RealVector = Matrix<T, Dynamic, 1>;
+  using ComplexVector = Matrix<Complex, Dynamic, 1>;
+  const T eps = NumTraits<T>::epsilon();
+
+  for (Index M = 2; M <= 14; ++M) {
+    for (Index N = 1; N <= 17; ++N) {
+      const Index bins = M / 2 + 1;
+      const bool shrinking = N / 2 + 1 < bins;
+      // A half spectrum does not record the parity of its signal, and expanding one assumes the even length
+      // 2 (bins - 1): for odd M the last bin is an ordinary bin that is wrongly made real and halved. The accuracy
+      // check below therefore excludes expanding from an odd M (a documented limitation of inv() with nfft).
+      const bool expanding = N / 2 + 1 > bins && M % 2 == 0;
+      if (!shrinking && !expanding) continue;
+      RealVector x = RealVector::Random(M);
+      FFT<T> full_fft, half_fft;
+      half_fft.SetFlag(half_fft.HalfSpectrum);
+      ComplexVector full, half;
+      full_fft.fwd(full, x);
+      half_fft.fwd(half, x);
+      VERIFY_IS_EQUAL(half.size(), bins);
+      RealVector from_full, from_half;
+      full_fft.inv(from_full, full, N);
+      half_fft.inv(from_half, half, N);
+      VERIFY_IS_EQUAL(from_half.size(), N);
+      VERIFY((from_full - from_half).cwiseAbs().maxCoeff() <= T(16) * T(M + N) * eps);
+    }
   }
 }
 
@@ -672,6 +787,10 @@ EIGEN_DECLARE_TEST(FFTW) {
   CALL_SUBTEST(test_return_by_value(32));
   CALL_SUBTEST(test_empty_operands<float>());
   CALL_SUBTEST(test_empty_operands<double>());
+  CALL_SUBTEST(test_inv_resizes_spectrum<float>());
+  CALL_SUBTEST(test_inv_resizes_spectrum<double>());
+  CALL_SUBTEST(test_inv_resizes_half_spectrum<float>());
+  CALL_SUBTEST(test_inv_resizes_half_spectrum<double>());
   // Regression test for #1537 -- reuse one FFT object for both real and
   // complex inputs of the same size.
   CALL_SUBTEST(test_reuse_real_and_complex<float>(32));
