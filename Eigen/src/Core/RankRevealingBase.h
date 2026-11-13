@@ -15,6 +15,35 @@
 
 namespace Eigen {
 
+namespace internal {
+
+/** \internal Stores the column norms of \a block in \a norms, using the fast norm() unless the largest of them is
+ * outside the range where it is accurate for the rank decisions that follow: the sum of squares overflows when the
+ * norm exceeds ~sqrt(max), and rank decisions compare residual column norms N with eps * maxnorm. The squares of
+ * the entries of a column of norm N below 2*sqrt(rows*min) can be lost (flushed to zero) to the point of losing a
+ * constant fraction of N^2, so the fast norm must not be used once eps * maxnorm falls below that. Then the norms are
+ * recomputed with stableNorm().
+ * \returns whether stableNorm() was used, so that later recomputations of partial column norms use it as well.
+ */
+template <typename BlockType, typename NormsType>
+bool column_norms_with_fallback(const BlockType& block, NormsType& norms) {
+  using RealScalar = typename NumTraits<typename BlockType::Scalar>::Real;
+  norms = block.colwise().norm();
+  if (block.size() == 0) return false;
+  const RealScalar maxnorm = norms.maxCoeff();
+  const RealScalar smallest_accurate =
+      RealScalar(2) * numext::sqrt((std::numeric_limits<RealScalar>::min)() * RealScalar(block.rows())) /
+      NumTraits<RealScalar>::epsilon();
+  // Comparisons against finite bounds, which survive -ffinite-math-only, unlike isfinite().
+  if (EIGEN_PREDICT_FALSE(!(maxnorm >= smallest_accurate && maxnorm <= NumTraits<RealScalar>::highest()))) {
+    norms = block.colwise().stableNorm();
+    return true;
+  }
+  return false;
+}
+
+}  // end namespace internal
+
 /** \brief CRTP mixin providing threshold management, rank computation, and rank-derived queries
  *         for rank-revealing decompositions (FullPivLU, ColPivHouseholderQR, FullPivHouseholderQR).
  *
