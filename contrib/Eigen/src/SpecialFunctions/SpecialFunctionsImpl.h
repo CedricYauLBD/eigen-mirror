@@ -891,6 +891,71 @@ EIGEN_DEVICE_FUNC constexpr int igamma_num_iterations() {
                                                : 2000;
 }
 
+/* x^a exp(-x) / Gamma(a) for x >= a >> 1 from Stirling's series. a log(x) - x - lgamma(a) in main_igamma_term
+ * cancels to an absolute error of about eps a log(a), more than 1 for a >~ 1 / eps. With d = (x - a) / a and
+ * s = d / (2 + d), so that log1p(d) = 2 atanh(s):
+ *
+ *   log(x^a exp(-x) / Gamma(a)) = a (log1p(d) - d) + (1/2) log(a / (2 pi)) - 1 / (12 a) + O(a^-3),
+ *   log1p(d) - d = -d s + 2 (s^3 / 3 + s^5 / 5 + ...),   0 <= s < 1/9 for d < 1/4: the tail past s^21 / 21 is
+ *   below 2^-64 relative. */
+template <typename Scalar>
+EIGEN_DEVICE_FUNC static Scalar main_igamma_term_stirling(Scalar a, Scalar x) {
+  const Scalar d = (x - a) / a;
+  Scalar log1pmx;
+  if (d >= Scalar(0.25)) {
+    log1pmx = numext::log1p(d) - d;
+  } else {
+    const Scalar s = d / (Scalar(2) + d);
+    const Scalar s2 = s * s;
+    Scalar power = s * s2;
+    Scalar sum = Scalar(0);
+    for (int k = 3; k <= 21; k += 2) {
+      sum += power / Scalar(k);
+      power *= s2;
+    }
+    log1pmx = Scalar(2) * sum - d * s;
+  }
+  const Scalar logax =
+      a * log1pmx + Scalar(0.5) * (numext::log(a) - numext::log(Scalar(2 * EIGEN_PI))) - Scalar(1) / (Scalar(12) * a);
+  return logax < -numext::log(NumTraits<Scalar>::highest()) ? Scalar(0) : numext::exp(logax);
+}
+
+/* The continued fraction of igammac(a, x) / main_igamma_term(a, x), for x >= a > 0, by the modified Lentz algorithm
+ * (Thompson and Barnett, J. Comput. Phys. 64, 1986; Press et al., Numerical Recipes, 3rd ed., section 6.2):
+ *
+ *   K = 1 / (b_0 + a_1 / (b_1 + a_2 / (b_2 + ...))),   b_i = x + 2i + 1 - a,   a_i = -i (i - a).
+ *
+ * The forward recurrence of igammac_cf_impl evaluates the odd convergents of the Legendre fraction, Lentz's method
+ * its even part (the same limit). The recurrence forms z x with z = x + 2 - a, which overflows once (x - a) x exceeds
+ * the largest number; Lentz's method forms no product of two large quantities, and a_i * d is grouped as
+ * -i * ((i - a) * d) so that it does not overflow for a near the largest number.
+ *
+ * The fraction needs ~ 355 / t^2 iterations (double), t = (x - a) / sqrt(a). Returns NaN if the iteration limit is
+ * reached first, as for t^2 <~ 0.18: an unconverged value would be a confident wrong answer. */
+template <typename Scalar>
+EIGEN_DEVICE_FUNC static Scalar igammac_cf_lentz(Scalar a, Scalar x) {
+  const Scalar one = 1;
+  const Scalar tiny = (numext::numeric_limits<Scalar>::min)();
+  const Scalar machep = cephes_helper<Scalar>::machep();
+  Scalar b = (x - a) + one;  // x - a is exact for a <= x <= 2a; in (x + 1) - a the 1 is lost for x >= 2 / eps.
+  Scalar c = one / tiny;
+  Scalar d = one / b;
+  Scalar h = d;
+  for (int i = 1; i <= igamma_num_iterations<Scalar, VALUE>(); i++) {
+    const Scalar ci = Scalar(i);
+    b += Scalar(2);
+    d = b - ci * ((ci - a) * d);
+    if (numext::abs(d) < tiny) d = tiny;
+    c = b - ci * ((ci - a) / c);
+    if (numext::abs(c) < tiny) c = tiny;
+    d = one / d;
+    const Scalar delta = d * c;
+    h *= delta;
+    if (numext::abs(delta - one) <= machep) return h;
+  }
+  return NumTraits<Scalar>::quiet_NaN();
+}
+
 template <typename Scalar, IgammaComputationMode mode>
 struct igammac_cf_impl {
   /* Computes igamc(a, x) or derivative (depending on the mode)
@@ -997,8 +1062,16 @@ struct igammac_cf_impl {
     Scalar dax_da = ax * dlogax_da;
 
     switch (mode) {
-      case VALUE:
-        return ans * ax;
+      case VALUE: {
+        const Scalar result = ans * ax;
+        if (EIGEN_PREDICT_FALSE(!(numext::isfinite)(result))) {
+          // Non-finite only for a >~ 1 / eps: the recurrence overflowed (inf - inf), or the cancelling ax overflowed.
+          // The Lentz fallback is NaN where it does not converge, |t| <~ 0.4 with t = (x - a) / sqrt(a).
+          const Scalar ax_stirling = main_igamma_term_stirling<Scalar>(a, x);
+          return ax_stirling == zero ? zero : ax_stirling * igammac_cf_lentz<Scalar>(a, x);
+        }
+        return result;
+      }
       case DERIVATIVE:
         return ans * dax_da + dans_da * ax;
       case SAMPLE_DERIVATIVE:
@@ -1154,7 +1227,8 @@ struct igammac_impl {
       return igamma_clamp_to_unit_interval(one - igamma_series_impl<Scalar, VALUE>::run(a, x));
     }
 
-    return igammac_cf_impl<Scalar, VALUE>::run(a, x);
+    // ax is inaccurate for a >~ 1 / eps, and ans * ax can exceed 1 there.
+    return igamma_clamp_to_unit_interval(igammac_cf_impl<Scalar, VALUE>::run(a, x));
   }
 };
 

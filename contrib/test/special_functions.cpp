@@ -725,6 +725,77 @@ void test_igamma_internal_nan() {
   }
 }
 
+// For a ~ x >~ 1 / eps, ax = x^a exp(-x) / Gamma(a) is inaccurate, and the igammac recurrence overflows once
+// (x - a) x > max (inf - inf = NaN, which igamma turned into 0). For finite arguments with x != a, P and Q must not be
+// NaN (they are clamped to [0, 1]), with P + Q = 1 where both use the same evaluation. Where the recurrence overflows
+// here, t = (x - a) / sqrt(a) >~ 40, so Q underflows: P = 1 and Q = 0 exactly. At x = a the continued fraction does not
+// converge: Q is NaN where the Lentz fallback is taken, otherwise P and Q are unconverged values clamped to [0, 1].
+template <typename Scalar>
+void test_igamma_large_arguments() {
+  using ArrayType = Array<Scalar, Dynamic, 1>;
+  const bool is_float = sizeof(Scalar) == 4;
+  // Arguments of similar size, a <= x, a >= 1e15 (float) or a >= 1e56 (double).
+  const double a_f[] = {5.91395965e35, 1.35730605e30, 8.87793298e23, 5.8135072e18,  6.47320813e18,
+                        7.71149728e15, 2.65364438e18, 3.17027468e36, 1.89243253e30, 4.04864182e36};
+  const double x_f[] = {5.91395965e35, 1.35730605e30, 8.87793298e23, 5.81351325e18, 6.47320813e18,
+                        7.71149728e15, 2.65364438e18, 3.17948384e36, 1.89432495e30, 8.23012518e36};
+  const double a_d[] = {3.11504927e56,  3.044355e117,   4.27351094e138, 2.23741782e108, 1.44216162e111,
+                        1.86758896e108, 2.41798259e105, 5.52553743e287, 1.20190782e199, 3.896103e300};
+  const double x_d[] = {3.1150493e56,   3.044355e117,   4.27351094e138, 2.23741784e108, 1.44216162e111,
+                        1.86758898e108, 2.41798259e105, 5.52553748e287, 1.20190784e199, 5e300};
+  // The last three pairs have (x - a) * x > max.
+  const int n = 10, num_overflow = 3;
+  ArrayType a(n), x(n);
+  for (int i = 0; i < n; ++i) {
+    a(i) = Scalar(is_float ? a_f[i] : a_d[i]);
+    x(i) = Scalar(is_float ? x_f[i] : x_d[i]);
+  }
+  const ArrayType p_array = igamma(a, x), q_array = igammac(a, x);
+  const Scalar eps = NumTraits<Scalar>::epsilon();
+  for (int i = 0; i < n; ++i) {
+    // Lentz's fraction needs ~ 355 / t^2 iterations: no convergence at x = a.
+    if (x(i) == a(i)) VERIFY((numext::isnan)(internal::igammac_cf_lentz<Scalar>(a(i), x(i))));
+    for (int path = 0; path < 2; ++path) {
+      const Scalar p = path ? p_array(i) : numext::igamma(a(i), x(i));
+      const Scalar q = path ? q_array(i) : numext::igammac(a(i), x(i));
+      // Written so that a NaN fails; the NaN at x = a is checked on the fraction above.
+      if (x(i) != a(i)) {
+        VERIFY(p >= Scalar(0) && p <= Scalar(1));
+        VERIFY(q >= Scalar(0) && q <= Scalar(1));
+        VERIFY(numext::abs(p + q - Scalar(1)) <= 2 * eps);
+      }
+      if (i >= n - num_overflow) {
+        VERIFY_IS_EQUAL(p, Scalar(1));
+        VERIFY_IS_EQUAL(q, Scalar(0));
+      }
+    }
+  }
+
+  // The fallback itself, Q = (Stirling main term) * (Lentz fraction), against the uniform asymptotic expansion of
+  // Temme (DLMF 8.12.3) in 300-bit MPFR, at the arguments rounded to Scalar (the references depend on the rounding),
+  // for t = 1, 0.5, 5 (double) and 2.03 (float). The relative error is bounded by factor * (log(a) / 2 + t^2) * eps,
+  // the error of the main term (log Gamma(a) enters as log(a) / 2 and exp(-t^2 / 2) as t^2); the measured error is at
+  // most 0.86 of this bound with factor 1, in g++ and clang++ with and without FMA. P = 1 - Q is within the same bound.
+  struct Reference {
+    double a, x, q;
+  };
+  const Reference refs_f[] = {{9.99999996e11, 1.00000203e12, 0.0210963254}};
+  const Reference refs_d[] = {{1e20, 1.0000000001e20, 0.15865508048690388},
+                              {1e20, 1.00000000005e20, 0.30853741253698347},
+                              {1e20, 1.0000000005e20, 2.8665111634868367e-07}};
+  const Reference* refs = is_float ? refs_f : refs_d;
+  const int num_refs = is_float ? 1 : 3;
+  const double factor = 4;
+  for (int i = 0; i < num_refs; ++i) {
+    const Reference r = refs[i];
+    const Scalar ai = Scalar(r.a), xi = Scalar(r.x);
+    const double t = (double(xi) - double(ai)) / std::sqrt(double(ai));
+    const double tol = factor * (0.5 * std::log(double(ai)) + t * t) * double(eps);
+    const Scalar q = internal::main_igamma_term_stirling<Scalar>(ai, xi) * internal::igammac_cf_lentz<Scalar>(ai, xi);
+    VERIFY(numext::abs(q - Scalar(r.q)) <= Scalar(tol * r.q));
+  }
+}
+
 // Limiting values, in the scalar and the array code paths. NaN must not be turned into a number by the clamping of
 // igamma to [0, 1].
 template <typename Scalar>
@@ -898,6 +969,7 @@ EIGEN_DECLARE_TEST(special_functions) {
   CALL_SUBTEST_1(test_polygamma_extreme_x<float>());
   CALL_SUBTEST_1(test_igamma_limits<float>());
   CALL_SUBTEST_1(test_igamma_internal_nan<float>());
+  CALL_SUBTEST_1(test_igamma_large_arguments<float>());
   CALL_SUBTEST_2(ndtri_tail_accuracy<double>());
   CALL_SUBTEST_2(array_special_functions<ArrayXd>());
   CALL_SUBTEST_2(test_special_functions_edge_cases<double>());
@@ -907,6 +979,7 @@ EIGEN_DECLARE_TEST(special_functions) {
   CALL_SUBTEST_2(test_polygamma_extreme_x<double>());
   CALL_SUBTEST_2(test_igamma_limits<double>());
   CALL_SUBTEST_2(test_igamma_internal_nan<double>());
+  CALL_SUBTEST_2(test_igamma_large_arguments<double>());
   CALL_SUBTEST_3(scalar_ndtri<long double>());
   CALL_SUBTEST_4(scalar_erf_erfc<long double>());
   CALL_SUBTEST_5(custom_scalar_erf_erfc());
