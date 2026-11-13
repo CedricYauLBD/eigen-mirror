@@ -386,6 +386,16 @@ void check_sign_dependent_functions() {
 // through volatiles: fast-math folds calls on constants and rewrites acosh and the like, even inside std::acosh.
 using LongDoubleFunction = long double (*)(long double);
 
+// Whether v is finite, from its bits: fast-math folds isfinite and compares as if a NaN or an infinity never occurred.
+template <typename Scalar>
+bool has_finite_bits(Scalar v) {
+  using Bits = typename numext::get_integer_by_size<sizeof(Scalar)>::unsigned_type;
+  constexpr int kMantissaBits = NumTraits<Scalar>::digits() - 1;
+  constexpr int kExponentBits = int(8 * sizeof(Scalar)) - 1 - kMantissaBits;
+  const Bits exponent_mask = static_cast<Bits>(((Bits(1) << kExponentBits) - 1) << kMantissaBits);
+  return (numext::bit_cast<Bits>(v) & exponent_mask) != exponent_mask;
+}
+
 template <typename Scalar, typename Func>
 bool check_fastmath_accuracy(const char* name, const std::vector<Scalar>& values, Func func,
                              LongDoubleFunction reference) {
@@ -393,6 +403,8 @@ bool check_fastmath_accuracy(const char* name, const std::vector<Scalar>& values
   using ArrayType = Array<Scalar, Dynamic, 1>;
   // Long enough for several packets of any size and a remainder.
   const Index n = 3 * 64 + 5;
+  // The kernels are within 2 ulp, and the limit leaves room for the reciprocal approximation that fast-math divides
+  // by.
   const long double tolerance = 4 * static_cast<long double>(NumTraits<Scalar>::epsilon());
   ArrayType x(n);
   for (Index i = 0; i < n; ++i) {
@@ -404,7 +416,7 @@ bool check_fastmath_accuracy(const char* name, const std::vector<Scalar>& values
   for (Index i = 0; i < n; ++i) {
     const long double expected = ref(static_cast<long double>(x[i]));
     const long double error = numext::abs(static_cast<long double>(y[i]) - expected);
-    if (!(error <= tolerance * numext::abs(expected))) {
+    if (!has_finite_bits(y[i]) || !(error <= tolerance * numext::abs(expected))) {
       passed = false;
       if (static_cast<size_t>(i) < values.size()) {
         std::cerr << std::setprecision(std::numeric_limits<Scalar>::max_digits10) << name << "(" << x[i]
@@ -480,6 +492,21 @@ void check_exp_family_accuracy() {
   VERIFY(passed);
 }
 
+// Finite arguments of sqrt and rsqrt, whose Newton steps compare the argument with an infinity.
+long double rsqrt_reference(long double x) { return 1 / ::sqrtl(x); }
+
+template <typename Scalar>
+void check_sqrt_rsqrt_finite() {
+  using ArrayType = Array<Scalar, Dynamic, 1>;
+  const std::vector<Scalar> values = {Scalar(4), Scalar(9), Scalar(2), Scalar(1e-3), Scalar(7.5), Scalar(1e20)};
+  bool passed = true;
+  passed &= check_fastmath_accuracy(
+      "sqrt", values, [](const ArrayType& x) -> ArrayType { return x.sqrt(); }, ::sqrtl);
+  passed &= check_fastmath_accuracy(
+      "rsqrt", values, [](const ArrayType& x) -> ArrayType { return x.rsqrt(); }, rsqrt_reference);
+  VERIFY(passed);
+}
+
 EIGEN_DECLARE_TEST(fastmath) {
   std::cout << "*** float *** \n\n";
   check_inf_nan<float>(true);
@@ -498,4 +525,6 @@ EIGEN_DECLARE_TEST(fastmath) {
   CALL_SUBTEST_4(check_sign_dependent_functions<double>());
   CALL_SUBTEST_5(check_exp_family_accuracy<float>());
   CALL_SUBTEST_6(check_exp_family_accuracy<double>());
+  CALL_SUBTEST_7(check_sqrt_rsqrt_finite<float>());
+  CALL_SUBTEST_8(check_sqrt_rsqrt_finite<double>());
 }

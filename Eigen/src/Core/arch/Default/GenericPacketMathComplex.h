@@ -66,7 +66,7 @@ EIGEN_DEFINE_FUNCTION_ALLOWING_MULTIPLE_DEFINITIONS Packet pdiv_complex(const Pa
     RealPacket denom_in = pmul(y_in, y_scaled);
     denom_in = padd(denom_in, pcplxflip(Packet(denom_in)).v);
     const Packet num_in = pmul(x_in, pconj(Packet(y_scaled)));
-    const RealPacket inf = pset1<RealPacket>(NumTraits<RealScalar>::infinity());
+    const RealPacket inf = pinf<RealPacket>();
     RealPacket overflow = por(pcmp_eq(pabs(num.v), inf), pcmp_eq(pabs(denom), inf));
     overflow = por(overflow, pcplxflip(Packet(overflow)).v);
     result = pselect(overflow, pmul(pdiv(num_in.v, denom_in), unscale), result);
