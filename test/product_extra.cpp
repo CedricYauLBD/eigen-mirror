@@ -1473,6 +1473,46 @@ void noncommutative_transposed_product_expression() {
   STATIC_CHECK((std::is_same<decltype(std::declval<const QProduct&>().transpose()), Transpose<const QProduct>>::value));
 }
 
+// A scalar factor is folded into a structured lhs only when the view can represent it; a complex factor on a real
+// triangular view times a complex vector is evaluated through the unfolded product instead.
+void scaled_real_structured_complex_vector() {
+  using Cf = std::complex<float>;
+  const Index n = 7;
+  const MatrixXf a = MatrixXf::Random(n, n);
+  const VectorXcf v = VectorXcf::Random(n);
+  const Cf s(2, 1);
+  const MatrixXcf tri = MatrixXf(a.triangularView<Upper>()).cast<Cf>();
+  const MatrixXcf dense = a.cast<Cf>();
+  VectorXcf x = VectorXcf::Zero(n);
+
+  // Same-scalar and real-into-complex factors still fold; a complex factor on a real view does not.
+  using RealTri = TriangularView<const MatrixXf, Upper>;
+  STATIC_CHECK((internal::product_can_fold_scalar_factor<float, RealTri>::value));
+  STATIC_CHECK((internal::product_can_fold_scalar_factor<double, RealTri>::value));
+  STATIC_CHECK((!internal::product_can_fold_scalar_factor<Cf, RealTri>::value));
+  STATIC_CHECK((internal::product_can_fold_scalar_factor<Cf, MatrixXf>::value));
+  STATIC_CHECK((internal::product_can_fold_scalar_factor<Cf, TriangularView<const MatrixXcf, Upper>>::value));
+
+  x.noalias() += s * (a.triangularView<Upper>() * v);
+  VERIFY_IS_APPROX(x, s * (tri * v));
+  x.setOnes();
+  x.noalias() -= s * (a.triangularView<Upper>() * v);
+  VERIFY_IS_APPROX(x, VectorXcf::Ones(n) - s * (tri * v));
+  x.setZero();
+  x.noalias() += 2.0f * (a.triangularView<Upper>() * v);
+  VERIFY_IS_APPROX(x, 2.0f * (tri * v));
+  x = s * (a.triangularView<Upper>() * v);
+  VERIFY_IS_APPROX(x, s * (tri * v));
+  x.noalias() = s * (a.triangularView<Upper>() * v);
+  VERIFY_IS_APPROX(x, s * (tri * v));
+  x = (a.triangularView<Upper>() * v) * s;
+  VERIFY_IS_APPROX(x, (tri * v) * s);
+
+  x.setZero();
+  x.noalias() += s * (a * v);
+  VERIFY_IS_APPROX(x, s * (dense * v));
+}
+
 template <int Order>
 void quaternion_unit_scale() {
   using Q = noncommutative_scalar::Quaternion;
@@ -1510,6 +1550,7 @@ void ordered_gemv_scale_cost() {
 }
 
 EIGEN_DECLARE_TEST(product_extra) {
+  CALL_SUBTEST_20(scaled_real_structured_complex_vector());
   CALL_SUBTEST_20((quaternion_transposed_product<noncommutative_scalar::Quaternion, ColMajor>()));
   CALL_SUBTEST_20((quaternion_transposed_product<noncommutative_scalar::Quaternion, RowMajor>()));
   CALL_SUBTEST_20(commutative_transposed_product_expression<double>());
