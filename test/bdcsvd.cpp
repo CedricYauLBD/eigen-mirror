@@ -20,6 +20,7 @@
 #include "tridiag_test_matrices.h"
 #include <Eigen/SVD>
 #include <cstdlib>
+#include <random>
 
 #define SVD_DEFAULT(M) BDCSVD<M>
 #define SVD_FOR_MIN_NORM(M) BDCSVD<M>
@@ -368,6 +369,75 @@ void bdcsvd_flushed_subnormal_bidiagonal(Index n, int switchSize) {
   });
 }
 
+// nonzeroSingularValues() is the number of singular values that are not exactly 0: the leading entries of
+// singularValues() read from the representation, which FTZ/DAZ hardware compares as zero if they are subnormal. A value
+// that is above the smallest normal number in the scaled frame can unscale to exactly 0 and must not be counted.
+template <typename SvdType>
+void bdcsvd_check_nonzero_count(const SvdType& svd) {
+  using RealScalar = typename SvdType::RealScalar;
+  using Binary = internal::binary_floating_point_traits<RealScalar>;
+  VERIFY_IS_EQUAL(svd.info(), Success);
+  const Index size = svd.singularValues().size();
+  Index nonzero = 0;
+  while (nonzero < size && Binary::magnitude(svd.singularValues()(nonzero)) != 0) ++nonzero;
+  VERIFY_IS_EQUAL(svd.nonzeroSingularValues(), nonzero);
+  for (Index i = nonzero; i < size; ++i) VERIFY_IS_EQUAL(Binary::magnitude(svd.singularValues()(i)), 0);
+}
+
+template <typename RealScalar>
+void bdcsvd_nonzero_count_after_unscaling() {
+  using Binary = internal::binary_floating_point_traits<RealScalar>;
+  using Bits = typename Binary::Bits;
+  using Mat = Matrix<RealScalar, Dynamic, Dynamic>;
+  using Vec = Matrix<RealScalar, Dynamic, 1>;
+  const Index n = 20;
+  // Subnormal entries 2^10, 2^9 and 1 times denorm_min: the scaled frame holds 1, 1/2, 2^-10, and the rounding noise
+  // below them, which unscales to exactly 0 (or to a subnormal) while still above the smallest normal number.
+  const RealScalar big = numext::bit_cast<RealScalar>(Bits(1) << 10);
+  const RealScalar mid = numext::bit_cast<RealScalar>(Bits(1) << 9);
+  const RealScalar tiny = numext::bit_cast<RealScalar>(Bits(1));
+  Mat subnormalMatrix = Mat::Zero(n, n);
+  subnormalMatrix(0, 0) = big;
+  subnormalMatrix(1, 1) = mid;
+  subnormalMatrix(2, 3) = tiny;
+  Vec diagonal = Vec::Zero(n), superdiagonal = Vec::Zero(n - 1);
+  diagonal(0) = big;
+  diagonal(1) = mid;
+  superdiagonal(1) = tiny;
+  forEachFlushToZeroMode([&](FlushToZeroMode) {
+    BDCSVD<Mat> dense;
+    dense.compute(subnormalMatrix);
+    bdcsvd_check_nonzero_count(dense);
+    BDCSVD<Mat> bidiagonal;
+    bidiagonal.compute(diagonal, superdiagonal);
+    bdcsvd_check_nonzero_count(bidiagonal);
+  });
+  // A singular bidiagonal matrix with entries of 1024 to 2047 denorm_min and d(n / 2) = 0: its smallest singular
+  // value is 0, and the scaled frame, in which the largest entry is about 1, holds the rest as O(1) numbers. n = 8 and
+  // 15 are below the switch size, 20 above it.
+  std::mt19937 gen(99);
+  std::uniform_int_distribution<int> multiplier(1 << 10, (1 << 11) - 1);
+  // The entries are assembled from their bit patterns, so that no flush-to-zero arithmetic touches them.
+  const auto subnormal = [&]() { return numext::bit_cast<RealScalar>(Bits(multiplier(gen))); };
+  for (const Index size : {8, 15, 20}) {
+    for (int trial = 0; trial < 50; ++trial) {
+      Vec d(size), e(size - 1);
+      for (Index i = 0; i < size; ++i) d(i) = subnormal();
+      for (Index i = 0; i < size - 1; ++i) e(i) = subnormal();
+      d(size / 2) = 0;
+      BDCSVD<Mat> bidiagonal;
+      bidiagonal.compute(d, e);
+      bdcsvd_check_nonzero_count(bidiagonal);
+      Mat dense = Mat::Zero(size, size);
+      dense.diagonal() = d;
+      dense.diagonal(1) = e;
+      BDCSVD<Mat> svd;
+      svd.compute(dense);
+      bdcsvd_check_nonzero_count(svd);
+    }
+  }
+}
+
 template <typename = void>
 void bdcsvd_power_of_two_scaling() {
   // Reciprocal scaling rounds the smaller singular value down by one ULP in both entry paths.
@@ -704,4 +774,6 @@ EIGEN_DECLARE_TEST(bdcsvd) {
   CALL_SUBTEST_60((bdcsvd_flushed_subnormal_bidiagonal<double>(16, 8)));
   CALL_SUBTEST_60((bdcsvd_flushed_subnormal_bidiagonal<double>(6, 8)));
   CALL_SUBTEST_65((bdcsvd_switch_size<>()));
+  CALL_SUBTEST_83(bdcsvd_nonzero_count_after_unscaling<float>());
+  CALL_SUBTEST_83(bdcsvd_nonzero_count_after_unscaling<double>());
 }
