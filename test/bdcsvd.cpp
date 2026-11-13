@@ -51,11 +51,11 @@ void compare_bdc_jacobi(const MatrixType& a = MatrixType(), int algoswap = 16, b
   VERIFY_IS_APPROX(bdc_svd.singularValues(), jacobi_svd.singularValues());
 }
 
-#if defined(EIGEN_TEST_PART_46) || defined(EIGEN_TEST_PART_47) || defined(EIGEN_TEST_PART_48) || \
-    defined(EIGEN_TEST_PART_49) || defined(EIGEN_TEST_PART_ALL)
-// Verifies total deflation is **not** triggered.
+#if defined(EIGEN_TEST_PART_48) || defined(EIGEN_TEST_PART_49) || defined(EIGEN_TEST_PART_ALL)
+// Verifies total deflation is **not** triggered. The instances have 3 columns, so the switch size must be at most 3 for
+// BDCSVD to run divide and conquer instead of its JacobiSVD fallback.
 template <typename = void>
-void compare_bdc_jacobi_instance(bool structure_as_m, int algoswap = 16) {
+void compare_bdc_jacobi_instance(bool structure_as_m, int algoswap) {
   MatrixXd m(4, 3);
   if (structure_as_m) {
     // The first 3 rows are the reduced form of Matrix 1 as shown below, and it
@@ -66,6 +66,7 @@ void compare_bdc_jacobi_instance(bool structure_as_m, int algoswap = 16) {
     m << 0.882336, 18.3914, -26.7921, -5.58135, 17.1931, -24.0892, -20.794, 8.68496, -4.83103, -8.4981, -10.5451,
         23.9072;
   }
+  VERIFY(m.cols() >= algoswap);  // BDCSVD does not fall back to JacobiSVD.
   compare_bdc_jacobi(m, algoswap, false);
 }
 #endif
@@ -741,10 +742,6 @@ EIGEN_DECLARE_TEST(bdcsvd) {
   CALL_SUBTEST_81((svd_zero_matrix_solvers<MatrixXcf>(5, 3)));
   CALL_SUBTEST_82(bdcsvd_empty_matrices<MatrixXd>());
   CALL_SUBTEST_82(bdcsvd_empty_matrices<MatrixXcf>());
-
-  // Without total deflation issues.
-  CALL_SUBTEST_46((compare_bdc_jacobi_instance<>(true)));
-  CALL_SUBTEST_47((compare_bdc_jacobi_instance<>(false)));
 
   // With total deflation issues before, when it shouldn't be triggered.
   CALL_SUBTEST_48((compare_bdc_jacobi_instance<>(true, 3)));
