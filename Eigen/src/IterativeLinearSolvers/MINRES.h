@@ -51,7 +51,7 @@ EIGEN_DONT_INLINE void minres(const MatrixType& mat, const Rhs& rhs, Dest& x, co
   // Convergence threshold (compared to residualNorm), raised to at most the smallest normal number so that
   // tol_error = 0 stops.
   const RealScalar threshold(
-      internal::iterative_solver_threshold(tol_error, rhsNorm, (std::numeric_limits<RealScalar>::min)()));
+      internal::iterative_solver_threshold(tol_error, rhsNorm, RealScalar((std::numeric_limits<RealScalar>::min)())));
 
   // Initialize preconditioned Lanczos
   VectorType v_old(N);                // will be initialized inside loop
