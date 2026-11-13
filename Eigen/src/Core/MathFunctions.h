@@ -944,18 +944,17 @@ struct sign_impl<Scalar, true, IsInteger> {
     const real_type im = numext::imag(a);
     // |z| lies in [m, sqrt(2) m] for m = max(|re|, |im|): it overflows only for m > max / sqrt(2) and is rounded to the
     // subnormal grid for m < min. Then u = z / m, with max(|Re u|, |Im u|) = 1, gives sign(z) = u / sqrt(|u|^2). The
-    // trigger m > max / 2 or m < min is on the components, not on |z|, and is the one of psign_impl. Under -ffast-math
-    // only m > max / 2 is known to give a unit result (tested from 0.6 max); m < min is untested, and for
-    // sqrt(max) < |z| <= max / 2 or |z| < sqrt(min) the naive |z| can leave 0 or NaN. Non-finite z keeps z / |z|.
+    // trigger is on the components, as in psign_impl. Non-finite z keeps z / |z|. Under -ffast-math only m > max / 2
+    // is known to give a unit result (tested from 0.6 max).
     const real_type abs_re = abs(re);
     const real_type abs_im = abs(im);
     const real_type m = abs_re < abs_im ? abs_im : abs_re;
-    if (EIGEN_PREDICT_FALSE(m < (numext::numeric_limits<real_type>::min)() ||
-                            m > NumTraits<real_type>::highest() / real_type(2))) {
+    const real_type half_highest = NumTraits<real_type>::highest() / real_type(2);
+    if (EIGEN_PREDICT_FALSE(m < (numext::numeric_limits<real_type>::min)() || m > half_highest)) {
       if (m <= NumTraits<real_type>::highest()) {
         // For large m, z / m is formed as (z / 4) / (m / 4): -ffast-math rewrites z / m as z * (1 / m), and 1 / m is
         // subnormal for m near max and flushed. The barrier keeps m / 4 from being folded back into the quotient.
-        const real_type scale = m > NumTraits<real_type>::highest() / real_type(2) ? real_type(0.25) : real_type(1);
+        const real_type scale = m > half_highest ? real_type(0.25) : real_type(1);
         real_type scaled_m = m * scale;
         volatile_barrier(scaled_m);
         const real_type u_re = (re * scale) / scaled_m;
@@ -1258,7 +1257,8 @@ EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE bool is_exactly_zero_no_flush_impl(const S
 }
 
 // |x - y|, as the packet path computes it: abs keeps the +0 of (+0, -0) and the NaN of (inf, inf).
-template <typename T, bool IsInteger = NumTraits<T>::IsInteger>
+template <typename T, bool IsInteger = NumTraits<T>::IsInteger,
+          bool IsSignedIntegral = std::is_integral<T>::value && std::is_signed<T>::value>
 struct absdiff_impl {
   EIGEN_DEVICE_FUNC static EIGEN_ALWAYS_INLINE T run(const T& x, const T& y) {
     EIGEN_USING_STD(abs);
@@ -1266,26 +1266,19 @@ struct absdiff_impl {
   }
 };
 
-// Unsigned x - y wraps, so integers order the operands. A signed integer subtracts in the unsigned type, since
-// |x - y| > max overflows the signed one.
-template <typename T, bool IsSignedIntegral = std::is_integral<T>::value && std::is_signed<T>::value>
-struct integer_absdiff_impl {
+// Unsigned x - y wraps, so integers order the operands.
+template <typename T>
+struct absdiff_impl<T, true, false> {
   EIGEN_DEVICE_FUNC static EIGEN_ALWAYS_INLINE T run(const T& x, const T& y) { return x > y ? x - y : y - x; }
 };
 
+// A signed integer subtracts in the unsigned type, since |x - y| > max overflows the signed one.
 template <typename T>
-struct integer_absdiff_impl<T, true> {
+struct absdiff_impl<T, true, true> {
   EIGEN_DEVICE_FUNC static EIGEN_ALWAYS_INLINE T run(const T& x, const T& y) {
     using U = std::make_unsigned_t<T>;
     const U ux = static_cast<U>(x), uy = static_cast<U>(y);
     return static_cast<T>(static_cast<U>(x > y ? ux - uy : uy - ux));
-  }
-};
-
-template <typename T>
-struct absdiff_impl<T, true> {
-  EIGEN_DEVICE_FUNC static EIGEN_ALWAYS_INLINE T run(const T& x, const T& y) {
-    return integer_absdiff_impl<T>::run(x, y);
   }
 };
 
@@ -2717,7 +2710,7 @@ EIGEN_DEVICE_FUNC EIGEN_DONT_INLINE std::complex<T> complex_divide_smith_large(c
   const T a_scale = large_a ? T(0.25) : T(1);
   const T b_scale = large_b ? T(0.25) : T(1);
   const T scaled_denominator = (b_real * b_scale) * rscale + (b_imag * b_scale) * iscale;
-  const T unscale = (large_a ? T(4) : T(1)) * (large_b ? T(0.25) : T(1));
+  const T unscale = (large_a ? T(4) : T(1)) * b_scale;
   return std::complex<T>(((a_real * a_scale) * rscale + (a_imag * a_scale) * iscale) / scaled_denominator * unscale,
                          ((a_imag * a_scale) * rscale - (a_real * a_scale) * iscale) / scaled_denominator * unscale);
 }
