@@ -202,10 +202,12 @@ class RandomSetter {
   /** Destructor updating back the sparse matrix target */
   ~RandomSetter() {
     KeyType keyBitsMask = (1 << m_keyBitsOffset) - 1;
+    // The constructor copied the target's coefficients into the hash maps. Reset the target before rewriting its index
+    // arrays: compacting an uncompressed target with the new offsets would read stale data.
+    m_target->setZero();
+    m_target->makeCompressed();
     if (!SwapStorage)  // also means the map is sorted
     {
-      m_target->setZero();
-      m_target->makeCompressed();
       m_target->reserve(nonZeros());
       Index prevOuter = -1;
       for (Index k = 0; k < m_outerPackets; ++k) {
@@ -223,10 +225,6 @@ class RandomSetter {
       }
       m_target->finalize();
     } else {
-      // The constructor copied the target's coefficients into the hash maps. Reset the target before writing the
-      // new outer index: compacting an uncompressed target with the new offsets would read stale data.
-      m_target->setZero();
-      m_target->makeCompressed();
       VectorXi positions(m_target->outerSize());
       positions.setZero();
       // pass 1
