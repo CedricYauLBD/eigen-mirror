@@ -302,10 +302,20 @@ class AutoDiffScalar
 
   template <typename OtherDerType>
   inline auto operator/(const AutoDiffScalar<OtherDerType>& other) const {
-    return MakeAutoDiffScalar(m_value / other.value(),
-                              internal::MakeCoherentCwiseBinaryOp<internal::scalar_difference_op<Scalar>>(
-                                  m_derivatives * other.value(), (other.derivatives() * m_value)) *
-                                  (Scalar(1) / (other.value() * other.value())));
+    // d(a/b) = (da b - db a) / b^2. When b^2 underflows below the smallest normal number or overflows, 1/b^2 is
+    // inexact, zero or infinite, so use d(a/b) = (da - (a/b) db) / b instead: its terms are bounded by the result when
+    // |b| < 1.
+    const Scalar& b = other.value();
+    Scalar scale_der = b, scale_other = m_value, scale = Scalar(1) / (b * b);
+    const Real square = numext::abs2(b);
+    if (square < Real((numext::numeric_limits<Real>::min)()) || square > Real((numext::numeric_limits<Real>::max)())) {
+      scale_der = Scalar(1);
+      scale_other = m_value / b;
+      scale = Scalar(1) / b;
+    }
+    return MakeAutoDiffScalar(m_value / b, internal::MakeCoherentCwiseBinaryOp<internal::scalar_difference_op<Scalar>>(
+                                               m_derivatives * scale_der, other.derivatives() * scale_other) *
+                                               scale);
   }
 
   template <typename OtherDerType>
@@ -520,8 +530,11 @@ template <typename DerType>
 inline auto pow(const Eigen::AutoDiffScalar<DerType>& x,
                 const typename internal::traits<internal::remove_all_t<DerType>>::Scalar& y) {
   using namespace Eigen;
+  using Scalar = typename internal::traits<internal::remove_all_t<DerType>>::Scalar;
   using std::pow;
-  return Eigen::MakeAutoDiffScalar(pow(x.value(), y), x.derivatives() * (y * pow(x.value(), y - 1)));
+  // y * x^(y-1) is 0 * inf at x = 0, but x^0 is constant.
+  const Scalar slope = y == Scalar(0) ? Scalar(0) : y * pow(x.value(), y - 1);
+  return Eigen::MakeAutoDiffScalar(pow(x.value(), y), x.derivatives() * slope);
 }
 
 template <typename DerTypeA, typename DerTypeB>
