@@ -18,8 +18,9 @@ namespace Eigen {
 
 namespace internal {
 
-// Read-only data cached load (__ldg) and native FP16 arithmetic are available
-// on all supported GPU architectures (sm_60+ for CUDA, GFX906+ for HIP).
+// Read-only data cached load (__ldg) is available on all supported GPU architectures (sm_50+ for CUDA, GFX906+ for
+// HIP). Native FP16 arithmetic needs sm_53+ (EIGEN_GPU_HAS_FP16_ARITHMETIC); below that the half2 packet ops
+// compute in float.
 
 // Make sure this is only available when targeting a GPU: we don't want to
 // introduce conflicts between these packet_traits definitions and the ones

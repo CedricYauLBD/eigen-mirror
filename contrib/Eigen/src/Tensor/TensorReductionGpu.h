@@ -898,8 +898,10 @@ struct OuterReducer<Self, Op, GpuDevice> {
       return true;
     }
 
-    // CUDA has native FP64 atomicAdd on every supported architecture (sm_60+). Keep the measured shape band
-    // for the other double reducers and for HIP, where atomicAdd may still use compare-and-swap.
+    // CUDA has native FP64 atomicAdd from sm_60 (the atomicReduce<double> specialization above is guarded by
+    // EIGEN_CUDA_ARCH >= 600; sm_50-sm_53 device code takes the correct but slower compare-and-swap loop, and host
+    // code cannot see the target architecture). Keep the measured shape band for the other double reducers and for
+    // HIP, where atomicAdd may still use compare-and-swap.
 #if defined(EIGEN_CUDACC)
     constexpr bool has_native_double_sum = std::is_same<Op, SumReducer<double>>::value;
 #else
