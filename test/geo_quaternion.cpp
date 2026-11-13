@@ -473,6 +473,40 @@ void quaternion_product_fma() {
 #endif
 }
 
+// setFromScaledAxis must stay finite when the norm of the rotation vector overflows although its coefficients do not.
+template <typename Scalar>
+void quaternion_scaled_axis_extreme_norm() {
+  using Vector3 = Matrix<Scalar, 3, 1>;
+  using Quaternionx = Quaternion<Scalar>;
+  const Scalar tolerance = Scalar(16) * NumTraits<Scalar>::epsilon();
+  const Scalar big = std::sqrt((NumTraits<Scalar>::highest)()) * Scalar(4);
+  // Along an axis the angle is the coefficient itself, so sin and cos of half of it are the expected values.
+  for (Scalar angle : {big, -big, Scalar(0.5) * (NumTraits<Scalar>::highest)()}) {
+    const Quaternionx q = Quaternionx::FromScaledAxis(Vector3(angle, 0, 0));
+    VERIFY((numext::isfinite)(q.coeffs().sum()));
+    VERIFY(numext::abs(q.norm() - Scalar(1)) <= tolerance);
+    VERIFY_IS_APPROX(q.w(), std::cos(Scalar(0.5) * numext::abs(angle)));
+    VERIFY_IS_APPROX(q.x(), std::sin(Scalar(0.5) * angle));
+    VERIFY_IS_EQUAL(q.y(), Scalar(0));
+    VERIFY_IS_EQUAL(q.z(), Scalar(0));
+  }
+  // A skew direction: the vector part stays parallel to the input and the quaternion has unit norm. The squared
+  // norm of v overflows, so v.normalized() would be zero and make the parallelism check vacuous.
+  const Vector3 v = big * Vector3(Scalar(0.5), Scalar(-0.25), Scalar(0.75));
+  const Quaternionx q = Quaternionx::FromScaledAxis(v);
+  VERIFY(numext::abs(q.norm() - Scalar(1)) <= tolerance);
+  VERIFY(q.vec().cross(v.stableNormalized()).norm() <= tolerance);
+  VERIFY_IS_APPROX(q.w(), std::cos(Scalar(0.5) * v.stableNorm()));
+}
+
+// Overflow of a squared norm cannot be observed under -ffinite-math-only, which folds the range checks away. The macro
+// is defined as 0 or 1 by GCC and clang, so it must be tested for its value.
+#if defined(__FINITE_MATH_ONLY__) && __FINITE_MATH_ONLY__
+#define EIGEN_TEST_OVERFLOW_HANDLING(x)
+#else
+#define EIGEN_TEST_OVERFLOW_HANDLING(x) x
+#endif
+
 EIGEN_DECLARE_TEST(geo_quaternion) {
   CALL_SUBTEST_2(quaternion_product_fma());
   for (int i = 0; i < g_repeat; i++) {
@@ -481,12 +515,14 @@ EIGEN_DECLARE_TEST(geo_quaternion) {
     CALL_SUBTEST_1((quaternion<float, DontAlign>()));
     CALL_SUBTEST_1((quaternionAlignment<float>()));
     CALL_SUBTEST_1(mapQuaternion<float>());
+    EIGEN_TEST_OVERFLOW_HANDLING(CALL_SUBTEST_1(quaternion_scaled_axis_extreme_norm<float>()));
 
     CALL_SUBTEST_2((quaternion<double, AutoAlign>()));
     CALL_SUBTEST_2(check_const_correctness(Quaterniond()));
     CALL_SUBTEST_2((quaternion<double, DontAlign>()));
     CALL_SUBTEST_2((quaternionAlignment<double>()));
     CALL_SUBTEST_2(mapQuaternion<double>());
+    EIGEN_TEST_OVERFLOW_HANDLING(CALL_SUBTEST_2(quaternion_scaled_axis_extreme_norm<double>()));
 
 #ifndef EIGEN_TEST_ANNOYING_SCALAR_DONT_THROW
     AnnoyingScalar::dont_throw = true;

@@ -736,10 +736,10 @@ EIGEN_DEVICE_FUNC inline Derived& QuaternionBase<Derived>::setFromScaledAxis(
   const Vector3 v = scaled_axis;
 
   // Fast path with stableNorm() fallback when norm() returns a suspiciously small
-  // value (below epsilon, where squaredNorm() may have underflowed); same idiom
-  // as AngleAxis::operator=(QuaternionBase).
+  // value (below epsilon, where squaredNorm() may have underflowed) or a non-finite
+  // one (squaredNorm() overflowed); same idiom as AngleAxis::operator=(QuaternionBase).
   Scalar angle = v.norm();
-  if (angle < NumTraits<Scalar>::epsilon()) angle = v.stableNorm();
+  if (angle < NumTraits<Scalar>::epsilon() || !(angle <= NumTraits<Scalar>::highest())) angle = v.stableNorm();
   if (numext::is_exactly_zero(angle)) {
     this->w() = Scalar(1);
     this->vec().setZero();
