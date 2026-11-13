@@ -19,14 +19,9 @@ namespace Eigen {
 namespace internal {
 
 // Writes lhs(:, k0) * y0, plus lhs(:, k1) * y1 if two, to (indices, values) by a two-way merge that sums equal
-// indices, and returns the number of entries. Returns -1 if the output is not strictly increasing, which happens
-// when an operand vector is unsorted or repeats an index; the output is then unspecified.
-//
-// One vector needs no accumulator, and two sorted vectors merge in order, so neither needs a sort. This is the
-// "direct referencing" of M. Parger, M. Winter, D. Mlakar and M. Steinberger, "spECK: accelerating GPU sparse
-// matrix-matrix multiplication through lightweight analysis", PPoPP 2020, doi:10.1145/3332466.3374521, and one step
-// of the row merging of F. Gremse, A. Hoefter, L. O. Schwen, F. Kiessling and U. Naumann, "GPU-accelerated sparse
-// matrix-matrix multiplication by iterative row merging", SIAM J. Sci. Comput. 37(1), 2015, doi:10.1137/130948811.
+// indices. Returns the count, or -1 if the output is not strictly increasing: an operand vector is unsorted or
+// repeats an index. After the direct referencing of Parger et al., "spECK", PPoPP 2020, doi:10.1145/3332466.3374521,
+// and the row merging of Gremse et al., SIAM J. Sci. Comput. 37(1), 2015, doi:10.1137/130948811.
 template <typename LhsEvaluator, typename RhsScalar, typename Product, typename StorageIndex, typename ResScalar>
 Index sparse_product_merge_vectors(const LhsEvaluator& lhsEval, Index k0, const RhsScalar& y0, Index k1,
                                    const RhsScalar& y1, bool two, const Product& product, StorageIndex* indices,
@@ -72,9 +67,8 @@ Index sparse_product_merge_vectors(const LhsEvaluator& lhsEval, Index k0, const 
 }
 
 // Computes res = lhs * rhs with sorted inner vectors and no transpose, without the entries that keep rejects. Each
-// vector of res is built in res's own free storage. A vector with one or two products per index at most, because
-// the rhs vector has one or two entries, is merged (sparse_product_merge_vectors) if the lhs vectors are sorted.
-// Any other is built in one of three ways:
+// vector of res is built in res's own free storage: merged (sparse_product_merge_vectors) if its rhs vector has one
+// or two entries and the lhs vectors allow it, else in one of three ways:
 //
 // - Marked: a marker of the inner dimension locates each index in the vector being built, so a coefficient costs one
 //   lookup however many products it sums; the distinct entries are sorted afterwards (sort_inner_vector), which is
@@ -89,9 +83,8 @@ Index sparse_product_merge_vectors(const LhsEvaluator& lhsEval, Index k0, const 
 //
 // A vector is marked unless the previous one had at least kUnmarkedMin distinct indices, with at most two products
 // each; the first one is not marked. The marker is allocated when the first vector is marked. A vector that would be
-// marked is direct instead if its range holds at most kDirectRatio slots per distinct index of the previous vector:
-// the table then replaces the sort of a long vector, whatever the number of products per index. spECK (see
-// sparse_product_merge_vectors) chooses a dense accumulator over [min, max] by the same density, for the same reason.
+// marked is direct instead if hi - lo + 1 <= kDirectRatio * (distinct indices of the previous vector): the table
+// then replaces the sort, as the dense accumulation of spECK does.
 //
 // keep sees the finished sum of each index, so a vector is pruned once it is complete (prune_inner_vector), before
 // the next one starts behind it. sparse_product_keep_all compiles the pass out.
