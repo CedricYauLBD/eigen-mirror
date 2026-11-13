@@ -130,8 +130,8 @@ build:linux:cross:x86-64:gcc-10:avx512dq:
   variables:
     EIGEN_CI_ADDITIONAL_ARGS: "-DEIGEN_TEST_AVX512DQ=on"
 
-# Explicit vectorization off: the tests compile with EIGEN_DONT_VECTORIZE=1 (alignment stays on).  With no packet
-# types EIGEN_MAX_ALIGN_BYTES drops to 0 and the scalar fallbacks run, code that no other job here compiles.
+# Explicit vectorization off: the tests compile with EIGEN_DONT_VECTORIZE=1, which sets EIGEN_MAX_ALIGN_BYTES to 0 and
+# runs the scalar fallbacks, code that no other job here compiles.
 build:linux:cross:x86-64:gcc-10:novec:
   extends: build:linux:cross:x86-64:gcc-10:default
   variables:
