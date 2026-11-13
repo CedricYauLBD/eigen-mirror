@@ -55,9 +55,11 @@ enum class SparseReordering : int {
 };
 
 /** Matching algorithm, applied during analyzePattern() to improve numerical
- * robustness. Off by cuDSS default; primarily useful for SparseLU on
- * indefinite or badly scaled systems. Auto lets cuDSS pick. The named
- * algorithms are declared only for cuDSS >= 0.8. */
+ * robustness. Default keeps the cuDSS default, which depends on the cuDSS
+ * version (CUDSS_CONFIG_MATCHING_ALG in cudss_data_types.h: Auto for cuDSS 1.0);
+ * None disables matching. Primarily useful for SparseLU on indefinite or badly
+ * scaled systems. Auto lets cuDSS pick. The named algorithms are declared only
+ * for cuDSS >= 0.8. */
 enum class SparseMatching : int {
   Default = -1,
 #if EIGEN_HAS_CUDSS_SOLVER_CONFIG
@@ -89,10 +91,10 @@ enum class SparsePivoting : int {
 /** Pass-through configuration for the cuDSS-backed sparse direct solvers
  * (SparseLLT, SparseLDLT, SparseLU). Fields left at their defaults keep the
  * corresponding cuDSS default, which is tuned for performance rather than
- * maximum robustness (e.g. matching is off). Non-default fields require
- * cuDSS >= 0.8, whose cudssReorderingAlg_t etc. name the algorithms with
- * stable values; earlier versions declare no algorithm enumerator and accept
- * only a default config, which EIGEN_HAS_CUDSS_SOLVER_CONFIG reports. */
+ * maximum robustness. Non-default fields require cuDSS >= 0.8, whose
+ * cudssReorderingAlg_t etc. name the algorithms with stable values; earlier
+ * versions declare no algorithm enumerator and accept only a default config,
+ * which EIGEN_HAS_CUDSS_SOLVER_CONFIG reports. */
 struct SparseSolverConfig {
   SparseReordering reordering = SparseReordering::Default;
   SparseMatching matching = SparseMatching::Default;
