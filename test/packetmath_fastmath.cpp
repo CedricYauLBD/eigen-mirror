@@ -362,6 +362,73 @@ struct expm1_near_overflow_runner<Scalar, false> {
   static void run() {}
 };
 
+template <typename Packet>
+EIGEN_DONT_INLINE void sqrt_packet(const float* a, float* output) {
+  Eigen::internal::pstoreu<float, Packet>(output, Eigen::internal::psqrt(Eigen::internal::ploadu<Packet>(a)));
+}
+
+template <typename Packet>
+EIGEN_DONT_INLINE void rsqrt_packet(const float* a, float* output) {
+  Eigen::internal::pstoreu<float, Packet>(output, Eigen::internal::prsqrt(Eigen::internal::ploadu<Packet>(a)));
+}
+
+EIGEN_DONT_INLINE void sqrt_array(const float* input, float* output, Index size) {
+  Map<Array<float, Dynamic, 1>>(output, size) = Map<const Array<float, Dynamic, 1>>(input, size).sqrt();
+}
+
+EIGEN_DONT_INLINE void rsqrt_array(const float* input, float* output, Index size) {
+  Map<Array<float, Dynamic, 1>>(output, size) = Map<const Array<float, Dynamic, 1>>(input, size).rsqrt();
+}
+
+// Distance in ulps, taken on the bits since -ffinite-math-only folds floating-point classification.
+inline Eigen::numext::uint32_t float_ulp_distance(float a, float b) {
+  const Eigen::numext::uint32_t x = Eigen::numext::bit_cast<Eigen::numext::uint32_t>(a);
+  const Eigen::numext::uint32_t y = Eigen::numext::bit_cast<Eigen::numext::uint32_t>(b);
+  return x > y ? x - y : y - x;
+}
+
+// sqrt and rsqrt of finite positive normal values. The NEON implementations guard the zero and infinity inputs with
+// an infinity constant; clang >= 19 under -ffinite-math-only folds that constant to poison and used to delete the
+// guarded computation, so every finite input returned 0 (rsqrt) or garbage (sqrt on ARMv7). The references are
+// computed in double and compared on the bits; the tolerance only has to separate the Newton iterations from a
+// deleted computation.
+template <typename Packet>
+void verify_sqrt_rsqrt_finite_packet() {
+  constexpr int packet_size = Eigen::internal::unpacket_traits<Packet>::size;
+  constexpr Eigen::numext::uint32_t max_ulps = 64;
+  float input[packet_size], output[packet_size];
+  for (int offset = 0; offset < 64; ++offset) {
+    for (int i = 0; i < packet_size; ++i) {
+      input[i] = std::ldexp(1.0f + 0.37f * float(i), (offset + 5 * i) % 61 - 30);
+    }
+    sqrt_packet<Packet>(input, output);
+    for (int i = 0; i < packet_size; ++i) {
+      VERIFY(float_ulp_distance(output[i], float(std::sqrt(double(input[i])))) <= max_ulps);
+    }
+    rsqrt_packet<Packet>(input, output);
+    for (int i = 0; i < packet_size; ++i) {
+      VERIFY(float_ulp_distance(output[i], float(1.0 / std::sqrt(double(input[i])))) <= max_ulps);
+    }
+  }
+}
+
+void verify_sqrt_rsqrt_finite_array() {
+  constexpr Eigen::numext::uint32_t max_ulps = 64;
+  constexpr Index size = 67;
+  float input[size], output[size];
+  for (Index i = 0; i < size; ++i) {
+    input[i] = std::ldexp(1.0f + 0.37f * float(i % 11), int(i % 61) - 30);
+  }
+  sqrt_array(input, output, size);
+  for (Index i = 0; i < size; ++i) {
+    VERIFY(float_ulp_distance(output[i], float(std::sqrt(double(input[i])))) <= max_ulps);
+  }
+  rsqrt_array(input, output, size);
+  for (Index i = 0; i < size; ++i) {
+    VERIFY(float_ulp_distance(output[i], float(1.0 / std::sqrt(double(input[i])))) <= max_ulps);
+  }
+}
+
 template <typename Scalar,
           bool HasIntegerBits =
               !std::is_void<typename Eigen::numext::get_integer_by_size<sizeof(Scalar)>::unsigned_type>::value>
@@ -399,6 +466,7 @@ EIGEN_DECLARE_TEST(packetmath_fastmath) {
   CALL_SUBTEST(verify_ldexp_beyond_exponent_range<double>());
   CALL_SUBTEST(expm1_near_overflow_runner<float>::run());
   CALL_SUBTEST(expm1_near_overflow_runner<double>::run());
+  CALL_SUBTEST(verify_sqrt_rsqrt_finite_array());
 
 #if defined(EIGEN_VECTORIZE_AVX512)
 #if !defined(EIGEN_VECTORIZE_AVX512FP16)
@@ -435,6 +503,8 @@ EIGEN_DECLARE_TEST(packetmath_fastmath) {
 #endif
 
 #if defined(EIGEN_VECTORIZE_NEON)
+  CALL_SUBTEST((verify_sqrt_rsqrt_finite_packet<Eigen::internal::Packet4f>()));
+  CALL_SUBTEST((verify_sqrt_rsqrt_finite_packet<Eigen::internal::Packet2f>()));
   CALL_SUBTEST((verify_mask_reduction<float, Eigen::internal::Packet2f>()));
   CALL_SUBTEST((verify_low_bit_mask_any_ftz<float, Eigen::internal::Packet2f>()));
   CALL_SUBTEST((verify_low_bit_mask_any_ftz<Eigen::bfloat16, Eigen::internal::Packet4bf>()));
