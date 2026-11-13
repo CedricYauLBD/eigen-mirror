@@ -38,7 +38,7 @@
 # from running anything but the GPU jobs.  Every rule set that fires on
 # "schedule" except .rules:libeigen:gpu opens with it: the job-level lists in
 # the build, test and deploy files splice it in as their first entry with
-# `- !reference [.rules:libeigen:gpu-schedule-guard, rules]`, while the three
+# `- !reference [.rules:libeigen:gpu-schedule-guard, rules]`, while the
 # .rules:libeigen:* sets below restate the two lines, since a !reference inside
 # a set that is itself !reference'd would nest.
 .rules:libeigen:gpu-schedule-guard:
