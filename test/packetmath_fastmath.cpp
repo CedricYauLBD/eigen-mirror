@@ -403,20 +403,20 @@ struct expm1_near_overflow_runner<Scalar, false> {
 };
 
 template <typename Packet>
-EIGEN_DONT_INLINE void sqrt_packet(const float* a, float* output) {
+EIGEN_DONT_INLINE void finite_sqrt_packet(const float* a, float* output) {
   Eigen::internal::pstoreu<float, Packet>(output, Eigen::internal::psqrt(Eigen::internal::ploadu<Packet>(a)));
 }
 
 template <typename Packet>
-EIGEN_DONT_INLINE void rsqrt_packet(const float* a, float* output) {
+EIGEN_DONT_INLINE void finite_rsqrt_packet(const float* a, float* output) {
   Eigen::internal::pstoreu<float, Packet>(output, Eigen::internal::prsqrt(Eigen::internal::ploadu<Packet>(a)));
 }
 
-EIGEN_DONT_INLINE void sqrt_array(const float* input, float* output, Index size) {
+EIGEN_DONT_INLINE void finite_sqrt_array(const float* input, float* output, Index size) {
   Map<Array<float, Dynamic, 1>>(output, size) = Map<const Array<float, Dynamic, 1>>(input, size).sqrt();
 }
 
-EIGEN_DONT_INLINE void rsqrt_array(const float* input, float* output, Index size) {
+EIGEN_DONT_INLINE void finite_rsqrt_array(const float* input, float* output, Index size) {
   Map<Array<float, Dynamic, 1>>(output, size) = Map<const Array<float, Dynamic, 1>>(input, size).rsqrt();
 }
 
@@ -441,11 +441,11 @@ void verify_sqrt_rsqrt_finite_packet() {
     for (int i = 0; i < packet_size; ++i) {
       input[i] = std::ldexp(1.0f + 0.37f * float(i), (offset + 5 * i) % 61 - 30);
     }
-    sqrt_packet<Packet>(input, output);
+    finite_sqrt_packet<Packet>(input, output);
     for (int i = 0; i < packet_size; ++i) {
       VERIFY(float_ulp_distance(output[i], float(std::sqrt(double(input[i])))) <= max_ulps);
     }
-    rsqrt_packet<Packet>(input, output);
+    finite_rsqrt_packet<Packet>(input, output);
     for (int i = 0; i < packet_size; ++i) {
       VERIFY(float_ulp_distance(output[i], float(1.0 / std::sqrt(double(input[i])))) <= max_ulps);
     }
@@ -459,11 +459,11 @@ void verify_sqrt_rsqrt_finite_array() {
   for (Index i = 0; i < size; ++i) {
     input[i] = std::ldexp(1.0f + 0.37f * float(i % 11), int(i % 61) - 30);
   }
-  sqrt_array(input, output, size);
+  finite_sqrt_array(input, output, size);
   for (Index i = 0; i < size; ++i) {
     VERIFY(float_ulp_distance(output[i], float(std::sqrt(double(input[i])))) <= max_ulps);
   }
-  rsqrt_array(input, output, size);
+  finite_rsqrt_array(input, output, size);
   for (Index i = 0; i < size; ++i) {
     VERIFY(float_ulp_distance(output[i], float(1.0 / std::sqrt(double(input[i])))) <= max_ulps);
   }
