@@ -1161,8 +1161,9 @@ void set_from_triplets(const InputIterator& begin, const InputIterator& end, Spa
       SparseMatrix<typename SparseMatrixType::Scalar, IsRowMajor ? ColMajor : RowMajor, StorageIndex>;
 
   if (begin == end) {
-    // Clear out existing data (if any).
+    // Clear out existing data (if any), including the inner non-zero counts of an uncompressed matrix.
     mat.setZero();
+    mat.makeCompressed();
     return;
   }
 
@@ -1215,7 +1216,12 @@ void set_from_triplets_sorted(const InputIterator& begin, const InputIterator& e
   constexpr bool IsRowMajor = SparseMatrixType::IsRowMajor;
   using StorageIndex = typename SparseMatrixType::StorageIndex;
 
-  if (begin == end) return;
+  if (begin == end) {
+    // Clear out existing data (if any), including the inner non-zero counts of an uncompressed matrix.
+    mat.setZero();
+    mat.makeCompressed();
+    return;
+  }
 
   constexpr StorageIndex kEmptyIndexValue(-1);
   // deallocate inner nonzeros if present and zero outerIndexPtr
@@ -1388,7 +1394,6 @@ void SparseMatrix<Scalar, Options_, StorageIndex_>::setFromTriplets(const InputI
 /** The same as setFromTriplets but triplets are assumed to be pre-sorted. This is faster and requires less temporary
  * storage. Two triplets `a` and `b` are appropriately ordered if: \code ColMajor: ((a.col() != b.col()) ? (a.col() <
  * b.col()) : (a.row() < b.row()) RowMajor: ((a.row() != b.row()) ? (a.row() < b.row()) : (a.col() < b.col()) \endcode
- * If the range is empty, the initial contents of \c *this are left untouched instead of being destroyed.
  */
 template <typename Scalar, int Options_, typename StorageIndex_>
 template <typename InputIterators>
