@@ -196,3 +196,7 @@ whose parts actually compile the added lines. A line inside a `CALL_SUBTEST_<n>(
 `#if defined(EIGEN_TEST_PART_<n>)` guard needs part `<n>`; any other line can be checked under any part. The driver
 prints what it left out next to the file name, so a run that hits the cap names the parts it did not check instead of
 reporting the file clean.
+
+For changed headers, the driver writes one source per group of headers that share an umbrella header and gate macros.
+That source includes the umbrella and then every header in the group, so clang-tidy parses each umbrella once per
+group rather than once per header.
