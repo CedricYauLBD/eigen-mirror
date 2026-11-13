@@ -310,6 +310,7 @@ class ColPivHouseholderQR : public SolverBase<ColPivHouseholderQR<MatrixType_, P
   EIGEN_STATIC_ASSERT_NON_INTEGER(Scalar)
 
   void computeInPlace();
+  void computeInPlaceNative();
 
   MatrixType m_qr;
   HCoeffsType m_hCoeffs;
@@ -371,6 +372,11 @@ ColPivHouseholderQR<MatrixType, PermutationIndex>& ColPivHouseholderQR<MatrixTyp
 
 template <typename MatrixType, typename PermutationIndex>
 void ColPivHouseholderQR<MatrixType, PermutationIndex>::computeInPlace() {
+  computeInPlaceNative();
+}
+
+template <typename MatrixType, typename PermutationIndex>
+void ColPivHouseholderQR<MatrixType, PermutationIndex>::computeInPlaceNative() {
   eigen_assert(m_qr.cols() <= NumTraits<PermutationIndex>::highest());
 
   Index rows = m_qr.rows();
