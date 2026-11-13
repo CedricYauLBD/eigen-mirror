@@ -602,6 +602,29 @@ void cod_set_threshold_after_compute() {
   VERIFY(!cod.isInjective());
 }
 
+// A right-hand side without columns, and an empty matrix, give an empty solution of the right size; sanitizer builds
+// reported a reference to the first element of an empty workspace.
+template <typename Decomposition, typename MatrixType>
+void qr_empty_rhs() {
+  const MatrixType A = MatrixType::Random(4, 4);
+  const Decomposition dec(A);
+  const MatrixType empty_rhs(4, 0);
+  VERIFY_IS_EQUAL(dec.solve(empty_rhs).rows(), 4);
+  VERIFY_IS_EQUAL(dec.solve(empty_rhs).cols(), 0);
+  VERIFY_IS_EQUAL(dec.transpose().solve(empty_rhs).rows(), 4);
+  VERIFY_IS_EQUAL(dec.transpose().solve(empty_rhs).cols(), 0);
+  VERIFY_IS_EQUAL(dec.adjoint().solve(empty_rhs).cols(), 0);
+  const MatrixType B = MatrixType::Random(4, 3);
+  const MatrixType X = dec.solve(B);
+  VERIFY_IS_EQUAL(X.cols(), 3);
+  VERIFY_IS_APPROX(A * X, B);
+
+  const Decomposition empty_dec{MatrixType(0, 0)};
+  VERIFY_IS_EQUAL(empty_dec.solve(MatrixType(0, 2)).rows(), 0);
+  VERIFY_IS_EQUAL(empty_dec.solve(MatrixType(0, 2)).cols(), 2);
+  VERIFY_IS_EQUAL(empty_dec.transpose().solve(MatrixType(0, 0)).cols(), 0);
+}
+
 EIGEN_DECLARE_TEST(qr_colpivoting) {
   for (int i = 0; i < g_repeat; i++) {
     CALL_SUBTEST_1(qr<MatrixXf>());
@@ -647,6 +670,11 @@ EIGEN_DECLARE_TEST(qr_colpivoting) {
   // Test problem size constructors
   CALL_SUBTEST_9(ColPivHouseholderQR<MatrixXf>(10, 20));
   CALL_SUBTEST_2(qr_empty<MatrixXd>());
+  CALL_SUBTEST_2((qr_empty_rhs<ColPivHouseholderQR<MatrixXd>, MatrixXd>()));
+  CALL_SUBTEST_2((qr_empty_rhs<CompleteOrthogonalDecomposition<MatrixXd>, MatrixXd>()));
+  CALL_SUBTEST_3((qr_empty_rhs<ColPivHouseholderQR<MatrixXcd>, MatrixXcd>()));
+  CALL_SUBTEST_3((qr_empty_rhs<CompleteOrthogonalDecomposition<MatrixXcd>, MatrixXcd>()));
+  CALL_SUBTEST_2((qr_empty_rhs<RandColPivHouseholderQR<MatrixXd>, MatrixXd>()));
   CALL_SUBTEST_1((qr_extreme_scale<ColPivHouseholderQR<MatrixXf>>()));
   CALL_SUBTEST_2((qr_extreme_scale<ColPivHouseholderQR<MatrixXd>>()));
   CALL_SUBTEST_1((qr_extreme_scale<RandColPivHouseholderQR<MatrixXf>>()));
