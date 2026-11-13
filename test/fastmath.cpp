@@ -492,8 +492,40 @@ void check_exp_family_accuracy() {
   VERIFY(passed);
 }
 
+// For x = 1000, the packet logistic computes exp(x) = inf, which it must recognize and map to 1, though fast-math
+// deletes a comparison with an infinity literal.
+long double logistic_reference(long double x) { return 1 / (1 + ::expl(-x)); }
+
+template <typename Scalar>
+void check_logistic_overflow() {
+  using ArrayType = Array<Scalar, Dynamic, 1>;
+  const std::vector<Scalar> values = {Scalar(1000), Scalar(-5), Scalar(100), Scalar(-50), Scalar(0.5)};
+  VERIFY(check_fastmath_accuracy(
+      "logistic", values, [](const ArrayType& x) -> ArrayType { return x.logistic(); }, logistic_reference));
+}
+
 // Finite arguments of sqrt and rsqrt, whose Newton steps compare the argument with an infinity.
 long double rsqrt_reference(long double x) { return 1 / ::sqrtl(x); }
+
+// bfloat16 divides in float, where -ffast-math may compute 1 / (1 + e) by an approximation that flushes it to 0 once
+// 1 + e exceeds 2^126: logistic(88) has e = exp(88) = 1.6e38 and is 1.
+void check_logistic_bfloat16() {
+  const float values[] = {88, 89, 100, 30, -30, 0, 50, -50};
+  const int n = 37;
+  Array<bfloat16, Dynamic, 1> x(n);
+  for (int i = 0; i < n; ++i) {
+    const volatile float* v = &values[i % 8];
+    x[i] = bfloat16(*v);
+  }
+  const Array<bfloat16, Dynamic, 1> y = x.logistic();
+  LongDoubleFunction volatile reference = logistic_reference;
+  for (int i = 0; i < n; ++i) {
+    const long double expected = reference(static_cast<long double>(static_cast<float>(x[i])));
+    const long double tolerance = 2 * static_cast<long double>(NumTraits<bfloat16>::epsilon());
+    VERIFY(has_finite_bits(static_cast<float>(y[i])));
+    VERIFY(numext::abs(static_cast<long double>(static_cast<float>(y[i])) - expected) <= tolerance * expected);
+  }
+}
 
 template <typename Scalar>
 void check_sqrt_rsqrt_finite() {
@@ -527,4 +559,7 @@ EIGEN_DECLARE_TEST(fastmath) {
   CALL_SUBTEST_6(check_exp_family_accuracy<double>());
   CALL_SUBTEST_7(check_sqrt_rsqrt_finite<float>());
   CALL_SUBTEST_8(check_sqrt_rsqrt_finite<double>());
+  CALL_SUBTEST_9(check_logistic_overflow<float>());
+  CALL_SUBTEST_10(check_logistic_overflow<double>());
+  CALL_SUBTEST_11(check_logistic_bfloat16());
 }

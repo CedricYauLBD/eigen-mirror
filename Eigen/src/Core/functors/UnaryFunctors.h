@@ -1290,10 +1290,11 @@ struct scalar_logistic_op_impl {
   template <typename Packet>
   EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE Packet packetOp(const Packet& x) const {
     const Packet one = pset1<Packet>(T(1));
-    const Packet inf = pset1<Packet>(NumTraits<T>::infinity());
     const Packet e = pexp(x);
-    const Packet inf_mask = pcmp_eq(e, inf);
-    return pselect(inf_mask, one, pdiv(e, padd(one, e)));
+    // e / (1 + e) rounds to 1 for e > 4 / epsilon, which includes e = inf. Dividing by such an e is avoided, as
+    // -ffast-math may approximate the reciprocal in float, which flushes it to 0 once it is subnormal.
+    const Packet large_mask = pcmp_lt(pset1<Packet>(T(4) / NumTraits<T>::epsilon()), e);
+    return pselect(large_mask, one, pdiv(e, padd(one, e)));
   }
 };
 
