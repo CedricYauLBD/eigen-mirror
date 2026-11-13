@@ -3820,7 +3820,7 @@ void packetmath_bfloat16_to_unsigned_short_cast() {
 #endif
 
 #if defined(EIGEN_VECTORIZE_AVX) || defined(EIGEN_VECTORIZE_AVX512) || defined(EIGEN_VECTORIZE_NEON) || \
-    defined(EIGEN_VECTORIZE_SME)
+    defined(EIGEN_VECTORIZE_SME) || defined(EIGEN_VECTORIZE_RVV10BF16)
 // The bfloat16 arithmetic packets round a float result to nearest even. Check them against that rounding applied to
 // the float packet op, over every encoding of one operand and a fixed set for the other that puts sums and products
 // on exact midpoints: 1 and 3 against [256, 512), 1 + 2^-7 and 2^-7 against values near 1, plus the range ends and
@@ -4029,11 +4029,15 @@ EIGEN_DECLARE_TEST(packetmath) {
 #endif
 
 #if defined(EIGEN_VECTORIZE_AVX) || defined(EIGEN_VECTORIZE_AVX512) || defined(EIGEN_VECTORIZE_NEON) || \
-    defined(EIGEN_VECTORIZE_SME)
+    defined(EIGEN_VECTORIZE_SME) || defined(EIGEN_VECTORIZE_RVV10BF16)
   using Bf16Packet = internal::packet_traits<bfloat16>::type;
   using Bf16HalfPacket = internal::packet_traits<bfloat16>::half;
   CALL_SUBTEST_15(packetmath_bfloat16_arithmetic_rounding<Bf16Packet>());
   CALL_SUBTEST_15(packetmath_bfloat16_arithmetic_rounding<Bf16HalfPacket>());
+#endif
+
+#if defined(EIGEN_VECTORIZE_AVX) || defined(EIGEN_VECTORIZE_AVX512) || defined(EIGEN_VECTORIZE_NEON) || \
+    defined(EIGEN_VECTORIZE_SME)
   // 32-bit ARM NEON flushes subnormals whatever FPSCR says.
   CALL_SUBTEST_15(packetmath_bfloat16_sqrt_exhaustive<Bf16Packet>(EIGEN_ARCH_ARM != 0));
   CALL_SUBTEST_15(packetmath_bfloat16_sqrt_exhaustive<Bf16HalfPacket>(EIGEN_ARCH_ARM != 0));
