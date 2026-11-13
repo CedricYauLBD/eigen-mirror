@@ -84,8 +84,10 @@ into a sparse destination. So `Q`, unlike `R`, comes out sorted.
 ## Products
 
 `A * B` on two sparse operands uses the conservative product; `(A * B).pruned()` is the pruned product. Both run the
-kernel in [`ConservativeSparseSparseProduct.h`](../Eigen/src/SparseCore/ConservativeSparseSparseProduct.h), which
-takes a `Keep` predicate over the finished value of each entry: `sparse_product_keep_all` for the conservative product,
+kernel in [`ConservativeSparseSparseProduct.h`](../Eigen/src/SparseCore/ConservativeSparseSparseProduct.h). The kernel
+describes each result vector as a sum of terms, and `sparse_accumulator` in
+[`SparseAccumulator.h`](../Eigen/src/SparseCore/SparseAccumulator.h) builds the vector. The accumulator takes a `Keep`
+predicate over the finished value of each entry: `sparse_product_keep_all` for the conservative product,
 `sparse_product_keep_above` for the pruned one. The two differ in results. The conservative product stores every entry
 that the operands' sparsity patterns generate, even one whose sum cancels to exactly zero. The pruned product drops
 finished values at or below its tolerance. So the two produce different patterns from the same operands, and a test
@@ -97,6 +99,11 @@ while the final sum is large. `prune_inner_vector` therefore filters each inner 
 When you remove entries from a vector that the marked path built, reset their markers. The marker holds positions in
 the result storage, so a stale marker at or past the new end of the vector makes the next vector add to a wrong entry.
 `prune_inner_vector` takes the marker for this, and `test/sparse_product.cpp` fails without the reset.
+
+When you write a `Terms` adapter for `sparse_accumulator`, mark its members `EIGEN_ALWAYS_INLINE`, and benchmark it in
+a translation unit that instantiates several products. `EIGEN_STRONG_INLINE` is plain `inline` on GCC. GCC 14 left the
+`Term` constructor of the product adapter out of line in such a unit, which cost 15-45% on vectors of one or two
+terms, while a program with a single product showed no loss.
 
 Neither product reserves the exact result size in advance. The conservative product starts from the heuristic
 `nonZerosEstimate()` sum, documented at its definition, and grows from there by doubling. It does not shrink the

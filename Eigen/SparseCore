@@ -52,6 +52,7 @@
 #include "src/SparseCore/SparseRedux.h"
 #include "src/SparseCore/SparseView.h"
 #include "src/SparseCore/SparseDiagonalProduct.h"
+#include "src/SparseCore/SparseAccumulator.h"
 #include "src/SparseCore/ConservativeSparseSparseProduct.h"
 #include "src/SparseCore/SparseProduct.h"
 #include "src/SparseCore/SparseDenseProduct.h"

@@ -18,91 +18,81 @@ namespace Eigen {
 
 namespace internal {
 
-// Writes lhs(:, k0) * y0, plus lhs(:, k1) * y1 if two, to (indices, values) by a two-way merge that sums equal
-// indices. Returns the count, or -1 if the output is not strictly increasing: an operand vector is unsorted or
-// repeats an index. After the direct referencing of Parger et al., "spECK", PPoPP 2020, doi:10.1145/3332466.3374521,
-// and the row merging of Gremse et al., SIAM J. Sci. Comput. 37(1), 2015, doi:10.1137/130948811.
-template <typename LhsEvaluator, typename RhsScalar, typename Product, typename StorageIndex, typename ResScalar>
-Index sparse_product_merge_vectors(const LhsEvaluator& lhsEval, Index k0, const RhsScalar& y0, Index k1,
-                                   const RhsScalar& y1, bool two, const Product& product, StorageIndex* indices,
-                                   ResScalar* values) {
+// The terms lhs(:, k) * rhs(k, j) of vector j of a product, for sparse_accumulator. lo and hi hold the index range of
+// each lhs vector that rhs(:, j) refers to. The members are always inlined: left to itself, GCC 14 called the
+// constructor of Term once per term in a unit with several products, which cost 15-45% on vectors of one or two terms.
+template <typename Lhs, typename Rhs, typename ResScalar, typename StorageIndex, bool ReverseProduct>
+class sparse_product_terms {
+  using LhsEvaluator = evaluator<Lhs>;
+  using RhsEvaluator = evaluator<Rhs>;
   using LhsIterator = typename LhsEvaluator::InnerIterator;
-  Index n = 0;
-  bool increasing = true;
-  StorageIndex last = 0;
-  auto append = [&](StorageIndex i) {
-    increasing &= n == 0 || last < i;
-    last = i;
-    indices[n++] = i;
-  };
-  LhsIterator a(lhsEval, k0);
-  if (two) {
-    LhsIterator b(lhsEval, k1);
-    while (a && b) {
-      StorageIndex ia = StorageIndex(a.index()), ib = StorageIndex(b.index());
-      if (ia <= ib) {
-        values[n] = product(a.value(), y0);
-        if (ia == ib) {
-          product.accumulate(values[n], b.value(), y1);
-          ++b;
-        }
-        ++a;
-        append(ia);
-      } else {
-        values[n] = product(b.value(), y1);
-        ++b;
-        append(ib);
-      }
-    }
-    for (; b; ++b) {
-      values[n] = product(b.value(), y1);
-      append(StorageIndex(b.index()));
-    }
-  }
-  for (; a; ++a) {
-    values[n] = product(a.value(), y0);
-    append(StorageIndex(a.index()));
-  }
-  return increasing ? n : Index(-1);
-}
+  using RhsIterator = typename RhsEvaluator::InnerIterator;
+  using LhsScalar = typename remove_all_t<Lhs>::Scalar;
+  using RhsScalar = typename remove_all_t<Rhs>::Scalar;
+  using Product = sparse_scalar_product_op<LhsScalar, RhsScalar, ReverseProduct>;
 
-// Computes res = lhs * rhs with sorted inner vectors and no transpose, without the entries that keep rejects. Each
-// vector of res is built in res's own free storage: merged (sparse_product_merge_vectors) if its rhs vector has one
-// or two entries and the lhs vectors allow it, else in one of three ways:
-//
-// - Marked: a marker of the inner dimension locates each index in the vector being built, so a coefficient costs one
-//   lookup however many products it sums; the distinct entries are sorted afterwards (sort_inner_vector), which is
-//   free when they arrive in order. This is the faster way for short vectors and for repeated indices.
-// - Direct: a direct_accumulator, which holds index i at slot i - lo, sums the products, with no work
-//   proportional to the inner dimension. This is the faster way for long vectors that are dense in their range and
-//   whose indices rarely repeat.
-// - Appended: every product is written to the bucket of its index, in the order of arrival, and each bucket is then
-//   sorted and its equal indices summed (merge_buckets). The buckets split [lo, hi] evenly, so they follow one
-//   another in the result and a bucket's work is local to it. This is the faster way for long vectors that are
-//   sparse in their range.
-//
-// A vector is marked unless the previous one had at least kUnmarkedMin distinct indices, with at most two products
-// each; the first one is not marked. The marker is allocated when the first vector is marked. A vector that would be
-// marked is direct instead if hi - lo + 1 <= kDirectRatio * (distinct indices of the previous vector): the table
-// then replaces the sort, as the dense accumulation of spECK does.
-//
-// keep sees the finished sum of each index, so a vector is pruned once it is complete (prune_inner_vector), before
-// the next one starts behind it. sparse_product_keep_all compiles the pass out.
-//
-// The storage of res grows by doubling and is not shrunk at the end, so res can hold more capacity than entries.
+ public:
+  class Term {
+   public:
+    EIGEN_ALWAYS_INLINE Term(const LhsEvaluator& lhsEval, const RhsIterator& rhsIt)
+        : m_it(lhsEval, rhsIt.index()), m_y(rhsIt.value()) {}
+    EIGEN_ALWAYS_INLINE explicit operator bool() const { return bool(m_it); }
+    EIGEN_ALWAYS_INLINE Term& operator++() {
+      ++m_it;
+      return *this;
+    }
+    EIGEN_ALWAYS_INLINE StorageIndex index() const { return StorageIndex(m_it.index()); }
+    EIGEN_ALWAYS_INLINE void assignTo(ResScalar& value) const { value = Product()(m_it.value(), m_y); }
+    EIGEN_ALWAYS_INLINE void addTo(ResScalar& value) const { Product().accumulate(value, m_it.value(), m_y); }
+
+   private:
+    LhsIterator m_it;
+    RhsScalar m_y;
+  };
+
+  sparse_product_terms(const LhsEvaluator& lhsEval, const RhsEvaluator& rhsEval, Index j, Index terms, Index entries,
+                       const StorageIndex* lo, const StorageIndex* hi)
+      : m_lhsEval(lhsEval), m_rhsEval(rhsEval), m_j(j), m_terms(terms), m_entries(entries), m_lo(lo), m_hi(hi) {}
+
+  Index count() const { return m_terms; }
+  Index maxEntries() const { return m_entries; }
+  void range(StorageIndex& lo, StorageIndex& hi) const {
+    for (RhsIterator rhsIt(m_rhsEval, m_j); rhsIt; ++rhsIt) {
+      Index k = rhsIt.index();
+      // An empty lhs vector has lo = highest() and hi = 0, which change nothing.
+      lo = numext::mini(lo, m_lo[k]);
+      hi = numext::maxi(hi, m_hi[k]);
+    }
+  }
+  EIGEN_ALWAYS_INLINE Term term(Index t) const {
+    RhsIterator rhsIt(m_rhsEval, m_j);
+    for (; t > 0; --t) ++rhsIt;
+    return Term(m_lhsEval, rhsIt);
+  }
+  template <typename Func>
+  EIGEN_ALWAYS_INLINE void forEachTerm(const Func& func) const {
+    for (RhsIterator rhsIt(m_rhsEval, m_j); rhsIt; ++rhsIt) func(Term(m_lhsEval, rhsIt));
+  }
+
+ private:
+  const LhsEvaluator& m_lhsEval;
+  const RhsEvaluator& m_rhsEval;
+  Index m_j, m_terms, m_entries;
+  const StorageIndex* m_lo;
+  const StorageIndex* m_hi;
+};
+
+// Computes res = lhs * rhs with sorted inner vectors and no transpose, without the entries that keep rejects. A
+// sparse_accumulator builds each vector of res in res's own storage, which can keep spare capacity.
 template <typename Lhs, typename Rhs, typename ResultType, bool ReverseProduct = false,
           typename Keep = sparse_product_keep_all>
 static void conservative_sparse_sparse_product_sorted_impl(const Lhs& lhs, const Rhs& rhs, ResultType& res,
                                                            const Keep& keep = Keep()) {
-  using LhsScalar = typename remove_all_t<Lhs>::Scalar;
-  using RhsScalar = typename remove_all_t<Rhs>::Scalar;
   using ResScalar = typename remove_all_t<ResultType>::Scalar;
   using StorageIndex = typename remove_all_t<ResultType>::StorageIndex;
   using LhsIterator = typename evaluator<Lhs>::InnerIterator;
   using RhsIterator = typename evaluator<Rhs>::InnerIterator;
-  const sparse_scalar_product_op<LhsScalar, RhsScalar, ReverseProduct> product;
-  // A vector with fewer distinct indices than this is marked; setting up the other two ways costs more.
-  constexpr Index kUnmarkedMin = 48;
+  using Terms = sparse_product_terms<Lhs, Rhs, ResScalar, StorageIndex, ReverseProduct>;
 
   // make sure to call innerSize/outerSize since we fake the storage order.
   Index rows = lhs.innerSize();
@@ -146,146 +136,15 @@ static void conservative_sparse_sparse_product_sorted_impl(const Lhs& lhs, const
   res.setZero();
   res.data().reserve(lhsEval.nonZerosEstimate() + rhsEval.nonZerosEstimate());
   StorageIndex* outer = res.outerIndexPtr();
-  // marker[i] >= start locates inner index i in the vector being built, which begins at start.
-  Matrix<StorageIndex, Dynamic, 1> marker;
-  using Workspace = inner_sort_workspace<ResScalar, StorageIndex>;
-  Workspace workspace;
-  direct_accumulator<ResScalar, StorageIndex>& acc = workspace.acc;
-  Index nnz = 0;
-  bool marked = false;
-  // The number of distinct indices of the previous non-empty vector, before pruning.
-  Index prevKeys = 0;
+  sparse_accumulator<ResScalar, StorageIndex> acc(rows, res.data());
   for (Index j = 0; j < cols; ++j) {
-    Index start = nnz;
-    outer[j] = convert_index<StorageIndex>(start);
-    Index maxKeys = 0, terms = 0;
-    for (RhsIterator rhsIt(rhsEval, j); rhsIt; ++rhsIt, ++terms) maxKeys += lhs_count(rhsIt.index());
-    if (maxKeys == 0) continue;
-
-    Index keys;
-    if (terms <= 2) {
-      if (res.data().allocatedSize() < nnz + maxKeys) {
-        res.data().resize(nnz);
-        res.data().reserve(numext::maxi(maxKeys, nnz));
-      }
-      StorageIndex* indices = res.data().indexPtr() + start;
-      ResScalar* values = res.data().valuePtr() + start;
-      RhsIterator first(rhsEval, j), second(rhsEval, j);
-      if (terms == 2) ++second;
-      keys = sparse_product_merge_vectors(lhsEval, first.index(), first.value(), second.index(), second.value(),
-                                          terms == 2, product, indices, values);
-      if (keys >= 0) {
-        nnz = start + prune_inner_vector(indices, values, keys, keep);
-        marked = keys < kUnmarkedMin || 2 * keys < maxKeys;
-        prevKeys = keys;
-        continue;
-      }
-    }
-
-    StorageIndex lo = NumTraits<StorageIndex>::highest(), hi = 0;
-    bool direct = false;
-    if (!marked || prevKeys >= kUnmarkedMin) {
-      for (RhsIterator rhsIt(rhsEval, j); rhsIt; ++rhsIt) {
-        Index k = rhsIt.index();
-        if (lhsCount[k] == 0) continue;
-        lo = numext::mini(lo, lhsLo[k]);
-        hi = numext::maxi(hi, lhsHi[k]);
-      }
-      direct = acc.direct(lo, hi, marked ? prevKeys : maxKeys);
-    }
-    if (direct || !marked) {
-      if (direct) {
-        Index size = acc.size(lo, hi);
-        if (res.data().allocatedSize() < nnz + size) {
-          res.data().resize(nnz);
-          res.data().reserve(numext::maxi(size, nnz));
-        }
-        acc.init(res.data().indexPtr() + nnz, res.data().valuePtr() + nnz, lo, hi);
-        for (RhsIterator rhsIt(rhsEval, j); rhsIt; ++rhsIt) {
-          RhsScalar y = rhsIt.value();
-          acc.accumulate(LhsIterator(lhsEval, rhsIt.index()),
-                         [&](ResScalar& value, bool inserted, const LhsIterator& lhsIt) {
-                           if (inserted)
-                             value = product(lhsIt.value(), y);
-                           else
-                             product.accumulate(value, lhsIt.value(), y);
-                         });
-        }
-        nnz += acc.compact();
-      } else {
-        monotone_hash<StorageIndex> hash = bucket_hash<ResScalar>(lo, hi, maxKeys);
-        Index buckets = hash.range();
-        // cursor[b + 1] counts the products of bucket b; cursor[b] then becomes where its next product goes.
-        Matrix<Index, Dynamic, 1>& cursor = workspace.cursor;
-        if (cursor.size() < buckets + 1) cursor.resize(buckets + 1);
-        cursor.head(buckets + 1).setZero();
-        for (RhsIterator rhsIt(rhsEval, j); rhsIt; ++rhsIt)
-          for (LhsIterator lhsIt(lhsEval, rhsIt.index()); lhsIt; ++lhsIt)
-            ++cursor[hash(StorageIndex(lhsIt.index())) + 1];
-        for (Index b = 1; b < buckets; ++b) cursor[b + 1] += cursor[b];
-        Workspace::reserve(workspace.buckets, maxKeys);
-        Workspace::reserve(workspace.split, maxKeys);
-        StorageIndex* bucketIndices = workspace.buckets.indexPtr();
-        ResScalar* bucketValues = workspace.buckets.valuePtr();
-        for (RhsIterator rhsIt(rhsEval, j); rhsIt; ++rhsIt) {
-          RhsScalar y = rhsIt.value();
-          for (LhsIterator lhsIt(lhsEval, rhsIt.index()); lhsIt; ++lhsIt) {
-            StorageIndex i = StorageIndex(lhsIt.index());
-            Index position = cursor[hash(i)]++;
-            bucketIndices[position] = i;
-            bucketValues[position] = product(lhsIt.value(), y);
-          }
-        }
-        if (res.data().allocatedSize() < nnz + maxKeys) {
-          res.data().resize(nnz);
-          res.data().reserve(numext::maxi(maxKeys, nnz));
-        }
-        nnz = merge_buckets(bucketIndices, bucketValues, workspace.split.indexPtr(), workspace.split.valuePtr(),
-                            workspace, 0, buckets, res.data().indexPtr(), res.data().valuePtr(), nnz);
-      }
-      keys = nnz - start;
-      nnz = start + prune_inner_vector(res.data().indexPtr() + start, res.data().valuePtr() + start, keys, keep);
-    } else {
-      if (marker.size() == 0) marker.setConstant(rows, StorageIndex(-1));
-      Index bound = numext::mini(maxKeys, rows);
-      if (res.data().allocatedSize() < nnz + bound) {
-        res.data().resize(nnz);
-        res.data().reserve(numext::maxi(bound, nnz));
-      }
-      StorageIndex* indices = res.data().indexPtr();
-      ResScalar* values = res.data().valuePtr();
-      Index descents = 0;
-      StorageIndex prev = 0;
-      for (RhsIterator rhsIt(rhsEval, j); rhsIt; ++rhsIt) {
-        RhsScalar y = rhsIt.value();
-        for (LhsIterator lhsIt(lhsEval, rhsIt.index()); lhsIt; ++lhsIt) {
-          StorageIndex i = StorageIndex(lhsIt.index());
-          Index position = marker[i];
-          if (position >= start) {
-            product.accumulate(values[position], lhsIt.value(), y);
-          } else {
-            descents += i < prev;
-            prev = i;
-            lo = numext::mini(lo, i);
-            hi = numext::maxi(hi, i);
-            marker[i] = convert_index<StorageIndex>(nnz);
-            indices[nnz] = i;
-            values[nnz] = product(lhsIt.value(), y);
-            ++nnz;
-          }
-        }
-      }
-      keys = nnz - start;
-      // A removed or moved entry leaves a marker at or past the new end of the vector, which the next vector would
-      // take for its own. Removing entries adds no descent, and [lo, hi] still bounds the rest.
-      nnz = start + prune_inner_vector(indices + start, values + start, keys, keep, marker.data());
-      sort_inner_vector(indices + start, values + start, nnz - start, lo, hi, descents, workspace);
-    }
-    marked = keys < kUnmarkedMin || 2 * keys < maxKeys;
-    prevKeys = keys;
+    outer[j] = convert_index<StorageIndex>(acc.size());
+    Index entries = 0, terms = 0;
+    for (RhsIterator rhsIt(rhsEval, j); rhsIt; ++rhsIt, ++terms) entries += lhs_count(rhsIt.index());
+    acc.append(Terms(lhsEval, rhsEval, j, terms, entries, lhsLo, lhsHi), keep);
   }
-  outer[cols] = convert_index<StorageIndex>(nnz);
-  res.data().resize(nnz);
+  outer[cols] = convert_index<StorageIndex>(acc.size());
+  acc.finish();
 }
 
 // Helper template to generate new sparse matrix types
