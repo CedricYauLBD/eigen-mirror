@@ -566,7 +566,7 @@ void SparseLU<MatrixType, OrderingType>::analyzePattern(const MatrixType& mat) {
 
     // Renumber etree in postorder
     Index m = m_mat.cols();
-    iwork.resize(m + 1);
+    iwork.resize(m);
     for (Index i = 0; i < m; ++i) iwork(post(i)) = post(m_etree(i));
     m_etree = iwork;
 
