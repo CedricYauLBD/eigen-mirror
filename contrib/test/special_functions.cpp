@@ -588,6 +588,45 @@ void test_betainc_large_b() {
   }
 }
 
+// zeta(x, q) for integer x and large negative non-integer q used to sum about |q| terms (seconds for |q| = 1e9, years
+// for 1e15). For q = -N - 1/2 and even x, zeta(x, q) = 2 zeta(x, 1/2) - zeta(x, N + 3/2), with
+// zeta(2, 1/2) = pi^2 / 2, zeta(4, 1/2) = pi^4 / 6 and zeta(x, z) = z^(1-x) / (x - 1) + z^-x / 2 + x z^(-x-1) / 12 +
+// ...
+template <typename Scalar>
+void test_zeta_large_negative_q() {
+  const double pi2 = EIGEN_PI * EIGEN_PI;
+  // Largest measured relative error: 1 eps (float and double); the margin is a factor of 32.
+  const Scalar tol = Scalar(32) * NumTraits<Scalar>::epsilon();
+  const double n_values[] = {999, 1e3, 1e5, 1e6, 1e9, 1e12};
+  for (double n : n_values) {
+    if (sizeof(Scalar) == 4 && n > 1e6) continue;  // N + 1/2 is not representable
+    const double z = n + 1.5;
+    const double ref2 = pi2 - (1 / z + 1 / (2 * z * z) + 1 / (6 * z * z * z));
+    const double ref4 = pi2 * pi2 / 3 - (1 / (3 * z * z * z) + 1 / (2 * z * z * z * z));
+    const Scalar q = Scalar(-n - 0.5);
+    VERIFY(numext::abs(numext::zeta(Scalar(2), q) - Scalar(ref2)) <= tol * Scalar(ref2));
+    VERIFY(numext::abs(numext::zeta(Scalar(4), q) - Scalar(ref4)) <= tol * Scalar(ref4));
+  }
+  // polygamma(1, x) = zeta(2, x)
+  {
+    const double z = 1e6 + 1.5;
+    const double ref = pi2 - (1 / z + 1 / (2 * z * z) + 1 / (6 * z * z * z));
+    VERIFY(numext::abs(numext::polygamma(Scalar(1), Scalar(-1e6 - 0.5)) - Scalar(ref)) <= tol * Scalar(ref));
+  }
+  // Odd x: zeta(x, q) = zeta(x, f) - zeta(x, 1 - f) + zeta(x, 1 - q) is a difference of O(1) numbers, which is exact at
+  // f = 1/2: zeta(3, -N - 1/2) = zeta(3, N + 3/2) ~ 5.0e-13 for N = 1e6, from z^-2 / 2 + z^-3 / 2 + z^-4 / 4 - z^-6
+  // / 12.
+  {
+    const long double z = 1e6L + 1.5L;
+    const long double ref =
+        1 / (2 * z * z) + 1 / (2 * z * z * z) + 1 / (4 * z * z * z * z) - 1 / (12 * z * z * z * z * z * z);
+    VERIFY(numext::abs(numext::zeta(Scalar(3), Scalar(-1e6 - 0.5)) - Scalar(ref)) <= tol * Scalar(ref));
+  }
+  // x = inf: the terms with |k + q| < 1 are infinite.
+  VERIFY_IS_EQUAL(numext::zeta(std::numeric_limits<Scalar>::infinity(), Scalar(-1e6 - 0.5)),
+                  std::numeric_limits<Scalar>::infinity());
+}
+
 // For huge a and x one ulp apart the continued fraction overflows and produces an internal NaN, which the clamping of
 // igamma to [0, 1] used to turn into 0 (igammac returned the NaN). The true values are P = 1 and Q = 0 (x - a is
 // ~1e8 standard deviations): the answer must be that or NaN, in the scalar and the array paths, never a silent 0.
@@ -773,12 +812,14 @@ EIGEN_DECLARE_TEST(special_functions) {
   CALL_SUBTEST_1(array_special_functions<ArrayXf>());
   CALL_SUBTEST_1(test_special_functions_edge_cases<float>());
   CALL_SUBTEST_1(test_betainc_large_b<float>());
+  CALL_SUBTEST_1(test_zeta_large_negative_q<float>());
   CALL_SUBTEST_1(test_igamma_limits<float>());
   CALL_SUBTEST_1(test_igamma_internal_nan<float>());
   CALL_SUBTEST_2(ndtri_tail_accuracy<double>());
   CALL_SUBTEST_2(array_special_functions<ArrayXd>());
   CALL_SUBTEST_2(test_special_functions_edge_cases<double>());
   CALL_SUBTEST_2(test_betainc_large_b<double>());
+  CALL_SUBTEST_2(test_zeta_large_negative_q<double>());
   CALL_SUBTEST_2(test_igamma_limits<double>());
   CALL_SUBTEST_2(test_igamma_internal_nan<double>());
   CALL_SUBTEST_3(scalar_ndtri<long double>());

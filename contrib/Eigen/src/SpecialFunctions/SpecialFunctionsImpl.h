@@ -1342,6 +1342,9 @@ struct gamma_sample_der_alpha_impl : igamma_generic_impl<Scalar, SAMPLE_DERIVATI
  * Implementation of Riemann zeta function of two arguments, based on Cephes *
  *****************************************************************************/
 
+// For q < -kZetaMaxNegativeQ, zeta(x, q) is evaluated by a reflection rather than by summing about |q| terms.
+constexpr int kZetaMaxNegativeQ = 1000;
+
 template <typename Scalar>
 struct zeta_impl_series {
   EIGEN_STATIC_ASSERT((std::is_same<Scalar, Scalar>::value == false), THIS_TYPE_IS_NOT_SUPPORTED)
@@ -1387,6 +1390,69 @@ struct zeta_impl_series<double> {
 
 template <typename Scalar>
 struct zeta_impl {
+  /* Euler-Maclaurin summation of the Hurwitz zeta function (see run()), for x > 1 and q > 0 or q < 0 non-integer. */
+  EIGEN_DEVICE_FUNC static Scalar sum(Scalar x, Scalar q) {
+    int i;
+    Scalar a, b, k, s, t, w;
+
+    const Scalar A[] = {
+        Scalar(12.0),
+        Scalar(-720.0),
+        Scalar(30240.0),
+        Scalar(-1209600.0),
+        Scalar(47900160.0),
+        Scalar(-1.8924375803183791606e9), /*1.307674368e12/691*/
+        Scalar(7.47242496e10),
+        Scalar(-2.950130727918164224e12),  /*1.067062284288e16/3617*/
+        Scalar(1.1646782814350067249e14),  /*5.109094217170944e18/43867*/
+        Scalar(-4.5979787224074726105e15), /*8.028576626982912e20/174611*/
+        Scalar(1.8152105401943546773e17),  /*1.5511210043330985984e23/854513*/
+        Scalar(-7.1661652561756670113e18)  /*1.6938241367317436694528e27/236364091*/
+    };
+
+    const Scalar zero = Scalar(0.0), half = Scalar(0.5), one = Scalar(1.0);
+    const Scalar machep = cephes_helper<Scalar>::machep();
+
+    /* Permit negative q but continue sum until n+q > +9 . For q < -kZetaMaxNegativeQ, run() uses the reflection
+     * below instead, so this runs for at most kZetaMaxNegativeQ + 10 iterations. */
+    s = numext::pow(q, -x);
+    a = q;
+    b = zero;
+    // Run the summation in a helper function that is specific to the floating precision
+    if (zeta_impl_series<Scalar>::run(a, b, s, x, machep)) {
+      return s;
+    }
+
+    // If b is zero, then the tail sum will also end up being zero.
+    // Exiting early here can prevent NaNs for some large inputs, where
+    // the tail sum computed below has term `a` which can overflow to `inf`.
+    if (numext::equal_strict(b, zero)) {
+      return s;
+    }
+
+    w = a;
+    s += b * w / (x - one);
+    s -= half * b;
+    a = one;
+    k = zero;
+
+    for (i = 0; i < 12; i++) {
+      a *= x + k;
+      b /= w;
+      t = a * b / A[i];
+      s = s + t;
+      t = numext::abs(t / s);
+      if (t < machep) {
+        break;
+      }
+      k += one;
+      a *= x + k;
+      b /= w;
+      k += one;
+    }
+    return s;
+  }
+
   EIGEN_DEVICE_FUNC static Scalar run(Scalar x, Scalar q) {
     /*							zeta.c
      *
@@ -1449,27 +1515,10 @@ struct zeta_impl {
      *
      */
 
-    int i;
-    Scalar p, r, a, b, k, s, t, w;
-
-    const Scalar A[] = {
-        Scalar(12.0),
-        Scalar(-720.0),
-        Scalar(30240.0),
-        Scalar(-1209600.0),
-        Scalar(47900160.0),
-        Scalar(-1.8924375803183791606e9), /*1.307674368e12/691*/
-        Scalar(7.47242496e10),
-        Scalar(-2.950130727918164224e12),  /*1.067062284288e16/3617*/
-        Scalar(1.1646782814350067249e14),  /*5.109094217170944e18/43867*/
-        Scalar(-4.5979787224074726105e15), /*8.028576626982912e20/174611*/
-        Scalar(1.8152105401943546773e17),  /*1.5511210043330985984e23/854513*/
-        Scalar(-7.1661652561756670113e18)  /*1.6938241367317436694528e27/236364091*/
-    };
+    Scalar p, r;
 
     const Scalar maxnum = NumTraits<Scalar>::infinity();
     const Scalar zero = Scalar(0.0), half = Scalar(0.5), one = Scalar(1.0);
-    const Scalar machep = cephes_helper<Scalar>::machep();
     const Scalar nan = NumTraits<Scalar>::quiet_NaN();
 
     if (x == one) return maxnum;
@@ -1491,47 +1540,20 @@ struct zeta_impl {
       if (p != r) return nan;
     }
 
-    /* Permit negative q but continue sum until n+q > +9 .
-     * This case should be handled by a reflection formula.
-     * If q<0 and x is an integer, there is a relation to
-     * the polygamma function.
-     */
-    s = numext::pow(q, -x);
-    a = q;
-    b = zero;
-    // Run the summation in a helper function that is specific to the floating precision
-    if (zeta_impl_series<Scalar>::run(a, b, s, x, machep)) {
-      return s;
+    /* The sum for q < 0 has about |q| terms. Beyond kZetaMaxNegativeQ split it at the sign change of k + q, with
+     * q = f - M, f in (0, 1) and M a positive integer, for integer x (checked above):
+     *
+     *   zeta(x, q) = zeta(x, f) + sum_{j=1}^M (f - j)^-x
+     *              = zeta(x, f) + (-1)^x (zeta(x, 1 - f) - zeta(x, 1 - q)),
+     *
+     * using sum_{j=1}^M (j - f)^-x = zeta(x, 1 - f) - zeta(x, M + 1 - f) and M + 1 - f = 1 - q. */
+    if (q < -Scalar(kZetaMaxNegativeQ)) {
+      const Scalar f = q - numext::floor(q);
+      const Scalar x_is_even = (numext::rint(half * x) == half * x) ? one : -one;
+      return (sum(x, f) + x_is_even * sum(x, one - f)) - x_is_even * sum(x, one - q);
     }
 
-    // If b is zero, then the tail sum will also end up being zero.
-    // Exiting early here can prevent NaNs for some large inputs, where
-    // the tail sum computed below has term `a` which can overflow to `inf`.
-    if (numext::equal_strict(b, zero)) {
-      return s;
-    }
-
-    w = a;
-    s += b * w / (x - one);
-    s -= half * b;
-    a = one;
-    k = zero;
-
-    for (i = 0; i < 12; i++) {
-      a *= x + k;
-      b /= w;
-      t = a * b / A[i];
-      s = s + t;
-      t = numext::abs(t / s);
-      if (t < machep) {
-        break;
-      }
-      k += one;
-      a *= x + k;
-      b /= w;
-      k += one;
-    }
-    return s;
+    return sum(x, q);
   }
 };
 
