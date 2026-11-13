@@ -136,6 +136,46 @@ void verify_minmax_reduction() {
   VERIFY_IS_EQUAL(output[1], Scalar(packet_size));
 }
 
+template <typename Scalar, typename Packet>
+EIGEN_DONT_INLINE void minmax_packets(const Scalar* a, const Scalar* b, Scalar* min_output, Scalar* max_output) {
+  const Packet pa = Eigen::internal::ploadu<Packet>(a);
+  const Packet pb = Eigen::internal::ploadu<Packet>(b);
+  Eigen::internal::pstoreu<Scalar, Packet>(min_output, Eigen::internal::pmin<Packet>(pa, pb));
+  Eigen::internal::pstoreu<Scalar, Packet>(max_output, Eigen::internal::pmax<Packet>(pa, pb));
+}
+
+// pmin and pmax return a quiet NaN in the lanes where an operand is NaN, and the exact minimum or maximum elsewhere.
+// The NaN operands are built from runtime bits and the lanes are classified by their bits, since -ffast-math folds
+// isnan; a NaN constant inside pmin or pmax that the compiler treats as poison shows up as a garbage lane.
+template <typename Scalar, typename Packet>
+void verify_minmax_nan_propagation() {
+  using Binary = Eigen::internal::binary_floating_point_traits<Scalar>;
+  using Bits = typename Binary::Bits;
+  constexpr int packet_size = Eigen::internal::unpacket_traits<Packet>::size;
+  volatile Bits nan_bits = Binary::kExponentMask | (Binary::kExponentUnit >> 1);
+  Scalar a[packet_size], b[packet_size], min_output[packet_size], max_output[packet_size];
+  for (int i = 0; i < packet_size; ++i) {
+    a[i] = Scalar(i + 1);
+    b[i] = Scalar(packet_size - i);
+    const Bits bits = nan_bits;
+    if (i % 3 == 0) std::memcpy(&a[i], &bits, sizeof(Bits));
+    if (i % 5 == 1) std::memcpy(&b[i], &bits, sizeof(Bits));
+  }
+  minmax_packets<Scalar, Packet>(a, b, min_output, max_output);
+  for (int i = 0; i < packet_size; ++i) {
+    const Bits min_bits = Binary::bits(min_output[i]);
+    const Bits max_bits = Binary::bits(max_output[i]);
+    if (i % 3 == 0 || i % 5 == 1) {
+      const Bits quiet_nan = Binary::kExponentMask | (Binary::kExponentUnit >> 1);
+      VERIFY_IS_EQUAL(Bits(min_bits & quiet_nan), quiet_nan);
+      VERIFY_IS_EQUAL(Bits(max_bits & quiet_nan), quiet_nan);
+    } else {
+      VERIFY_IS_EQUAL(min_bits, Binary::bits(a[i] < b[i] ? a[i] : b[i]));
+      VERIFY_IS_EQUAL(max_bits, Binary::bits(a[i] < b[i] ? b[i] : a[i]));
+    }
+  }
+}
+
 // Complementary to the opaque-mask calls: the all-ones mask flows straight
 // from ptrue into the packet op, the way comparison-mask producers feed it,
 // which gives constant folding under -ffinite-math-only a chance to see the
@@ -488,6 +528,14 @@ EIGEN_DECLARE_TEST(packetmath_fastmath) {
   CALL_SUBTEST((verify_minmax_reduction<double, Eigen::internal::Packet1Xd>()));
   CALL_SUBTEST((verify_minmax_reduction<double, Eigen::internal::Packet2Xd>()));
   CALL_SUBTEST((verify_minmax_reduction<double, Eigen::internal::Packet4Xd>()));
+#if EIGEN_COMP_CLANG  // GCC folds the NaN self-comparison inside pmin and pmax under -ffinite-math-only
+  CALL_SUBTEST((verify_minmax_nan_propagation<float, Eigen::internal::Packet1Xf>()));
+  CALL_SUBTEST((verify_minmax_nan_propagation<float, Eigen::internal::Packet2Xf>()));
+  CALL_SUBTEST((verify_minmax_nan_propagation<float, Eigen::internal::Packet4Xf>()));
+  CALL_SUBTEST((verify_minmax_nan_propagation<double, Eigen::internal::Packet1Xd>()));
+  CALL_SUBTEST((verify_minmax_nan_propagation<double, Eigen::internal::Packet2Xd>()));
+  CALL_SUBTEST((verify_minmax_nan_propagation<double, Eigen::internal::Packet4Xd>()));
+#endif
 #endif
 
 #if defined(EIGEN_VECTORIZE_RVV10FP16)
@@ -495,6 +543,10 @@ EIGEN_DECLARE_TEST(packetmath_fastmath) {
   CALL_SUBTEST((verify_mask_reduction<Eigen::half, Eigen::internal::Packet2Xh>()));
   CALL_SUBTEST((verify_minmax_reduction<Eigen::half, Eigen::internal::Packet1Xh>()));
   CALL_SUBTEST((verify_minmax_reduction<Eigen::half, Eigen::internal::Packet2Xh>()));
+#if EIGEN_COMP_CLANG
+  CALL_SUBTEST((verify_minmax_nan_propagation<Eigen::half, Eigen::internal::Packet1Xh>()));
+  CALL_SUBTEST((verify_minmax_nan_propagation<Eigen::half, Eigen::internal::Packet2Xh>()));
+#endif
 #endif
 
 #if defined(EIGEN_VECTORIZE_RVV10BF16)
