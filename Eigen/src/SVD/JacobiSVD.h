@@ -363,33 +363,30 @@ class qr_preconditioner_impl<MatrixType, Options, HouseholderQRPreconditioner, P
 // The complex preconditioning rotates by c = conj(a) / n, s = b / n with n = |(a, b)|_2, the norm of the first column
 // of a 2x2 pivot block. The rotation is unitary to rounding only if n is accurate to a few eps in the relative sense.
 
-// Cold path of jacobi_pivot_norm: scales (a, b) by the exact power of two that brings its largest component into
-// [1/2, 1), so that every square is normal, and returns the norm of the scaled pair.
+// Cold path of jacobi_pivot_norm: returns the norm, in [1, 2], of (a_s, b_s) = (a, b) / m with m the largest of the
+// four real components, so no square underflows or overflows. Division by m, not by a power of two via frexp/ldexp
+// (which a custom scalar need not provide), rounds each component to relative error <= eps / 2, or absolute error
+// <= min against a norm >= 1, so the rotation built from (a_s, b_s) is unitary to rounding and within O(eps) of the
+// exact one.
 template <typename Scalar>
 EIGEN_DONT_INLINE typename NumTraits<Scalar>::Real jacobi_pivot_norm_scaled(
     const Scalar& a, const Scalar& b, Scalar& a_scaled, Scalar& b_scaled, typename NumTraits<Scalar>::Real sumSquares) {
   using RealScalar = typename NumTraits<Scalar>::Real;
-  EIGEN_USING_STD(frexp);
   const RealScalar m = numext::maxi(numext::maxi(numext::abs(numext::real(a)), numext::abs(numext::imag(a))),
                                     numext::maxi(numext::abs(numext::real(b)), numext::abs(numext::imag(b))));
   // A zero pair, which FTZ/DAZ hardware may also read from subnormal entries, or NaN: nothing to scale.
   if (!(m > RealScalar(0))) return numext::sqrt(sumSquares);
-  int e;
-  frexp(m, &e);
-  // 2^-e as a product of two powers of two: a single one overflows when -e exceeds the exponent range. Each
-  // multiplication is exact, and the first already lifts a subnormal entry into the normal range.
-  const RealScalar f1 = numext::ldexp(RealScalar(1), -e / 2);
-  const RealScalar f2 = numext::ldexp(RealScalar(1), -e - (-e / 2));
-  a_scaled = (a * f1) * f2;
-  b_scaled = (b * f1) * f2;
-  return numext::sqrt(numext::abs2(a_scaled) + numext::abs2(b_scaled));
+  a_scaled = a / m;
+  b_scaled = b / m;
+  const RealScalar scaledSumSquares = numext::abs2(a_scaled) + numext::abs2(b_scaled);
+  return numext::sqrt(scaledSumSquares);
 }
 
-// Returns n = |(a_s, b_s)|_2 for (a_s, b_s) = 2^k (a, b), so that c = conj(a_s) / n, s = b_s / n is the rotation for
-// (a, b), unitary to rounding. For S = |a|^2 + |b|^2 >= 4 min / eps (k = 0) the largest real component m has
-// m^2 >= S / 4 >= min / eps, so m^2 is normal. A subnormal square is off by at most min eps / 2, or by at most min if
-// FTZ flushes it, and three such terms total <= 3 min <= 0.75 eps S: S stays accurate to eps. Below that bound the
-// squares lose their accuracy, so the pair is scaled first.
+// Returns n = |(a_s, b_s)|_2, where (a_s, b_s) is (a, b) itself or, below the bound, the scaled pair of the cold path,
+// so that c = conj(a_s) / n, s = b_s / n is the rotation for (a, b), unitary to rounding. For S = |a|^2 + |b|^2 >=
+// 4 min / eps the largest real component m has m^2 >= S / 4 >= min / eps, so m^2 is normal. A subnormal square is off
+// by at most min eps / 2, or by at most min if FTZ flushes it, and three such terms total <= 3 min <= 0.75 eps S: S
+// stays accurate to eps. Below that bound the squares lose their accuracy, so the pair is scaled first.
 template <typename Scalar>
 EIGEN_STRONG_INLINE typename NumTraits<Scalar>::Real jacobi_pivot_norm(const Scalar& a, const Scalar& b,
                                                                        Scalar& a_scaled, Scalar& b_scaled) {
