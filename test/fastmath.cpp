@@ -539,6 +539,54 @@ void check_sqrt_rsqrt_finite() {
   VERIFY(passed);
 }
 
+// exp(x + iy) with exp(x) above the largest finite value and cos(y) or sin(y) small enough that the component is
+// finite: the packet code splits exp(x) = 2^n exp(r) for those, and finds them by the overflow of exp(x), which
+// fast-math must not hide.
+template <typename Scalar>
+void check_complex_exp_overflow() {
+  using Complex = std::complex<Scalar>;
+  const bool is_float = std::is_same<Scalar, float>::value;
+  // Real parts above x_overflow of pexp_complex, the bound of the split, which lies 4 epsilon below ln(highest): the
+  // value after it, ln(highest), where exp(x) is the largest finite value, and larger ones.
+  using Bits = typename numext::get_integer_by_size<sizeof(Scalar)>::unsigned_type;
+  const Scalar x_overflow = Scalar(NumTraits<Scalar>::max_exponent()) * Scalar(EIGEN_LN2) *
+                            (Scalar(1) - Scalar(4) * NumTraits<Scalar>::epsilon());
+  const Bits x_overflow_bits = numext::bit_cast<Bits>(x_overflow);
+  const std::vector<Scalar> x_values = {
+      is_float ? Scalar(89) : Scalar(710), is_float ? Scalar(92) : Scalar(720), is_float ? Scalar(95) : Scalar(735),
+      numext::bit_cast<Scalar>(Bits(x_overflow_bits + 1)),
+      static_cast<Scalar>(::logl(static_cast<long double>(NumTraits<Scalar>::highest())))};
+  const Scalar y_values[] = {Scalar(1.5707963267948966), Scalar(3.141592653589793), Scalar(-1.5707963267948966),
+                             Scalar(0.7)};
+  const Index n = 4 * static_cast<Index>(x_values.size());
+  Array<Complex, Dynamic, 1> z(n);
+  for (Index i = 0; i < n; ++i) {
+    const volatile Scalar* x = &x_values[static_cast<size_t>(i / 4)];
+    const volatile Scalar* y = &y_values[i % 4];
+    z[i] = Complex(*x, *y);
+  }
+  const Array<Complex, Dynamic, 1> w = z.exp();
+  LongDoubleFunction volatile exp_function = ::expl, cos_function = ::cosl, sin_function = ::sinl;
+  const long double highest = static_cast<long double>(NumTraits<Scalar>::highest());
+  for (Index i = 0; i < n; ++i) {
+    const long double magnitude = exp_function(static_cast<long double>(z[i].real()));
+    const long double expected_real = magnitude * cos_function(static_cast<long double>(z[i].imag()));
+    const long double expected_imag = magnitude * sin_function(static_cast<long double>(z[i].imag()));
+    const long double tolerance = 8 * static_cast<long double>(NumTraits<Scalar>::epsilon());
+    // A component above the largest finite value is infinite, which fast-math cannot be asked about.
+    if (numext::abs(expected_real) <= highest) {
+      VERIFY(has_finite_bits(w[i].real()));
+      VERIFY(numext::abs(static_cast<long double>(w[i].real()) - expected_real) <=
+             tolerance * numext::abs(expected_real));
+    }
+    if (numext::abs(expected_imag) <= highest) {
+      VERIFY(has_finite_bits(w[i].imag()));
+      VERIFY(numext::abs(static_cast<long double>(w[i].imag()) - expected_imag) <=
+             tolerance * numext::abs(expected_imag));
+    }
+  }
+}
+
 EIGEN_DECLARE_TEST(fastmath) {
   std::cout << "*** float *** \n\n";
   check_inf_nan<float>(true);
@@ -562,4 +610,6 @@ EIGEN_DECLARE_TEST(fastmath) {
   CALL_SUBTEST_9(check_logistic_overflow<float>());
   CALL_SUBTEST_10(check_logistic_overflow<double>());
   CALL_SUBTEST_11(check_logistic_bfloat16());
+  CALL_SUBTEST_12(check_complex_exp_overflow<float>());
+  CALL_SUBTEST_13(check_complex_exp_overflow<double>());
 }
