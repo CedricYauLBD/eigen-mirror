@@ -232,6 +232,29 @@ void unary_ops_test() {
   */
 }
 
+// The scalar tanh approximations return +-1 where tanh rounds to it, whether or not the compiler fuses their
+// multiply-adds (GCC does, with FMA available, even when Eigen is not vectorized).
+inline float scalar_tanh_approximation(float x) { return internal::ptanh_float(x); }
+inline double scalar_tanh_approximation(double x) { return internal::ptanh_double(x); }
+
+template <typename Scalar>
+void tanh_saturation_test() {
+  const Scalar inf = NumTraits<Scalar>::infinity(), highest = NumTraits<Scalar>::highest();
+  const Scalar rounds_to_one = std::is_same<Scalar, float>::value ? Scalar(9.1) : Scalar(19.1);
+  for (const Scalar x : {rounds_to_one, Scalar(2) * rounds_to_one, Scalar(100), Scalar(1e10), highest, inf}) {
+    VERIFY_IS_EQUAL(scalar_tanh_approximation(x), Scalar(1));
+    VERIFY_IS_EQUAL(scalar_tanh_approximation(-x), Scalar(-1));
+    VERIFY_IS_EQUAL(numext::tanh(x), Scalar(1));
+    VERIFY_IS_EQUAL(numext::tanh(-x), Scalar(-1));
+  }
+  // The approximation never exceeds 1 in magnitude on the way to saturation.
+  for (Scalar x = Scalar(0.5); x < rounds_to_one; x += Scalar(0.0125)) {
+    VERIFY(numext::abs(scalar_tanh_approximation(x)) <= Scalar(1));
+    VERIFY(numext::abs(scalar_tanh_approximation(-x)) <= Scalar(1));
+  }
+  VERIFY((numext::isnan)(scalar_tanh_approximation(NumTraits<Scalar>::quiet_NaN())));
+}
+
 // log2 of half and bfloat16 is exact at powers of two, subnormal ones included, on the scalar path (size 1) and in the
 // packet body and tail.
 template <typename Scalar>
@@ -1876,6 +1899,8 @@ EIGEN_DECLARE_TEST(array_cwise) {
   for (int i = 0; i < g_repeat; i++) {
     CALL_SUBTEST_34(ldexp_test<float>());
     CALL_SUBTEST_35(ldexp_test<double>());
+    CALL_SUBTEST_34(tanh_saturation_test<float>());
+    CALL_SUBTEST_35(tanh_saturation_test<double>());
     CALL_SUBTEST_36(ldexp_test<Eigen::half>());
     CALL_SUBTEST_37(ldexp_test<Eigen::bfloat16>());
     CALL_SUBTEST_36(log2_narrow_test<Eigen::half>());

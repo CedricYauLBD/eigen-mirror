@@ -623,6 +623,20 @@ EIGEN_DEFINE_FUNCTION_ALLOWING_MULTIPLE_DEFINITIONS Packet generic_atan(const Pa
 // Hyperbolic Functions
 //----------------------------------------------------------------------
 
+// Whether a scalar a * b + c is fused is up to the compiler (GCC contracts it across statements whatever
+// scalar_madd_uses_fma says), and the rational approximations of tanh below reach exactly 1 at different arguments
+// when it is, and wobble around 1 by a few ulps beyond it. A scalar therefore returns +-1 for |x| >= clamp, which is
+// no smaller than the argument where either evaluation first reaches 1. Packets use pmadd, which is deterministic.
+template <typename T>
+EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE T ptanh_saturate(const T& x, const T& tanh_x, const T&, std::false_type) {
+  EIGEN_UNUSED_VARIABLE(x);
+  return tanh_x;
+}
+template <typename T>
+EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE T ptanh_saturate(const T& x, const T& tanh_x, const T& clamp, std::true_type) {
+  return numext::abs(x) >= clamp ? numext::copysign(T(1), x) : tanh_x;
+}
+
 #if EIGEN_FAST_MATH
 
 /** \internal \returns the hyperbolic tan of \a a (coeff-wise)
@@ -643,8 +657,7 @@ EIGEN_DEFINE_FUNCTION_ALLOWING_MULTIPLE_DEFINITIONS T ptanh_float(const T& a_x) 
 #ifdef EIGEN_VECTORIZE_FMA
   constexpr float kClamp = 8.01773357391357422f;
 #else
-  constexpr bool kUsesFma = is_scalar<T>::value && scalar_madd_uses_fma<T>::value;
-  constexpr float kClamp = kUsesFma ? 8.01773357391357422f : 7.90738964080810547f;
+  constexpr float kClamp = is_scalar<T>::value ? 8.01773357391357422f : 7.90738964080810547f;
 #endif
   const T plus_clamp = pset1<T>(kClamp);
   const T minus_clamp = pset1<T>(-kClamp);
@@ -674,7 +687,7 @@ EIGEN_DEFINE_FUNCTION_ALLOWING_MULTIPLE_DEFINITIONS T ptanh_float(const T& a_x) 
   p = pmadd(x3, p, x);
 
   // Divide the numerator by the denominator.
-  return pdiv(p, q);
+  return ptanh_saturate(a_x, pdiv(p, q), plus_clamp, bool_constant<is_scalar<T>::value>());
 }
 
 #else
@@ -743,8 +756,7 @@ EIGEN_DEFINE_FUNCTION_ALLOWING_MULTIPLE_DEFINITIONS T ptanh_double(const T& a_x)
 #ifdef EIGEN_VECTORIZE_FMA
   constexpr double kClamp = 17.6610191624600077;
 #else
-  constexpr bool kUsesFma = is_scalar<T>::value && scalar_madd_uses_fma<T>::value;
-  constexpr double kClamp = kUsesFma ? 17.6610191624600077 : 17.714196154005176;
+  constexpr double kClamp = 17.714196154005176;
 #endif
   const T plus_clamp = pset1<T>(kClamp);
   const T minus_clamp = pset1<T>(-kClamp);
@@ -781,7 +793,7 @@ EIGEN_DEFINE_FUNCTION_ALLOWING_MULTIPLE_DEFINITIONS T ptanh_double(const T& a_x)
   p = pmadd(x3, p, x);
 
   // Divide the numerator by the denominator.
-  return pdiv(p, q);
+  return ptanh_saturate(a_x, pdiv(p, q), plus_clamp, bool_constant<is_scalar<T>::value>());
 }
 
 template <typename Packet>
