@@ -805,6 +805,26 @@ void test_circulant_mixed_scalar(Index n) {
   RVec xr = RVec::Random(n);
   CVec z = Cc * xr;
   VERIFY_IS_APPROX(z, (denseC * xr).eval());
+
+  // solve() promotes like the product: the solution of a real operator for a complex right-hand side is complex.
+  RVec cd = RVec::Random(n);
+  cd[0] += RealScalar(2 * n);
+  Circulant<RealScalar> Cd(cd);
+  CMat denseD = reference_circulant<RealScalar>(cd).template cast<Complex>();
+  CVec b = CVec::Random(n);
+  CVec xs = Cd.solve(b);
+  VERIFY_IS_APPROX((denseD * xs).eval(), b);
+  CMat B = CMat::Random(n, 3);
+  CMat Xs = Cd.solve(B);
+  VERIFY_IS_APPROX((denseD * Xs).eval(), B);
+
+  CVec cdc = CVec::Random(n);
+  cdc[0] += Complex(RealScalar(2 * n));
+  Circulant<Complex> Cdc(cdc);
+  CMat denseDc = reference_circulant<Complex>(cdc);
+  RVec br = RVec::Random(n);
+  CVec xc = Cdc.solve(br);
+  VERIFY_IS_APPROX((denseDc * xc).eval(), br.template cast<Complex>().eval());
 }
 
 template <typename RealScalar>
