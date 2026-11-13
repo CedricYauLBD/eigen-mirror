@@ -111,8 +111,15 @@ if(EIGEN_TEST_EXTERNAL_BLAS)
 endif()
 
 # configure blas/lapack (use Eigen's ones)
-set(EIGEN_BLAS_LIBRARIES eigen_blas)
-set(EIGEN_LAPACK_LIBRARIES eigen_lapack)
+# Without EIGEN_BUILD_SHARED_LIBS only the static libraries exist.  blas/ and lapack/ are added
+# after this directory, so their targets cannot be tested for here.
+if(EIGEN_BUILD_SHARED_LIBS)
+  set(EIGEN_BLAS_LIBRARIES eigen_blas)
+  set(EIGEN_LAPACK_LIBRARIES eigen_lapack)
+else()
+  set(EIGEN_BLAS_LIBRARIES eigen_blas_static)
+  set(EIGEN_LAPACK_LIBRARIES eigen_lapack_static)
+endif()
 
 set(EIGEN_TEST_MATRIX_DIR "" CACHE STRING "Enable testing of realword sparse matrices contained in the specified path")
 if(EIGEN_TEST_MATRIX_DIR)

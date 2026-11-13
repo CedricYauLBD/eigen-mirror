@@ -93,9 +93,13 @@ option(EIGEN_LEAVE_TEST_IN_ALL_TARGET "Leaves tests in the all target, needed by
 option(EIGEN_BUILD_BLAS "Toggles the building of the Eigen Blas library" ${PROJECT_IS_TOP_LEVEL})
 option(EIGEN_BUILD_LAPACK "Toggles the building of the included Eigen LAPACK library" ${PROJECT_IS_TOP_LEVEL})
 if (EIGEN_BUILD_BLAS OR EIGEN_BUILD_LAPACK)
-  # Determine if we should build shared libraries for BLAS/LAPACK on this platform.
-  if (NOT EIGEN_BUILD_SHARED_LIBS)
-    get_cmake_property(EIGEN_BUILD_SHARED_LIBS TARGET_SUPPORTS_SHARED_LIBS)
+  # Build shared libraries for BLAS/LAPACK where the platform supports them, unless the user
+  # chose otherwise.  The static libraries are always built.
+  get_cmake_property(eigen_platform_supports_shared TARGET_SUPPORTS_SHARED_LIBS)
+  if (NOT DEFINED EIGEN_BUILD_SHARED_LIBS)
+    set(EIGEN_BUILD_SHARED_LIBS ${eigen_platform_supports_shared})
+  elseif (NOT eigen_platform_supports_shared)
+    set(EIGEN_BUILD_SHARED_LIBS OFF)
   endif()
 endif()
 
