@@ -401,7 +401,7 @@ struct pminmax_propagates_nan<Packet2Xf> : bool_constant<true> {};
 
 template <>
 EIGEN_STRONG_INLINE Packet2Xf pmin<Packet2Xf>(const Packet2Xf& a, const Packet2Xf& b) {
-  Packet2Xf nans = __riscv_vfmv_v_f_f32m2((std::numeric_limits<float>::quiet_NaN)(), unpacket_traits<Packet2Xf>::size);
+  Packet2Xf nans = pnan<Packet2Xf>();
   PacketMask16 mask = __riscv_vmfeq_vv_f32m2_b16(a, a, unpacket_traits<Packet2Xf>::size);
   PacketMask16 mask2 = __riscv_vmfeq_vv_f32m2_b16(b, b, unpacket_traits<Packet2Xf>::size);
   mask = __riscv_vmand_mm_b16(mask, mask2, unpacket_traits<Packet2Xf>::size);
@@ -416,7 +416,7 @@ EIGEN_STRONG_INLINE Packet2Xf pmin<PropagateNumbers, Packet2Xf>(const Packet2Xf&
 
 template <>
 EIGEN_STRONG_INLINE Packet2Xf pmax<Packet2Xf>(const Packet2Xf& a, const Packet2Xf& b) {
-  Packet2Xf nans = __riscv_vfmv_v_f_f32m2((std::numeric_limits<float>::quiet_NaN)(), unpacket_traits<Packet2Xf>::size);
+  Packet2Xf nans = pnan<Packet2Xf>();
   PacketMask16 mask = __riscv_vmfeq_vv_f32m2_b16(a, a, unpacket_traits<Packet2Xf>::size);
   PacketMask16 mask2 = __riscv_vmfeq_vv_f32m2_b16(b, b, unpacket_traits<Packet2Xf>::size);
   mask = __riscv_vmand_mm_b16(mask, mask2, unpacket_traits<Packet2Xf>::size);
@@ -1058,7 +1058,7 @@ struct pminmax_propagates_nan<Packet2Xd> : bool_constant<true> {};
 
 template <>
 EIGEN_STRONG_INLINE Packet2Xd pmin<Packet2Xd>(const Packet2Xd& a, const Packet2Xd& b) {
-  Packet2Xd nans = __riscv_vfmv_v_f_f64m2((std::numeric_limits<double>::quiet_NaN)(), unpacket_traits<Packet2Xd>::size);
+  Packet2Xd nans = pnan<Packet2Xd>();
   PacketMask32 mask = __riscv_vmfeq_vv_f64m2_b32(a, a, unpacket_traits<Packet2Xd>::size);
   PacketMask32 mask2 = __riscv_vmfeq_vv_f64m2_b32(b, b, unpacket_traits<Packet2Xd>::size);
   mask = __riscv_vmand_mm_b32(mask, mask2, unpacket_traits<Packet2Xd>::size);
@@ -1073,7 +1073,7 @@ EIGEN_STRONG_INLINE Packet2Xd pmin<PropagateNumbers, Packet2Xd>(const Packet2Xd&
 
 template <>
 EIGEN_STRONG_INLINE Packet2Xd pmax<Packet2Xd>(const Packet2Xd& a, const Packet2Xd& b) {
-  Packet2Xd nans = __riscv_vfmv_v_f_f64m2((std::numeric_limits<double>::quiet_NaN)(), unpacket_traits<Packet2Xd>::size);
+  Packet2Xd nans = pnan<Packet2Xd>();
   PacketMask32 mask = __riscv_vmfeq_vv_f64m2_b32(a, a, unpacket_traits<Packet2Xd>::size);
   PacketMask32 mask2 = __riscv_vmfeq_vv_f64m2_b32(b, b, unpacket_traits<Packet2Xd>::size);
   mask = __riscv_vmand_mm_b32(mask, mask2, unpacket_traits<Packet2Xd>::size);

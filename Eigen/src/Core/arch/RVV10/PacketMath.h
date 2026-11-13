@@ -417,7 +417,7 @@ struct pminmax_propagates_nan<Packet1Xf> : bool_constant<true> {};
 
 template <>
 EIGEN_STRONG_INLINE Packet1Xf pmin<Packet1Xf>(const Packet1Xf& a, const Packet1Xf& b) {
-  Packet1Xf nans = __riscv_vfmv_v_f_f32m1((std::numeric_limits<float>::quiet_NaN)(), unpacket_traits<Packet1Xf>::size);
+  Packet1Xf nans = pnan<Packet1Xf>();
   PacketMask32 mask = __riscv_vmfeq_vv_f32m1_b32(a, a, unpacket_traits<Packet1Xf>::size);
   PacketMask32 mask2 = __riscv_vmfeq_vv_f32m1_b32(b, b, unpacket_traits<Packet1Xf>::size);
   mask = __riscv_vmand_mm_b32(mask, mask2, unpacket_traits<Packet1Xf>::size);
@@ -432,7 +432,7 @@ EIGEN_STRONG_INLINE Packet1Xf pmin<PropagateNumbers, Packet1Xf>(const Packet1Xf&
 
 template <>
 EIGEN_STRONG_INLINE Packet1Xf pmax<Packet1Xf>(const Packet1Xf& a, const Packet1Xf& b) {
-  Packet1Xf nans = __riscv_vfmv_v_f_f32m1((std::numeric_limits<float>::quiet_NaN)(), unpacket_traits<Packet1Xf>::size);
+  Packet1Xf nans = pnan<Packet1Xf>();
   PacketMask32 mask = __riscv_vmfeq_vv_f32m1_b32(a, a, unpacket_traits<Packet1Xf>::size);
   PacketMask32 mask2 = __riscv_vmfeq_vv_f32m1_b32(b, b, unpacket_traits<Packet1Xf>::size);
   mask = __riscv_vmand_mm_b32(mask, mask2, unpacket_traits<Packet1Xf>::size);
@@ -1125,7 +1125,7 @@ struct pminmax_propagates_nan<Packet1Xd> : bool_constant<true> {};
 
 template <>
 EIGEN_STRONG_INLINE Packet1Xd pmin<Packet1Xd>(const Packet1Xd& a, const Packet1Xd& b) {
-  Packet1Xd nans = __riscv_vfmv_v_f_f64m1((std::numeric_limits<double>::quiet_NaN)(), unpacket_traits<Packet1Xd>::size);
+  Packet1Xd nans = pnan<Packet1Xd>();
   PacketMask64 mask = __riscv_vmfeq_vv_f64m1_b64(a, a, unpacket_traits<Packet1Xd>::size);
   PacketMask64 mask2 = __riscv_vmfeq_vv_f64m1_b64(b, b, unpacket_traits<Packet1Xd>::size);
   mask = __riscv_vmand_mm_b64(mask, mask2, unpacket_traits<Packet1Xd>::size);
@@ -1140,7 +1140,7 @@ EIGEN_STRONG_INLINE Packet1Xd pmin<PropagateNumbers, Packet1Xd>(const Packet1Xd&
 
 template <>
 EIGEN_STRONG_INLINE Packet1Xd pmax<Packet1Xd>(const Packet1Xd& a, const Packet1Xd& b) {
-  Packet1Xd nans = __riscv_vfmv_v_f_f64m1((std::numeric_limits<double>::quiet_NaN)(), unpacket_traits<Packet1Xd>::size);
+  Packet1Xd nans = pnan<Packet1Xd>();
   PacketMask64 mask = __riscv_vmfeq_vv_f64m1_b64(a, a, unpacket_traits<Packet1Xd>::size);
   PacketMask64 mask2 = __riscv_vmfeq_vv_f64m1_b64(b, b, unpacket_traits<Packet1Xd>::size);
   mask = __riscv_vmand_mm_b64(mask, mask2, unpacket_traits<Packet1Xd>::size);
