@@ -377,9 +377,21 @@ struct TensorEvaluator<const TensorRef<Derived>, Device> {
 
   EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE const Dimensions& dimensions() const { return m_ref.dimensions(); }
 
+#ifdef EIGEN_USE_THREADS
+  template <typename EvalSubExprsCallback>
+  EIGEN_STRONG_INLINE void evalSubExprsIfNeededAsync(EvaluatorPointerType, EvalSubExprsCallback done) {
+    done(true);
+  }
+#endif  // EIGEN_USE_THREADS
+
   EIGEN_STRONG_INLINE bool evalSubExprsIfNeeded(EvaluatorPointerType) { return true; }
 
   EIGEN_STRONG_INLINE void cleanup() {}
+
+  // The cost of the evaluator behind the reference is not known here; charge one coefficient load.
+  EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE TensorOpCost costPerCoeff(bool /*vectorized*/) const {
+    return TensorOpCost(sizeof(CoeffReturnType), 0, 0);
+  }
 
   EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE CoeffReturnType coeff(Index index) const { return m_ref.coeff(index); }
 
