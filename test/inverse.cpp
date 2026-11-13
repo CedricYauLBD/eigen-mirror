@@ -125,6 +125,70 @@ void inverse(const MatrixType& m) {
   }
 }
 
+// Products with an inverse of a fixed-size complex matrix. GCC 15.1 and 15.2 with FMA miscompiled v * v.inverse() for
+// Matrix2cf at -O2 and -O3 (and v * w, w = v.inverse(), for Matrix3cf at -O3): the inverse's complex products,
+// broadcast by pset1<Packet2cf> in the lazy product, came out as garbage (see EIGEN_GCC15_SLP_BUG). Each case is a
+// function of its own, as in user code: the miscompile needs the inverse and the product inlined together.
+template <int Case, typename MatrixType, typename VectorType>
+EIGEN_DONT_INLINE MatrixType inverse_product_case(const MatrixType& v, const MatrixType& b, const VectorType& d) {
+  switch (Case) {
+    case 0:
+      return v * v.inverse();
+    case 1:
+      return v.inverse() * v;
+    case 2:
+      return v.lazyProduct(v.inverse());
+    case 3:
+      return v * v.inverse().eval();
+    case 4: {
+      const MatrixType w = v.inverse();
+      return v * w;
+    }
+    case 5: {
+      const MatrixType w = v.inverse();
+      return w * v;
+    }
+    case 6:
+      return b * v.inverse();
+    default:
+      return v * d.asDiagonal() * v.inverse();
+  }
+}
+
+template <typename MatrixType>
+void inverse_product_fixed_size() {
+  using Scalar = typename MatrixType::Scalar;
+  using RealScalar = typename NumTraits<Scalar>::Real;
+  constexpr Index n = MatrixType::RowsAtCompileTime;
+  const MatrixType identity = MatrixType::Identity();
+  // ||R||_2 <= sqrt(2) n for |re|, |im| <= 1, so 2 n I + R is well conditioned.
+  const MatrixType v = MatrixType::Random() + RealScalar(2 * n) * identity;
+  const MatrixType b = MatrixType::Random();
+  const Matrix<Scalar, n, 1> d = Matrix<Scalar, n, 1>::Random();
+  const RealScalar cond = v.norm() * v.partialPivLu().inverse().norm();
+  const RealScalar tol = RealScalar(4 * n) * NumTraits<RealScalar>::epsilon() * cond;
+  const auto max_abs_diff = [](const MatrixType& x, const MatrixType& y) { return (x - y).cwiseAbs().maxCoeff(); };
+  // x * v by scalar loops, so the check does not go through the product evaluator under test.
+  const auto ref_times_v = [&v](const MatrixType& x) {
+    MatrixType r = MatrixType::Zero();
+    for (Index i = 0; i < n; ++i)
+      for (Index j = 0; j < n; ++j)
+        for (Index k = 0; k < n; ++k) r.coeffRef(i, j) += x.coeff(i, k) * v.coeff(k, j);
+    return r;
+  };
+
+  VERIFY(max_abs_diff(inverse_product_case<0>(v, b, d), identity) <= tol);
+  VERIFY(max_abs_diff(inverse_product_case<1>(v, b, d), identity) <= tol);
+  VERIFY(max_abs_diff(inverse_product_case<2>(v, b, d), identity) <= tol);
+  VERIFY(max_abs_diff(inverse_product_case<3>(v, b, d), identity) <= tol);
+  VERIFY(max_abs_diff(inverse_product_case<4>(v, b, d), identity) <= tol);
+  VERIFY(max_abs_diff(inverse_product_case<5>(v, b, d), identity) <= tol);
+  // (b v^-1) v = b and (v diag(d) v^-1) v = v diag(d)
+  VERIFY(max_abs_diff(ref_times_v(inverse_product_case<6>(v, b, d)), b) <= tol * b.norm());
+  const MatrixType vd = v * d.asDiagonal();
+  VERIFY(max_abs_diff(ref_times_v(inverse_product_case<7>(v, b, d)), vd) <= tol * vd.norm());
+}
+
 template <typename Scalar>
 void inverse_zerosized() {
   Matrix<Scalar, Dynamic, Dynamic> A(0, 0);
@@ -164,5 +228,13 @@ EIGEN_DECLARE_TEST(inverse) {
     CALL_SUBTEST_7(inverse(Matrix<double, 4, 4, DontAlign>()));
 
     CALL_SUBTEST_8(inverse(Matrix4cd()));
+
+    CALL_SUBTEST_9(inverse_product_fixed_size<Matrix2cf>());
+    CALL_SUBTEST_9(inverse_product_fixed_size<Matrix3cf>());
+    CALL_SUBTEST_9(inverse_product_fixed_size<Matrix4cf>());
+    CALL_SUBTEST_9((inverse_product_fixed_size<Matrix<std::complex<float>, 2, 2, RowMajor>>()));
+    CALL_SUBTEST_9(inverse_product_fixed_size<Matrix2cd>());
+    CALL_SUBTEST_9(inverse_product_fixed_size<Matrix3cd>());
+    CALL_SUBTEST_9(inverse_product_fixed_size<Matrix4cd>());
   }
 }

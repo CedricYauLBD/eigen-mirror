@@ -80,6 +80,19 @@ struct eigen_fill_impl<Xpr, /*use_fill*/ true> {
   using Scalar = typename Xpr::Scalar;
   static EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE void run(Xpr& dst, const Scalar& val) {
     const Scalar val_copy = val;
+#if EIGEN_GCC15_SLP_BUG
+    // GCC 15.1/15.2 SLP-vectorize the stores of fill_n into wrong code when val is a complex product computed in the
+    // same function and the size is visible, e.g. Vector2cd::Constant(a * b); see EIGEN_GCC15_SLP_BUG. Copying val as
+    // one unit of sizeof(Scalar) bytes stores VIEW_CONVERT<uint64_t or uint128_t>(COMPLEX_EXPR <re, im>), so no group
+    // of float lanes {re, im, re, im} forms.
+    EIGEN_IF_CONSTEXPR (NumTraits<Scalar>::IsComplex) {
+      EIGEN_USING_STD(memcpy);
+      Scalar* data = dst.data();
+      const Index size = dst.size();
+      for (Index i = 0; i < size; ++i) memcpy(static_cast<void*>(data + i), &val_copy, sizeof(Scalar));
+      return;
+    }
+#endif
     using std::fill_n;
     fill_n(dst.data(), dst.size(), val_copy);
   }
