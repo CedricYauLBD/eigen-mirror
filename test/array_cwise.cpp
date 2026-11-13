@@ -232,6 +232,25 @@ void unary_ops_test() {
   */
 }
 
+// log2 of half and bfloat16 is exact at powers of two, subnormal ones included, on the scalar path (size 1) and in the
+// packet body and tail.
+template <typename Scalar>
+void log2_narrow_test() {
+#if EIGEN_ARCH_ARM  // 32-bit ARM flushes subnormals.
+  const int min_exp = NumTraits<Scalar>::min_exponent() - 1;
+#else
+  const int min_exp = NumTraits<Scalar>::min_exponent() - NumTraits<Scalar>::digits();  // 2^-24 and 2^-133
+#endif
+  const int max_exp = NumTraits<Scalar>::max_exponent() - 1;
+  for (const Index size : {Index(1), 2 * Index(internal::packet_traits<Scalar>::size) + 1}) {
+    for (int e = min_exp; e <= max_exp; ++e) {
+      const ArrayX<Scalar> x = ArrayX<Scalar>::Constant(size, Scalar(std::ldexp(1.0f, e)));
+      const ArrayX<Scalar> y = x.log2();
+      for (Index i = 0; i < size; ++i) VERIFY_IS_EQUAL(float(y(i)), float(e));
+    }
+  }
+}
+
 template <typename Scalar>
 void ldexp_test() {
   const std::vector<Scalar> vals = special_values<Scalar>();
@@ -1859,6 +1878,8 @@ EIGEN_DECLARE_TEST(array_cwise) {
     CALL_SUBTEST_35(ldexp_test<double>());
     CALL_SUBTEST_36(ldexp_test<Eigen::half>());
     CALL_SUBTEST_37(ldexp_test<Eigen::bfloat16>());
+    CALL_SUBTEST_36(log2_narrow_test<Eigen::half>());
+    CALL_SUBTEST_37(log2_narrow_test<Eigen::bfloat16>());
   }
   for (int i = 0; i < g_repeat; i++) {
     CALL_SUBTEST_23(typed_logicals_test(ArrayX<int>(internal::random<int>(1, EIGEN_TEST_MAX_SIZE))));
