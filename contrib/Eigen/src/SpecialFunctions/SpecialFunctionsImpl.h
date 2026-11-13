@@ -1814,15 +1814,15 @@ EIGEN_DEVICE_FUNC static EIGEN_STRONG_INLINE bool betainc_use_stirling_ratio(Sca
  * and the remaining term is -lgamma(m). */
 template <typename Scalar>
 EIGEN_DEVICE_FUNC static EIGEN_STRONG_INLINE Scalar betainc_stirling_ratio(Scalar a, Scalar b) {
-  const Scalar big = numext::maxi(a, b);
-  const Scalar small = numext::mini(a, b);
-  const Scalar sum = big + small;
+  const Scalar M = numext::maxi(a, b);
+  const Scalar m = numext::mini(a, b);
+  const Scalar sum = M + m;
   const Scalar sum_inv = Scalar(1) / sum;
-  const Scalar big_inv = Scalar(1) / big;
-  Scalar d = small * numext::log(big) + (sum - Scalar(0.5)) * numext::log1p(small / big) - small;
-  d += (Scalar(1) / Scalar(12)) * (sum_inv - big_inv) -
-       (Scalar(1) / Scalar(360)) * (sum_inv * sum_inv * sum_inv - big_inv * big_inv * big_inv);
-  return d - lgamma_impl<Scalar>::run(small);
+  const Scalar M_inv = Scalar(1) / M;
+  Scalar d = m * numext::log(M) + (sum - Scalar(0.5)) * numext::log1p(m / M) - m;
+  d += (Scalar(1) / Scalar(12)) * (sum_inv - M_inv) -
+       (Scalar(1) / Scalar(360)) * (sum_inv * sum_inv * sum_inv - M_inv * M_inv * M_inv);
+  return d - lgamma_impl<Scalar>::run(m);
 }
 
 /* Helper functions depending on the Scalar type */
