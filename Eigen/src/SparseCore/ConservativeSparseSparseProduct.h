@@ -18,9 +18,107 @@ namespace Eigen {
 
 namespace internal {
 
-// The terms lhs(:, k) * rhs(k, j) of vector j of a product, for sparse_accumulator. lo and hi hold the index range of
-// each lhs vector that rhs(:, j) refers to. The members are always inlined: left to itself, GCC 14 called the
-// constructor of Term once per term in a unit with several products, which cost 15-45% on vectors of one or two terms.
+// The outer index and inner sizes of an expression with compressed access, null without it. A SparseVector has
+// compressed access and no outer index: vectorSize() is then the size of its one inner vector, and -1 otherwise.
+template <typename Xpr, bool = has_compressed_access<Xpr>::value>
+struct sparse_outer_pointers {
+  using StorageIndex = typename Xpr::StorageIndex;
+  static const StorageIndex* outer(const Xpr&) { return nullptr; }
+  static const StorageIndex* innerNonZeros(const Xpr&) { return nullptr; }
+  static Index vectorSize(const Xpr&) { return -1; }
+};
+template <typename Xpr>
+struct sparse_outer_pointers<Xpr, true> {
+  using StorageIndex = typename Xpr::StorageIndex;
+  static const StorageIndex* outer(const Xpr& xpr) { return xpr.outerIndexPtr(); }
+  static const StorageIndex* innerNonZeros(const Xpr& xpr) { return xpr.innerNonZeroPtr(); }
+  static Index vectorSize(const Xpr& xpr) {
+    return xpr.outerIndexPtr() == nullptr && xpr.outerSize() == 1 ? Index(xpr.nonZeros()) : -1;
+  }
+};
+
+// The size and the index range of each inner vector of the lhs of a product, in arrays the caller owns. A size is
+// read from the outer index, or from a SparseVector, without a scan; only the direct and appended vectors ask for a
+// range. A vector is scanned when first needed, so that few rhs entries do not cost a pass over the lhs, unless
+// scanAll: the first need then scans all of them in storage order, which beats first uses in rhs order.
+template <typename Lhs, typename StorageIndex>
+class sparse_product_lhs_stats {
+  using LhsIterator = typename evaluator<Lhs>::InnerIterator;
+  using Pointers = sparse_outer_pointers<Lhs>;
+
+ public:
+  // known has outerSize entries, or none if scanAll.
+  sparse_product_lhs_stats(const Lhs& lhs, const evaluator<Lhs>& lhsEval, bool scanAll, Index* count, StorageIndex* lo,
+                           StorageIndex* hi, bool* known)
+      : m_lhsEval(lhsEval),
+        m_outer(Pointers::outer(lhs)),
+        m_innerNonZeros(Pointers::innerNonZeros(lhs)),
+        m_vectorSize(Pointers::vectorSize(lhs)),
+        m_outerSize(lhs.outerSize()),
+        m_scanAll(scanAll),
+        m_count(count),
+        m_lo(lo),
+        m_hi(hi),
+        m_known(known) {
+    if (!scanAll) std::fill_n(known, m_outerSize, false);
+  }
+
+  EIGEN_ALWAYS_INLINE Index count(Index k) {
+    if (m_outer != nullptr)
+      return m_innerNonZeros != nullptr ? Index(m_innerNonZeros[k]) : Index(m_outer[k + 1]) - Index(m_outer[k]);
+    if (m_vectorSize >= 0) return m_vectorSize;
+    scan(k);
+    return m_count[k];
+  }
+
+  // Widens [lo, hi] to hold the indices of vector k.
+  EIGEN_ALWAYS_INLINE void range(Index k, StorageIndex& lo, StorageIndex& hi) {
+    scan(k);
+    // An empty vector has lo = highest() and hi = 0, which change nothing.
+    lo = numext::mini(lo, m_lo[k]);
+    hi = numext::maxi(hi, m_hi[k]);
+  }
+
+ private:
+  EIGEN_ALWAYS_INLINE void scan(Index k) {
+    if (m_allKnown || (!m_scanAll && m_known[k])) return;
+    scanMissing(k);
+  }
+  EIGEN_DONT_INLINE void scanMissing(Index k) {
+    Index begin = m_scanAll ? 0 : k, end = m_scanAll ? m_outerSize : k + 1;
+    for (Index v = begin; v < end; ++v) {
+      Index count = 0;
+      StorageIndex lo = NumTraits<StorageIndex>::highest(), hi = 0;
+      for (LhsIterator lhsIt(m_lhsEval, v); lhsIt; ++lhsIt, ++count) {
+        lo = numext::mini(lo, StorageIndex(lhsIt.index()));
+        hi = numext::maxi(hi, StorageIndex(lhsIt.index()));
+      }
+      m_count[v] = count;
+      m_lo[v] = lo;
+      m_hi[v] = hi;
+    }
+    if (m_scanAll)
+      m_allKnown = true;
+    else
+      m_known[k] = true;
+  }
+
+  const evaluator<Lhs>& m_lhsEval;
+  const typename Pointers::StorageIndex* m_outer;
+  const typename Pointers::StorageIndex* m_innerNonZeros;
+  Index m_vectorSize;
+  Index m_outerSize;
+  bool m_scanAll;
+  bool m_allKnown = false;
+  Index* m_count;
+  StorageIndex* m_lo;
+  StorageIndex* m_hi;
+  bool* m_known;
+};
+
+// The terms lhs(:, k) * rhs(k, j) of vector j of a product, for sparse_accumulator. The members are always inlined:
+// left to itself, GCC 14 called the constructor of Term once per term in a unit with several products, which cost
+// 15-45% on vectors of one or two terms.
 template <typename Lhs, typename Rhs, typename ResScalar, typename StorageIndex, bool ReverseProduct>
 class sparse_product_terms {
   using LhsEvaluator = evaluator<Lhs>;
@@ -50,19 +148,16 @@ class sparse_product_terms {
     RhsScalar m_y;
   };
 
+  using LhsStats = sparse_product_lhs_stats<Lhs, StorageIndex>;
+
   sparse_product_terms(const LhsEvaluator& lhsEval, const RhsEvaluator& rhsEval, Index j, Index terms, Index entries,
-                       const StorageIndex* lo, const StorageIndex* hi)
-      : m_lhsEval(lhsEval), m_rhsEval(rhsEval), m_j(j), m_terms(terms), m_entries(entries), m_lo(lo), m_hi(hi) {}
+                       LhsStats& lhsStats)
+      : m_lhsEval(lhsEval), m_rhsEval(rhsEval), m_j(j), m_terms(terms), m_entries(entries), m_lhsStats(lhsStats) {}
 
   Index count() const { return m_terms; }
   Index maxEntries() const { return m_entries; }
   void range(StorageIndex& lo, StorageIndex& hi) const {
-    for (RhsIterator rhsIt(m_rhsEval, m_j); rhsIt; ++rhsIt) {
-      Index k = rhsIt.index();
-      // An empty lhs vector has lo = highest() and hi = 0, which change nothing.
-      lo = numext::mini(lo, m_lo[k]);
-      hi = numext::maxi(hi, m_hi[k]);
-    }
+    for (RhsIterator rhsIt(m_rhsEval, m_j); rhsIt; ++rhsIt) m_lhsStats.range(rhsIt.index(), lo, hi);
   }
   EIGEN_ALWAYS_INLINE Term term(Index t) const {
     RhsIterator rhsIt(m_rhsEval, m_j);
@@ -78,8 +173,7 @@ class sparse_product_terms {
   const LhsEvaluator& m_lhsEval;
   const RhsEvaluator& m_rhsEval;
   Index m_j, m_terms, m_entries;
-  const StorageIndex* m_lo;
-  const StorageIndex* m_hi;
+  LhsStats& m_lhsStats;
 };
 
 // Computes res = lhs * rhs with sorted inner vectors and no transpose, without the entries that keep rejects. A
@@ -90,7 +184,6 @@ static void conservative_sparse_sparse_product_sorted_impl(const Lhs& lhs, const
                                                            const Keep& keep = Keep()) {
   using ResScalar = typename remove_all_t<ResultType>::Scalar;
   using StorageIndex = typename remove_all_t<ResultType>::StorageIndex;
-  using LhsIterator = typename evaluator<Lhs>::InnerIterator;
   using RhsIterator = typename evaluator<Rhs>::InnerIterator;
   using Terms = sparse_product_terms<Lhs, Rhs, ResScalar, StorageIndex, ReverseProduct>;
 
@@ -103,35 +196,13 @@ static void conservative_sparse_sparse_product_sorted_impl(const Lhs& lhs, const
   evaluator<Lhs> lhsEval(lhs);
   evaluator<Rhs> rhsEval(rhs);
 
-  // The size and the index range of each lhs vector bound those of each result vector. A product with few rhs
-  // entries must not cost a pass over the whole lhs, so they are found when a vector is first used, unless the rhs
-  // has an entry per lhs vector or more: then one pass in storage order is faster than first uses in rhs order.
   ei_declare_aligned_stack_constructed_variable(Index, lhsCount, mid, 0);
   ei_declare_aligned_stack_constructed_variable(StorageIndex, lhsLo, mid, 0);
   ei_declare_aligned_stack_constructed_variable(StorageIndex, lhsHi, mid, 0);
+  // With an rhs entry per lhs vector or more, a need for the lhs statistics is a need for all of them.
   const bool scanAll = rhsEval.nonZerosEstimate() >= mid;
   ei_declare_aligned_stack_constructed_variable(bool, lhsKnown, scanAll ? 0 : mid, 0);
-  if (!scanAll) std::fill_n(lhsKnown, mid, false);
-  auto scan_lhs = [&](Index k) {
-    Index count = 0;
-    StorageIndex lo = NumTraits<StorageIndex>::highest(), hi = 0;
-    for (LhsIterator lhsIt(lhsEval, k); lhsIt; ++lhsIt, ++count) {
-      lo = numext::mini(lo, StorageIndex(lhsIt.index()));
-      hi = numext::maxi(hi, StorageIndex(lhsIt.index()));
-    }
-    lhsCount[k] = count;
-    lhsLo[k] = lo;
-    lhsHi[k] = hi;
-  };
-  if (scanAll)
-    for (Index k = 0; k < mid; ++k) scan_lhs(k);
-  auto lhs_count = [&](Index k) {
-    if (!scanAll && !lhsKnown[k]) {
-      scan_lhs(k);
-      lhsKnown[k] = true;
-    }
-    return lhsCount[k];
-  };
+  sparse_product_lhs_stats<Lhs, StorageIndex> lhsStats(lhs, lhsEval, scanAll, lhsCount, lhsLo, lhsHi, lhsKnown);
 
   res.setZero();
   res.data().reserve(lhsEval.nonZerosEstimate() + rhsEval.nonZerosEstimate());
@@ -140,8 +211,8 @@ static void conservative_sparse_sparse_product_sorted_impl(const Lhs& lhs, const
   for (Index j = 0; j < cols; ++j) {
     outer[j] = convert_index<StorageIndex>(acc.size());
     Index entries = 0, terms = 0;
-    for (RhsIterator rhsIt(rhsEval, j); rhsIt; ++rhsIt, ++terms) entries += lhs_count(rhsIt.index());
-    acc.append(Terms(lhsEval, rhsEval, j, terms, entries, lhsLo, lhsHi), keep);
+    for (RhsIterator rhsIt(rhsEval, j); rhsIt; ++rhsIt, ++terms) entries += lhsStats.count(rhsIt.index());
+    acc.append(Terms(lhsEval, rhsEval, j, terms, entries, lhsStats), keep);
   }
   outer[cols] = convert_index<StorageIndex>(acc.size());
   acc.finish();
