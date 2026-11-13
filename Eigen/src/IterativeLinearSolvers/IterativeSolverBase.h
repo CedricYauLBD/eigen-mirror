@@ -251,7 +251,7 @@ class IterativeSolverBase : public SparseSolverBase<Derived> {
    * documents instead; LeastSquaresConjugateGradient bounds the normal-equation residual |A'(Ax-b)|/|A'b|, and
    * LSMR bounds |A'(Ax-b)|/(|A| |Ax-b|).
    * The default value is the machine precision given by NumTraits<Scalar>::epsilon(), unless the solver documents
-   * another; IDRS derives its default from the size of the matrix.
+   * another; IDRS and MINRES derive their default from the size of the matrix.
    * A tolerance of 0 asks for iterating until the residual vanishes or maxIterations() is reached. The solvers stop
    * earlier when it underflows or the Krylov space is exhausted, and return a finite solution.
    */
