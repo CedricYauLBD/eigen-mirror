@@ -1354,13 +1354,13 @@ struct zeta_impl_series {
 
 template <>
 struct zeta_impl_series<float> {
-  EIGEN_DEVICE_FUNC static EIGEN_STRONG_INLINE bool run(float& a, float& b, float& s, const float x,
-                                                        const float machep) {
+  EIGEN_DEVICE_FUNC static EIGEN_STRONG_INLINE bool run(float& a, float& b, float& s, const float x, const float machep,
+                                                        const float inv_scale) {
     int i = 0;
     while ((i < 9) || (a <= 9.0f)) {
       i += 1;
       a += 1.0f;
-      b = numext::pow(a, -x);
+      b = numext::pow(a * inv_scale, -x);
       s += b;
       if (numext::abs(b / s) < machep) return true;
     }
@@ -1373,12 +1373,12 @@ struct zeta_impl_series<float> {
 template <>
 struct zeta_impl_series<double> {
   EIGEN_DEVICE_FUNC static EIGEN_STRONG_INLINE bool run(double& a, double& b, double& s, const double x,
-                                                        const double machep) {
+                                                        const double machep, const double inv_scale) {
     int i = 0;
     while ((i < 9) || (a <= 9.0)) {
       i += 1;
       a += 1.0;
-      b = numext::pow(a, -x);
+      b = numext::pow(a * inv_scale, -x);
       s += b;
       if (numext::abs(b / s) < machep) return true;
     }
@@ -1390,8 +1390,11 @@ struct zeta_impl_series<double> {
 
 template <typename Scalar>
 struct zeta_impl {
-  /* Euler-Maclaurin summation of the Hurwitz zeta function (see run()), for x > 1 and q > 0 or q < 0 non-integer. */
-  EIGEN_DEVICE_FUNC static Scalar sum(Scalar x, Scalar q) {
+  /* Euler-Maclaurin summation of the Hurwitz zeta function (see run()), for x > 1 and q > 0 or q < 0 non-integer, and
+   * multiplied by scale^x where inv_scale = 1 / scale. Every term (k + q)^-x is computed as (inv_scale (k + q))^-x,
+   * which does not underflow when scale is of the size of q, so scale = q gives a result of order 1 where zeta(x, q)
+   * itself underflows. */
+  EIGEN_DEVICE_FUNC static Scalar sum(Scalar x, Scalar q, Scalar inv_scale) {
     int i;
     Scalar a, b, k, s, t, w;
 
@@ -1415,11 +1418,11 @@ struct zeta_impl {
 
     /* Permit negative q but continue sum until n+q > +9 . For q < -kZetaMaxNegativeQ, run() uses the reflection
      * below instead, so this runs for at most kZetaMaxNegativeQ + 10 iterations. */
-    s = numext::pow(q, -x);
+    s = numext::pow(q * inv_scale, -x);
     a = q;
     b = zero;
     // Run the summation in a helper function that is specific to the floating precision
-    if (zeta_impl_series<Scalar>::run(a, b, s, x, machep)) {
+    if (zeta_impl_series<Scalar>::run(a, b, s, x, machep, inv_scale)) {
       return s;
     }
 
@@ -1550,10 +1553,10 @@ struct zeta_impl {
     if (q < -Scalar(kZetaMaxNegativeQ)) {
       const Scalar f = q - numext::floor(q);
       const Scalar x_is_even = (numext::rint(half * x) == half * x) ? one : -one;
-      return (sum(x, f) + x_is_even * sum(x, one - f)) - x_is_even * sum(x, one - q);
+      return (sum(x, f, one) + x_is_even * sum(x, one - f, one)) - x_is_even * sum(x, one - q, one);
     }
 
-    return sum(x, q);
+    return sum(x, q, one);
   }
 };
 
@@ -1579,7 +1582,27 @@ struct polygamma_impl {
     // Use the same implementation as scipy
     else {
       Scalar factorial = numext::exp(lgamma_impl<Scalar>::run(nplus));
-      return numext::pow(-one, nplus) * factorial * zeta_impl<Scalar>::run(nplus, x);
+      Scalar zeta = zeta_impl<Scalar>::run(nplus, x);
+      // The limit at +inf is 0, with the sign of (-1)^(n+1); n! zeta(n + 1, inf) would be NaN for n! = inf.
+      if (x == NumTraits<Scalar>::infinity()) return numext::pow(-one, nplus) * zero;
+      // 1 / x must be a normal number, also when subnormals are flushed to zero: for x <= max / 16 it is >= 16 / max,
+      // which is above the smallest normal number (4.7e-38 vs 1.2e-38 in float, 8.9e-308 vs 2.2e-308 in double).
+      if (x > zero && x <= (numext::numeric_limits<Scalar>::max)() / Scalar(16) &&
+          ((numext::isinf)(factorial) || !(zeta >= (numext::numeric_limits<Scalar>::min)()))) {
+        // n! overflows, or zeta(n + 1, x) ~ x^-(n+1) underflows, while n! zeta(n + 1, x) can be representable (a
+        // product of inf and 0 is NaN). With Z = x^(n+1) zeta(n + 1, x), which is >= 1 and ~ x / n for x >> n, form
+        // the product in the log domain:
+        //   n! zeta(n + 1, x) = exp(lgamma(n + 1) - (n + 1) log x + log Z).
+        const Scalar log_z = numext::log(zeta_impl<Scalar>::sum(nplus, x, one / x));
+        if ((numext::isfinite)(log_z)) {
+          return numext::pow(-one, nplus) *
+                 numext::exp(lgamma_impl<Scalar>::run(nplus) - nplus * numext::log(x) + log_z);
+        }
+      }
+      // x < 0: zeta(n + 1, x) = 0 where the sums cancel exactly (x = -N - 1/2) and the true value, n! zeta(n + 1, 1 -
+      // x) with 1 - x > 1000, underflows; likewise for x > max / 16, where n! x^-n underflows. inf * 0 would be NaN.
+      if ((numext::isinf)(factorial) && zeta == zero) return numext::pow(-one, nplus) * zero;
+      return numext::pow(-one, nplus) * factorial * zeta;
     }
   }
 };

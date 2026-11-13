@@ -10,6 +10,7 @@
 
 #include <limits.h>
 #include "main.h"
+#include "fp_control.h"
 #include "../Eigen/SpecialFunctions"
 
 // Workaround to allow "implicit" conversions from double to Scalar via comma-initialization.
@@ -588,6 +589,86 @@ void test_betainc_large_b() {
   }
 }
 
+// polygamma(n, x) = (-1)^(n+1) n! zeta(n + 1, x) for n! overflowing, or zeta(n + 1, x) ~ x^-(n+1) underflowing, where
+// the product is representable: these used to return NaN, inf or 0. References: long double sum of (1 + k / x)^-(n+1)
+// combined with n! in the log domain.
+template <typename Scalar>
+void test_polygamma_large_order() {
+  struct Case {
+    double n, x, ref;
+  };
+  std::vector<Case> cases;
+  if (sizeof(Scalar) == 4) {
+    cases = {{40, 50, -3.261035087314967e-22},  {35, 100, 3.499912459241533e-32},   {30, 30, -6.8043629582669342e-14},
+             {34, 50, -2.0576445694243446e-21}, {20, 171, -2.8206264083990782e-28}, {36, 10, -38339.459700163335}};
+  } else {
+    cases = {{180, 100, -2.40802169974166e-33},
+             {171, 171, 1.6510804421365765e-75},
+             {300, 100, -3222042538708.5125},
+             {200, 30, -9.9109053899111735e+77},
+             {170, 100, -8.8841193781856056e-36}};
+  }
+  // The relative error is that of the exponent lgamma(n + 1) - (n + 1) log x, about |exponent| eps. Largest measured:
+  // 40 eps (float), 620 eps (double); the margin is a factor of 10 and 8.
+  const Scalar tol = Scalar(sizeof(Scalar) == 4 ? 400 : 5000) * NumTraits<Scalar>::epsilon();
+  Array<Scalar, Dynamic, 1> n(cases.size()), x(cases.size());
+  for (size_t i = 0; i < cases.size(); ++i) {
+    n(i) = Scalar(cases[i].n);
+    x(i) = Scalar(cases[i].x);
+  }
+  const Array<Scalar, Dynamic, 1> res = polygamma(n, x);
+  for (size_t i = 0; i < cases.size(); ++i) {
+    const Scalar ref = Scalar(cases[i].ref);
+    const Scalar v = numext::polygamma(n(i), x(i));
+    VERIFY(numext::abs(v - ref) <= tol * numext::abs(ref));
+    VERIFY(numext::abs(res(i) - ref) <= tol * numext::abs(ref));
+  }
+  // Subnormal x: 1 / x overflows and n! zeta(n + 1, x) is infinite; it was never 0.
+  VERIFY_IS_EQUAL(numext::polygamma(Scalar(sizeof(Scalar) == 4 ? 35 : 171), std::numeric_limits<Scalar>::denorm_min()),
+                  std::numeric_limits<Scalar>::infinity());
+  // x < 0 where zeta(n + 1, x) cancels to exactly 0 and n! overflows: inf * 0 is not the answer. The true value
+  // (-1)^(n+1) n! zeta(n + 1, 1 - x) underflows to a zero with the sign of (-1)^(n+1), here -0 for n = 200. (In float
+  // zeta(201, 1/2) overflows and the result is NaN.)
+  if (sizeof(Scalar) == 8) {
+    const Scalar v = numext::polygamma(Scalar(200), Scalar(-1e6 - 0.5));
+    VERIFY_IS_EQUAL(v, Scalar(0));
+    VERIFY((std::signbit)(v));
+  }
+  // Representable in double but not in float.
+  if (sizeof(Scalar) == 4) {
+    VERIFY_IS_EQUAL(numext::polygamma(Scalar(170), Scalar(2)), -std::numeric_limits<Scalar>::infinity());
+  }
+}
+
+// polygamma(n, x) = (-1)^(n+1) n! zeta(n + 1, x) at x = +inf (limit 0, with the sign of (-1)^(n+1); inf * 0 was NaN)
+// and near the largest number, where 1 / x is subnormal or, with flush to zero, 0, and the true value underflows to 0
+// or a subnormal number with the sign of (-1)^(n+1). Scalar and array, with and without flush to zero.
+template <typename Scalar>
+void test_polygamma_extreme_x() {
+  const Scalar inf = std::numeric_limits<Scalar>::infinity();
+  const Scalar largest = (std::numeric_limits<Scalar>::max)();
+  const Scalar smallest_normal = (std::numeric_limits<Scalar>::min)();
+  forEachFlushToZeroMode([&](FlushToZeroMode) {
+    const int orders[] = {1, 2, 3, 5, 35, 171};
+    const Scalar xs[] = {inf, largest, largest / Scalar(2)};
+    for (int n : orders) {
+      Array<Scalar, Dynamic, 1> nv = Array<Scalar, Dynamic, 1>::Constant(3, Scalar(n));
+      Array<Scalar, Dynamic, 1> xv(3);
+      xv << xs[0], xs[1], xs[2];
+      const Array<Scalar, Dynamic, 1> av = polygamma(nv, xv);
+      for (int k = 0; k < 3; ++k) {
+        for (int path = 0; path < 2; ++path) {
+          const Scalar v = path ? av(k) : numext::polygamma(Scalar(n), xs[k]);
+          VERIFY((numext::isfinite)(v));
+          VERIFY(numext::abs(v) <= smallest_normal);
+          if (k == 0 || v != Scalar(0)) VERIFY((std::signbit)(v) == (n % 2 == 0));
+          if (k == 0) VERIFY_IS_EQUAL(v, Scalar(0));
+        }
+      }
+    }
+  });
+}
+
 // zeta(x, q) for integer x and large negative non-integer q used to sum about |q| terms (seconds for |q| = 1e9, years
 // for 1e15). For q = -N - 1/2 and even x, zeta(x, q) = 2 zeta(x, 1/2) - zeta(x, N + 3/2), with
 // zeta(2, 1/2) = pi^2 / 2, zeta(4, 1/2) = pi^4 / 6 and zeta(x, z) = z^(1-x) / (x - 1) + z^-x / 2 + x z^(-x-1) / 12 +
@@ -812,14 +893,18 @@ EIGEN_DECLARE_TEST(special_functions) {
   CALL_SUBTEST_1(array_special_functions<ArrayXf>());
   CALL_SUBTEST_1(test_special_functions_edge_cases<float>());
   CALL_SUBTEST_1(test_betainc_large_b<float>());
+  CALL_SUBTEST_1(test_polygamma_large_order<float>());
   CALL_SUBTEST_1(test_zeta_large_negative_q<float>());
+  CALL_SUBTEST_1(test_polygamma_extreme_x<float>());
   CALL_SUBTEST_1(test_igamma_limits<float>());
   CALL_SUBTEST_1(test_igamma_internal_nan<float>());
   CALL_SUBTEST_2(ndtri_tail_accuracy<double>());
   CALL_SUBTEST_2(array_special_functions<ArrayXd>());
   CALL_SUBTEST_2(test_special_functions_edge_cases<double>());
   CALL_SUBTEST_2(test_betainc_large_b<double>());
+  CALL_SUBTEST_2(test_polygamma_large_order<double>());
   CALL_SUBTEST_2(test_zeta_large_negative_q<double>());
+  CALL_SUBTEST_2(test_polygamma_extreme_x<double>());
   CALL_SUBTEST_2(test_igamma_limits<double>());
   CALL_SUBTEST_2(test_igamma_internal_nan<double>());
   CALL_SUBTEST_3(scalar_ndtri<long double>());
