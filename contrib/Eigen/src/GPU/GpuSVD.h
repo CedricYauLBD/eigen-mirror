@@ -327,18 +327,21 @@ class SVD {
     return solve_impl(B, (std::min)(m_, n_), RealScalar(0));
   }
 
+  // The second argument selects the solve by its kind: an integer is a truncation, a floating-point value a
+  // regularization. Overloads on Index and RealScalar would be ambiguous for a literal such as 2 or 0.1.
+
   /** Truncated solve: use only top trunc singular triplets. */
-  template <typename Rhs>
-  PlainMatrix solve(const MatrixBase<Rhs>& B, Index trunc) const {
+  template <typename Rhs, typename Trunc, std::enable_if_t<std::is_integral<Trunc>::value, int> = 0>
+  PlainMatrix solve(const MatrixBase<Rhs>& B, Trunc trunc) const {
     eigen_assert(trunc > 0 && trunc <= (std::min)(m_, n_));
-    return solve_impl(B, trunc, RealScalar(0));
+    return solve_impl(B, static_cast<Index>(trunc), RealScalar(0));
   }
 
   /** Tikhonov-regularized solve: D_ii = S_i / (S_i^2 + lambda^2). */
-  template <typename Rhs>
-  PlainMatrix solve(const MatrixBase<Rhs>& B, RealScalar lambda) const {
+  template <typename Rhs, typename Lambda, std::enable_if_t<std::is_floating_point<Lambda>::value, int> = 0>
+  PlainMatrix solve(const MatrixBase<Rhs>& B, Lambda lambda) const {
     eigen_assert(lambda > 0);
-    return solve_impl(B, (std::min)(m_, n_), lambda);
+    return solve_impl(B, (std::min)(m_, n_), static_cast<RealScalar>(lambda));
   }
 
   /** Pseudoinverse solve with device-resident RHS: returns an n × nrhs
@@ -351,15 +354,17 @@ class SVD {
   }
 
   /** Truncated device solve: use only top trunc singular triplets. */
-  DeviceMatrix<Scalar> solve(const DeviceMatrix<Scalar>& d_B, Index trunc) const {
+  template <typename Trunc, std::enable_if_t<std::is_integral<Trunc>::value, int> = 0>
+  DeviceMatrix<Scalar> solve(const DeviceMatrix<Scalar>& d_B, Trunc trunc) const {
     eigen_assert(trunc > 0 && trunc <= (std::min)(m_, n_));
-    return solve_device_impl(d_B, trunc, RealScalar(0));
+    return solve_device_impl(d_B, static_cast<Index>(trunc), RealScalar(0));
   }
 
   /** Tikhonov-regularized device solve: D_ii = S_i / (S_i^2 + lambda^2). */
-  DeviceMatrix<Scalar> solve(const DeviceMatrix<Scalar>& d_B, RealScalar lambda) const {
+  template <typename Lambda, std::enable_if_t<std::is_floating_point<Lambda>::value, int> = 0>
+  DeviceMatrix<Scalar> solve(const DeviceMatrix<Scalar>& d_B, Lambda lambda) const {
     eigen_assert(lambda > 0);
-    return solve_device_impl(d_B, (std::min)(m_, n_), lambda);
+    return solve_device_impl(d_B, (std::min)(m_, n_), static_cast<RealScalar>(lambda));
   }
 
   cudaStream_t stream() const { return solver_ctx_.stream(); }

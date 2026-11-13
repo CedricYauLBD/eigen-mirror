@@ -164,6 +164,8 @@ void test_svd_solve_truncated(Index m, Index n) {
 
   gpu::SVD<Scalar> svd(A, ComputeThinU | ComputeThinV);
   Mat X_trunc = svd.solve(B, trunc);
+  // A literal selects the truncated solve, not the regularized one.
+  VERIFY_IS_APPROX(Mat(svd.solve(B, 2)), Mat(svd.solve(B, Index(2))));
 
   // Build CPU reference: truncated pseudoinverse.
   auto cpu_svd = BDCSVD<Mat, ComputeThinU | ComputeThinV>(A);
@@ -194,6 +196,8 @@ void test_svd_solve_regularized(Index m, Index n) {
 
   gpu::SVD<Scalar> svd(A, ComputeThinU | ComputeThinV);
   Mat X_reg = svd.solve(B, lambda);
+  // A double literal selects the regularized solve for float too.
+  VERIFY_IS_APPROX(Mat(svd.solve(B, 0.1)), X_reg);
 
   // CPU reference: D_ii = S_i / (S_i^2 + lambda^2).
   auto cpu_svd = BDCSVD<Mat, ComputeThinU | ComputeThinV>(A);
@@ -500,6 +504,10 @@ void test_device_solve(Index m, Index n, Index nrhs) {
   Mat Xt_host = svd.solve(B, trunc);
   gpu::DeviceMatrix<Scalar> d_Xt = svd.solve(d_B, trunc);
   VERIFY_IS_APPROX(d_Xt.toHost(), Xt_host);
+
+  // Literals pick the overload by their kind.
+  VERIFY_IS_APPROX(svd.solve(d_B, 2).toHost(), svd.solve(d_B, Index(2)).toHost());
+  VERIFY_IS_APPROX(svd.solve(d_B, 0.1).toHost(), svd.solve(d_B, typename NumTraits<Scalar>::Real(0.1)).toHost());
 }
 
 // ---- Per-scalar driver ------------------------------------------------------
