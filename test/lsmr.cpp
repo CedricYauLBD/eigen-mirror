@@ -30,6 +30,8 @@ void test_lsmr_T() {
 
   CALL_SUBTEST(check_sparse_zero_tolerance(lsmr_colmajor_I));
   CALL_SUBTEST(check_sparse_zero_tolerance(lsmr_colmajor_diag));
+
+  CALL_SUBTEST(check_sparse_default_tolerance(lsmr_colmajor_I));
 }
 
 // LSMR on dense, rectangular, overdetermined problems: the solution must match

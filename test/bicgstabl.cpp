@@ -26,6 +26,8 @@ void test_bicgstabl_T() {
 
   // check_sparse_zero_tolerance is not run: BiCGSTABL returns the iterate x_min with the smallest recurrence residual
   // without comparing true residuals, so for tolerance 0 its b - A x can exceed 100 n eps |b|.
+
+  CALL_SUBTEST(check_sparse_default_tolerance(bicgstabl_colmajor_diag));
 }
 
 template <typename = void>

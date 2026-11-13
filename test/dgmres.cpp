@@ -26,6 +26,8 @@ void test_dgmres_T() {
 
   CALL_SUBTEST(check_sparse_zero_tolerance(dgmres_colmajor_diag));
   CALL_SUBTEST(check_sparse_zero_tolerance(dgmres_colmajor_ilut));
+
+  CALL_SUBTEST(check_sparse_default_tolerance(dgmres_colmajor_diag));
 }
 
 // Regression: Arnoldi breakdown used to divide by zero (producing NaN in the

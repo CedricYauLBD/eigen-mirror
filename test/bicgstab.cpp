@@ -28,6 +28,8 @@ void test_bicgstab_T() {
 
   CALL_SUBTEST(check_sparse_zero_tolerance(bicgstab_colmajor_diag));
   CALL_SUBTEST(check_sparse_zero_tolerance(bicgstab_colmajor_ilut));
+
+  CALL_SUBTEST(check_sparse_default_tolerance(bicgstab_colmajor_diag));
 }
 
 // https://gitlab.com/libeigen/eigen/-/issues/2856

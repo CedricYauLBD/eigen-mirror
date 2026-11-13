@@ -35,6 +35,8 @@ void test_minres_T() {
   CALL_SUBTEST(check_sparse_zero_tolerance(minres_colmajor_uplo_diag));
   CALL_SUBTEST(check_sparse_zero_tolerance(minres_colmajor_lower_I));
 
+  CALL_SUBTEST(check_sparse_default_tolerance(minres_colmajor_uplo_diag));
+
   // TO DO: symmetric semi-definite matrix
   // TO DO: symmetric indefinite matrix
 }

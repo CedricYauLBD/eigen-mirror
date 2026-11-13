@@ -916,6 +916,40 @@ void check_sparse_zero_tolerance(Solver& solver) {
   }
 }
 
+// Solves the 2D Poisson problem on a 30 x 30 grid, an SPD matrix on which every iterative solver converges within about
+// 700 iterations, with a solver constructed with its defaults. The solver must report Success after fewer than
+// maxIterations() iterations, with a true residual within 100 n eps, so that a default that cannot be reached, which
+// makes a solver run to maxIterations() with NoConvergence, does not go unnoticed.
+template <typename Solver>
+void check_sparse_default_tolerance(const Solver&) {
+  using Mat = typename Solver::MatrixType;
+  using Scalar = typename Mat::Scalar;
+  using RealScalar = typename NumTraits<Scalar>::Real;
+  using DenseVector = Matrix<Scalar, Dynamic, 1>;
+
+  const Index m = 30, n = m * m;
+  std::vector<Triplet<Scalar>> triplets;
+  for (Index i = 0; i < m; ++i) {
+    for (Index j = 0; j < m; ++j) {
+      const Index k = i * m + j;
+      triplets.emplace_back(k, k, Scalar(4));
+      if (j + 1 < m) triplets.emplace_back(k, k + 1, Scalar(-1));
+      if (j > 0) triplets.emplace_back(k, k - 1, Scalar(-1));
+      if (i + 1 < m) triplets.emplace_back(k, k + m, Scalar(-1));
+      if (i > 0) triplets.emplace_back(k, k - m, Scalar(-1));
+    }
+  }
+  Mat A(n, n);
+  A.setFromTriplets(triplets.begin(), triplets.end());
+  const DenseVector b = DenseVector::Random(n);
+
+  Solver solver(A);
+  const DenseVector x = solver.solve(b);
+  VERIFY_IS_EQUAL(solver.info(), Success);
+  VERIFY(solver.iterations() < solver.maxIterations());
+  VERIFY_LE((b - A * x).norm(), RealScalar(100 * n) * NumTraits<RealScalar>::epsilon() * b.norm());
+}
+
 // Solves A x = b for b = s A xt with A = tridiag(-1, 4, -1), n = 40, and |b| so small that tol |b| is below sqrt(min),
 // though |b| is a normal number: a stopping threshold raised to an absolute floor, to keep a tolerance of 0 from
 // dividing by zero, would then exceed tol |b|, and the solvers returned NoConvergence or an inaccurate x without

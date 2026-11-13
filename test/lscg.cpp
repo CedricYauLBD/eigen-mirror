@@ -47,6 +47,8 @@ void test_lscg_T() {
 
   CALL_SUBTEST(check_sparse_zero_tolerance(lscg_colmajor_diag));
   CALL_SUBTEST(check_sparse_zero_tolerance(lscg_rowmajor_I));
+
+  CALL_SUBTEST(check_sparse_default_tolerance(lscg_colmajor_diag));
 }
 
 void test_lscg_extreme_rhs() {

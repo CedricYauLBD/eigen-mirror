@@ -22,6 +22,8 @@ void test_idrs_T() {
 
   CALL_SUBTEST(check_sparse_zero_tolerance(idrs_colmajor_diag));
   CALL_SUBTEST(check_sparse_zero_tolerance(idrs_colmajor_ilut));
+
+  CALL_SUBTEST(check_sparse_default_tolerance(idrs_colmajor_diag));
 }
 
 // Residual smoothing used to scale its line search by |t| instead of |t|^2 and diverged.

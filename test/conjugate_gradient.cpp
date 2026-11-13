@@ -28,6 +28,8 @@ void test_conjugate_gradient_T() {
 
   CALL_SUBTEST(check_sparse_zero_tolerance(cg_colmajor_loup_diag));
   CALL_SUBTEST(check_sparse_zero_tolerance(cg_colmajor_lower_I));
+
+  CALL_SUBTEST(check_sparse_default_tolerance(cg_colmajor_loup_diag));
 }
 
 // Regression for issue #1704: default-constructing an iterative solver

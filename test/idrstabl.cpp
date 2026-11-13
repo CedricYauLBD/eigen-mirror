@@ -26,6 +26,8 @@ void test_idrstabl_T() {
 
   CALL_SUBTEST(check_sparse_zero_tolerance(idrstabl_colmajor_diag));
   CALL_SUBTEST(check_sparse_zero_tolerance(idrstabl_colmajor_ilut));
+
+  CALL_SUBTEST(check_sparse_default_tolerance(idrstabl_colmajor_diag));
 }
 
 // Neither a zero right-hand side nor the direct solve for n <= S iterates; iterations() used to report the cap.

@@ -26,6 +26,8 @@ void test_gmres_T() {
 
   CALL_SUBTEST(check_sparse_zero_tolerance(gmres_colmajor_diag));
   CALL_SUBTEST(check_sparse_zero_tolerance(gmres_colmajor_ilut));
+
+  CALL_SUBTEST(check_sparse_default_tolerance(gmres_colmajor_diag));
 }
 
 template <typename = void>
