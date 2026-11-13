@@ -850,7 +850,7 @@ EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE typename internal::traits<Derived>::Scalar
  */
 template <typename Derived>
 EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE typename internal::traits<Derived>::Scalar DenseBase<Derived>::sum() const {
-  return internal::redux_with_identity(*this, internal::scalar_sum_op<Scalar, Scalar>(), 0);
+  return internal::redux_with_identity(*this, internal::scalar_sum_op<Scalar, Scalar>(), Scalar(0));
 }
 
 /** \returns the mean of all coefficients of *this
@@ -878,7 +878,7 @@ EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE typename internal::traits<Derived>::Scalar
  */
 template <typename Derived>
 EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE typename internal::traits<Derived>::Scalar DenseBase<Derived>::prod() const {
-  return internal::redux_with_identity(*this, internal::scalar_product_op<Scalar>(), 1);
+  return internal::redux_with_identity(*this, internal::scalar_product_op<Scalar>(), Scalar(1));
 }
 
 /** \returns the trace of \c *this, i.e. the sum of the coefficients on the main diagonal.
