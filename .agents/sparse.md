@@ -69,10 +69,12 @@ into a sparse destination. So `Q`, unlike `R`, comes out sorted.
   replacing them. All four take an optional functor for combining duplicates; the default sums them.
 - `insert()` requires that the entry not already exist. Use `coeffRef()` when it might exist. Before inserting in random
   order, call `reserve(const SizesType&)`: the sequential fast path applies only when outer indices increase.
-- The sparse-sparse product selectors keep the result sorted on purpose. Six of the eight combinations of storage
-  orders run a kernel that builds each inner vector sorted. When both operands have the storage order that the result
-  lacks, an unsorted kernel runs and the storage-order change of the result sorts it
-  ([`ConservativeSparseSparseProduct.h`](../Eigen/src/SparseCore/ConservativeSparseSparseProduct.h)). A new product,
+- The sparse-sparse product selectors keep the result sorted on purpose. All eight combinations of storage
+  orders run one kernel that builds each inner vector sorted, in the storage order of the result. A selector first
+  converts each operand that lacks that order
+  ([`ConservativeSparseSparseProduct.h`](../Eigen/src/SparseCore/ConservativeSparseSparseProduct.h)). Do not replace
+  the conversion of both operands with a storage-order change of the result: that form measured up to 1.44 times
+  slower, because the result usually has more entries than the operands. A new product,
   permutation, or assembly path must also leave the indices sorted. `sortInnerIndices()` and `innerIndicesAreSorted()`
   on `SparseCompressedBase` are the tools for this. Check `innerIndicesAreSorted()` in a test, not only in reasoning.
 - When a new kernel must produce sorted inner vectors, read "Postconditions And Invariants" in
@@ -82,8 +84,8 @@ into a sparse destination. So `Q`, unlike `R`, comes out sorted.
 ## Products
 
 `A * B` on two sparse operands uses the conservative product; `(A * B).pruned()` is the pruned product. Both run the
-kernels in [`ConservativeSparseSparseProduct.h`](../Eigen/src/SparseCore/ConservativeSparseSparseProduct.h), which
-take a `Keep` predicate over the finished value of each entry: `sparse_product_keep_all` for the conservative product,
+kernel in [`ConservativeSparseSparseProduct.h`](../Eigen/src/SparseCore/ConservativeSparseSparseProduct.h), which
+takes a `Keep` predicate over the finished value of each entry: `sparse_product_keep_all` for the conservative product,
 `sparse_product_keep_above` for the pruned one. The two differ in results. The conservative product stores every entry
 that the operands' sparsity patterns generate, even one whose sum cancels to exactly zero. The pruned product drops
 finished values at or below its tolerance. So the two produce different patterns from the same operands, and a test

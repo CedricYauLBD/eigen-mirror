@@ -18,68 +18,6 @@ namespace Eigen {
 
 namespace internal {
 
-// Computes res = lhs * rhs without the entries that keep rejects. The inner vectors of res are not sorted.
-template <typename Lhs, typename Rhs, typename ResultType, bool ReverseProduct = false,
-          typename Keep = sparse_product_keep_all>
-static void conservative_sparse_sparse_product_impl(const Lhs& lhs, const Rhs& rhs, ResultType& res,
-                                                    const Keep& keep = Keep()) {
-  using LhsScalar = typename remove_all_t<Lhs>::Scalar;
-  using RhsScalar = typename remove_all_t<Rhs>::Scalar;
-  using ResScalar = typename remove_all_t<ResultType>::Scalar;
-  const sparse_scalar_product_op<LhsScalar, RhsScalar, ReverseProduct> product;
-
-  // make sure to call innerSize/outerSize since we fake the storage order.
-  Index rows = lhs.innerSize();
-  Index cols = rhs.outerSize();
-  eigen_assert(lhs.outerSize() == rhs.innerSize());
-
-  ei_declare_aligned_stack_constructed_variable(bool, mask, rows, 0);
-  ei_declare_aligned_stack_constructed_variable(ResScalar, values, rows, 0);
-  ei_declare_aligned_stack_constructed_variable(Index, indices, rows, 0);
-
-  std::fill_n(mask, rows, false);
-
-  evaluator<Lhs> lhsEval(lhs);
-  evaluator<Rhs> rhsEval(rhs);
-
-  // estimate the number of non zero entries
-  // given a rhs column containing Y non zeros, we assume that the respective Y columns
-  // of the lhs differs in average of one non zeros, thus the number of non zeros for
-  // the product of a rhs column with the lhs is X+Y where X is the average number of non zero
-  // per column of the lhs.
-  // Therefore, we have nnz(lhs*rhs) = nnz(lhs) + nnz(rhs)
-  Index estimated_nnz_prod = lhsEval.nonZerosEstimate() + rhsEval.nonZerosEstimate();
-
-  res.setZero();
-  res.reserve(Index(estimated_nnz_prod));
-  // we compute each column of the result, one after the other
-  for (Index j = 0; j < cols; ++j) {
-    res.startVec(j);
-    Index nnz = 0;
-    for (typename evaluator<Rhs>::InnerIterator rhsIt(rhsEval, j); rhsIt; ++rhsIt) {
-      RhsScalar y = rhsIt.value();
-      Index k = rhsIt.index();
-      for (typename evaluator<Lhs>::InnerIterator lhsIt(lhsEval, k); lhsIt; ++lhsIt) {
-        Index i = lhsIt.index();
-        LhsScalar x = lhsIt.value();
-        if (!mask[i]) {
-          mask[i] = true;
-          values[i] = product(x, y);
-          indices[nnz] = i;
-          ++nnz;
-        } else
-          product.accumulate(values[i], x, y);
-      }
-    }
-    for (Index k = 0; k < nnz; ++k) {
-      Index i = indices[k];
-      if (keep(values[i])) res.insertBackByOuterInnerUnordered(j, i) = values[i];
-      mask[i] = false;
-    }
-  }
-  res.finalize();
-}
-
 // Computes res = lhs * rhs with sorted inner vectors and no transpose, without the entries that keep rejects. Each
 // vector of res is built in res's own free storage, in one of three ways:
 //
@@ -283,9 +221,9 @@ template <typename Lhs, typename Rhs, typename ResultType,
           int ResStorageOrder = (traits<ResultType>::Flags & RowMajorBit) ? RowMajor : ColMajor>
 struct conservative_sparse_sparse_product_selector;
 
-// The sorted kernel yields sorted vectors in the storage order of its operands, so each selector below converts at
-// most one operand. When both operands have the storage order the result lacks, the unsorted kernel runs and the
-// storage-order change of the result sorts it.
+// The kernel yields sorted vectors in the storage order of its operands, so each selector below converts the operands
+// that lack the storage order of the result. Converting both costs a pass over the operands; multiplying first and
+// converting the result costs a pass over the result, which usually has more entries.
 template <typename Lhs, typename Rhs, typename ResultType>
 struct conservative_sparse_sparse_product_selector<Lhs, Rhs, ResultType, ColMajor, ColMajor, ColMajor> {
   template <typename Keep = sparse_product_keep_all>
@@ -327,11 +265,15 @@ template <typename Lhs, typename Rhs, typename ResultType>
 struct conservative_sparse_sparse_product_selector<Lhs, Rhs, ResultType, RowMajor, RowMajor, ColMajor> {
   template <typename Keep = sparse_product_keep_all>
   static void run(const Lhs& lhs, const Rhs& rhs, ResultType& res, const Keep& keep = Keep()) {
-    using RowMajorRes = WithStorageOrder<ResultType, RowMajor>;
-    RowMajorRes resRow(lhs.rows(), rhs.cols());
-    // The storage-order change sorts the result, so the product can stay unsorted.
-    internal::conservative_sparse_sparse_product_impl<Rhs, Lhs, RowMajorRes, true>(rhs, lhs, resRow, keep);
-    res = resRow;
+    using ColMajorLhs = WithStorageOrder<Lhs, ColMajor>;
+    ColMajorLhs lhsCol = lhs;
+    using ColMajorRhs = WithStorageOrder<Rhs, ColMajor>;
+    ColMajorRhs rhsCol = rhs;
+    using ColMajorRes = WithStorageOrder<ResultType, ColMajor>;
+    ColMajorRes resCol(lhs.rows(), rhs.cols());
+    internal::conservative_sparse_sparse_product_sorted_impl<ColMajorLhs, ColMajorRhs, ColMajorRes>(lhsCol, rhsCol,
+                                                                                                    resCol, keep);
+    res = resCol.markAsRValue();
   }
 };
 
@@ -339,11 +281,15 @@ template <typename Lhs, typename Rhs, typename ResultType>
 struct conservative_sparse_sparse_product_selector<Lhs, Rhs, ResultType, ColMajor, ColMajor, RowMajor> {
   template <typename Keep = sparse_product_keep_all>
   static void run(const Lhs& lhs, const Rhs& rhs, ResultType& res, const Keep& keep = Keep()) {
-    using ColMajorRes = WithStorageOrder<ResultType, ColMajor>;
-    ColMajorRes resCol(lhs.rows(), rhs.cols());
-    // The storage-order change sorts the result, so the product can stay unsorted.
-    internal::conservative_sparse_sparse_product_impl<Lhs, Rhs, ColMajorRes>(lhs, rhs, resCol, keep);
-    res = resCol;
+    using RowMajorLhs = WithStorageOrder<Lhs, RowMajor>;
+    RowMajorLhs lhsRow = lhs;
+    using RowMajorRhs = WithStorageOrder<Rhs, RowMajor>;
+    RowMajorRhs rhsRow = rhs;
+    using RowMajorRes = WithStorageOrder<ResultType, RowMajor>;
+    RowMajorRes resRow(lhs.rows(), rhs.cols());
+    internal::conservative_sparse_sparse_product_sorted_impl<RowMajorRhs, RowMajorLhs, RowMajorRes, true>(
+        rhsRow, lhsRow, resRow, keep);
+    res = resRow.markAsRValue();
   }
 };
 
