@@ -2905,11 +2905,23 @@ struct exp_complex_test_impl {
         if (is_sign_exp_unspecified(z)) {
           Scalar abs_w = Scalar(numext::abs(numext::real_ref(w)), numext::abs(numext::imag_ref(w)));
           Scalar expected = numext::exp(z);
+          // C99 Annex G: exp(+inf + i inf) = (+-inf, NaN); the macOS libm returns (NaN, NaN).
+          if (numext::real_ref(z) == std::numeric_limits<RealScalar>::infinity() &&
+              (numext::isinf)(numext::imag_ref(z))) {
+            expected =
+                Scalar(std::numeric_limits<RealScalar>::infinity(), std::numeric_limits<RealScalar>::quiet_NaN());
+          }
           Scalar abs_expected =
               Scalar(numext::abs(numext::real_ref(expected)), numext::abs(numext::imag_ref(expected)));
           VERIFY(is_exactly_equal(abs_w, abs_expected));
         } else {
           Scalar expected = numext::exp(z);
+          // C99 Annex G requires cexp(conj(z)) = conj(cexp(z)), so exp(x -+ 0i) has the imaginary part -+0. The macOS
+          // libm returns +0 for -0i, and libstdc++ forwards std::exp(std::complex) to it; for an infinite or overflowed
+          // real part, the comparison below then takes the relative error of (inf, +0) and (inf, -0), which is NaN.
+          if (numext::imag_ref(z) == RealScalar(0) && numext::imag_ref(expected) == RealScalar(0)) {
+            numext::imag_ref(expected) = std::copysign(RealScalar(0), numext::imag_ref(z));
+          }
           // First try exact equality (handles NaN, signed zeros correctly).
           // Fall back to approximate comparison to allow for small differences
           // in trig functions near zero crossings (e.g., vectorized sincos may
