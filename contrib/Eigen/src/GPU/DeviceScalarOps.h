@@ -19,7 +19,6 @@
 #include <npps_arithmetic_and_logical_operations.h>
 
 #include <algorithm>
-#include <limits>
 
 #include "./GpuSupport.h"
 
