@@ -212,8 +212,8 @@ void verify_valid_sparse(const SparseMatrixType& m, const MatrixXd& dense) {
 // spare capacity between its inner vectors.
 template <int Order>
 void check_inner_panel_assignment_from_uncompressed() {
-  typedef SparseMatrix<double, Order> SM;
-  typedef SparseMatrix<double, Order == RowMajor ? ColMajor : RowMajor> OtherSM;
+  using SM = SparseMatrix<double, Order>;
+  using OtherSM = SparseMatrix<double, Order == RowMajor ? ColMajor : RowMajor>;
   constexpr bool IsRowMajor = Order == RowMajor;
   const Index rows = internal::random<Index>(3, 9), cols = internal::random<Index>(3, 9);
   const Index outer = IsRowMajor ? rows : cols;

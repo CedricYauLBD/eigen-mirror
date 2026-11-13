@@ -282,10 +282,10 @@ void sparse_permutations_all(int size) {
 // the destination, against a dense reference.
 template <int SrcOrder, int DstOrder>
 void sparse_permutation_products() {
-  typedef SparseMatrix<double, SrcOrder> SrcMatrix;
-  typedef SparseMatrix<double, DstOrder> DstMatrix;
-  typedef Matrix<double, Dynamic, Dynamic> DenseMat;
-  typedef PermutationMatrix<Dynamic, Dynamic, int> Perm;
+  using SrcMatrix = SparseMatrix<double, SrcOrder>;
+  using DstMatrix = SparseMatrix<double, DstOrder>;
+  using DenseMat = Matrix<double, Dynamic, Dynamic>;
+  using Perm = PermutationMatrix<Dynamic, Dynamic, int>;
   const Index n = internal::random<Index>(1, 20);
   DenseMat D = (DenseMat::Random(n, n).array().abs() < 0.3).select(DenseMat::Random(n, n), 0.0);
   SrcMatrix A = D.sparseView();

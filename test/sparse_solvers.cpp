@@ -259,9 +259,9 @@ void sparse_solvers(int rows, int cols) {
 // A sparse right-hand side of either storage order, with fewer, as many or more columns than rows.
 template <typename Scalar, int RhsOrder>
 void sparse_triangular_solve_rhs_order() {
-  typedef Matrix<Scalar, Dynamic, Dynamic> DenseMatrix;
-  typedef SparseMatrix<Scalar, ColMajor> Lhs;
-  typedef SparseMatrix<Scalar, RhsOrder> Rhs;
+  using DenseMatrix = Matrix<Scalar, Dynamic, Dynamic>;
+  using Lhs = SparseMatrix<Scalar, ColMajor>;
+  using Rhs = SparseMatrix<Scalar, RhsOrder>;
   const Index n = internal::random<Index>(1, 12);
   for (Index k : {Index(1), n, n + 4, Index(2 * n + 1)}) {
     DenseMatrix refL = DenseMatrix::Zero(n, n);

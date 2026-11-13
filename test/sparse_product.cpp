@@ -1282,9 +1282,9 @@ void test_sparse_vector_dense_product() {
 // unit diagonal that the view adds. The dense-times-sparse kernels increment an iterator past its end.
 template <int Order, int Mode>
 void check_sparse_triangular_view_products(Index n) {
-  typedef SparseMatrix<double, Order> SM;
-  typedef Matrix<double, Dynamic, Dynamic> DenseMat;
-  typedef TriangularView<const SM, Mode> View;
+  using SM = SparseMatrix<double, Order>;
+  using DenseMat = Matrix<double, Dynamic, Dynamic>;
+  using View = TriangularView<const SM, Mode>;
   DenseMat D = (DenseMat::Random(n, n).array().abs() < 0.5).select(DenseMat::Random(n, n), 0.0);
   SM A = D.sparseView();
   A.makeCompressed();

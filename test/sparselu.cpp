@@ -202,8 +202,8 @@ void test_sparselu_tiny_fill_estimate() {
 // signDeterminant() is det / |det|: complex for complex scalars, and the other determinants agree with a dense one.
 template <typename T>
 void test_sparselu_determinants() {
-  typedef typename NumTraits<T>::Real Real;
-  typedef Matrix<T, Dynamic, Dynamic> DenseMatrix;
+  using Real = typename NumTraits<T>::Real;
+  using DenseMatrix = Matrix<T, Dynamic, Dynamic>;
   SparseLU<SparseMatrix<T> > lu;
   for (int repeat = 0; repeat < 5; ++repeat) {
     const Index size = internal::random<Index>(1, 30);

@@ -325,8 +325,8 @@ void test_sparseqr_empty() {
 // A matrix with a zero dimension, in particular zero rows and some columns, has rank 0 and an empty Q.
 template <typename T = double>
 void test_sparseqr_zero_dimension() {
-  typedef SparseMatrix<T> SM;
-  typedef Matrix<T, Dynamic, Dynamic> DenseMat;
+  using SM = SparseMatrix<T>;
+  using DenseMat = Matrix<T, Dynamic, Dynamic>;
   const Index shapes[][2] = {{0, 0}, {0, 3}, {0, 1}, {3, 0}};
   for (const auto& shape : shapes) {
     const Index rows = shape[0], cols = shape[1];
