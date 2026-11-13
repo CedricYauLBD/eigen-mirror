@@ -679,6 +679,21 @@ EIGEN_DEVICE_FUNC inline typename QuaternionBase<Derived>::Matrix3 QuaternionBas
   return res;
 }
 
+namespace internal {
+// v / ||v||. This is MatrixBase::normalized() except that a squared norm outside the range in which it is accurate
+// (underflow or overflow of the sum of squares) falls back to stableNormalized(). A zero vector is returned unchanged.
+template <typename Derived>
+EIGEN_DEVICE_FUNC inline typename MatrixBase<Derived>::PlainObject quaternion_normalized(const MatrixBase<Derived>& v) {
+  using Scalar = typename traits<Derived>::Scalar;
+  const typename MatrixBase<Derived>::PlainObject x = v;
+  const Scalar n2 = x.squaredNorm();
+  if (n2 > (numext::numeric_limits<Scalar>::min)() && n2 <= Scalar(NumTraits<Scalar>::highest())) {
+    return x / numext::sqrt(n2);
+  }
+  return x.stableNormalized();
+}
+}  // namespace internal
+
 /** Sets \c *this to be a quaternion representing a rotation between
  * the two arbitrary vectors \a a and \a b. In other words, the built
  * rotation represent a rotation sending the line of direction \a a
@@ -693,8 +708,8 @@ template <class Derived>
 template <typename Derived1, typename Derived2>
 EIGEN_DEVICE_FUNC inline Derived& QuaternionBase<Derived>::setFromTwoVectors(const MatrixBase<Derived1>& a,
                                                                              const MatrixBase<Derived2>& b) {
-  Vector3 v0 = a.normalized();
-  Vector3 v1 = b.normalized();
+  Vector3 v0 = internal::quaternion_normalized(a);
+  Vector3 v1 = internal::quaternion_normalized(b);
   Scalar c = v1.dot(v0);
 
   // if dot == -1, vectors are nearly opposites: an axis orthogonal to v0 alone does not send v0 to v1.

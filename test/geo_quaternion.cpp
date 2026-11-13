@@ -473,6 +473,62 @@ void quaternion_product_fma() {
 #endif
 }
 
+// Checks that Quaternion::FromTwoVectors(a, b) is a unit quaternion that rotates the direction of a to the direction of
+// b, against a long double reference built from the rounded inputs, up to 16 eps.
+template <typename Scalar>
+void check_from_two_vectors(const Matrix<Scalar, 3, 1>& a, const Matrix<Scalar, 3, 1>& b) {
+  using LongDouble = long double;
+  using Vector3L = Matrix<LongDouble, 3, 1>;
+  const Scalar tolerance = Scalar(16) * NumTraits<Scalar>::epsilon();
+  const Quaternion<Scalar> q = Quaternion<Scalar>::FromTwoVectors(a, b);
+  const Quaternion<LongDouble> ql(LongDouble(q.w()), LongDouble(q.x()), LongDouble(q.y()), LongDouble(q.z()));
+  // stableNormalized(): the squared norm of an extreme input does not exist even in long double if that is double.
+  const Vector3L a_unit = a.template cast<LongDouble>().stableNormalized();
+  const Vector3L b_unit = b.template cast<LongDouble>().stableNormalized();
+  const Scalar norm_error = Scalar(std::abs(ql.norm() - 1));
+  const Scalar rotation_error = Scalar((ql * a_unit - b_unit).norm());
+  VERIFY(norm_error <= tolerance);
+  VERIFY(rotation_error <= tolerance);
+}
+
+// The inputs of FromTwoVectors need not be normalized: this holds for magnitudes whose square or whose squared norm is
+// not representable.
+template <typename Scalar>
+void quaternion_two_vectors_extreme_scale() {
+  using Vector3 = Matrix<Scalar, 3, 1>;
+  using Quaternionx = Quaternion<Scalar>;
+  const Scalar tolerance = Scalar(16) * NumTraits<Scalar>::epsilon();
+  const Scalar sqrt2_half = Scalar(0.70710678118654752440);
+  const Scalar big = std::sqrt((NumTraits<Scalar>::highest)()) * Scalar(4);
+  const Scalar tiny = std::sqrt((std::numeric_limits<Scalar>::min)()) * NumTraits<Scalar>::epsilon();
+  const Scalar scales[] = {big, tiny, Scalar(1)};  // the scale 1 mixes normal and extreme magnitudes
+  const Vector3 d0(Scalar(0.3), Scalar(-0.4), Scalar(0.5));
+  const Vector3 d1(Scalar(-0.2), Scalar(0.7), Scalar(0.1));
+  const Vector3 d_orth = d0.cross(d1);
+  for (Scalar sa : scales) {
+    for (Scalar sb : scales) {
+      // Along an axis: parallel, orthogonal and antiparallel vectors.
+      Quaternionx q = Quaternionx::FromTwoVectors(Vector3(sa, 0, 0), Vector3(sb, 0, 0));
+      VERIFY(numext::abs(q.norm() - Scalar(1)) <= tolerance);
+      VERIFY_IS_APPROX(q.coeffs(), Quaternionx::Identity().coeffs());
+      q = Quaternionx::FromTwoVectors(Vector3(sa, 0, 0), Vector3(0, sb, 0));
+      VERIFY(numext::abs(q.norm() - Scalar(1)) <= tolerance);
+      VERIFY(numext::abs(q.x()) <= tolerance && numext::abs(q.y()) <= tolerance);
+      VERIFY(numext::abs(q.z() - sqrt2_half) <= tolerance && numext::abs(q.w() - sqrt2_half) <= tolerance);
+      q = Quaternionx::FromTwoVectors(Vector3(sa, 0, 0), Vector3(-sb, 0, 0));
+      VERIFY(numext::abs(q.norm() - Scalar(1)) <= tolerance);
+      VERIFY(numext::abs(q.w()) <= tolerance);
+
+      // Skew directions: q a is parallel to b in every case.
+      check_from_two_vectors<Scalar>(sa * d0, sb * d0);
+      check_from_two_vectors<Scalar>(sa * d0, -sb * d0);
+      check_from_two_vectors<Scalar>(sa * d0, sb * d1);
+      check_from_two_vectors<Scalar>(sa * d0, sb * d_orth);
+      check_from_two_vectors<Scalar>(sa * d0, -sb * d1);
+    }
+  }
+}
+
 // setFromScaledAxis must stay finite when the norm of the rotation vector overflows although its coefficients do not.
 template <typename Scalar>
 void quaternion_scaled_axis_extreme_norm() {
@@ -515,6 +571,7 @@ EIGEN_DECLARE_TEST(geo_quaternion) {
     CALL_SUBTEST_1((quaternion<float, DontAlign>()));
     CALL_SUBTEST_1((quaternionAlignment<float>()));
     CALL_SUBTEST_1(mapQuaternion<float>());
+    EIGEN_TEST_OVERFLOW_HANDLING(CALL_SUBTEST_1(quaternion_two_vectors_extreme_scale<float>()));
     EIGEN_TEST_OVERFLOW_HANDLING(CALL_SUBTEST_1(quaternion_scaled_axis_extreme_norm<float>()));
 
     CALL_SUBTEST_2((quaternion<double, AutoAlign>()));
@@ -522,6 +579,7 @@ EIGEN_DECLARE_TEST(geo_quaternion) {
     CALL_SUBTEST_2((quaternion<double, DontAlign>()));
     CALL_SUBTEST_2((quaternionAlignment<double>()));
     CALL_SUBTEST_2(mapQuaternion<double>());
+    EIGEN_TEST_OVERFLOW_HANDLING(CALL_SUBTEST_2(quaternion_two_vectors_extreme_scale<double>()));
     EIGEN_TEST_OVERFLOW_HANDLING(CALL_SUBTEST_2(quaternion_scaled_axis_extreme_norm<double>()));
 
 #ifndef EIGEN_TEST_ANNOYING_SCALAR_DONT_THROW
