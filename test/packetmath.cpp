@@ -3695,6 +3695,38 @@ void packetmath_binary_sign_subnormals() {
   }
 }
 
+#if EIGEN_ARCH_i386_OR_x86_64
+// Under flush-to-zero inputs, psqrt of a subnormal may return the lane unchanged (as the AVX-512 fast-math kernel does)
+// or a zero of its sign, but not NaN, and must leave the other lanes alone.
+template <typename Scalar>
+void packetmath_sqrt_flushed_subnormals() {
+  using Packet = typename internal::packet_traits<Scalar>::type;
+  using Binary = internal::binary_floating_point_traits<Scalar>;
+  using Bits = typename Binary::Bits;
+  constexpr Index packet_size = internal::unpacket_traits<Packet>::size;
+  const Bits sign = Binary::kSignBit;
+  const Bits subnormals[] = {Bits(1), Bits(3), Binary::kExponentUnit >> 1, Binary::kExponentUnit - 1};
+  EIGEN_ALIGN_MAX Scalar input[packet_size], output[packet_size];
+  for (const Bits subnormal : subnormals) {
+    for (const Bits sign_bit : {Bits(0), sign}) {
+      for (Index i = 0; i < packet_size; ++i) {
+        input[i] = i % 2 == 0 ? numext::bit_cast<Scalar>(subnormal | sign_bit) : Scalar(4);
+      }
+      internal::pstore(output, internal::psqrt(internal::pload<Packet>(input)));
+      for (Index i = 0; i < packet_size; ++i) {
+        const Bits bits = numext::bit_cast<Bits>(output[i]);
+        if (i % 2 == 0) {
+          VERIFY(bits == (subnormal | sign_bit) || bits == sign_bit);
+        } else {
+          VERIFY_IS_EQUAL(output[i], Scalar(2));
+        }
+      }
+    }
+  }
+}
+
+#endif  // EIGEN_ARCH_i386_OR_x86_64
+
 #if defined(EIGEN_VECTORIZE_AVX2)
 // Packet4d <-> Packet4l casts, which are an intrinsic with AVX-512DQ+VL and bit manipulation or a scalar loop
 // otherwise, against the scalar casts at the edges of the int64 range and of the double significand.
@@ -3999,6 +4031,10 @@ EIGEN_DECLARE_TEST(packetmath) {
   CALL_SUBTEST_2(packetmath_with_flushed_inputs(packetmath_binary_sign_subnormals<double>));
 #if defined(EIGEN_VECTORIZE_AVX2)
   CALL_SUBTEST_9(packetmath_cast_double_int64_edges());
+#endif
+#if EIGEN_ARCH_i386_OR_x86_64
+  CALL_SUBTEST_1(packetmath_with_flushed_inputs(packetmath_sqrt_flushed_subnormals<float>));
+  CALL_SUBTEST_2(packetmath_with_flushed_inputs(packetmath_sqrt_flushed_subnormals<double>));
 #endif
 
 #if defined(EIGEN_VECTORIZE_AVX) || defined(EIGEN_VECTORIZE_AVX512) || defined(EIGEN_VECTORIZE_NEON) || \
