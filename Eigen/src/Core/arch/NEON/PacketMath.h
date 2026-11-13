@@ -4621,7 +4621,7 @@ EIGEN_STRONG_INLINE Packet2f prsqrt_float_unsafe(const Packet2f& a) {
 template <typename Packet>
 Packet prsqrt_float_common(const Packet& a) {
   const Packet cst_zero = pzero(a);
-  const Packet cst_inf = pset1<Packet>(NumTraits<float>::infinity());
+  const Packet cst_inf = pinf<Packet>();
   Packet return_zero = pcmp_eq(a, cst_inf);
   Packet return_inf = pcmp_eq(a, cst_zero);
   Packet result = prsqrt_float_unsafe(a);
@@ -4685,7 +4685,7 @@ EIGEN_STRONG_INLINE Packet2f pdiv(const Packet2f& a, const Packet2f& b) {
 template <typename Packet>
 EIGEN_STRONG_INLINE Packet psqrt_float_common(const Packet& a) {
   const Packet cst_zero = pzero(a);
-  const Packet cst_inf = pset1<Packet>(NumTraits<float>::infinity());
+  const Packet cst_inf = pinf<Packet>();
 
   Packet result = pmul(a, prsqrt_float_unsafe(a));
   Packet a_is_zero = pcmp_eq(a, cst_zero);
