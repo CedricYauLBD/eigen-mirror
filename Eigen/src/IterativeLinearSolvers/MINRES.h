@@ -48,10 +48,10 @@ EIGEN_DONT_INLINE void minres(const MatrixType& mat, const Rhs& rhs, Dest& x, co
   // initialize
   const Index maxIters(iters);                      // initialize maxIters to iters
   const Index N(mat.cols());                        // the size of the matrix
-  // convergence threshold (compared to residualNorm), raised to at most the smallest normal number so that tol_error =
-  // 0 stops
+  // Convergence threshold (compared to residualNorm), raised to at most the smallest normal number so that
+  // tol_error = 0 stops.
   const RealScalar threshold(
-      internal::iterative_solver_threshold(tol_error, rhsNorm, RealScalar((std::numeric_limits<RealScalar>::min)())));
+      internal::iterative_solver_threshold(tol_error, rhsNorm, (std::numeric_limits<RealScalar>::min)()));
 
   // Initialize preconditioned Lanczos
   VectorType v_old(N);                // will be initialized inside loop
@@ -140,10 +140,11 @@ EIGEN_DONT_INLINE void minres(const MatrixType& mat, const Rhs& rhs, Dest& x, co
     // is exhausted, and the Lanczos recurrence cannot continue.
     residualNorm *= numext::abs(s);
     residualIsTrue = false;
-    if (residualNorm < threshold || beta_new == RealScalar(0)) {
+    const bool krylovExhausted = beta_new == RealScalar(0);
+    if (residualNorm < threshold || krylovExhausted) {
       residualNorm = (rhs - mat * x).stableNorm();
       residualIsTrue = true;
-      if (residualNorm < threshold || beta_new == RealScalar(0)) {
+      if (residualNorm < threshold || krylovExhausted) {
         break;
       }
       if (residualNorm <= RealScalar(0.5) * referenceResidualNorm) {

@@ -324,7 +324,7 @@ Index DGMRES<MatrixType_, Preconditioner_>::dgmresCycle(const MatrixType& mat, c
     // Normalize the vector. A coef of the size of the rounding error in A M^{-1} v is an Arnoldi happy breakdown: the
     // new direction lies in span(V[0..it]), and tv1 / coef would only normalize noise. Skip the division (which for
     // coef == 0 would poison m_V.col(it+1) with NaN) and fall through to the termination check below.
-    RealScalar coefNorm = tv1.norm();
+    const RealScalar coefNorm = tv1.norm();
     const bool happy_breakdown =
         coefNorm <= numext::sqrt(RealScalar(n)) * NumTraits<RealScalar>::epsilon() * normBefore;
     coef = Scalar(coefNorm);
