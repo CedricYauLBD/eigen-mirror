@@ -132,6 +132,8 @@ void eigensolver_generic_extra() {
     a << 0, 0, 1, 1, 1, 1, 1, 1e+200, 1;
     Eigen::EigenSolver<MatrixXd> eig(a);
     double scale = 1e-200;  // scale to avoid overflow during the comparisons
+    // The eigenvalues are 0 and +-1e100, which depend on entries 1e-200 times the norm of the matrix.
+    VERIFY_IS_APPROX(eig.eigenvalues().cwiseAbs().maxCoeff() * scale * 1e100, 1.);
     VERIFY_IS_APPROX(a * eig.pseudoEigenvectors() * scale,
                      eig.pseudoEigenvectors() * eig.pseudoEigenvalueMatrix() * scale);
     VERIFY_IS_APPROX(a * eig.eigenvectors() * scale, eig.eigenvectors() * eig.eigenvalues().asDiagonal() * scale);
