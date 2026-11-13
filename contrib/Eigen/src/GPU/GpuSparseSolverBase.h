@@ -194,6 +194,7 @@ class SparseSolverBase {
       config_opts_ = cfg;
       analysis_done_ = false;
       info_ = InvalidInput;
+      info_synced_ = true;
       return derived();
     }
 #endif
@@ -211,6 +212,7 @@ class SparseSolverBase {
       // info() rather than factorizing against the wrong analysis.
       analysis_done_ = false;
       info_ = InvalidInput;
+      info_synced_ = true;
     }
     return derived();
   }
@@ -237,6 +239,7 @@ class SparseSolverBase {
       // setConfig() refused this config; analyzing as if it had been applied
       // would hand factorize() state built for settings the caller replaced.
       info_ = InvalidInput;
+      info_synced_ = true;
       analysis_done_ = false;
       return derived();
     }
@@ -248,11 +251,13 @@ class SparseSolverBase {
 
     n_ = input.rows();
     info_ = InvalidInput;
+    info_synced_ = true;
     analysis_done_ = false;
 
     if (n_ == 0) {
       nnz_ = 0;
       info_ = Success;
+      info_synced_ = true;
       analysis_done_ = true;
       return derived();
     }
@@ -285,6 +290,7 @@ class SparseSolverBase {
 
     analysis_done_ = true;
     info_ = Success;
+    info_synced_ = true;
     return derived();
   }
 
@@ -303,11 +309,13 @@ class SparseSolverBase {
       // Reachable in release builds whenever setConfig() invalidated the
       // analysis rather than applying the request; see setConfig().
       info_ = InvalidInput;
+      info_synced_ = true;
       return derived();
     }
 
     if (n_ == 0) {
       info_ = Success;
+      info_synced_ = true;
       return derived();
     }
 
