@@ -365,6 +365,7 @@ template <typename MatrixType, typename PermutationIndex>
 template <typename InputType>
 ColPivHouseholderQR<MatrixType, PermutationIndex>& ColPivHouseholderQR<MatrixType, PermutationIndex>::compute(
     const EigenBase<InputType>& matrix) {
+  m_qr.resize(matrix.rows(), matrix.cols());
   m_qr = matrix.derived();
   computeInPlace();
   return *this;
@@ -391,6 +392,8 @@ void ColPivHouseholderQR<MatrixType, PermutationIndex>::computeInPlaceNative() {
   Index number_of_transpositions = 0;
 
   // m_colNormsDirect caches the most recent directly computed column norms.
+  m_colNormsDirect.resize(cols);
+  m_colNormsUpdated.resize(cols);
   const bool stable_norms = internal::column_norms_with_fallback(m_qr, m_colNormsDirect);
   m_colNormsUpdated = m_colNormsDirect;
 
