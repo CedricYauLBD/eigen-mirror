@@ -192,6 +192,8 @@ class SVD {
     const Index k = (std::min)(m_orig, n_orig);
     if (!transposed_) {
       const Index ucols = (options_ & ComputeFullU) ? m_ : k;
+      // An empty input runs no factorization, so there is no device buffer: the factors are identities.
+      if (m_ == 0 || n_ == 0) return PlainMatrix::Identity(m_, ucols);
       PlainMatrix U(m_, ucols);
       solver_ctx_.download(U.data(), d_U_.get(), static_cast<size_t>(m_) * static_cast<size_t>(ucols) * sizeof(Scalar));
       return U;
@@ -216,6 +218,7 @@ class SVD {
     const Index k = (std::min)(m_orig, n_orig);
     if (!transposed_) {
       const Index vtrows = (options_ & ComputeFullV) ? n_ : k;
+      if (m_ == 0 || n_ == 0) return PlainMatrix::Identity(vtrows, n_);
       PlainMatrix VT(vtrows, n_);
       solver_ctx_.download(VT.data(), d_VT_.get(),
                            static_cast<size_t>(vtrows) * static_cast<size_t>(n_) * sizeof(Scalar));
@@ -258,6 +261,9 @@ class SVD {
     const Index k = (std::min)(m_orig, n_orig);
     if (!transposed_) {
       const Index ucols = (options_ & ComputeFullU) ? m_ : k;
+      if (m_ == 0 || n_ == 0) {
+        return DeviceMatrix<Scalar>::fromHost(PlainMatrix::Identity(m_, ucols), solver_ctx_.stream());
+      }
       auto v = DeviceMatrix<Scalar>::view(static_cast<Scalar*>(d_U_.get()), m_, ucols);
       v.recordReady(solver_ctx_.stream());
       return v;
@@ -285,6 +291,9 @@ class SVD {
     const Index k = (std::min)(m_orig, n_orig);
     if (!transposed_) {
       const Index vtrows = (options_ & ComputeFullV) ? n_ : k;
+      if (m_ == 0 || n_ == 0) {
+        return DeviceMatrix<Scalar>::fromHost(PlainMatrix::Identity(vtrows, n_), solver_ctx_.stream());
+      }
       auto v = DeviceMatrix<Scalar>::view(static_cast<Scalar*>(d_VT_.get()), vtrows, n_);
       v.recordReady(solver_ctx_.stream());
       return v;

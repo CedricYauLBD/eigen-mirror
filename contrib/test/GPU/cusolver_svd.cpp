@@ -416,6 +416,35 @@ void test_svd_getters_ignore_other_streams(Index m, Index n) {
 
 // ---- Empty matrix -----------------------------------------------------------
 
+// The factors of an empty matrix are those of JacobiSVD: identities for the full ones, no columns or rows for the
+// thin ones. No factorization runs, so there is no device buffer to download them from.
+void test_svd_empty_factors(Index rows, Index cols, unsigned int options) {
+  MatrixXd A(rows, cols);
+  JacobiSVD<MatrixXd> ref(A, options);
+  gpu::SVD<double> svd(A, options);
+  VERIFY_IS_EQUAL(svd.info(), Success);
+  if (options & (ComputeThinU | ComputeFullU)) {
+    MatrixXd U = svd.matrixU();
+    VERIFY_IS_EQUAL(U.rows(), ref.matrixU().rows());
+    VERIFY_IS_EQUAL(U.cols(), ref.matrixU().cols());
+    VERIFY(U.isIdentity());
+    MatrixXd d_U = svd.d_matrixU().toHost();
+    VERIFY_IS_EQUAL(d_U.rows(), U.rows());
+    VERIFY_IS_EQUAL(d_U.cols(), U.cols());
+    VERIFY(d_U.isIdentity());
+  }
+  if (options & (ComputeThinV | ComputeFullV)) {
+    MatrixXd V = svd.matrixV();
+    VERIFY_IS_EQUAL(V.rows(), ref.matrixV().rows());
+    VERIFY_IS_EQUAL(V.cols(), ref.matrixV().cols());
+    VERIFY(V.isIdentity());
+    MatrixXd d_VT = svd.d_matrixVT().toHost();
+    VERIFY_IS_EQUAL(d_VT.rows(), V.cols());
+    VERIFY_IS_EQUAL(d_VT.cols(), V.rows());
+    VERIFY(d_VT.isIdentity());
+  }
+}
+
 void test_svd_empty() {
   ArrayXXd empty(0, 0);
   gpu::SVD<double> svd(empty, 0);
@@ -437,6 +466,12 @@ void test_svd_empty() {
   VERIFY_IS_EQUAL(svd.rows(), 5);
   VERIFY_IS_EQUAL(svd.cols(), 0);
   VERIFY_IS_EQUAL(svd.singularValues().size(), 0);
+
+  for (const unsigned int options : {unsigned(ComputeFullU | ComputeFullV), unsigned(ComputeThinU | ComputeThinV)}) {
+    test_svd_empty_factors(5, 0, options);
+    test_svd_empty_factors(0, 7, options);
+    test_svd_empty_factors(0, 0, options);
+  }
 }
 
 // ---- Device-resident solve ----------------------------------------------------
