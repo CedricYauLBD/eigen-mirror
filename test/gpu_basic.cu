@@ -948,7 +948,7 @@ void test_with_infs_nans(const Kernel& ker, int n, const Input& in, Output& out)
   run_on_cpu(ker, n, in, out_ref);
   run_on_gpu(ker, n, in, out_gpu);
 #if !defined(EIGEN_GPU_COMPILE_PHASE)
-  verifyIsApproxWithInfsNans(out_ref, out_gpu);
+  VERIFY(verifyIsApproxWithInfsNans(out_ref, out_gpu));
 #endif
 }
 
