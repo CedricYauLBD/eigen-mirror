@@ -929,12 +929,65 @@ void check_complex_sign() {
     VERIFY_IS_EQUAL(numext::sign(T(zero, r)), T(zero, one));
   }
 
-  // Off the axes the magnitude is only as accurate as abs() itself, which cannot resolve |z| for a z
-  // whose components are at the bottom of the subnormal range; from the smallest normal upwards it can.
-  for (Real r : {(std::numeric_limits<Real>::min)(), one, (std::numeric_limits<Real>::max)() / Real(2)}) {
-    const T s = numext::sign(T(r, r));
-    VERIFY_IS_APPROX(numext::abs(s), one);
-    VERIFY_IS_EQUAL(numext::real(s), numext::imag(s));
+  // Off the axes, sign(z) = (x, y) / m / sqrt(1 + (min(|x|, |y|) / m)^2) for m = max(|x|, |y|), also where |z|
+  // overflows (z = (max, max)) or is subnormal, which abs() cannot resolve.
+  const Real eps = NumTraits<Real>::epsilon();
+  const Real denorm_min = std::numeric_limits<Real>::denorm_min();
+  const Real highest = (std::numeric_limits<Real>::max)();
+  const Real sqrt_half = Real(0.70710678118654752440);
+  const Real two_over_sqrt5 = Real(0.89442719099991587856), one_over_sqrt5 = Real(0.44721359549995793928);
+  struct Case {
+    Real x, y, sign_x, sign_y;
+  };
+  const Case cases[] = {{(std::numeric_limits<Real>::min)(), (std::numeric_limits<Real>::min)(), sqrt_half, sqrt_half},
+                        {one, one, sqrt_half, sqrt_half},
+                        {highest / Real(2), highest / Real(2), sqrt_half, sqrt_half},
+                        {highest, highest, sqrt_half, sqrt_half},
+                        {-highest, highest, -sqrt_half, sqrt_half},
+                        {highest, -highest / Real(2), two_over_sqrt5, -one_over_sqrt5},
+                        {denorm_min, denorm_min, sqrt_half, sqrt_half},
+                        {-denorm_min, denorm_min, -sqrt_half, sqrt_half},
+                        {Real(6) * denorm_min, Real(3) * denorm_min, two_over_sqrt5, one_over_sqrt5},
+                        {Real(2) * denorm_min, -Real(4) * denorm_min, one_over_sqrt5, -two_over_sqrt5}};
+  const auto check = [&](const T& value, const Case& c) {
+    VERIFY(numext::abs(numext::real(value) - c.sign_x) <= Real(4) * eps);
+    VERIFY(numext::abs(numext::imag(value) - c.sign_y) <= Real(4) * eps);
+  };
+  // Array::sign() takes the packet path in the body and the scalar path in the remainder.
+  Array<T, Dynamic, 1> z(19), s_array;
+  for (const Case& c : cases) {
+    check(numext::sign(T(c.x, c.y)), c);
+#if EIGEN_ARCH_ARM  // 32-bit ARM flushes subnormals in packet operations.
+    if (numext::abs(c.x) < (std::numeric_limits<Real>::min)()) continue;
+#endif
+    z.setConstant(T(c.x, c.y));
+    s_array = z.sign();
+    check(s_array(0), c);
+    check(s_array(s_array.size() - 1), c);
+  }
+
+  // Lane isolation: extreme, NaN and infinite elements next to ordinary ones, at every lane position, agree with the
+  // scalar function (NaN in either component gives NaN in both).
+  const Real nan = NumTraits<Real>::quiet_NaN(), inf = NumTraits<Real>::infinity();
+  std::vector<T> lanes = {T(highest, highest), T(nan, highest),  T(highest, nan), T(inf, one),   T(3, 4),
+                          T(-highest, one),    T(one, -highest), T(zero, zero),   T(-inf, -inf), T(one, 2)};
+#if !EIGEN_ARCH_ARM  // 32-bit ARM flushes subnormals in packet operations.
+  lanes.push_back(T(denorm_min, denorm_min));
+  lanes.push_back(T(nan, denorm_min));
+  lanes.push_back(T(-denorm_min, nan));
+  lanes.push_back(T(Real(6) * denorm_min, Real(3) * denorm_min));
+#endif
+  const auto same = [&](const Real& x, const Real& y) {
+    return ((numext::isnan)(x) && (numext::isnan)(y)) || x == y || numext::abs(x - y) <= Real(4) * eps;
+  };
+  for (size_t shift = 0; shift < lanes.size(); ++shift) {
+    for (Index i = 0; i < z.size(); ++i) z(i) = lanes[(size_t(i) + shift) % lanes.size()];
+    s_array = z.sign();
+    for (Index i = 0; i < z.size(); ++i) {
+      const T expected = numext::sign(z(i));
+      VERIFY(same(numext::real(s_array(i)), numext::real(expected)));
+      VERIFY(same(numext::imag(s_array(i)), numext::imag(expected)));
+    }
   }
 }
 
