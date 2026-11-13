@@ -32,6 +32,7 @@ You can disable %Eigen's multi threading at compile time by defining the \link T
 As an alternative to OpenMP, %Eigen supports a custom thread pool backend for GEMM operations.
 Define \c EIGEN_GEMM_THREADPOOL and use \c Eigen::setGemmThreadPool(Eigen::ThreadPool*) to
 provide a thread pool. OpenMP and \c EIGEN_GEMM_THREADPOOL are mutually exclusive.
+\c Eigen::nbThreads() is 1 until a pool is registered or \c Eigen::setNbThreads() is called.
 
 \subsection TopicMultiThreading_ParallelOps Parallelized operations
 

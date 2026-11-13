@@ -252,7 +252,8 @@ inline void manage_multi_threading(Action action, int* v) {
     else
       *v = omp_get_max_threads();
 #else
-    *v = m_maxThreads;
+    // m_maxThreads is -1 until a pool is registered or setNbThreads is called.
+    *v = m_maxThreads > 0 ? m_maxThreads : 1;
 #endif
   } else {
     eigen_internal_assert(false);

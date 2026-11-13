@@ -22,9 +22,7 @@
 // stale registration harmless.
 struct ScopedSerialGemm {
   ScopedSerialGemm() : saved_threads_(Eigen::nbThreads()) { Eigen::setNbThreads(1); }
-  // In a thread-pool build nbThreads() reports the raw -1 that means "never set", and
-  // setNbThreads rejects a negative count.  0 is its documented "back to the pool's count".
-  ~ScopedSerialGemm() { Eigen::setNbThreads(saved_threads_ > 0 ? saved_threads_ : 0); }
+  ~ScopedSerialGemm() { Eigen::setNbThreads(saved_threads_); }
   ScopedSerialGemm(const ScopedSerialGemm&) = delete;
   ScopedSerialGemm& operator=(const ScopedSerialGemm&) = delete;
 
@@ -346,6 +344,13 @@ void test_parallelize_gemm_assign() {
   VERIFY_IS_APPROX(c, serial);
 }
 
+// nbThreads() is a count of threads: 1 until a pool is registered or setNbThreads is called, never the -1 of "unset".
+// It runs first, before any other subtest registers a pool.
+template <typename = void>
+void test_nb_threads_unset() {
+  VERIFY(Eigen::nbThreads() >= 1);
+}
+
 // Runs a test with the given SME unit count: a nonzero count splits products on the SME kernel into disjoint parts,
 // 0 keeps the shared parallel session, so both paths are covered on every host.
 template <typename Test>
@@ -357,6 +362,7 @@ void with_sme_units(int units, Test test) {
 }
 
 EIGEN_DECLARE_TEST(product_threaded) {
+  CALL_SUBTEST_12(test_nb_threads_unset<>());
   // Off SME the unit count does nothing, so only the default runs there.
 #ifdef EIGEN_VECTORIZE_SME
   for (int units : {2, 3, 0}) {
