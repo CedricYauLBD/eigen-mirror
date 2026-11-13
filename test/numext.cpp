@@ -1016,6 +1016,101 @@ void check_complex_divide() {
   }
 }
 
+// Quotients that are representable although Smith's numerator a_r + a_i d / c or denominator c + d^2 / c is not: the
+// operands lie above max / 2 or the divisor's parts are. Both the scalar and the packet (Array) path must give them.
+template <typename T>
+void check_complex_divide_extreme() {
+  using Complex = std::complex<T>;
+  const T zero(0), half(0.5), one(1);
+  const T highest = (std::numeric_limits<T>::max)();
+  const T h = T(0.75) * highest, big = T(0.9) * highest, lowest = (std::numeric_limits<T>::min)();
+  struct Case {
+    Complex a, b, quotient;
+  };
+  const Case cases[] = {{Complex(h, h), Complex(h, h), Complex(one, zero)},
+                        {Complex(h, -h), Complex(h, h), Complex(zero, -one)},
+                        {Complex(-h, h), Complex(h, -h), Complex(-one, zero)},
+                        {Complex(h, zero), Complex(h, h), Complex(half, -half)},
+                        {Complex(-h, zero), Complex(h, h), Complex(-half, half)},
+                        {Complex(zero, h), Complex(-h, h), Complex(half, -half)},
+                        {Complex(highest, highest), Complex(T(2), T(2)), Complex(highest / T(2), zero)},
+                        {Complex(highest, -highest), Complex(T(2), T(2)), Complex(zero, -highest / T(2))},
+                        {Complex(big, zero), Complex(big, zero), Complex(one, zero)},
+                        {Complex(zero, big), Complex(zero, -big), Complex(-one, zero)},
+                        {Complex(lowest, lowest), Complex(T(2) * lowest, T(2) * lowest), Complex(half, zero)},
+                        {Complex(lowest, zero), Complex(zero, -T(2) * lowest), Complex(zero, half)}};
+  const T tol = T(8) * NumTraits<T>::epsilon();
+  Array<Complex, Dynamic, 1> a(19), b(19), q;
+  for (const Case& c : cases) {
+    a.setConstant(c.a);
+    b.setConstant(c.b);
+    q = a / b;
+    for (const Complex& value : {numext::divide(c.a, c.b), internal::scalar_quotient_op<Complex, Complex>()(c.a, c.b),
+                                 q(0), q(q.size() - 1)}) {
+      VERIFY(numext::abs(value.real() - c.quotient.real()) <= tol * numext::abs(c.quotient));
+      VERIFY(numext::abs(value.imag() - c.quotient.imag()) <= tol * numext::abs(c.quotient));
+    }
+  }
+  // Random quotients of operands near the top of the range: a = q b with 0.25 <= |q| < 1 and the parts of b up to
+  // max / 2.
+  for (int i = 0; i < 50; ++i) {
+    const Complex b_big(internal::random<T>(T(-0.5), T(0.5)) * highest, internal::random<T>(T(-0.5), T(0.5)) * highest);
+    const Complex q_ref(internal::random<T>(T(-0.7), T(0.7)), internal::random<T>(T(-0.7), T(0.7)));
+    if (numext::abs(b_big) < T(0.2) * highest || numext::abs(q_ref) < T(0.25)) continue;
+    const Complex a_big = q_ref * b_big;
+    a.setConstant(a_big);
+    b.setConstant(b_big);
+    q = a / b;
+    for (const Complex& value : {numext::divide(a_big, b_big), q(0), q(q.size() - 1)}) {
+      VERIFY(numext::abs(value - q_ref) <= tol * numext::abs(q_ref));
+    }
+  }
+}
+
+// The unscaled quotient is right where no numerator overflows. |a_r| + |a_i| = highest + ulp / 2 at a tie does overflow
+// the sum a_r + a_i of Smith's numerator for b = 1 + i, but the quotient does not: it rounds to 2^(emax - 1). A
+// subnormal component beside a large one survives division by one. Those two are the regression checks; the assertions
+// on the zero signs of a division by an infinity pin the existing behavior and do not guard the rework.
+template <typename T>
+void check_complex_divide_ties_and_zero_signs() {
+  using Complex = std::complex<T>;
+  const T zero(0), one(1);
+  const T highest = (std::numeric_limits<T>::max)();
+  const T denorm_min = std::numeric_limits<T>::denorm_min();
+  const T inf = std::numeric_limits<T>::infinity();
+  const int ulp_exponent = NumTraits<T>::max_exponent() - NumTraits<T>::digits();  // ulp(highest) = 2^ulp_exponent
+  const T ulp = numext::ldexp(one, ulp_exponent);
+  const Complex tie(highest - ulp, T(1.5) * ulp);
+  const Complex one_plus_i(one, one);
+  const T tol = T(8) * NumTraits<T>::epsilon();
+  const Complex expected(numext::ldexp(one, NumTraits<T>::max_exponent() - 1),
+                         -numext::ldexp(one, NumTraits<T>::max_exponent() - 1));
+  for (const Complex& q :
+       {numext::divide(tie, one_plus_i), internal::scalar_quotient_op<Complex, Complex>()(tie, one_plus_i)}) {
+    VERIFY(numext::abs(q - expected) <= tol * numext::abs(expected));
+  }
+  const T tiny_cases[] = {denorm_min, -denorm_min};
+#if !EIGEN_ARCH_ARM  // 32-bit ARM flushes subnormals.
+  for (const T tiny : tiny_cases) {
+    const Complex q = numext::divide(Complex(tiny, highest), Complex(one, zero));
+    VERIFY_IS_EQUAL(q.real(), tiny);
+    VERIFY_IS_EQUAL(q.imag(), highest);
+    // Plain Smith's quotient by an infinite divisor: 0 with the sign of the numerator component.
+    for (const T large : {one, -one}) {
+      const Complex r = numext::divide(Complex(tiny, large), Complex(inf, zero));
+      VERIFY_IS_EQUAL(r.real(), T(tiny / inf));
+      VERIFY_IS_EQUAL((std::signbit)(r.real()), (std::signbit)(tiny));
+      VERIFY_IS_EQUAL(r.imag(), zero);
+      VERIFY_IS_EQUAL((std::signbit)(r.imag()), (std::signbit)(large));
+    }
+  }
+#else
+  (void)tiny_cases;
+  (void)inf;
+  (void)denorm_min;
+#endif
+}
+
 #if EIGEN_COMP_MSVC
 #pragma float_control(precise, on, push)
 #pragma fenv_access(on)
@@ -1838,6 +1933,10 @@ EIGEN_DECLARE_TEST(numext) {
 
     CALL_SUBTEST_1(check_complex_divide<float>());
     CALL_SUBTEST_1(check_complex_divide<double>());
+    CALL_SUBTEST_1(check_complex_divide_extreme<float>());
+    CALL_SUBTEST_1(check_complex_divide_extreme<double>());
+    CALL_SUBTEST_1(check_complex_divide_ties_and_zero_signs<float>());
+    CALL_SUBTEST_1(check_complex_divide_ties_and_zero_signs<double>());
     CALL_SUBTEST_1(check_complex_divide_exceptions<float>());
     CALL_SUBTEST_1(check_complex_divide_exceptions<double>());
     CALL_SUBTEST_1(check_narrow_fma_nonfinite<half>());
