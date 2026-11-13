@@ -118,7 +118,7 @@ inline typename MatrixBase<Derived>::RealScalar MatrixBase<Derived>::operatorNor
   if (!(numext::isfinite)(maxCoeff) || numext::is_exactly_zero(maxCoeff)) return maxCoeff;
   const auto factors = internal::safe_scaling<RealScalar>::scale_in_place(m_eval, maxCoeff);
   const auto gram = (m_eval * m_eval.adjoint()).eval();
-  SelfAdjointEigenSolver<typename std::decay<decltype(gram)>::type> solver(gram, EigenvaluesOnly);
+  SelfAdjointEigenSolver<std::decay_t<decltype(gram)>> solver(gram, EigenvaluesOnly);
   if (solver.info() != Success) return NumTraits<RealScalar>::quiet_NaN();
   RealScalar result = numext::sqrt(numext::maxi(solver.eigenvalues().maxCoeff(), RealScalar(0)));
   internal::safe_scaling<RealScalar>::unscale_in_place(result, factors);

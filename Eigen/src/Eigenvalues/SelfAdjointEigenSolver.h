@@ -629,9 +629,8 @@ EIGEN_DEVICE_FUNC ComputationInfo computeFromTridiagonal_impl(DiagType& diag, Su
     for (Index i = lo; i < hi; ++i) {
       const RealScalar absSubdiag = numext::abs(subdiag[i]);
       // |e_i| <= eps * max(|d_i|, |d_{i+1}|) is homogeneous of degree one in the entries, so the decision is unchanged
-      // by any scaling of the block; it perturbs T by at most eps * ||T||. The absolute floor is only meaningful in
-      // scaled coordinates, so the first per-block call, before any block is scaled, leaves it out: a coupling below
-      // the floor can be significant for T = s T0 with s near min().
+      // by any scaling of the block; it perturbs T by at most eps * ||T||. The absolute floor applies only in scaled
+      // coordinates; see considerAsZero.
       const bool belowMin = (!PerBlockScaling || iter != 0) && absSubdiag < considerAsZero;
       if (belowMin || absSubdiag <= precision * numext::maxi(numext::abs(diag[i]), numext::abs(diag[i + 1]))) {
         subdiag[i] = RealScalar(0);
