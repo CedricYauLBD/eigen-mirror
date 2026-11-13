@@ -73,10 +73,10 @@ void cod() {
   setRandomWellConditionedDiagonal(matrix);
   Scalar det = matrix.diagonal().prod();
   RealScalar absdet = numext::abs(det);
-  CompleteOrthogonalDecomposition<MatrixType> cod2(matrix);
-  cod2.compute(matrix);
-  q = cod2.householderQ();
+  // Rotate the diagonal matrix by a random unitary matrix, so that the determinants are those of a dense matrix.
+  q = generateRandomUnitaryMatrix<MatrixQType>(size);
   matrix = q * matrix * q.adjoint();
+  CompleteOrthogonalDecomposition<MatrixType> cod2(matrix);
   VERIFY_IS_APPROX(det, cod2.determinant());
   VERIFY_IS_APPROX(absdet, cod2.absDeterminant());
   VERIFY_IS_APPROX(numext::log(absdet), cod2.logAbsDeterminant());
