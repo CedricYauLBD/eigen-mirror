@@ -419,17 +419,33 @@ template <typename Scalar>
 void check_exp_family_accuracy() {
   using ArrayType = Array<Scalar, Dynamic, 1>;
   const bool is_float = std::is_same<Scalar, float>::value;
-  // Small and moderate arguments.
+  // Small and moderate arguments, where expm1, log1p and asinh rely on the low bits of fl(1 + x).
   const Scalar tiny = is_float ? Scalar(1e-7) : Scalar(1e-10);
   const std::vector<Scalar> small_values = {tiny,        -tiny,       Scalar(1e-3), Scalar(-1e-3),
                                             Scalar(0.1), Scalar(0.7), Scalar(3)};
-  // The largest finite results of exp need a scale 2^m with m at the top of the exponent range.
+  // The largest finite results of exp and expm1 need a scale 2^m with m at the top of the exponent range.
   const Scalar exp_edge = is_float ? Scalar(88.38) : Scalar(709.1);
   const std::vector<Scalar> large_values = {exp_edge, is_float ? Scalar(88.5) : Scalar(709.5),
                                             is_float ? Scalar(88.72) : Scalar(709.78), Scalar(10), Scalar(-10)};
+  // Arguments up to the largest finite value, where asinh and acosh switch to log(2 x) without squaring x.
+  const std::vector<Scalar> huge_values = {is_float ? Scalar(1e10) : Scalar(1e150),
+                                           is_float ? Scalar(1e30) : Scalar(1e300),
+                                           is_float ? Scalar(1e38) : Scalar(1e307), NumTraits<Scalar>::highest()};
 
   auto exp_fn = [](const ArrayType& x) -> ArrayType { return x.exp(); };
   LongDoubleFunction exp_ref = ::expl;
+  auto expm1_fn = [](const ArrayType& x) -> ArrayType { return x.expm1(); };
+  LongDoubleFunction expm1_ref = ::expm1l;
+  auto log1p_fn = [](const ArrayType& x) -> ArrayType { return x.log1p(); };
+  LongDoubleFunction log1p_ref = ::log1pl;
+  auto asinh_fn = [](const ArrayType& x) -> ArrayType { return x.asinh(); };
+  LongDoubleFunction asinh_ref = ::asinhl;
+  auto acosh_fn = [](const ArrayType& x) -> ArrayType { return x.acosh(); };
+  LongDoubleFunction acosh_ref = ::acoshl;
+  auto sinh_fn = [](const ArrayType& x) -> ArrayType { return x.sinh(); };
+  LongDoubleFunction sinh_ref = ::sinhl;
+  auto cosh_fn = [](const ArrayType& x) -> ArrayType { return x.cosh(); };
+  LongDoubleFunction cosh_ref = ::coshl;
 
   // Every call runs, so that one failure report lists all the functions that are wrong.
   bool passed = true;
@@ -437,6 +453,30 @@ void check_exp_family_accuracy() {
   // On a target without fma, -ffast-math fuses the two products of the range reduction of exp and loses its low bits
   // for large |x|, so only the overflow edge of float is covered here.
   if (is_float) passed &= check_fastmath_accuracy("exp", large_values, exp_fn, exp_ref);
+  passed &= check_fastmath_accuracy("expm1", small_values, expm1_fn, expm1_ref);
+  passed &= check_fastmath_accuracy("expm1", large_values, expm1_fn, expm1_ref);
+  passed &= check_fastmath_accuracy("log1p", small_values, log1p_fn, log1p_ref);
+  passed &= check_fastmath_accuracy("log1p", huge_values, log1p_fn, log1p_ref);
+  passed &= check_fastmath_accuracy("asinh", small_values, asinh_fn, asinh_ref);
+  passed &= check_fastmath_accuracy("asinh", huge_values, asinh_fn, asinh_ref);
+  std::vector<Scalar> negative_huge_values;
+  for (Scalar v : huge_values) negative_huge_values.push_back(-v);
+  passed &= check_fastmath_accuracy("asinh", negative_huge_values, asinh_fn, asinh_ref);
+
+  // acosh is defined for x >= 1: x = 1 + tiny, 1 + 1e-3, ... and the huge values.
+  std::vector<Scalar> acosh_values = huge_values;
+  for (Scalar v : small_values) {
+    if (v > Scalar(0)) acosh_values.push_back(Scalar(1) + v);
+  }
+  passed &= check_fastmath_accuracy("acosh", acosh_values, acosh_fn, acosh_ref);
+
+  // sinh and cosh scale exp(r) by 2^(n - 1) from the same reduction as expm1, and are finite up to ln(2 highest).
+  std::vector<Scalar> hyperbolic_values = large_values;
+  hyperbolic_values.push_back(is_float ? Scalar(89.2) : Scalar(710.3));
+  hyperbolic_values.push_back(Scalar(-1.5));
+  hyperbolic_values.push_back(is_float ? Scalar(-89.2) : Scalar(-710.3));
+  passed &= check_fastmath_accuracy("sinh", hyperbolic_values, sinh_fn, sinh_ref);
+  passed &= check_fastmath_accuracy("cosh", hyperbolic_values, cosh_fn, cosh_ref);
   VERIFY(passed);
 }
 
