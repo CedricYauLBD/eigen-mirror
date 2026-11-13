@@ -704,6 +704,83 @@ void selfadjointeigensolver_isolated_tiny_block_all() {
           selfadjointeigensolver_isolated_tiny_block<RealScalar>(e, blockSize, size, coupled);
 }
 
+// MatrixBase::operatorNorm() forms A*A^*, so it must scale first: the norm of s*A0 is s*||A0||_2 over the whole
+// normal range, and a non-finite input gives a non-finite norm instead of a stale or finite value.
+template <typename Scalar>
+void matrix_operator_norm_scale_sweep() {
+  using RealScalar = typename NumTraits<Scalar>::Real;
+  using MatrixType = Matrix<Scalar, Dynamic, Dynamic>;
+  const Index n = 5;
+  const RealScalar eps = NumTraits<RealScalar>::epsilon();
+  const RealScalar nan = std::numeric_limits<RealScalar>::quiet_NaN();
+  const RealScalar inf = std::numeric_limits<RealScalar>::infinity();
+  const int minExp = std::numeric_limits<RealScalar>::min_exponent - 1 + std::numeric_limits<RealScalar>::digits / 2;
+  const int maxExp = std::numeric_limits<RealScalar>::max_exponent - 6;
+  const int step = std::numeric_limits<RealScalar>::digits / 4;
+
+  // A0 = U diag(sigma) W^* with unitary U, W, so that ||A0||_2 = sigma_max.
+  MatrixType h1 = MatrixType::Random(n, n), h2 = MatrixType::Random(n, n);
+  MatrixType U = SelfAdjointEigenSolver<MatrixType>(h1 + h1.adjoint()).eigenvectors();
+  MatrixType W = SelfAdjointEigenSolver<MatrixType>(h2 + h2.adjoint()).eigenvectors();
+  Matrix<RealScalar, Dynamic, 1> sigma(n);
+  for (Index i = 0; i < n; ++i) sigma(i) = RealScalar(1) / RealScalar(i + 1);
+  const MatrixType A0 = U * sigma.template cast<Scalar>().asDiagonal() * W.adjoint();
+  const RealScalar norm0 = sigma(0);
+
+  for (int e = minExp; e <= maxExp; e += step) {
+    const RealScalar scale = std::ldexp(RealScalar(1), e);
+    const MatrixType A = A0 * Scalar(scale);
+    const RealScalar expected = scale * norm0;
+    const RealScalar computed = A.operatorNorm();
+    VERIFY(numext::abs(computed - expected) <= RealScalar(10 * n) * eps * expected);
+  }
+
+  MatrixType B = A0;
+  B(1, 2) = Scalar(nan);
+  VERIFY((numext::isnan)(B.operatorNorm()));
+  B = A0;
+  B(3, 1) = Scalar(inf);
+  VERIFY((numext::isinf)(B.operatorNorm()) && B.operatorNorm() > RealScalar(0));
+  B(0, 0) = Scalar(nan);
+  VERIFY((numext::isnan)(B.operatorNorm()));
+  VERIFY_IS_EQUAL(MatrixType::Zero(n, n).operatorNorm(), RealScalar(0));
+  VERIFY_IS_EQUAL(MatrixType(0, 0).operatorNorm(), RealScalar(0));
+
+  // The self-adjoint view reports a NaN as NaN and an infinity as +infinity, as MatrixBase does, rather than the
+  // maximum of unspecified eigenvalues.
+  B = A0 + A0.adjoint();
+  const RealScalar viewNorm = B.template selfadjointView<Lower>().operatorNorm();
+  VERIFY(numext::abs(viewNorm - B.template selfadjointView<Lower>().eigenvalues().cwiseAbs().maxCoeff()) <=
+         RealScalar(10 * n) * eps * viewNorm);
+  B(1, 1) = Scalar(nan);
+  VERIFY((numext::isnan)(B.template selfadjointView<Lower>().operatorNorm()));
+  B(1, 1) = Scalar(inf);
+  const RealScalar infiniteViewNorm = B.template selfadjointView<Lower>().operatorNorm();
+  VERIFY((numext::isinf)(infiniteViewNorm) && infiniteViewNorm > RealScalar(0));
+}
+
+// SelfAdjointView::operatorNorm() uses what the solver uses: the lower triangle and the real part of the diagonal. A
+// non-finite entry above the diagonal or in the imaginary part of a diagonal entry changes nothing.
+template <typename Scalar>
+void selfadjoint_view_operator_norm_unreferenced() {
+  using RealScalar = typename NumTraits<Scalar>::Real;
+  using MatrixType = Matrix<Scalar, Dynamic, Dynamic>;
+  const Index n = 5;
+  const RealScalar eps = NumTraits<RealScalar>::epsilon();
+  const RealScalar nan = std::numeric_limits<RealScalar>::quiet_NaN();
+  const MatrixType base = MatrixType::Random(n, n) + MatrixType::Random(n, n).adjoint();
+  const RealScalar expected = base.template selfadjointView<Lower>().operatorNorm();
+  VERIFY(expected > RealScalar(0));
+  MatrixType B = base;
+  B(1, 3) = Scalar(nan);
+  VERIFY(numext::abs(B.template selfadjointView<Lower>().operatorNorm() - expected) <=
+         RealScalar(10 * n) * eps * expected);
+  B = base;
+  numext::imag_ref(B(2, 2)) = nan;
+  VERIFY(numext::abs(B.template selfadjointView<Lower>().operatorNorm() - expected) <=
+         RealScalar(10 * n) * eps * expected);
+}
+
 // Test computeFromTridiagonal with wide dynamic range across decoupled blocks.
 // This exercises the per-block scaling in computeFromTridiagonal_impl: a zero on the
 // subdiagonal decouples the matrix into blocks with vastly different scales. Global
@@ -1844,6 +1921,12 @@ EIGEN_DECLARE_TEST(eigensolver_selfadjoint) {
     CALL_SUBTEST_8(selfadjointeigensolver_tridiagonal_graded_all<float>());
     CALL_SUBTEST_8(selfadjointeigensolver_isolated_tiny_block_all<double>());
     CALL_SUBTEST_8(selfadjointeigensolver_isolated_tiny_block_all<float>());
+    CALL_SUBTEST_8(matrix_operator_norm_scale_sweep<float>());
+    CALL_SUBTEST_8(matrix_operator_norm_scale_sweep<double>());
+    CALL_SUBTEST_8(matrix_operator_norm_scale_sweep<std::complex<float>>());
+    CALL_SUBTEST_8(matrix_operator_norm_scale_sweep<std::complex<double>>());
+    CALL_SUBTEST_8(selfadjoint_view_operator_norm_unreferenced<std::complex<float>>());
+    CALL_SUBTEST_8(selfadjoint_view_operator_norm_unreferenced<std::complex<double>>());
 
     // diagonal matrices
     CALL_SUBTEST_17(selfadjointeigensolver_diagonal(Matrix3d()));
