@@ -310,19 +310,24 @@ void ldexp_test() {
   const int digits = std::numeric_limits<Scalar>::digits;
   const int max_exp = std::numeric_limits<Scalar>::max_exponent;
   // Include denormals, saturation, and unrepresentable 2^e scale factors.
-  const int exponents[] = {0,
-                           1,
-                           -1,
-                           digits - 1,
-                           1 - digits,
-                           max_exp - 1,
-                           1 - max_exp,
-                           max_exp + digits,
-                           -(max_exp + digits),
-                           2 * max_exp,
-                           -2 * max_exp,
-                           (std::numeric_limits<int>::max)(),
-                           (std::numeric_limits<int>::min)()};
+  std::vector<int> exponents = {0,
+                                1,
+                                -1,
+                                digits - 1,
+                                1 - digits,
+                                max_exp - 1,
+                                1 - max_exp,
+                                max_exp + digits,
+                                -(max_exp + digits),
+                                2 * max_exp,
+                                -2 * max_exp,
+                                (std::numeric_limits<int>::max)(),
+                                (std::numeric_limits<int>::min)(),
+                                70000,
+                                -70000};
+  // Every exponent that matters for subnormal inputs and near-overflow results, including those that bfloat16 cannot
+  // represent as a Scalar (odd |e| > 256).
+  for (int exponent = -300; exponent <= 300; ++exponent) exponents.push_back(exponent);
 
   bool all_pass = true;
   for (const int exponent : exponents) {
@@ -347,6 +352,31 @@ void ldexp_test() {
     }
   }
   VERIFY(all_pass);
+}
+
+// A custom scalar whose NumTraits members are plain functions, not constexpr (as for mpfr::mpreal), still has ldexp.
+struct NonConstexprReal {
+  NonConstexprReal() : value(0) {}
+  explicit NonConstexprReal(double v) : value(v) {}
+  double value;
+};
+inline NonConstexprReal ldexp(const NonConstexprReal& x, int exponent) {
+  return NonConstexprReal(std::ldexp(x.value, exponent));
+}
+namespace Eigen {
+template <>
+struct NumTraits<NonConstexprReal> : GenericNumTraits<NonConstexprReal> {
+  static int digits() { return 53; }
+  static int min_exponent() { return -1021; }
+  static int max_exponent() { return 1024; }
+};
+}  // namespace Eigen
+
+void ldexp_custom_scalar_test() {
+  ArrayX<NonConstexprReal> x(5);
+  for (Index i = 0; i < x.size(); ++i) x(i) = NonConstexprReal(double(i) + 0.5);
+  const ArrayX<NonConstexprReal> y = x.ldexp(3);
+  for (Index i = 0; i < x.size(); ++i) VERIFY_IS_EQUAL(y(i).value, 8.0 * (double(i) + 0.5));
 }
 
 template <typename Base, typename Exponent, bool ExpIsInteger = NumTraits<Exponent>::IsInteger>
@@ -1927,6 +1957,7 @@ EIGEN_DECLARE_TEST(array_cwise) {
     CALL_SUBTEST_37(ldexp_test<Eigen::bfloat16>());
     CALL_SUBTEST_36(log2_narrow_test<Eigen::half>());
     CALL_SUBTEST_37(log2_narrow_test<Eigen::bfloat16>());
+    CALL_SUBTEST_37(ldexp_custom_scalar_test());
   }
   for (int i = 0; i < g_repeat; i++) {
     CALL_SUBTEST_23(typed_logicals_test(ArrayX<int>(internal::random<int>(1, EIGEN_TEST_MAX_SIZE))));

@@ -441,8 +441,21 @@ struct scalar_ldexp_op {
   }
   template <typename Packet>
   EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE Packet packetOp(const Packet& a) const {
-    // pldexp clamps exponents, so a saturating conversion to Scalar is safe.
-    return internal::pldexp(a, pset1<Packet>(static_cast<Scalar>(m_exponent)));
+    // A nonzero finite a lies in [2^(emin - digits), 2^emax), so |e| > B = emax - emin + digits overflows or underflows
+    // as B + 1 does, and converting e to Scalar is exact where it matters if B < 2^digits: float, double and half
+    // (B = 40 < 2^11), but not bfloat16 (B = 261 > 2^8, where odd |e| in [257, 261] would round). Those are applied in
+    // two steps, e - 256 sign(e) and then 256 sign(e), which round once. Locals, not class constants, keep a custom
+    // Scalar with non-constexpr NumTraits compiling; for float, double and half they fold.
+    const int digits = NumTraits<Scalar>::digits();
+    const int bound = NumTraits<Scalar>::max_exponent() - NumTraits<Scalar>::min_exponent() + digits;
+    const Scalar exponent = static_cast<Scalar>(m_exponent);
+    const bool exact = bound < (1 << (digits < 24 ? digits : 24));  // 24: avoids overflowing int
+    if (exact || m_exponent > bound || m_exponent < -bound || static_cast<double>(exponent) == m_exponent) {
+      return internal::pldexp(a, pset1<Packet>(exponent));
+    }
+    const int step = m_exponent < 0 ? -(1 << digits) : (1 << digits);
+    return internal::pldexp(internal::pldexp(a, pset1<Packet>(static_cast<Scalar>(m_exponent - step))),
+                            pset1<Packet>(static_cast<Scalar>(step)));
   }
 
  private:
