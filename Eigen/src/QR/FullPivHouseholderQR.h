@@ -374,6 +374,7 @@ template <typename MatrixType, typename PermutationIndex>
 template <typename InputType>
 FullPivHouseholderQR<MatrixType, PermutationIndex>& FullPivHouseholderQR<MatrixType, PermutationIndex>::compute(
     const EigenBase<InputType>& matrix) {
+  m_qr.resize(matrix.rows(), matrix.cols());
   m_qr = matrix.derived();
   computeInPlace();
   return *this;

@@ -129,6 +129,7 @@ class PartialPivLU : public SolverBase<PartialPivLU<MatrixType_, PermutationInde
 
   template <typename InputType>
   PartialPivLU& compute(const EigenBase<InputType>& matrix) {
+    m_lu.resize(matrix.rows(), matrix.cols());
     m_lu = matrix.derived();
     compute();
     return *this;
