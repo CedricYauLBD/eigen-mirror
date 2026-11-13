@@ -392,6 +392,7 @@ class SparseContext {
     const Index m = (op == GpuOp::NoTrans) ? mat.rows() : mat.cols();
     const Index k = (op == GpuOp::NoTrans) ? mat.cols() : mat.rows();
     eigen_assert(k == rhs.rows());
+    EIGEN_UNUSED_VARIABLE(k);
 
     const Index n = rhs.cols();
     if (m == 0 || n == 0 || mat.nonZeros() == 0) return DenseMatrix::Zero(m, n);

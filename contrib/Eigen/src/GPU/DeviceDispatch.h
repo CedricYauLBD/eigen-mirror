@@ -57,6 +57,7 @@ void dispatch(Context& ctx, DeviceMatrix<scalar_type_t<Lhs>>& dst, const GemmExp
   const int64_t rhs_k = (traits_rhs::op == GpuOp::NoTrans) ? B.rows() : B.cols();
 
   eigen_assert(k == rhs_k && "DeviceMatrix GEMM dimension mismatch");
+  EIGEN_UNUSED_VARIABLE(rhs_k);
 
   const int64_t lda = A.rows();
   const int64_t ldb = B.rows();

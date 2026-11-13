@@ -622,6 +622,7 @@ class SVD {
     const Index m_orig = transposed_ ? n_ : m_;
     const Index n_orig = transposed_ ? m_ : n_;
     eigen_assert(d_B.rows() == m_orig);
+    EIGEN_UNUSED_VARIABLE(m_orig);
 
     const Index k = (std::min)(m_, n_);
     const Index kk = (std::min)(trunc, k);
