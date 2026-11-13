@@ -436,6 +436,14 @@ void jacobi_makejacobi_ratio_boundaries() {
   }
 }
 
+// The product of two const rotations must compile.
+template <typename Scalar>
+void jacobi_rotation_const() {
+  const JacobiRotation<Scalar> a(Scalar(0.6), Scalar(0.8)), b(Scalar(0.8), Scalar(-0.6));
+  const JacobiRotation<Scalar> product = a * b;
+  VERIFY_IS_APPROX(product.c(), a.c() * b.c() - numext::conj(a.s()) * b.s());
+}
+
 EIGEN_DECLARE_TEST(jacobi) {
   for (int i = 0; i < g_repeat; i++) {
     CALL_SUBTEST_7((jacobi_makegivens_safe_scaling<float>()));
@@ -450,6 +458,8 @@ EIGEN_DECLARE_TEST(jacobi) {
     CALL_SUBTEST_7((jacobi_makejacobi_extreme_phase<float>()));
     CALL_SUBTEST_7((jacobi_makejacobi_extreme_phase<double>()));
     CALL_SUBTEST_7((jacobi_makejacobi_ratio_boundaries<float>()));
+    CALL_SUBTEST_7((jacobi_rotation_const<float>()));
+    CALL_SUBTEST_7((jacobi_rotation_const<std::complex<double>>()));
     CALL_SUBTEST_7((jacobi_makejacobi_ratio_boundaries<double>()));
     CALL_SUBTEST_7((jacobi_makejacobi_ratio_boundaries<long double>()));
     CALL_SUBTEST_7((jacobi_makejacobi_ratio_boundaries<half>()));

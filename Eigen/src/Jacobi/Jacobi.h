@@ -52,7 +52,7 @@ class JacobiRotation {
   EIGEN_DEVICE_FUNC Scalar s() const { return m_s; }
 
   /** Concatenates two planar rotations */
-  EIGEN_DEVICE_FUNC JacobiRotation operator*(const JacobiRotation& other) {
+  EIGEN_DEVICE_FUNC JacobiRotation operator*(const JacobiRotation& other) const {
     return JacobiRotation(m_c * other.m_c - numext::conj(m_s) * other.m_s,
                           numext::conj(m_c * numext::conj(other.m_s) + numext::conj(m_s) * numext::conj(other.m_c)));
   }
