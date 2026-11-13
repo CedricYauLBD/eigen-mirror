@@ -274,6 +274,28 @@ void log2_narrow_test() {
   }
 }
 
+// |x - y| of signed integers that differ by more than the maximum wraps modulo 2^digits, as pabsdiff does.
+template <typename Scalar>
+void absolute_difference_integer_test() {
+  using Unsigned = std::make_unsigned_t<Scalar>;
+  const Scalar lowest = (std::numeric_limits<Scalar>::min)(), highest = (std::numeric_limits<Scalar>::max)();
+  const Scalar values[] = {lowest, Scalar(lowest + 1), Scalar(-1), Scalar(0), Scalar(1), Scalar(highest - 1), highest};
+  const Index n = Index(sizeof(values) / sizeof(values[0]));
+  const Index size = n * n;
+  ArrayX<Scalar> x(size), y(size), expected(size);
+  for (Index i = 0; i < n; ++i) {
+    for (Index j = 0; j < n; ++j) {
+      x(i * n + j) = values[i];
+      y(i * n + j) = values[j];
+      const Unsigned a = Unsigned(values[i]), b = Unsigned(values[j]);
+      expected(i * n + j) = Scalar(Unsigned(values[i] > values[j] ? a - b : b - a));
+    }
+  }
+  const ArrayX<Scalar> got = x.absolute_difference(y);
+  VERIFY_IS_CWISE_EQUAL(got, expected);
+  for (Index k = 0; k < size; ++k) VERIFY_IS_EQUAL(numext::absdiff(x(k), y(k)), expected(k));
+}
+
 template <typename Scalar>
 void ldexp_test() {
   const std::vector<Scalar> vals = special_values<Scalar>();
@@ -1920,6 +1942,10 @@ EIGEN_DECLARE_TEST(array_cwise) {
     CALL_SUBTEST_27(typed_logicals_test(ArrayX<std::complex<double>>(internal::random<int>(1, EIGEN_TEST_MAX_SIZE))));
     CALL_SUBTEST_42(bool_logical_ops<>());
     CALL_SUBTEST_43(modulus_tests());
+    CALL_SUBTEST_43(absolute_difference_integer_test<int8_t>());
+    CALL_SUBTEST_43(absolute_difference_integer_test<int16_t>());
+    CALL_SUBTEST_43(absolute_difference_integer_test<int32_t>());
+    CALL_SUBTEST_43(absolute_difference_integer_test<int64_t>());
   }
 
   for (int i = 0; i < g_repeat; i++) {
