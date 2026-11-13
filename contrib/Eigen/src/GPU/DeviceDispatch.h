@@ -750,11 +750,9 @@ namespace internal {
 // x[i] /= alpha. Real Scalar: NPP divides in place. Complex Scalar: cuBLAS scal by the
 // host reciprocal, which std::complex computes with scaling, so |alpha| > sqrt(max)
 // does not overflow; one extra rounding per element.
-inline void divide_in_place(Context& ctx, float* x, int64_t n, float alpha) {
-  device_divC(alpha, x, Eigen::internal::convert_index<int>(n), ctx.stream());
-}
+inline void divide_in_place(Context& ctx, float* x, int64_t n, float alpha) { device_divC(alpha, x, n, ctx.stream()); }
 inline void divide_in_place(Context& ctx, double* x, int64_t n, double alpha) {
-  device_divC(alpha, x, Eigen::internal::convert_index<int>(n), ctx.stream());
+  device_divC(alpha, x, n, ctx.stream());
 }
 template <typename Real>
 void divide_in_place(Context& ctx, std::complex<Real>* x, int64_t n, std::complex<Real> alpha) {
@@ -862,8 +860,7 @@ DeviceMatrix<Scalar_> DeviceMatrix<Scalar_>::cwiseProduct(Context& ctx, const De
   if (n > 0) {
     waitReady(ctx.stream());
     other.waitReady(ctx.stream());
-    internal::device_cwiseProduct(data_.get(), other.data_.get(), result.data_.get(),
-                                  Eigen::internal::convert_index<int>(n), ctx.stream());
+    internal::device_cwiseProduct(data_.get(), other.data_.get(), result.data_.get(), n, ctx.stream());
     result.recordReady(ctx.stream());
   }
   return result;
@@ -879,8 +876,7 @@ void DeviceMatrix<Scalar_>::cwiseProduct(Context& ctx, const DeviceMatrix& a, co
   if (n > 0) {
     a.waitReady(ctx.stream());
     b.waitReady(ctx.stream());
-    internal::device_cwiseProduct(a.data_.get(), b.data_.get(), data_.get(), Eigen::internal::convert_index<int>(n),
-                                  ctx.stream());
+    internal::device_cwiseProduct(a.data_.get(), b.data_.get(), data_.get(), n, ctx.stream());
     recordReady(ctx.stream());
   }
 }

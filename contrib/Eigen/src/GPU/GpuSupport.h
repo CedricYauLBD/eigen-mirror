@@ -74,10 +74,13 @@ inline void gpu_check_failed_code(const char* library, int status, const char* e
 // cuBLAS and the legacy cuSOLVER APIs take dimensions and leading dimensions as
 // 32-bit `int`, while Eigen's Index is 64-bit by default and GPU allocations can
 // exceed INT_MAX in one dimension. Narrow through this helper at every such call
-// site so an out-of-range value asserts instead of silently overflowing.
+// site so an out-of-range value is reported, in every build, instead of silently
+// overflowing.
 inline int to_blas_int(int64_t v) {
-  eigen_assert(v >= 0 && v <= static_cast<int64_t>((std::numeric_limits<int>::max)()) &&
-               "dimension exceeds the int range supported by cuBLAS / cuSOLVER");
+  if (v < 0 || v > static_cast<int64_t>((std::numeric_limits<int>::max)())) {
+    EIGEN_GPU_CHECK_FAILED("dimension exceeds the int range supported by cuBLAS / cuSOLVER", "to_blas_int", __FILE__,
+                           __LINE__);
+  }
   return static_cast<int>(v);
 }
 
