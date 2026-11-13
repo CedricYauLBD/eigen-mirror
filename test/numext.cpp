@@ -1047,6 +1047,23 @@ void check_complex_log1p_accuracy() {
   }
 }
 
+// log1p(z) for |z| of at least 1, where 1 + z is accurate: the argument is atan2(y, 1 + x) to a few ulps, however large
+// |x| is. W is wider than T.
+template <typename T, typename W>
+void check_complex_log1p_large() {
+  const T eps = NumTraits<T>::epsilon();
+  const T big = (std::numeric_limits<T>::max)() / T(4);
+  for (const T x : {T(3), -T(5), T(1e3), -T(1e5), T(1e10), -T(1e10), T(1e20), big, -big}) {
+    for (const T y : {T(1), -T(0.25), T(1e-3) * x, T(1e-10) * x, big / T(2)}) {
+      const std::complex<T> got = numext::log1p(std::complex<T>(x, y));
+      const W ref_re = std::log(std::hypot(W(1) + W(x), W(y)));
+      const W ref_im = std::atan2(W(y), W(1) + W(x));
+      VERIFY(numext::abs(W(got.imag()) - ref_im) <= W(4) * W(eps) * numext::abs(ref_im));
+      VERIFY(numext::abs(W(got.real()) - ref_re) <= W(4) * W(eps) * numext::abs(ref_re));
+    }
+  }
+}
+
 // C99 Annex G: a nonzero finite numerator over a zero divisor gives an infinity, and a finite one over an infinite
 // divisor gives zero, also where the divisor's parts have equal magnitudes. scalar_quotient_op is the coefficient-wise
 // quotient's scalar path.
@@ -1999,8 +2016,10 @@ EIGEN_DECLARE_TEST(numext) {
     CALL_SUBTEST_1(check_complex_fuzzy<double>());
 
     CALL_SUBTEST_1((check_complex_log1p_accuracy<float, double>()));
+    CALL_SUBTEST_1((check_complex_log1p_large<float, double>()));
     if (std::numeric_limits<long double>::digits > std::numeric_limits<double>::digits) {
       CALL_SUBTEST_1((check_complex_log1p_accuracy<double, long double>()));
+      CALL_SUBTEST_1((check_complex_log1p_large<double, long double>()));
     }
 
     CALL_SUBTEST_1(check_complex_digits<float>());

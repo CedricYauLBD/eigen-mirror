@@ -2550,10 +2550,15 @@ struct log1p_impl<std::complex<RealScalar>> {
     const RealScalar y = z.imag();
     // log|1 + z| = log1p(x (2 + x) + y^2) / 2. Rounding |1 + z| instead loses the real part to cancellation near
     // |1 + z| = 1, and with it the relative accuracy of log1p(z) for small z off the real axis.
-    if (numext::abs(x) < RealScalar(0.5) && numext::abs(y) < RealScalar(0.5) && !numext::is_exactly_zero(y)) {
+    const bool is_small = numext::abs(x) < RealScalar(0.5) && numext::abs(y) < RealScalar(0.5);
+    if (is_small && !numext::is_exactly_zero(y)) {
       return std::complex<RealScalar>(numext::log1p(x * (RealScalar(2) + x) + y * y) / RealScalar(2),
                                       numext::atan2(y, RealScalar(1) + x));
     }
+    // The correction in std_fallback::log1p, z log(u) / (u - 1) for u = 1 + z, presumes log(u) ~ u - 1, so small z. For
+    // |z| >= 1/2 it only adds error, up to ~1e2 ulps in the argument for |x| >= 1e4 in float, where the quotient's
+    // imaginary part cancels; log(u) is accurate there.
+    if (!is_small) return numext::log(std::complex<RealScalar>(RealScalar(1) + x, y));
     return std_fallback::log1p(z);
   }
 };
