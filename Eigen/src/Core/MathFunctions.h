@@ -1266,10 +1266,27 @@ struct absdiff_impl {
   }
 };
 
-// Unsigned x - y wraps, so integers order the operands.
+// Unsigned x - y wraps, so integers order the operands. A signed integer subtracts in the unsigned type, since
+// |x - y| > max overflows the signed one.
+template <typename T, bool IsSignedIntegral = std::is_integral<T>::value && std::is_signed<T>::value>
+struct integer_absdiff_impl {
+  EIGEN_DEVICE_FUNC static EIGEN_ALWAYS_INLINE T run(const T& x, const T& y) { return x > y ? x - y : y - x; }
+};
+
+template <typename T>
+struct integer_absdiff_impl<T, true> {
+  EIGEN_DEVICE_FUNC static EIGEN_ALWAYS_INLINE T run(const T& x, const T& y) {
+    using U = std::make_unsigned_t<T>;
+    const U ux = static_cast<U>(x), uy = static_cast<U>(y);
+    return static_cast<T>(static_cast<U>(x > y ? ux - uy : uy - ux));
+  }
+};
+
 template <typename T>
 struct absdiff_impl<T, true> {
-  EIGEN_DEVICE_FUNC static EIGEN_ALWAYS_INLINE T run(const T& x, const T& y) { return x > y ? x - y : y - x; }
+  EIGEN_DEVICE_FUNC static EIGEN_ALWAYS_INLINE T run(const T& x, const T& y) {
+    return integer_absdiff_impl<T>::run(x, y);
+  }
 };
 
 }  // end namespace internal
