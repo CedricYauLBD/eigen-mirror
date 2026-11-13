@@ -367,7 +367,8 @@ static void test_fft_non_power_of_2_accuracy(int n) {
     max_error = (std::max)(max_error, std::abs(WideComplex(output(k)) - expected));
     max_value = (std::max)(max_value, std::abs(expected));
   }
-  const long double bound = 16 * static_cast<long double>(NumTraits<RealScalar>::epsilon()) * std::log2(double(n));
+  const long double bound =
+      16 * static_cast<long double>(NumTraits<RealScalar>::epsilon()) * std::log2(static_cast<long double>(n));
   VERIFY(max_error <= bound * max_value);
 }
 
@@ -394,7 +395,8 @@ static void test_fft_non_power_of_2_impulse_accuracy(int n, int p) {
   }
   // 64 eps log2(n): measured 3.7e-14 (double) and 1.1e-5 (float) at n = 100003 against 5.9e-14 and 3.2e-5 for
   // 16 eps log2(n); the unreduced chirp gives 4.4e-11 (double). The slack covers platforms with another libm or no FMA.
-  const long double bound = 64 * static_cast<long double>(NumTraits<RealScalar>::epsilon()) * std::log2(double(n));
+  const long double bound =
+      64 * static_cast<long double>(NumTraits<RealScalar>::epsilon()) * std::log2(static_cast<long double>(n));
   VERIFY(max_error <= bound * scale);
 }
 

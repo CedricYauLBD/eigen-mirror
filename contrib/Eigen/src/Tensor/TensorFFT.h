@@ -291,7 +291,8 @@ struct TensorEvaluator<const TensorFFTOp<FFT, ArgType, FFTResultType, FFTDir>, D
         Index reduced_square = 0;
         Index square_step = 1;
         for (Index j = 0; j < line_len + 1; ++j) {
-          double arg = (EIGEN_PI * static_cast<double>(reduced_square)) / line_len;
+          // EIGEN_PI is a long double: the angle is formed in long double and rounded once to double.
+          double arg = static_cast<double>((EIGEN_PI * reduced_square) / line_len);
           std::complex<double> tmp(numext::cos(arg), numext::sin(arg));
           pos_j_base_powered[j] = static_cast<ComplexScalar>(tmp);
           reduced_square += square_step;
