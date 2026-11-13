@@ -42,7 +42,11 @@ struct ThrowingAssignScalar {
   ThrowingAssignScalar(const ThrowingAssignScalar& other) : v(other.v) { ++live; }
   ~ThrowingAssignScalar() { --live; }
   ThrowingAssignScalar& operator=(const ThrowingAssignScalar& other) {
-    if (budget >= 0 && budget-- == 0) throw assign_exception();
+    if (budget >= 0) {
+      const bool exhausted = budget == 0;
+      --budget;
+      if (exhausted) throw assign_exception();
+    }
     v = other.v;
     return *this;
   }
@@ -67,6 +71,7 @@ void check_throwing_assign(Index rows, Index cols) {
     for (int budget = 0; budget < rows * cols; budget += 3) {
       bool thrown = false;
       ThrowingAssignScalar::budget = budget;
+      // NOLINTNEXTLINE(performance-unnecessary-copy-initialization): the copy is the operation under test.
       EIGEN_TRY { MatrixType copy(src); }
       EIGEN_CATCH(assign_exception) { thrown = true; }
       ThrowingAssignScalar::budget = -1;
