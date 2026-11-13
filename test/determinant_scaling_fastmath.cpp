@@ -20,7 +20,10 @@ void determinant_scaling_fastmath() {
   VERIFY_IS_EQUAL(A.template triangularView<Upper>().determinant(), Scalar(-15));
   const PartialPivLU<MatrixType> lu(A);
   VERIFY_IS_EQUAL(lu.determinant(), Scalar(-15));
-  VERIFY_IS_EQUAL(lu.absDeterminant(), RealScalar(15));
+  // |z| of a complex scalar takes a square root, which clang 14 compiles under -ffast-math on x86-64 to rsqrtss and
+  // one Newton step (clang 15 emits sqrtss): relative error ~(3/2) (1.5 2^-12)^2 < 2 eps, plus a rounding per step.
+  VERIFY(numext::abs(lu.absDeterminant() - RealScalar(15)) <=
+         RealScalar(4) * NumTraits<RealScalar>::epsilon() * RealScalar(15));
   // log(mantissa), exponent log(2) and their sum each round once.
   VERIFY(numext::abs(lu.logAbsDeterminant() - std::log(RealScalar(15))) <=
          RealScalar(4) * NumTraits<RealScalar>::epsilon() * std::log(RealScalar(15)));
