@@ -2498,6 +2498,58 @@ packetmath_special_value_lanes() {
   }
 }
 
+// 32-bit ARM NEON reads a subnormal input as zero. A subnormal lane of psqrt may then give the input or a zero (or the
+// root, where the lane is not flushed), and one of prsqrt a signed infinity, but neither may give a NaN, nor disturb
+// the other lanes. clang compiled the zero test of psqrt on the bits of the input, which is false for a subnormal,
+// while vrsqrte and vmul flush it: the lane became 0 * inf = NaN.
+template <typename Scalar, typename Packet>
+std::enable_if_t<!std::is_same<Scalar, float>::value, void> packetmath_flushed_subnormal_lanes() {}
+
+template <typename Scalar, typename Packet>
+std::enable_if_t<std::is_same<Scalar, float>::value, void> packetmath_flushed_subnormal_lanes() {
+#if EIGEN_ARCH_ARM
+  using PacketTraits = internal::packet_traits<Scalar>;
+  constexpr bool kCheck = !internal::is_scalar<Packet>::value && PacketTraits::HasSqrt && PacketTraits::HasRsqrt;
+  EIGEN_IF_CONSTEXPR (kCheck) {
+    constexpr int PacketSize = internal::unpacket_traits<Packet>::size;
+    const Scalar norm_min = (std::numeric_limits<Scalar>::min)();
+    const Scalar denorm_min = std::numeric_limits<Scalar>::denorm_min();
+    const Scalar inf = NumTraits<Scalar>::infinity();
+    const Scalar subnormals[] = {denorm_min, Scalar(1024) * denorm_min, norm_min / Scalar(2), norm_min - denorm_min};
+    const Scalar neighbors[] = {Scalar(4), Scalar(0), inf};
+    EIGEN_ALIGN_TO_BOUNDARY(internal::unpacket_traits<Packet>::alignment) Scalar in[PacketSize];
+    EIGEN_ALIGN_TO_BOUNDARY(internal::unpacket_traits<Packet>::alignment) Scalar root[PacketSize];
+    EIGEN_ALIGN_TO_BOUNDARY(internal::unpacket_traits<Packet>::alignment) Scalar rroot[PacketSize];
+    test::packet_helper<PacketTraits::HasSqrt, Packet> h;
+    for (const Scalar sign : {Scalar(1), Scalar(-1)}) {
+      for (const Scalar subnormal : subnormals) {
+        for (int k = 0; k < PacketSize; ++k) {
+          for (int i = 0; i < PacketSize; ++i) in[i] = i == k ? sign * subnormal : neighbors[(i + k) % 3];
+          h.store(root, internal::psqrt(h.load(in)));
+          h.store(rroot, internal::prsqrt(h.load(in)));
+          for (int i = 0; i < PacketSize; ++i) {
+            if (i == k) {
+              VERIFY(test::biteq(root[i], in[i]) || root[i] == Scalar(0) ||
+                     (sign > 0 && numext::abs(root[i] - numext::sqrt(in[i])) <= Scalar(1e-3) * numext::sqrt(in[i])));
+              VERIFY(!(numext::isnan)(rroot[i]) && (rroot[i] > 0) == (sign > 0));
+            } else if (in[i] == Scalar(4)) {
+              VERIFY_IS_APPROX(root[i], Scalar(2));
+              VERIFY_IS_APPROX(rroot[i], Scalar(0.5));
+            } else if (in[i] == Scalar(0)) {
+              VERIFY(test::biteq(root[i], Scalar(0)));
+              VERIFY(test::biteq(rroot[i], inf));
+            } else {
+              VERIFY(test::biteq(root[i], inf));
+              VERIFY(test::biteq(rroot[i], Scalar(0)));
+            }
+          }
+        }
+      }
+    }
+  }
+#endif
+}
+
 template <typename Scalar, typename Packet>
 void packetmath_redux_infinities() {
   const Scalar infinity = NumTraits<Scalar>::infinity();
@@ -2614,6 +2666,7 @@ template <typename Scalar, typename Packet>
 void packetmath_notcomplex() {
   packetmath_ieee_special_values<Scalar, Packet>();
   packetmath_special_value_lanes<Scalar, Packet>();
+  packetmath_flushed_subnormal_lanes<Scalar, Packet>();
 
   using PacketTraits = internal::packet_traits<Scalar>;
   const int PacketSize = internal::unpacket_traits<Packet>::size;
