@@ -289,12 +289,17 @@ class PolynomialSolverBase {
  * WARNING: this polynomial solver is experimental, part of the contrib Eigen modules.
  *
  *
- * The eigenvalues of the balanced companion matrix of the polynomial give first approximations of
- * the roots. Ehrlich-Aberth iterations on the polynomial itself target a residual within the rounding
- * error of evaluation, with a finite sweep limit and an initial-estimate fallback for iterates whose
- * residual increased, or that would leave Cauchy's bound on the root moduli. Coincident estimates keep their
- * eigenvalues. The roots of a real polynomial are returned as real numbers or exact conjugate pairs. A root of
- * multiplicity \f$ m \f$ can only be located to about \f$ \varepsilon^{1/m} \f$.
+ * By default the roots are the eigenvalues of the balanced companion matrix of the polynomial, which are, as a set, the
+ * roots of one polynomial near the given one, also for multiple and clustered roots, followed by a clean-up that
+ * returns the roots of a real polynomial as real numbers or exact conjugate pairs. A root of multiplicity \f$ m \f$ can
+ * only be located to about \f$ \varepsilon^{1/m} \f$.
+ *
+ * With the optional argument \c refine = true of the constructor and of compute(), Ehrlich-Aberth iterations on the
+ * polynomial itself first refine the eigenvalues, targeting a residual within the rounding error of evaluation, with a
+ * finite sweep limit and an initial-estimate fallback for iterates whose residual increased, or that would leave
+ * Cauchy's bound on the root moduli. Coincident estimates keep their eigenvalues. Refined roots are individually more
+ * accurate for well-separated roots, but for multiple or clustered roots they are no longer jointly the roots of one
+ * nearby polynomial, which is why the refinement is off by default.
  */
 template <typename Scalar_, int Deg_>
 class PolynomialSolver : public PolynomialSolverBase<Scalar_, Deg_> {
@@ -310,9 +315,10 @@ class PolynomialSolver : public PolynomialSolverBase<Scalar_, Deg_> {
   using ComplexScalar = internal::make_complex_t<Scalar_>;
 
  public:
-  /** Computes the complex roots of a new polynomial. */
+  /** Computes the complex roots of a new polynomial. With \a refine, the eigenvalues of the companion matrix are
+   * refined by Ehrlich-Aberth iterations before the clean-up, see the class documentation. */
   template <typename OtherPolynomial>
-  void compute(const OtherPolynomial& poly) {
+  void compute(const OtherPolynomial& poly, bool refine = false) {
     eigen_assert(Scalar(0) != poly[poly.size() - 1]);
     eigen_assert(poly.size() > 1);
     if (poly.size() > 2) {
@@ -329,7 +335,7 @@ class PolynomialSolver : public PolynomialSolverBase<Scalar_, Deg_> {
       // Uniform coefficient scaling must not overflow or underflow the refinement's Horner recurrences.
       const RealScalar scale = poly.realView().cwiseAbs().maxCoeff();
       const auto scaledPoly = (poly / scale).eval();
-      refineRoots(scaledPoly);
+      if (refine) refineRoots(scaledPoly);
       cleanUpRoots(scaledPoly);
     } else if (poly.size() == 2) {
       m_roots.resize(1);
@@ -339,8 +345,8 @@ class PolynomialSolver : public PolynomialSolverBase<Scalar_, Deg_> {
 
  public:
   template <typename OtherPolynomial>
-  inline PolynomialSolver(const OtherPolynomial& poly) {
-    compute(poly);
+  inline PolynomialSolver(const OtherPolynomial& poly, bool refine = false) {
+    compute(poly, refine);
   }
 
   inline PolynomialSolver() {}
@@ -520,9 +526,9 @@ class PolynomialSolver<Scalar_, 1> : public PolynomialSolverBase<Scalar_, 1> {
   EIGEN_POLYNOMIAL_SOLVER_BASE_INHERITED_TYPES(PS_Base)
 
  public:
-  /** Computes the complex roots of a new polynomial. */
+  /** Computes the complex roots of a new polynomial. \a refine is ignored. */
   template <typename OtherPolynomial>
-  void compute(const OtherPolynomial& poly) {
+  void compute(const OtherPolynomial& poly, bool /*refine*/ = false) {
     eigen_assert(poly.size() == 2);
     eigen_assert(Scalar(0) != poly[1]);
     m_roots[0] = -poly[0] / poly[1];
@@ -530,8 +536,8 @@ class PolynomialSolver<Scalar_, 1> : public PolynomialSolverBase<Scalar_, 1> {
 
  public:
   template <typename OtherPolynomial>
-  inline PolynomialSolver(const OtherPolynomial& poly) {
-    compute(poly);
+  inline PolynomialSolver(const OtherPolynomial& poly, bool refine = false) {
+    compute(poly, refine);
   }
 
   inline PolynomialSolver() {}

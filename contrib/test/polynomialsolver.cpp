@@ -256,7 +256,7 @@ void polynomialsolver_refinement_accuracy(int deg) {
   const RootsType roots = RootsType::Random(deg);
   PolynomialType pols;
   roots_to_monicPolynomial(roots, pols);
-  PolynomialSolver<Scalar, Deg> solver(pols);
+  PolynomialSolver<Scalar, Deg> solver(pols, true);
   const WideReal eps = WideReal(NumTraits<RealScalar>::epsilon());
 
   // A Newton correction below one ulp bounds |p(z)| by eps |z p'(z)| <= deg eps sum_k |a_k| |z|^k; sampled roots of
@@ -277,7 +277,7 @@ void polynomialsolver_refinement_accuracy(int deg) {
   // A coefficient perturbation of size delta moves a simple root r_j by at most
   // delta * sum_k |r_j|^k / prod_{k != j} |r_j - r_k| to first order, valid while that is small against the gap to the
   // nearest other root. Each such root must have a computed root within 16 times the bound at delta = eps max_k |a_k|.
-  const PolynomialSolver<WideScalar, Deg> reference(pols.template cast<WideScalar>().eval());
+  const PolynomialSolver<WideScalar, Deg> reference(pols.template cast<WideScalar>().eval(), true);
   const WideReal delta = eps * WideReal(pols.cwiseAbs().maxCoeff());
   for (Index j = 0; j < deg; ++j) {
     const std::complex<WideReal> r = reference.roots()[j];
@@ -331,7 +331,7 @@ void polynomialsolver_tiny_root() {
   roots << 1e-12, 0.25, -0.5, 0.75, -1.0;
   Matrix<double, 6, 1> pols;
   roots_to_monicPolynomial(roots, pols);
-  PolynomialSolver<double, 5> solver(pols);
+  PolynomialSolver<double, 5> solver(pols, true);
   const double eps = NumTraits<double>::epsilon();
   bool found = false;
   for (Index i = 0; i < 5; ++i) {
@@ -360,7 +360,7 @@ void polynomialsolver_zero_cluster() {
     const double e = std::pow(10.0, -exponent);
     Matrix<double, 5, 1> pols;
     pols << e, -e, 0, -1, 1;
-    PolynomialSolver<double, 4> solver(pols);
+    PolynomialSolver<double, 4> solver(pols, true);
     VERIFY(polynomialsolver_reconstruction_error(pols, solver.roots()) <= 64 * eps);
     Index nearOne = 0;
     for (Index i = 0; i < 4; ++i) nearOne += numext::abs(solver.roots()[i] - 1.0) < 0.5;
@@ -374,7 +374,7 @@ template <typename = void>
 void polynomialsolver_root_bound() {
   Matrix<double, 5, 1> pols;
   pols << 1.34e-18, -2.217e-95, -2.172e-27, -1.043e88, 5.409e83;
-  PolynomialSolver<double, 4> solver(pols);
+  PolynomialSolver<double, 4> solver(pols, true);
   const double bound = 1 + pols.head(4).cwiseAbs().maxCoeff() / pols[4];
   for (Index i = 0; i < 4; ++i) VERIFY(numext::abs(solver.roots()[i]) <= bound);
   VERIFY(polynomialsolver_reconstruction_error(pols, solver.roots()) <= 64 * NumTraits<double>::epsilon());
@@ -408,12 +408,13 @@ void polynomialsolver_separated_roots() {
     for (Index i = 0; i < rootVector.size(); ++i) rootVector[i] = roots[i];
     roots_to_monicPolynomial(rootVector, monic);
     const VectorXd pols = monic.real();
-    PolynomialSolver<double, Dynamic> solver(pols);
+    PolynomialSolver<double, Dynamic> solver(pols, true);
     VERIFY_IS_EQUAL(solver.roots().size(), rootVector.size());
 
     Array<bool, Dynamic, 1> used = Array<bool, Dynamic, 1>::Constant(rootVector.size(), false);
     for (Index i = 0; i < rootVector.size(); ++i) {
-      const LongComplex r(rootVector[i].real(), rootVector[i].imag());
+      const LongComplex r(static_cast<long double>(rootVector[i].real()),
+                          static_cast<long double>(rootVector[i].imag()));
       LongComplex value = 0, derivative = 0;
       long double magnitude = 0;
       for (Index k = pols.size() - 1; k >= 0; --k) {
@@ -439,6 +440,58 @@ void polynomialsolver_separated_roots() {
   }
 }
 
+// The default roots are the companion eigenvalues, which are jointly the roots of one polynomial near the given one:
+// for multiple roots the mean of the roots near 1 and the polynomial rebuilt from all the roots stay accurate to the
+// rounding of the coefficients. Refining the roots one at a time (refine = true) keeps that for (x-1)^3 but loses it
+// for (x-1)^5 and (x-1)^3 (x+2): the mean is then off by 6e10 and 1e9 eps, the rebuilt polynomial by 4e10 and 5e8 n eps
+// max|a_k|.
+inline void polynomialsolver_multiple_roots_as_a_set(const std::vector<double>& rootSet) {
+  using LongComplex = std::complex<long double>;
+  const double eps = NumTraits<double>::epsilon();
+  const Index n = rootSet.size();
+  Matrix<std::complex<double>, Dynamic, 1> roots(n), monic;
+  for (Index i = 0; i < n; ++i) roots[i] = rootSet[i];
+  roots_to_monicPolynomial(roots, monic);
+  const VectorXd poly = monic.real();
+  const PolynomialSolver<double, Dynamic> solver(poly);
+  VERIFY_IS_EQUAL(solver.roots().size(), n);
+
+  // The mean of the roots near 1.
+  std::complex<double> mean = 0;
+  Index cluster = 0;
+  for (Index i = 0; i < n; ++i) {
+    if (!(numext::abs(solver.roots()[i] - 1.0) < 0.5)) continue;
+    mean += solver.roots()[i];
+    ++cluster;
+  }
+  VERIFY(cluster >= 3);
+  mean /= static_cast<double>(cluster);
+  VERIFY(numext::abs(mean - 1.0) <= 32 * eps);  // measured at most 3 eps
+
+  // The polynomial with the computed roots, in long double.
+  std::vector<LongComplex> rebuilt(n + 1, LongComplex(0));
+  rebuilt[0] = 1;
+  for (Index i = 0; i < n; ++i) {  // multiply by (x - r_i)
+    const LongComplex r(static_cast<long double>(solver.roots()[i].real()),
+                        static_cast<long double>(solver.roots()[i].imag()));
+    for (Index k = i + 1; k > 0; --k) rebuilt[k] = rebuilt[k - 1] - r * rebuilt[k];
+    rebuilt[0] = -r * rebuilt[0];
+  }
+  long double error = 0, largest = 0;
+  for (Index k = 0; k <= n; ++k) {
+    error = (std::max)(error, std::abs(rebuilt[k] - static_cast<long double>(poly[k])));
+    largest = (std::max)(largest, std::abs(static_cast<long double>(poly[k])));
+  }
+  VERIFY(error <= 20 * n * static_cast<long double>(eps) * largest);  // measured at most 2.3 n eps max|a_k|
+}
+
+template <typename = void>
+void polynomialsolver_multiple_roots() {
+  polynomialsolver_multiple_roots_as_a_set({1, 1, 1});
+  polynomialsolver_multiple_roots_as_a_set({1, 1, 1, 1, 1});
+  polynomialsolver_multiple_roots_as_a_set({1, 1, 1, -2});
+}
+
 // When the companion matrix cannot be formed (|a_k / a_n| overflows) or the eigenvalue computation fails, the
 // solver reports one NaN root per degree instead of an empty root vector.
 template <typename Scalar>
@@ -462,7 +515,7 @@ template <typename Polynomial, typename Roots>
 void polynomialsolver_verify_root_set(const Polynomial& poly, const Roots& expected) {
   using Scalar = typename Polynomial::Scalar;
   using Real = typename NumTraits<Scalar>::Real;
-  const PolynomialSolver<Scalar, Roots::RowsAtCompileTime> solver(poly);
+  const PolynomialSolver<Scalar, Roots::RowsAtCompileTime> solver(poly, true);
   Array<bool, Dynamic, 1> matched = Array<bool, Dynamic, 1>::Constant(expected.size(), false);
   VERIFY_IS_EQUAL(solver.roots().size(), expected.size());
   // These exactly represented polynomials have well-separated simple roots or exact roots at zero.
@@ -519,7 +572,7 @@ void polynomialsolver_real_starts_for_complex_pair() {
   Matrix<double, 7, 1> poly;
   poly << 0.015754773452117808, -0.2921305061016638, 1.8654828811488313, -4.9912618133859823, 6.4755674799802918,
       -4.0734106361481288, 1;
-  PolynomialSolver<double, Degree> solver(poly);
+  PolynomialSolver<double, Degree> solver(poly, true);
   // A nearly double nonreal pair initially appears as two real eigenvalues. Unconverged real-axis refinement
   // used to increase the maximum componentwise backward error from 2.2 eps to 3.1e5 eps.
   const long double tolerance = 32 * static_cast<long double>(NumTraits<double>::epsilon());
@@ -560,6 +613,7 @@ EIGEN_DECLARE_TEST(polynomialsolver) {
   CALL_SUBTEST_15(polynomialsolver_zero_cluster<>());
   CALL_SUBTEST_15(polynomialsolver_root_bound<>());
   CALL_SUBTEST_15(polynomialsolver_separated_roots<>());
+  CALL_SUBTEST_15(polynomialsolver_multiple_roots<>());
   CALL_SUBTEST_15(polynomialsolver_companion_failure<double>());
   CALL_SUBTEST_15(polynomialsolver_companion_failure<std::complex<double>>());
   CALL_SUBTEST_16(polynomialsolver_real_part_is_another_root<float>());
