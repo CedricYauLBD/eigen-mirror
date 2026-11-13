@@ -131,6 +131,9 @@ inline void setNbSmeUnits(int v) {
 #ifdef EIGEN_GEMM_THREADPOOL
 // Sets the ThreadPool used by Eigen parallel Gemm.
 //
+// Products issued by several threads at once are safe: the pool serves one parallel product at a time, and a product
+// that finds it busy, or that is issued from a task on the pool, runs on its calling thread.
+//
 // NOTICE: This function has a known race condition with
 // parallelize_gemm below, and should not be called while
 // an instance of that function is running.
@@ -260,6 +263,16 @@ inline void manage_multi_threading(Action action, int* v) {
   }
 }
 
+#if defined(EIGEN_GEMM_THREADPOOL)
+// The parts of one shared parallel session wait for each other's packed panels. Sessions of different products on one
+// pool could each occupy some workers while their other parts wait in the queue, so only one session at a time uses
+// the pool. A product that finds it busy runs on its calling thread.
+inline std::mutex& gemm_session_mutex() {
+  static std::mutex mutex;
+  return mutex;
+}
+#endif
+
 template <bool Condition, typename Functor, typename Index>
 EIGEN_STRONG_INLINE void parallelize_gemm(const Functor& func, Index rows, Index cols, Index depth, bool transpose) {
   // Dynamically check whether we should even try to execute in parallel.
@@ -381,6 +394,11 @@ EIGEN_STRONG_INLINE void parallelize_gemm(const Functor& func, Index rows, Index
       return;
     }
   }
+#endif
+
+#if defined(EIGEN_GEMM_THREADPOOL)
+  std::unique_lock<std::mutex> session_lock(gemm_session_mutex(), std::try_to_lock);
+  if (!session_lock.owns_lock()) return func(0, rows, 0, cols);
 #endif
 
   func.initParallelSession(threads);

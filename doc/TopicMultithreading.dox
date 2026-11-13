@@ -34,6 +34,11 @@ Define \c EIGEN_GEMM_THREADPOOL and use \c Eigen::setGemmThreadPool(Eigen::Threa
 provide a thread pool. OpenMP and \c EIGEN_GEMM_THREADPOOL are mutually exclusive.
 \c Eigen::nbThreads() is 1 until a pool is registered or \c Eigen::setNbThreads() is called.
 
+Several threads may issue products at the same time, but the pool serves one parallel product at a time, because the
+threads of a product wait for each other's packed panels (the independent parts of a product on the ARM SME kernel are
+not restricted). A product that finds the pool busy runs on its calling thread, and so does a product issued from a
+task running on the pool.
+
 \subsection TopicMultiThreading_ParallelOps Parallelized operations
 
 Currently, the following algorithms can make use of multi-threading:
