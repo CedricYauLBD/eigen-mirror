@@ -490,6 +490,123 @@ void linspaced_integer_divisor() {
   }
 }
 
+// Constant fills of small fixed-size complex objects with a complex product computed in the same function. GCC 15.1
+// and 15.2 with FMA SLP-vectorized the unrolled fill_n stores into wrong code, e.g. (1,70),(8,42) instead of
+// (-5,10),(-5,10) for Vector2cd::Constant((1+2i) * (3+4i)); see EIGEN_GCC15_SLP_BUG. Each case is a function of its
+// own, as in user code.
+template <int Case, typename XprType>
+EIGEN_DONT_INLINE void complex_constant_fill_case(const typename XprType::Scalar* a, XprType& x) {
+  switch (Case) {
+    case 0:
+      x = XprType::Constant(a[0] * a[1]);
+      break;
+    case 1:
+      x.setConstant(a[0] * a[1]);
+      break;
+    case 2:
+      x.fill(a[0] * a[1]);
+      break;
+    case 3:
+      for (Index j = 0; j < x.cols(); ++j) x.col(j).setConstant(a[0] * a[1]);
+      break;
+    default:
+      Map<XprType>(x.data()).setConstant(a[0] * a[1]);
+  }
+}
+
+template <typename XprType>
+void complex_constant_fill() {
+  using Scalar = typename XprType::Scalar;
+  using RealScalar = typename NumTraits<Scalar>::Real;
+  // Small integers make the product exact however it is evaluated.
+  const auto small_int = [] { return RealScalar(internal::random<int>(-8, 8)); };
+  const Scalar a[2] = {Scalar(small_int(), small_int()), Scalar(small_int(), small_int())};
+  const Scalar expected = a[0] * a[1];
+  XprType x;
+  // Coefficient-wise scalar compares, so the check does not broadcast expected the way the code under test does.
+  const auto check = [&](int which) {
+    for (Index j = 0; j < x.cols(); ++j)
+      for (Index i = 0; i < x.rows(); ++i)
+        if (!(x.coeff(i, j) == expected)) {
+          std::cerr << "case " << which << " coefficient (" << i << ", " << j << "): " << x.coeff(i, j)
+                    << " != " << expected << "\n";
+          VERIFY(false);
+        }
+  };
+  x.setZero();
+  complex_constant_fill_case<0>(a, x);
+  check(0);
+  x.setZero();
+  complex_constant_fill_case<1>(a, x);
+  check(1);
+  x.setZero();
+  complex_constant_fill_case<2>(a, x);
+  check(2);
+  x.setZero();
+  complex_constant_fill_case<3>(a, x);
+  check(3);
+  x.setZero();
+  complex_constant_fill_case<4>(a, x);
+  check(4);
+}
+
+// The same for dynamic-size objects whose size the compiler sees in the filling function.
+template <int Case, int N, typename XprType>
+EIGEN_DONT_INLINE void complex_constant_fill_dynamic_case(const typename XprType::Scalar* a, XprType& x) {
+  const Index cols = XprType::ColsAtCompileTime == 1 ? 1 : N;
+  switch (Case) {
+    case 0:
+      x.resize(N, cols);
+      x.setConstant(a[0] * a[1]);
+      break;
+    case 1: {
+      const Index n = N;
+      XprType y(n, XprType::ColsAtCompileTime == 1 ? 1 : n);
+      y.setConstant(a[0] * a[1]);
+      x = y;
+      break;
+    }
+    case 2:
+      x = XprType::Constant(N, cols, a[0] * a[1]);
+      break;
+    default:
+      x.setConstant(N, cols, a[0] * a[1]);
+  }
+}
+
+template <typename XprType, int N>
+void complex_constant_fill_dynamic() {
+  using Scalar = typename XprType::Scalar;
+  using RealScalar = typename NumTraits<Scalar>::Real;
+  const auto small_int = [] { return RealScalar(internal::random<int>(-8, 8)); };
+  const Scalar a[2] = {Scalar(small_int(), small_int()), Scalar(small_int(), small_int())};
+  const Scalar expected = a[0] * a[1];
+  const Index size = XprType::ColsAtCompileTime == 1 ? N : N * N;
+  XprType x;
+  const Index empty_cols = XprType::ColsAtCompileTime == 1 ? 1 : 0;
+  const auto check = [&](int which) {
+    VERIFY_IS_EQUAL(x.size(), size);
+    for (Index i = 0; i < x.size(); ++i)
+      if (!(x.data()[i] == expected)) {
+        std::cerr << "case " << which << " size " << N << " coefficient " << i << ": " << x.data()[i]
+                  << " != " << expected << "\n";
+        VERIFY(false);
+      }
+  };
+  x.resize(0, empty_cols);
+  complex_constant_fill_dynamic_case<0, N>(a, x);
+  check(0);
+  x.resize(0, empty_cols);
+  complex_constant_fill_dynamic_case<1, N>(a, x);
+  check(1);
+  x.resize(0, empty_cols);
+  complex_constant_fill_dynamic_case<2, N>(a, x);
+  check(2);
+  x.resize(0, empty_cols);
+  complex_constant_fill_dynamic_case<3, N>(a, x);
+  check(3);
+}
+
 EIGEN_DECLARE_TEST(nullary) {
   CALL_SUBTEST_1(testMatrixType(Matrix2d()));
   CALL_SUBTEST_2(testMatrixType(MatrixXcf(internal::random<int>(1, 300), internal::random<int>(1, 300))));
@@ -522,4 +639,26 @@ EIGEN_DECLARE_TEST(nullary) {
 
   // Integer LinSpaced divisor path tests.
   CALL_SUBTEST_12(linspaced_integer_divisor<0>());
+
+  for (int i = 0; i < g_repeat; i++) {
+    CALL_SUBTEST_13(complex_constant_fill<Vector2cf>());
+    CALL_SUBTEST_13(complex_constant_fill<RowVector2cf>());
+    CALL_SUBTEST_13(complex_constant_fill<Array2cf>());
+    CALL_SUBTEST_13(complex_constant_fill<Matrix2cf>());
+    CALL_SUBTEST_13(complex_constant_fill<Vector2cd>());
+    CALL_SUBTEST_13(complex_constant_fill<Vector3cd>());
+    CALL_SUBTEST_13(complex_constant_fill<Vector4cd>());
+    CALL_SUBTEST_13(complex_constant_fill<Matrix2cd>());
+    CALL_SUBTEST_13(complex_constant_fill<Matrix3cd>());
+    CALL_SUBTEST_13(complex_constant_fill<Matrix4cd>());
+    CALL_SUBTEST_13(complex_constant_fill<Array2cd>());
+    CALL_SUBTEST_13((complex_constant_fill_dynamic<VectorXcf, 2>()));
+    CALL_SUBTEST_13((complex_constant_fill_dynamic<VectorXcf, 4>()));
+    CALL_SUBTEST_13((complex_constant_fill_dynamic<ArrayXcf, 2>()));
+    CALL_SUBTEST_13((complex_constant_fill_dynamic<VectorXcd, 2>()));
+    CALL_SUBTEST_13((complex_constant_fill_dynamic<VectorXcd, 4>()));
+    CALL_SUBTEST_13((complex_constant_fill_dynamic<VectorXcd, 8>()));
+    CALL_SUBTEST_13((complex_constant_fill_dynamic<MatrixXcd, 2>()));
+    CALL_SUBTEST_13((complex_constant_fill_dynamic<MatrixXcd, 4>()));
+  }
 }
