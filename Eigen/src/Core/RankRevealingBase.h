@@ -68,17 +68,18 @@ class RankRevealingBase {
 
   /** Allows to prescribe a threshold to be used by certain methods, such as rank(),
    * which need to determine when pivots are to be considered nonzero. This is not used for the
-   * decomposition itself.
+   * decomposition itself, except by CompleteOrthogonalDecomposition, whose rank is determined by compute().
    *
-   * When it needs to get the threshold value, Eigen calls threshold(). By default, this
-   * uses a formula to automatically determine a reasonable threshold.
+   * When it needs to get the threshold value, Eigen calls threshold(). By default, this is
+   * \f$ 4 \, \min(rows, cols) \, \epsilon \f$, where \f$ \epsilon \f$ is \c NumTraits<Scalar>::epsilon() and
+   * \a rows and \a cols are the dimensions of the decomposed matrix.
    * Once you have called the present method setThreshold(const RealScalar&),
    * your value is used instead.
    *
    * \param threshold The new value to use as the threshold.
    *
    * A pivot will be considered nonzero if its absolute value is strictly greater than
-   *  \f$ \vert pivot \vert \leqslant threshold \times \vert maxpivot \vert \f$
+   *  \f$ threshold \times \vert maxpivot \vert \f$
    * where maxpivot is the biggest pivot.
    *
    * If you want to come back to the default behavior, call setThreshold(Default_t)
@@ -102,9 +103,9 @@ class RankRevealingBase {
     return self();
   }
 
-  /** Returns the threshold that will be used by certain methods such as rank().
-   *
-   * See the documentation of setThreshold(const RealScalar&).
+  /** Returns the threshold that will be used by certain methods such as rank(): the value given to
+   * setThreshold(const RealScalar&), or by default \f$ 4 \, \min(rows, cols) \, \epsilon \f$ with
+   * \f$ \epsilon \f$ = \c NumTraits<Scalar>::epsilon(). It is relative to the biggest pivot.
    */
   RealScalar threshold() const {
     eigen_assert(self().m_isInitialized || m_usePrescribedThreshold);
