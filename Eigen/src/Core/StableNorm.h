@@ -154,8 +154,19 @@ typename Derived::RealScalar stable_norm_impl(const Derived&) {
   return typename Derived::RealScalar(0);
 }
 
+// The scaling below guards floating-point accumulation against over- and underflow, and is meaningless for integers,
+// whose norm is the plain one.
+template <
+    typename Derived,
+    std::enable_if_t<NumTraits<typename Derived::Scalar>::IsInteger && Derived::MaxSizeAtCompileTime != 0, int> = 0>
+typename Derived::RealScalar stable_norm_impl(const Derived& vec) {
+  return vec.norm();
+}
+
 template <typename VectorType,
-          std::enable_if_t<VectorType::IsVectorAtCompileTime && VectorType::MaxSizeAtCompileTime != 0, int> = 0>
+          std::enable_if_t<VectorType::IsVectorAtCompileTime && VectorType::MaxSizeAtCompileTime != 0 &&
+                               !NumTraits<typename VectorType::Scalar>::IsInteger,
+                           int> = 0>
 typename VectorType::RealScalar stable_norm_impl(const VectorType& vec) {
   Index n = vec.size();
   if (EIGEN_PREDICT_FALSE(n == 1)) return numext::abs(vec.coeff(0));
@@ -172,7 +183,9 @@ typename VectorType::RealScalar stable_norm_impl(const VectorType& vec) {
 }
 
 template <typename MatrixType,
-          std::enable_if_t<!MatrixType::IsVectorAtCompileTime && MatrixType::MaxSizeAtCompileTime != 0, int> = 0>
+          std::enable_if_t<!MatrixType::IsVectorAtCompileTime && MatrixType::MaxSizeAtCompileTime != 0 &&
+                               !NumTraits<typename MatrixType::Scalar>::IsInteger,
+                           int> = 0>
 typename MatrixType::RealScalar stable_norm_impl(const MatrixType& mat) {
   using RealScalar = typename MatrixType::RealScalar;
   using Accumulator = typename stable_norm_accumulator<RealScalar>::type;
@@ -224,7 +237,12 @@ struct blue_norm_accumulate_scalar<Scalar, Accumulator, true> {
   }
 };
 
-template <typename Derived>
+template <typename Derived, std::enable_if_t<NumTraits<typename traits<Derived>::Scalar>::IsInteger, int> = 0>
+inline typename NumTraits<typename traits<Derived>::Scalar>::Real blueNorm_impl(const EigenBase<Derived>& vec) {
+  return vec.derived().norm();
+}
+
+template <typename Derived, std::enable_if_t<!NumTraits<typename traits<Derived>::Scalar>::IsInteger, int> = 0>
 inline typename NumTraits<typename traits<Derived>::Scalar>::Real blueNorm_impl(const EigenBase<Derived>& _vec) {
   using RealScalar = typename Derived::RealScalar;
   using Accumulator = typename stable_norm_accumulator<RealScalar>::type;
@@ -289,6 +307,20 @@ inline typename NumTraits<typename traits<Derived>::Scalar>::Real blueNorm_impl(
   return RealScalar(scale * numext::sqrt(sumsq));
 }
 
+template <typename Derived>
+inline typename Derived::RealScalar hypot_norm_impl(const Derived& vec, std::true_type /* IsInteger */) {
+  return vec.norm();
+}
+
+template <typename Derived>
+inline typename Derived::RealScalar hypot_norm_impl(const Derived& vec, std::false_type /* IsInteger */) {
+  using RealScalar = typename Derived::RealScalar;
+  using Accumulator = typename stable_norm_accumulator<RealScalar>::type;
+  // Component reduction avoids rounded complex magnitudes and permits promoted accumulation.
+  return RealScalar(
+      redux_with_identity(vec.realView().template cast<Accumulator>().cwiseAbs(), scalar_hypot_op<Accumulator>(), 0));
+}
+
 }  // end namespace internal
 
 /** \returns the \em l2 norm of \c *this avoiding underflow and overflow.
@@ -299,6 +331,9 @@ inline typename NumTraits<typename traits<Derived>::Scalar>::Real blueNorm_impl(
  *
  * For architecture/scalar types supporting vectorization, this version
  * is faster than blueNorm(). Otherwise the blueNorm() is much faster.
+ *
+ * For integer scalar types there is nothing to scale, and this is norm(): the square root of squaredNorm() as
+ * norm() computes it, truncated to the integer type.
  *
  * \sa norm(), blueNorm(), hypotNorm()
  */
@@ -317,6 +352,9 @@ inline typename NumTraits<typename internal::traits<Derived>::Scalar>::Real Matr
  * For architecture/scalar types without vectorization, this version
  * is much faster than stableNorm(). Otherwise the stableNorm() is faster.
  *
+ * For integer scalar types this is norm(): the square root of squaredNorm() as norm() computes it, truncated to the
+ * integer type.
+ *
  * \sa norm(), stableNorm(), hypotNorm()
  */
 template <typename Derived>
@@ -327,14 +365,14 @@ inline typename NumTraits<typename internal::traits<Derived>::Scalar>::Real Matr
 /** \returns the \em l2 norm of \c *this avoiding underflow and overflow.
  * This version use a concatenation of hypot() calls, and it is very slow.
  *
+ * For integer scalar types this is norm(): the square root of squaredNorm() as norm() computes it, truncated to the
+ * integer type.
+ *
  * \sa norm(), stableNorm()
  */
 template <typename Derived>
 inline typename NumTraits<typename internal::traits<Derived>::Scalar>::Real MatrixBase<Derived>::hypotNorm() const {
-  using Accumulator = typename internal::stable_norm_accumulator<RealScalar>::type;
-  // Component reduction avoids rounded complex magnitudes and permits promoted accumulation.
-  return RealScalar(internal::redux_with_identity(derived().realView().template cast<Accumulator>().cwiseAbs(),
-                                                  internal::scalar_hypot_op<Accumulator>(), 0));
+  return internal::hypot_norm_impl(derived(), internal::bool_constant<NumTraits<Scalar>::IsInteger>());
 }
 
 }  // end namespace Eigen

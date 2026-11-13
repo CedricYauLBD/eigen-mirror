@@ -860,6 +860,96 @@ void stable_normalize_custom_scalar() {
   }
 }
 
+// For integer scalars every norm is the l2 (lp) norm truncated to the integer type, as norm() is, and 0 for empty
+// inputs. The scaling in stableNorm() and blueNorm() and the real hypot in hypotNorm() are meaningless for integers.
+template <typename Scalar>
+void integer_norms() {
+  using Vec = Matrix<Scalar, Dynamic, 1>;
+  using Mat = Matrix<Scalar, Dynamic, Dynamic>;
+  const auto check_l2 = [](const auto& m, Scalar expected) {
+    VERIFY_IS_EQUAL(m.norm(), expected);
+    VERIFY_IS_EQUAL(m.stableNorm(), expected);
+    VERIFY_IS_EQUAL(m.blueNorm(), expected);
+    VERIFY_IS_EQUAL(m.hypotNorm(), expected);
+    VERIFY_IS_EQUAL(m.template lpNorm<2>(), expected);
+  };
+  Vec v(2);
+  v << 3, 4;
+  check_l2(v, 5);
+  v << -3, 4;
+  check_l2(v, 5);
+  v << 1, 1;
+  check_l2(v, 1);  // truncated sqrt(2)
+  Vec w(3);
+  w << 1, 2, 2;
+  check_l2(w, 3);
+  check_l2(Vec(Vec::Constant(1, Scalar(-7))), 7);
+  check_l2((Matrix<Scalar, 2, 2>() << 1, 2, 2, 4).finished(), 5);
+  check_l2(Vec(Vec::Zero(5)), 0);
+
+  VERIFY_IS_EQUAL(w.template lpNorm<1>(), 5);
+  VERIFY_IS_EQUAL(w.template lpNorm<Infinity>(), 2);
+  VERIFY_IS_EQUAL(w.template lpNorm<3>(), 2);  // cbrt(17) = 2.57
+  VERIFY_IS_EQUAL(w.template lpNorm<4>(), 2);  // 33^(1/4) = 2.40
+  Vec u(2);
+  u << 3, 0;
+  VERIFY_IS_EQUAL(u.template lpNorm<3>(), 3);  // pow(27, 1/3.) is 3
+  u << 4, 0;
+  VERIFY_IS_EQUAL(u.template lpNorm<3>(), 4);  // pow(64, 1/3.) is 3.9999999999999996
+  u << -4, 3;
+  VERIFY_IS_EQUAL(u.template lpNorm<3>(), 4);  // cbrt(91) = 4.50
+  VERIFY_IS_EQUAL(u.template lpNorm<5>(), 4);  // 1267^(1/5) = 4.17
+  VERIFY_IS_EQUAL(u.array().template lpNorm<3>(), 4);
+
+  // The root is exact beyond the 53 bits of double. For r = 2^18 + 1, a sum of cubes r^3 - 1 has floor(cbrt) = r - 1.
+  if (sizeof(Scalar) >= 8) {
+    const Scalar r = Scalar(262145);
+    Scalar remainder = r * r * r - 1;
+    std::vector<Scalar> parts;
+    while (remainder > 0) {
+      Scalar c = Scalar(std::cbrt(double(remainder)));
+      while ((c + 1) * (c + 1) * (c + 1) <= remainder) ++c;
+      while (c * c * c > remainder) --c;
+      parts.push_back(c);
+      remainder -= c * c * c;
+    }
+    Vec cubes(Index(parts.size()));
+    for (Index i = 0; i < cubes.size(); ++i) cubes(i) = parts[size_t(i)];
+    VERIFY_IS_EQUAL(cubes.cwiseAbs2().cwiseProduct(cubes.cwiseAbs()).sum(), r * r * r - 1);
+    VERIFY_IS_EQUAL(cubes.template lpNorm<3>(), r - 1);
+    Vec at_root(1);
+    at_root << r;  // r^3 does not exceed the sum
+    VERIFY_IS_EQUAL(at_root.template lpNorm<3>(), r);
+  }
+
+  // A p outside the documented domain terminates.
+  {
+    const Vec twos = Vec::Constant(5, Scalar(2));
+    VERIFY(twos.template lpNorm<0>() == twos.template lpNorm<0>());
+    VERIFY(twos.template lpNorm<-2>() == twos.template lpNorm<-2>());
+  }
+
+  // Empty inputs: 0 for every p.
+  for (const Index rows : {Index(0), Index(3)}) {
+    const Mat empty = Mat::Zero(rows, rows == 0 ? 3 : 0);
+    check_l2(empty, 0);
+    VERIFY_IS_EQUAL(empty.template lpNorm<1>(), 0);
+    VERIFY_IS_EQUAL(empty.template lpNorm<3>(), 0);
+    VERIFY_IS_EQUAL(empty.template lpNorm<4>(), 0);
+    VERIFY_IS_EQUAL(empty.template lpNorm<Infinity>(), 0);
+  }
+  VERIFY_IS_EQUAL(Vec().stableNorm(), 0);
+  VERIFY_IS_EQUAL((Matrix<Scalar, 0, 1>().template lpNorm<3>()), 0);
+  VERIFY_IS_EQUAL((Matrix<Scalar, 0, 1>().blueNorm()), 0);
+
+  // Random vectors, as long as the squared norm fits: the norm family agrees with norm().
+  const Scalar bound = std::is_same<Scalar, int16_t>::value ? 5 : 100;
+  Vec r = Vec::Random(internal::random<int>(1, 30)).unaryExpr([&](Scalar x) { return Scalar(x % bound); }).eval();
+  VERIFY_IS_EQUAL(r.stableNorm(), r.norm());
+  VERIFY_IS_EQUAL(r.blueNorm(), r.norm());
+  VERIFY_IS_EQUAL(r.hypotNorm(), r.norm());
+}
+
 EIGEN_DECLARE_TEST(stable_norm) {
   CALL_SUBTEST_1(test_empty<>());
   CALL_SUBTEST_1(stable_normalization_empty_reductions<float>());
@@ -918,4 +1008,7 @@ EIGEN_DECLARE_TEST(stable_norm) {
   CALL_SUBTEST_13(stable_norm_expression_and_stride<>());
   CALL_SUBTEST_13(stable_normalize_no_malloc<>());
   CALL_SUBTEST_13(stable_normalize_custom_scalar<>());
+  CALL_SUBTEST_13(integer_norms<int>());
+  CALL_SUBTEST_13(integer_norms<int64_t>());
+  CALL_SUBTEST_13(integer_norms<int16_t>());
 }
