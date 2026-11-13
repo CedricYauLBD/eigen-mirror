@@ -156,6 +156,28 @@ static void test_cancel() {
   tp.Cancel();
 }
 
+// A closure that is still running when Cancel() is called, and then schedules another one, leaves that closure in
+// its worker's queue. The destructor must discard it only after the workers have exited: ~RunQueue asserts that the
+// queue is empty, and the queues' owner-only operations must not run beside the workers.
+static void test_cancel_while_task_schedules() {
+  for (int threads : {1, 2, 4}) {
+    std::atomic<bool> started(false), cancelled(false);
+    {
+      ThreadPool tp(threads);
+      tp.Schedule([&] {
+        started = true;
+        while (!cancelled) std::this_thread::yield();
+        // By now the destructor is waiting to join this worker; the closures scheduled below must still be discarded.
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        for (int i = 0; i < 4; ++i) tp.Schedule([] {});
+      });
+      VERIFY(spin_wait([&] { return started.load(); }));
+      tp.Cancel();
+      cancelled = true;
+    }
+  }
+}
+
 static void test_pool_partitions() {
   const int kThreads = 2;
 
@@ -241,6 +263,7 @@ EIGEN_DECLARE_TEST(threads_non_blocking_thread_pool) {
   CALL_SUBTEST(test_parallelism(true));
   CALL_SUBTEST(test_parallelism(false));
   CALL_SUBTEST(test_cancel());
+  CALL_SUBTEST(test_cancel_while_task_schedules());
   CALL_SUBTEST(test_pool_partitions());
   CALL_SUBTEST(test_maybe_get_task_from_other_pool());
 }
