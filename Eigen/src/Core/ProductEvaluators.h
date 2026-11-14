@@ -52,19 +52,32 @@ struct product_can_fold_scalar
 template <typename Lhs>
 struct product_can_fold_scalar<Lhs, TriangularShape> : bool_constant<(int(Lhs::Mode) & int(UnitDiag)) == 0> {};
 
+// Folding s into a structured lhs forms s * lhs, which those views define only for their own Scalar.
+template <typename Factor, typename Lhs, typename Shape = typename evaluator_traits<Lhs>::Shape>
+struct product_can_fold_scalar_factor : product_can_fold_scalar<Lhs, Shape> {};
+
+template <typename Factor, typename Lhs>
+struct product_can_fold_scalar_factor<Factor, Lhs, TriangularShape>
+    : bool_constant<product_can_fold_scalar<Lhs>::value && std::is_convertible<Factor, typename Lhs::Scalar>::value> {};
+
+template <typename Factor, typename Lhs>
+struct product_can_fold_scalar_factor<Factor, Lhs, SelfAdjointShape>
+    : bool_constant<product_can_fold_scalar<Lhs>::value && std::is_convertible<Factor, typename Lhs::Scalar>::value> {};
+
 // The lazy selfadjoint/diagonal evaluator would conjugate a folded complex factor.
-template <typename Lhs, typename Rhs>
+template <typename Factor, typename Lhs, typename Rhs>
 struct product_evaluator_can_fold_scalar
-    : bool_constant<product_can_fold_scalar<Lhs>::value &&
+    : bool_constant<product_can_fold_scalar_factor<Factor, Lhs>::value &&
                     !(std::is_same<typename evaluator_traits<Lhs>::Shape, SelfAdjointShape>::value &&
                       std::is_same<typename evaluator_traits<Rhs>::Shape, DiagonalShape>::value)> {};
 
-template <typename Xpr,
-          bool Fold = product_evaluator_can_fold_scalar<typename Xpr::Rhs::Lhs, typename Xpr::Rhs::Rhs>::value>
+template <typename Xpr, bool Fold = product_evaluator_can_fold_scalar<typename Xpr::Lhs::Scalar, typename Xpr::Rhs::Lhs,
+                                                                      typename Xpr::Rhs::Rhs>::value>
 struct scaled_product_evaluator_type {
   // The assignment kernel extracts selfadjoint factors; materializing also protects nested aliases.
-  using type = std::conditional_t<product_can_fold_scalar<typename Xpr::Rhs::Lhs>::value, evaluator<EvalToTemp<Xpr>>,
-                                  binary_evaluator<Xpr>>;
+  using type =
+      std::conditional_t<product_can_fold_scalar_factor<typename Xpr::Lhs::Scalar, typename Xpr::Rhs::Lhs>::value,
+                         evaluator<EvalToTemp<Xpr>>, binary_evaluator<Xpr>>;
 };
 
 template <typename Xpr>
@@ -92,11 +105,11 @@ struct evaluator<CwiseBinaryOp<internal::scalar_product_op<Scalar1, Scalar2>,
                                 const Product<Lhs, Rhs, DefaultProduct>>;
   using Base = typename scaled_product_evaluator_type<XprType>::type;
 
-  template <bool Fold = product_evaluator_can_fold_scalar<Lhs, Rhs>::value, std::enable_if_t<Fold, int> = 0>
+  template <bool Fold = product_evaluator_can_fold_scalar<Scalar1, Lhs, Rhs>::value, std::enable_if_t<Fold, int> = 0>
   EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE explicit evaluator(const XprType& xpr)
       : Base(xpr.lhs().functor().m_other * xpr.rhs().lhs() * xpr.rhs().rhs()) {}
 
-  template <bool Fold = product_evaluator_can_fold_scalar<Lhs, Rhs>::value, std::enable_if_t<!Fold, int> = 0>
+  template <bool Fold = product_evaluator_can_fold_scalar<Scalar1, Lhs, Rhs>::value, std::enable_if_t<!Fold, int> = 0>
   EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE explicit evaluator(const XprType& xpr) : Base(xpr) {}
 };
 
@@ -207,7 +220,7 @@ struct Assignment<DstXprType,
                   CwiseBinaryOp<internal::scalar_product_op<ScalarBis, Scalar>,
                                 const CwiseNullaryOp<internal::scalar_constant_op<ScalarBis>, Plain>,
                                 const Product<Lhs, Rhs, DefaultProduct>>,
-                  AssignFunc, Dense2Dense, std::enable_if_t<product_can_fold_scalar<Lhs>::value>> {
+                  AssignFunc, Dense2Dense, std::enable_if_t<product_can_fold_scalar_factor<ScalarBis, Lhs>::value>> {
   using SrcXprType = CwiseBinaryOp<internal::scalar_product_op<ScalarBis, Scalar>,
                                    const CwiseNullaryOp<internal::scalar_constant_op<ScalarBis>, Plain>,
                                    const Product<Lhs, Rhs, DefaultProduct>>;
@@ -600,6 +613,10 @@ struct generic_product_impl<Lhs, Rhs, DenseShape, DenseShape, GemvProduct>
                                                         std::true_type) {
     // Fallback to inner product if both the lhs and rhs is a runtime vector.
     if (lhs.rows() == 1 && rhs.cols() == 1) {
+      // Same zero-factor contract as the kernels below: a zero must not multiply the operands.
+      if (numext::is_exactly_zero(alpha) || blas_traits<Lhs>::hasZeroScalarFactor(lhs) ||
+          blas_traits<Rhs>::hasZeroScalarFactor(rhs))
+        return;
       dst.coeffRef(0, 0) += alpha * lhs.row(0).conjugate().dot(rhs.col(0));
       return;
     }
