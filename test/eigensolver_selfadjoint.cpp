@@ -745,6 +745,7 @@ void matrix_operator_norm_scale_sweep() {
   VERIFY((numext::isnan)(B.operatorNorm()));
   VERIFY_IS_EQUAL(MatrixType::Zero(n, n).operatorNorm(), RealScalar(0));
   VERIFY_IS_EQUAL(MatrixType(0, 0).operatorNorm(), RealScalar(0));
+  VERIFY_IS_EQUAL(MatrixType(0, 0).template selfadjointView<Lower>().operatorNorm(), RealScalar(0));
 
   // The self-adjoint view reports a NaN as NaN and an infinity as +infinity, as MatrixBase does, rather than the
   // maximum of unspecified eigenvalues.
