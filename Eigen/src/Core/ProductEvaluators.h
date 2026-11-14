@@ -2220,10 +2220,7 @@ struct product_evaluator<Product<Lhs, Rhs, ProductKind>, ProductTag, DiagonalSha
       : Base(xpr, xpr.rhs().nestedExpression(), xpr.lhs().diagonal()) {}
 };
 
-/** \internal
- * dst.noalias() += lhs * rhs and -= for the permutation and transposition products below, which only overwrite
- * their destination: the product is evaluated into a temporary, as it is without noalias().
- */
+// Fallback for indexed products whose operand shape has no direct accumulator.
 template <typename Lhs, typename Rhs, typename Derived>
 struct product_accumulate_through_temporary {
   template <typename Dest>
@@ -2240,6 +2237,64 @@ struct product_accumulate_through_temporary {
     dst -= tmp;
   }
 };
+
+template <typename Lhs, typename Rhs, typename Derived, typename MatrixShape>
+struct indexed_product_accumulation : product_accumulate_through_temporary<Lhs, Rhs, Derived> {};
+
+template <typename Lhs, typename Rhs, typename Derived>
+struct indexed_product_accumulation<Lhs, Rhs, Derived, DenseShape> {
+  template <typename Dest>
+  static EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE void addTo(Dest& dst, const Lhs& lhs, const Rhs& rhs) {
+    Derived::accumulate(dst, lhs, rhs, add_assign_op<typename Dest::Scalar, typename Product<Lhs, Rhs>::Scalar>());
+  }
+
+  template <typename Dest>
+  static EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE void subTo(Dest& dst, const Lhs& lhs, const Rhs& rhs) {
+    Derived::accumulate(dst, lhs, rhs, sub_assign_op<typename Dest::Scalar, typename Product<Lhs, Rhs>::Scalar>());
+  }
+};
+
+template <typename Lhs, typename Rhs, typename Derived>
+struct indexed_product_accumulation<Lhs, Rhs, Derived, TriangularShape>
+    : indexed_product_accumulation<Lhs, Rhs, Derived, DenseShape> {};
+
+template <typename Lhs, typename Rhs, typename Derived>
+struct indexed_product_accumulation<Lhs, Rhs, Derived, SelfAdjointShape>
+    : indexed_product_accumulation<Lhs, Rhs, Derived, DenseShape> {};
+
+template <int Side, bool Transposed, typename Dest, typename Indices, typename Expression, typename Func>
+EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE void indexed_matrix_update(Dest& dst, const Indices& indices,
+                                                                 const Expression& xpr, const Func& func) {
+  using MatrixType = typename nested_eval<Expression, 1>::type;
+  using MatrixTypeCleaned = remove_all_t<MatrixType>;
+  MatrixType mat(xpr);
+  // An inner-dimension permutation reuses its index expression for every outer vector.
+  typename nested_eval<Indices, Dynamic>::type actualIndices(indices);
+  const Index n = Side == OnTheLeft ? mat.rows() : mat.cols();
+  EIGEN_IF_CONSTEXPR (bool(Dest::IsRowMajor) == bool(MatrixTypeCleaned::IsRowMajor) &&
+                      bool(Dest::IsRowMajor) == (Side == OnTheRight)) {
+    for (Index j = 0; j < (Side == OnTheLeft ? mat.cols() : mat.rows()); ++j) {
+      auto target = dst.template subVector < Side == OnTheLeft ? Vertical : Horizontal > (j);
+      const auto source = mat.template subVector < Side == OnTheLeft ? Vertical : Horizontal > (j);
+      for (Index i = 0; i < n; ++i) {
+        const Index p = actualIndices.coeff(i);
+        func.assignCoeff(target.coeffRef(((Side == OnTheLeft) ^ Transposed) ? p : i),
+                         source.coeff(((Side == OnTheRight) ^ Transposed) ? p : i));
+      }
+    }
+  } else {
+    for (Index i = 0; i < n; ++i) {
+      const Index p = actualIndices.coeff(i);
+      auto target = dst.template subVector < Side == OnTheLeft
+                        ? Horizontal
+                        : Vertical > (((Side == OnTheLeft) ^ Transposed) ? p : i);
+      const auto source = mat.template subVector < Side == OnTheLeft
+                              ? Horizontal
+                              : Vertical > (((Side == OnTheRight) ^ Transposed) ? p : i);
+      call_assignment_no_alias(target, source, func);
+    }
+  }
+}
 
 /***************************************************************************
  * Products with permutation matrices
@@ -2266,6 +2321,12 @@ template <typename ExpressionType, int Side, bool Transposed>
 struct permutation_matrix_product<ExpressionType, Side, Transposed, DenseShape> {
   using MatrixType = typename nested_eval<ExpressionType, 1>::type;
   using MatrixTypeCleaned = remove_all_t<MatrixType>;
+
+  template <typename Dest, typename Indices, typename Func>
+  static EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE void accumulate(Dest& dst, const Indices& indices,
+                                                               const ExpressionType& xpr, const Func& func) {
+    indexed_matrix_update<Side, Transposed>(dst, indices, xpr, func);
+  }
 
   template <typename Dest, typename PermutationType>
   static EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE void run(Dest& dst, const PermutationType& perm,
@@ -2326,6 +2387,13 @@ template <typename ExpressionType, int Side, bool Transposed>
 struct permutation_densified_matrix_product {
   using DenseType = typename ExpressionType::DenseMatrixType;
 
+  template <typename Dest, typename Indices, typename Func>
+  static EIGEN_DEVICE_FUNC void accumulate(Dest& dst, const Indices& indices, const ExpressionType& xpr,
+                                           const Func& func) {
+    const DenseType dense(xpr);
+    indexed_matrix_update<Side, Transposed>(dst, indices, dense, func);
+  }
+
   template <typename Dest, typename PermutationType>
   static EIGEN_DEVICE_FUNC void run(Dest& dst, const PermutationType& perm, const ExpressionType& xpr) {
     const DenseType dense(xpr);
@@ -2343,6 +2411,14 @@ template <typename ExpressionType, int Side, bool Transposed>
 struct permutation_matrix_product<ExpressionType, Side, Transposed, SelfAdjointShape> {
   using DenseType = typename ExpressionType::DenseMatrixType;
 
+  template <typename Dest, typename Indices, typename Func>
+  static void accumulate(Dest& dst, const Indices& indices, const ExpressionType& xpr, const Func& func) {
+    DenseType dense(xpr.rows(), xpr.cols());
+    const typename ExpressionType::Scalar factor = densified_view_operand<ExpressionType>::run(dense, xpr);
+    EIGEN_IF_CONSTEXPR (blas_traits<typename ExpressionType::MatrixType>::HasScalarFactor) dense *= factor;
+    indexed_matrix_update<Side, Transposed>(dst, indices, dense, func);
+  }
+
   template <typename Dest, typename PermutationType>
   static void run(Dest& dst, const PermutationType& perm, const ExpressionType& xpr) {
     DenseType dense(xpr.rows(), xpr.cols());
@@ -2354,8 +2430,13 @@ struct permutation_matrix_product<ExpressionType, Side, Transposed, SelfAdjointS
 
 template <typename Lhs, typename Rhs, int ProductTag, typename MatrixShape>
 struct generic_product_impl<Lhs, Rhs, PermutationShape, MatrixShape, ProductTag>
-    : product_accumulate_through_temporary<Lhs, Rhs,
-                                           generic_product_impl<Lhs, Rhs, PermutationShape, MatrixShape, ProductTag>> {
+    : indexed_product_accumulation<Lhs, Rhs, generic_product_impl<Lhs, Rhs, PermutationShape, MatrixShape, ProductTag>,
+                                   MatrixShape> {
+  template <typename Dest, typename Func>
+  static EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE void accumulate(Dest& dst, const Lhs& lhs, const Rhs& rhs,
+                                                               const Func& func) {
+    permutation_matrix_product<Rhs, OnTheLeft, false, MatrixShape>::accumulate(dst, lhs.indices(), rhs, func);
+  }
   template <typename Dest>
   static EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE void evalTo(Dest& dst, const Lhs& lhs, const Rhs& rhs) {
     permutation_matrix_product<Rhs, OnTheLeft, false, MatrixShape>::run(dst, lhs, rhs);
@@ -2364,8 +2445,13 @@ struct generic_product_impl<Lhs, Rhs, PermutationShape, MatrixShape, ProductTag>
 
 template <typename Lhs, typename Rhs, int ProductTag, typename MatrixShape>
 struct generic_product_impl<Lhs, Rhs, MatrixShape, PermutationShape, ProductTag>
-    : product_accumulate_through_temporary<Lhs, Rhs,
-                                           generic_product_impl<Lhs, Rhs, MatrixShape, PermutationShape, ProductTag>> {
+    : indexed_product_accumulation<Lhs, Rhs, generic_product_impl<Lhs, Rhs, MatrixShape, PermutationShape, ProductTag>,
+                                   MatrixShape> {
+  template <typename Dest, typename Func>
+  static EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE void accumulate(Dest& dst, const Lhs& lhs, const Rhs& rhs,
+                                                               const Func& func) {
+    permutation_matrix_product<Lhs, OnTheRight, false, MatrixShape>::accumulate(dst, rhs.indices(), lhs, func);
+  }
   template <typename Dest>
   static EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE void evalTo(Dest& dst, const Lhs& lhs, const Rhs& rhs) {
     permutation_matrix_product<Lhs, OnTheRight, false, MatrixShape>::run(dst, rhs, lhs);
@@ -2374,8 +2460,15 @@ struct generic_product_impl<Lhs, Rhs, MatrixShape, PermutationShape, ProductTag>
 
 template <typename Lhs, typename Rhs, int ProductTag, typename MatrixShape>
 struct generic_product_impl<Inverse<Lhs>, Rhs, PermutationShape, MatrixShape, ProductTag>
-    : product_accumulate_through_temporary<
-          Inverse<Lhs>, Rhs, generic_product_impl<Inverse<Lhs>, Rhs, PermutationShape, MatrixShape, ProductTag>> {
+    : indexed_product_accumulation<Inverse<Lhs>, Rhs,
+                                   generic_product_impl<Inverse<Lhs>, Rhs, PermutationShape, MatrixShape, ProductTag>,
+                                   MatrixShape> {
+  template <typename Dest, typename Func>
+  static EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE void accumulate(Dest& dst, const Inverse<Lhs>& lhs, const Rhs& rhs,
+                                                               const Func& func) {
+    permutation_matrix_product<Rhs, OnTheLeft, true, MatrixShape>::accumulate(dst, lhs.nestedExpression().indices(),
+                                                                              rhs, func);
+  }
   template <typename Dest>
   static EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE void evalTo(Dest& dst, const Inverse<Lhs>& lhs, const Rhs& rhs) {
     permutation_matrix_product<Rhs, OnTheLeft, true, MatrixShape>::run(dst, lhs.nestedExpression(), rhs);
@@ -2384,8 +2477,15 @@ struct generic_product_impl<Inverse<Lhs>, Rhs, PermutationShape, MatrixShape, Pr
 
 template <typename Lhs, typename Rhs, int ProductTag, typename MatrixShape>
 struct generic_product_impl<Lhs, Inverse<Rhs>, MatrixShape, PermutationShape, ProductTag>
-    : product_accumulate_through_temporary<
-          Lhs, Inverse<Rhs>, generic_product_impl<Lhs, Inverse<Rhs>, MatrixShape, PermutationShape, ProductTag>> {
+    : indexed_product_accumulation<Lhs, Inverse<Rhs>,
+                                   generic_product_impl<Lhs, Inverse<Rhs>, MatrixShape, PermutationShape, ProductTag>,
+                                   MatrixShape> {
+  template <typename Dest, typename Func>
+  static EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE void accumulate(Dest& dst, const Lhs& lhs, const Inverse<Rhs>& rhs,
+                                                               const Func& func) {
+    permutation_matrix_product<Lhs, OnTheRight, true, MatrixShape>::accumulate(dst, rhs.nestedExpression().indices(),
+                                                                               lhs, func);
+  }
   template <typename Dest>
   static EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE void evalTo(Dest& dst, const Lhs& lhs, const Inverse<Rhs>& rhs) {
     permutation_matrix_product<Lhs, OnTheRight, true, MatrixShape>::run(dst, rhs.nestedExpression(), lhs);
@@ -2406,6 +2506,25 @@ template <typename ExpressionType, int Side, bool Transposed, typename Expressio
 struct transposition_matrix_product {
   using MatrixType = typename nested_eval<ExpressionType, 1>::type;
   using MatrixTypeCleaned = remove_all_t<MatrixType>;
+
+  template <typename Dest, typename TranspositionType, typename Func>
+  static EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE void accumulate(Dest& dst, const TranspositionType& tr,
+                                                               const ExpressionType& xpr, const Func& func) {
+    static_assert(std::is_same<ExpressionShape, DenseShape>::value,
+                  "TRANSPOSITIONS_PRODUCTS_ARE_ONLY_IMPLEMENTED_FOR_DENSE_OPERANDS");
+    using SourceIndices = typename TranspositionType::IndicesType;
+    // Swap partners can fit a narrow StorageIndex even when composed positions do not.
+    constexpr bool FitsStack = SourceIndices::MaxSizeAtCompileTime != Dynamic &&
+                               (EIGEN_STACK_ALLOCATION_LIMIT == 0 || std::size_t(SourceIndices::MaxSizeAtCompileTime) <=
+                                                                         EIGEN_STACK_ALLOCATION_LIMIT / sizeof(Index));
+    using Indices = Matrix<Index, FitsStack ? SourceIndices::SizeAtCompileTime : Dynamic, 1, 0,
+                           FitsStack ? SourceIndices::MaxSizeAtCompileTime : Dynamic, 1>;
+    Indices indices(tr.size());
+    for (Index i = 0; i < tr.size(); ++i) indices.coeffRef(i) = i;
+    for (Index k = tr.size(); k > 0; --k) numext::swap(indices.coeffRef(k - 1), indices.coeffRef(tr.coeff(k - 1)));
+    // Right products apply the swap sequence in the opposite matrix-product order.
+    indexed_matrix_update<Side, Transposed ^ (Side == OnTheRight)>(dst, indices, xpr, func);
+  }
 
   template <typename Dest, typename TranspositionType>
   static EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE void run(Dest& dst, const TranspositionType& tr,
@@ -2434,8 +2553,13 @@ struct transposition_matrix_product {
 
 template <typename Lhs, typename Rhs, int ProductTag, typename MatrixShape>
 struct generic_product_impl<Lhs, Rhs, TranspositionsShape, MatrixShape, ProductTag>
-    : product_accumulate_through_temporary<
-          Lhs, Rhs, generic_product_impl<Lhs, Rhs, TranspositionsShape, MatrixShape, ProductTag>> {
+    : indexed_product_accumulation<
+          Lhs, Rhs, generic_product_impl<Lhs, Rhs, TranspositionsShape, MatrixShape, ProductTag>, MatrixShape> {
+  template <typename Dest, typename Func>
+  static EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE void accumulate(Dest& dst, const Lhs& lhs, const Rhs& rhs,
+                                                               const Func& func) {
+    transposition_matrix_product<Rhs, OnTheLeft, false, MatrixShape>::accumulate(dst, lhs, rhs, func);
+  }
   template <typename Dest>
   static EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE void evalTo(Dest& dst, const Lhs& lhs, const Rhs& rhs) {
     transposition_matrix_product<Rhs, OnTheLeft, false, MatrixShape>::run(dst, lhs, rhs);
@@ -2444,8 +2568,13 @@ struct generic_product_impl<Lhs, Rhs, TranspositionsShape, MatrixShape, ProductT
 
 template <typename Lhs, typename Rhs, int ProductTag, typename MatrixShape>
 struct generic_product_impl<Lhs, Rhs, MatrixShape, TranspositionsShape, ProductTag>
-    : product_accumulate_through_temporary<
-          Lhs, Rhs, generic_product_impl<Lhs, Rhs, MatrixShape, TranspositionsShape, ProductTag>> {
+    : indexed_product_accumulation<
+          Lhs, Rhs, generic_product_impl<Lhs, Rhs, MatrixShape, TranspositionsShape, ProductTag>, MatrixShape> {
+  template <typename Dest, typename Func>
+  static EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE void accumulate(Dest& dst, const Lhs& lhs, const Rhs& rhs,
+                                                               const Func& func) {
+    transposition_matrix_product<Lhs, OnTheRight, false, MatrixShape>::accumulate(dst, rhs, lhs, func);
+  }
   template <typename Dest>
   static EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE void evalTo(Dest& dst, const Lhs& lhs, const Rhs& rhs) {
     transposition_matrix_product<Lhs, OnTheRight, false, MatrixShape>::run(dst, rhs, lhs);
@@ -2454,9 +2583,14 @@ struct generic_product_impl<Lhs, Rhs, MatrixShape, TranspositionsShape, ProductT
 
 template <typename Lhs, typename Rhs, int ProductTag, typename MatrixShape>
 struct generic_product_impl<Transpose<Lhs>, Rhs, TranspositionsShape, MatrixShape, ProductTag>
-    : product_accumulate_through_temporary<
-          Transpose<Lhs>, Rhs,
-          generic_product_impl<Transpose<Lhs>, Rhs, TranspositionsShape, MatrixShape, ProductTag>> {
+    : indexed_product_accumulation<
+          Transpose<Lhs>, Rhs, generic_product_impl<Transpose<Lhs>, Rhs, TranspositionsShape, MatrixShape, ProductTag>,
+          MatrixShape> {
+  template <typename Dest, typename Func>
+  static EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE void accumulate(Dest& dst, const Transpose<Lhs>& lhs, const Rhs& rhs,
+                                                               const Func& func) {
+    transposition_matrix_product<Rhs, OnTheLeft, true, MatrixShape>::accumulate(dst, lhs.nestedExpression(), rhs, func);
+  }
   template <typename Dest>
   static EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE void evalTo(Dest& dst, const Transpose<Lhs>& lhs, const Rhs& rhs) {
     transposition_matrix_product<Rhs, OnTheLeft, true, MatrixShape>::run(dst, lhs.nestedExpression(), rhs);
@@ -2465,9 +2599,15 @@ struct generic_product_impl<Transpose<Lhs>, Rhs, TranspositionsShape, MatrixShap
 
 template <typename Lhs, typename Rhs, int ProductTag, typename MatrixShape>
 struct generic_product_impl<Lhs, Transpose<Rhs>, MatrixShape, TranspositionsShape, ProductTag>
-    : product_accumulate_through_temporary<
-          Lhs, Transpose<Rhs>,
-          generic_product_impl<Lhs, Transpose<Rhs>, MatrixShape, TranspositionsShape, ProductTag>> {
+    : indexed_product_accumulation<
+          Lhs, Transpose<Rhs>, generic_product_impl<Lhs, Transpose<Rhs>, MatrixShape, TranspositionsShape, ProductTag>,
+          MatrixShape> {
+  template <typename Dest, typename Func>
+  static EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE void accumulate(Dest& dst, const Lhs& lhs, const Transpose<Rhs>& rhs,
+                                                               const Func& func) {
+    transposition_matrix_product<Lhs, OnTheRight, true, MatrixShape>::accumulate(dst, rhs.nestedExpression(), lhs,
+                                                                                 func);
+  }
   template <typename Dest>
   static EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE void evalTo(Dest& dst, const Lhs& lhs, const Transpose<Rhs>& rhs) {
     transposition_matrix_product<Lhs, OnTheRight, true, MatrixShape>::run(dst, rhs.nestedExpression(), lhs);
