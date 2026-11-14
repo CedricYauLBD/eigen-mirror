@@ -728,8 +728,8 @@ void test_igamma_internal_nan() {
 // For a ~ x >~ 1 / eps, ax = x^a exp(-x) / Gamma(a) is inaccurate, and the igammac recurrence overflows once
 // (x - a) x > max (inf - inf = NaN, which igamma turned into 0). For finite arguments with x != a, P and Q must not be
 // NaN (they are clamped to [0, 1]), with P + Q = 1 where both use the same evaluation. Where the recurrence overflows
-// here, t = (x - a) / sqrt(a) >~ 40, so Q underflows: P = 1 and Q = 0 exactly. At x = a the continued fraction does not
-// converge: Q is NaN where the Lentz fallback is taken, otherwise P and Q are unconverged values clamped to [0, 1].
+// here, t = (x - a) / sqrt(a) >~ 40, so Q underflows: P = 1 and Q = 0 exactly. At x = a Lentz's fraction does not
+// converge for a >~ 1e7 (a >~ 5e7 in float).
 template <typename Scalar>
 void test_igamma_large_arguments() {
   using ArrayType = Array<Scalar, Dynamic, 1>;
@@ -753,12 +753,15 @@ void test_igamma_large_arguments() {
   const ArrayType p_array = igamma(a, x), q_array = igammac(a, x);
   const Scalar eps = NumTraits<Scalar>::epsilon();
   for (int i = 0; i < n; ++i) {
-    // Lentz's fraction needs ~ 355 / t^2 iterations: no convergence at x = a.
-    if (x(i) == a(i)) VERIFY((numext::isnan)(internal::igammac_cf_lentz<Scalar>(a(i), x(i))));
+    if (x(i) == a(i)) {
+      bool converged = true;
+      internal::igammac_cf_lentz<Scalar>(a(i), x(i), &converged);
+      VERIFY(!converged);
+    }
     for (int path = 0; path < 2; ++path) {
       const Scalar p = path ? p_array(i) : numext::igamma(a(i), x(i));
       const Scalar q = path ? q_array(i) : numext::igammac(a(i), x(i));
-      // Written so that a NaN fails; the NaN at x = a is checked on the fraction above.
+      // Written so that a NaN fails; no claim at x = a, where neither evaluation converges.
       if (x(i) != a(i)) {
         VERIFY(p >= Scalar(0) && p <= Scalar(1));
         VERIFY(q >= Scalar(0) && q <= Scalar(1));
@@ -770,29 +773,71 @@ void test_igamma_large_arguments() {
       }
     }
   }
+}
 
-  // The fallback itself, Q = (Stirling main term) * (Lentz fraction), against the uniform asymptotic expansion of
-  // Temme (DLMF 8.12.3) in 300-bit MPFR, at the arguments rounded to Scalar (the references depend on the rounding),
-  // for t = 1, 0.5, 5 (double) and 2.03 (float). The relative error is bounded by factor * (log(a) / 2 + t^2) * eps,
-  // the error of the main term (log Gamma(a) enters as log(a) / 2 and exp(-t^2 / 2) as t^2); the measured error is at
-  // most 0.86 of this bound with factor 1, in g++ and clang++ with and without FMA. P = 1 - Q is within the same bound.
+// Q = igammac(a, x) and P = igamma(a, x), x = a + t sqrt(a), through the scalar and array functions, for a above
+// igamma_use_stirling_main_term's threshold (a >~ 29 in float, a >~ 2.3e4 in double). The ordinary main term would
+// have the error eps a log(a) in its exponent: 1e3 eps at a = 1e3, O(1) for a >~ 1 / eps. References: MPFR (>= 600
+// bits) at the arguments rounded to Scalar, mpfr_gamma_inc for a < 1e6 and Temme's uniform expansion (DLMF 8.12.3,
+// 8.12.8, terms c0 and c1) above. The relative error of Q is ~ (log(a) / 2 + t^2) eps, from log Gamma(a) and
+// exp(-t^2 / 2). The bound at these test points is 2 (log(a) / 2 + t^2 + 2) eps, the 2 eps from truncating Stirling's
+// series at the threshold; measured <= 0.5 of it in g++ and clang++, with and without FMA. It is not a general bound:
+// near x = a at large a the error is larger (63 eps at a = 4.40e6, t = 4.6e-4, where the bound is 15 eps).
+// |P - P_ref| <= 2 eps P_ref + the bound on |Q - Q_ref| for x != a; at x = a igamma uses the series, not tested here.
+template <typename Scalar>
+void test_igamma_stirling_regime() {
+  using ArrayType = Array<Scalar, Dynamic, 1>;
   struct Reference {
     double a, x, q;
   };
-  const Reference refs_f[] = {{9.99999996e11, 1.00000203e12, 0.0210963254}};
-  const Reference refs_d[] = {{1e20, 1.0000000001e20, 0.15865508048690388},
-                              {1e20, 1.00000000005e20, 0.30853741253698347},
-                              {1e20, 1.0000000005e20, 2.8665111634868367e-07}};
+  // The first three of each are at the threshold: a = 29 (float), 23300 (double), for x = a, t = 1 and t = 4.
+  const Reference refs_f[] = {{29, 29, 0.47530172814254118},
+                              {29, 34.385166168212891, 0.15742604999135354},
+                              {29, 50.540657043457031, 0.00039717534593627728},
+                              {40, 46.3245544, 0.157748569},
+                              {1000, 1015.8114, 0.305755924},
+                              {1000000, 1002000, 0.0228040959},
+                              {1e+09, 1.00003162e+09, 0.158707111},
+                              {9.99999996e+11, 1.00000052e+12, 0.300039037},
+                              {9.99999996e+11, 1.00000203e+12, 0.0210963254},
+                              {1e+14, 1.00000009e+14, 0.200773711}};
+  const Reference refs_d[] = {{23300, 23300, 0.49912881386668523},
+                              {23300, 23452.643375224736, 0.15865353112085209},
+                              {23300, 23910.57350089895, 3.6275102017670049e-05},
+                              {30000, 30173.205080756888, 0.15865391514519289},
+                              {100000, 100632.45553203368, 0.022920595778153613},
+                              {100000000, 100010000, 0.15865525352820117},
+                              {1000000000000, 1000000500000, 0.30853745070965705},
+                              {10000000000000000, 10000000050000000, 0.30853753784582361},
+                              {1e+17, 1.0000000031622776e+17, 0.15865525853541282},
+                              {1e+18, 1.000000001e+18, 0.15865525393145705},
+                              {1e+20, 1.00000000005e+20, 0.30853741253698347},
+                              {1e+20, 1.0000000001000001e+20, 0.15865508048690388},
+                              {1e+20, 1.0000000002e+20, 0.02275014301093051},
+                              {1e+20, 1.0000000007999999e+20, 6.2210020687104885e-16},
+                              {9.9999999999999998e+23, 1.000000000001e+24, 0.15864163346140472},
+                              {9.9999999999999998e+23, 1.00000000002e+24, 2.7507500517774874e-89}};
+  const bool is_float = sizeof(Scalar) == 4;
   const Reference* refs = is_float ? refs_f : refs_d;
-  const int num_refs = is_float ? 1 : 3;
-  const double factor = 4;
-  for (int i = 0; i < num_refs; ++i) {
-    const Reference r = refs[i];
-    const Scalar ai = Scalar(r.a), xi = Scalar(r.x);
-    const double t = (double(xi) - double(ai)) / std::sqrt(double(ai));
-    const double tol = factor * (0.5 * std::log(double(ai)) + t * t) * double(eps);
-    const Scalar q = internal::main_igamma_term_stirling<Scalar>(ai, xi) * internal::igammac_cf_lentz<Scalar>(ai, xi);
-    VERIFY(numext::abs(q - Scalar(r.q)) <= Scalar(tol * r.q));
+  const int n = is_float ? 10 : 16;
+  ArrayType a(n), x(n);
+  for (int i = 0; i < n; ++i) {
+    a(i) = Scalar(refs[i].a);
+    x(i) = Scalar(refs[i].x);
+  }
+  const ArrayType p_array = igamma(a, x), q_array = igammac(a, x);
+  const double eps = double(NumTraits<Scalar>::epsilon());
+  const double factor = 2;
+  for (int i = 0; i < n; ++i) {
+    const double q_ref = refs[i].q, p_ref = 1 - q_ref;
+    const double t = (double(x(i)) - double(a(i))) / std::sqrt(double(a(i)));
+    const double tol = factor * (0.5 * std::log(double(a(i))) + t * t + 2) * eps;
+    for (int path = 0; path < 2; ++path) {
+      const double q = double(path ? q_array(i) : numext::igammac(a(i), x(i)));
+      const double p = double(path ? p_array(i) : numext::igamma(a(i), x(i)));
+      VERIFY(numext::abs(q - q_ref) <= tol * q_ref);
+      if (x(i) != a(i)) VERIFY(numext::abs(p - p_ref) <= 2 * eps * p_ref + tol * q_ref);
+    }
   }
 }
 
@@ -970,6 +1015,7 @@ EIGEN_DECLARE_TEST(special_functions) {
   CALL_SUBTEST_1(test_igamma_limits<float>());
   CALL_SUBTEST_1(test_igamma_internal_nan<float>());
   CALL_SUBTEST_1(test_igamma_large_arguments<float>());
+  CALL_SUBTEST_1(test_igamma_stirling_regime<float>());
   CALL_SUBTEST_2(ndtri_tail_accuracy<double>());
   CALL_SUBTEST_2(array_special_functions<ArrayXd>());
   CALL_SUBTEST_2(test_special_functions_edge_cases<double>());
@@ -980,6 +1026,7 @@ EIGEN_DECLARE_TEST(special_functions) {
   CALL_SUBTEST_2(test_igamma_limits<double>());
   CALL_SUBTEST_2(test_igamma_internal_nan<double>());
   CALL_SUBTEST_2(test_igamma_large_arguments<double>());
+  CALL_SUBTEST_2(test_igamma_stirling_regime<double>());
   CALL_SUBTEST_3(scalar_ndtri<long double>());
   CALL_SUBTEST_4(scalar_erf_erfc<long double>());
   CALL_SUBTEST_5(custom_scalar_erf_erfc());

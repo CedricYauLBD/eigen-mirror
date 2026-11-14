@@ -920,6 +920,16 @@ EIGEN_DEVICE_FUNC static Scalar main_igamma_term_stirling(Scalar a, Scalar x) {
   return logax < -numext::log(NumTraits<Scalar>::highest()) ? Scalar(0) : numext::exp(logax);
 }
 
+/* Whether igammac_cf_impl evaluates igammac(a, x), x >= a, as main_igamma_term_stirling * igammac_cf_lentz rather
+ * than main_igamma_term * recurrence: true once the error 1 / (360 a^3) of Stirling's series for log Gamma(a),
+ * truncated after 1 / (12 a), is below eps, i.e. a >~ 2.3e4 (double), a >~ 29 (float), and when a^3 overflows.
+ * The ordinary main term has the absolute error eps a log(a) in its exponent: better for a <~ 1500 (double),
+ * a <~ 16 (float), worse above, and meaningless for a >~ 1 / eps. */
+template <typename Scalar>
+EIGEN_DEVICE_FUNC static EIGEN_STRONG_INLINE bool igamma_use_stirling_main_term(Scalar a) {
+  return Scalar(360) * NumTraits<Scalar>::epsilon() * a * a * a >= Scalar(1);
+}
+
 /* The continued fraction of igammac(a, x) / main_igamma_term(a, x), for x >= a > 0, by the modified Lentz algorithm
  * (Thompson and Barnett, J. Comput. Phys. 64, 1986; Press et al., Numerical Recipes, 3rd ed., section 6.2):
  *
@@ -930,10 +940,12 @@ EIGEN_DEVICE_FUNC static Scalar main_igamma_term_stirling(Scalar a, Scalar x) {
  * the largest number; Lentz's method forms no product of two large quantities, and a_i * d is grouped as
  * -i * ((i - a) * d) so that it does not overflow for a near the largest number.
  *
- * The fraction needs ~ 355 / t^2 iterations (double), t = (x - a) / sqrt(a). Returns NaN if the iteration limit is
- * reached first, as for t^2 <~ 0.18: an unconverged value would be a confident wrong answer. */
+ * The fraction needs ~ 355 / t^2 iterations (double), t = (x - a) / sqrt(a), for large a. It does not converge within
+ * the iteration limit from (measured) a ~ 1.1e7 at t = 0, 1.8e7 at t = 0.1, 3.3e7 at t = 0.2, 1.4e8 at t = 0.3 and
+ * 8e10 at t = 0.4 in double, and from a ~ 5.6e7 at t = 0 and 2.2e8 at t = 0.1 in float. Then *converged is false and
+ * the returned value is meaningless. */
 template <typename Scalar>
-EIGEN_DEVICE_FUNC static Scalar igammac_cf_lentz(Scalar a, Scalar x) {
+EIGEN_DEVICE_FUNC static Scalar igammac_cf_lentz(Scalar a, Scalar x, bool* converged) {
   const Scalar one = 1;
   const Scalar tiny = (numext::numeric_limits<Scalar>::min)();
   const Scalar machep = cephes_helper<Scalar>::machep();
@@ -951,9 +963,13 @@ EIGEN_DEVICE_FUNC static Scalar igammac_cf_lentz(Scalar a, Scalar x) {
     d = one / d;
     const Scalar delta = d * c;
     h *= delta;
-    if (numext::abs(delta - one) <= machep) return h;
+    if (numext::abs(delta - one) <= machep) {
+      *converged = true;
+      return h;
+    }
   }
-  return NumTraits<Scalar>::quiet_NaN();
+  *converged = false;
+  return h;
 }
 
 template <typename Scalar, IgammaComputationMode mode>
@@ -977,6 +993,17 @@ struct igammac_cf_impl {
 
     if ((numext::isinf)(x)) {
       return zero;
+    }
+
+    if (mode == VALUE && igamma_use_stirling_main_term(a)) {
+      bool converged;
+      const Scalar h = igammac_cf_lentz<Scalar>(a, x, &converged);
+      if (converged) {
+        const Scalar ax_stirling = main_igamma_term_stirling<Scalar>(a, x);
+        return ax_stirling == zero ? zero : ax_stirling * h;
+      }
+      // Unconverged only in the band documented at igammac_cf_lentz (|t| <~ 0.4, a >~ 1e7 in double, 5e7 in float):
+      // fall back to the recurrence.
     }
 
     Scalar ax = main_igamma_term<Scalar>(a, x);
@@ -1063,14 +1090,10 @@ struct igammac_cf_impl {
 
     switch (mode) {
       case VALUE: {
+        // Non-finite only for a >~ 1 / eps where Lentz's fraction did not converge: the recurrence gave inf - inf, or
+        // the cancelling ax overflowed.
         const Scalar result = ans * ax;
-        if (EIGEN_PREDICT_FALSE(!(numext::isfinite)(result))) {
-          // Non-finite only for a >~ 1 / eps: the recurrence overflowed (inf - inf), or the cancelling ax overflowed.
-          // The Lentz fallback is NaN where it does not converge, |t| <~ 0.4 with t = (x - a) / sqrt(a).
-          const Scalar ax_stirling = main_igamma_term_stirling<Scalar>(a, x);
-          return ax_stirling == zero ? zero : ax_stirling * igammac_cf_lentz<Scalar>(a, x);
-        }
-        return result;
+        return EIGEN_PREDICT_FALSE(!(numext::isfinite)(result)) ? NumTraits<Scalar>::quiet_NaN() : result;
       }
       case DERIVATIVE:
         return ans * dax_da + dans_da * ax;
