@@ -125,8 +125,10 @@ namespace bfloat16_impl {
 #if defined(EIGEN_CUDACC)
 // Like Eigen::half, bfloat16 is used as the element type of __shared__ arrays, whose type must have an empty default
 // constructor: clang's CUDA mode rejects `__shared__ bfloat16 a[N]` when a constructor in the chain initializes value,
-// in both compile phases. Hence the CUDA default constructors leave value uninitialized, and cannot be constexpr
-// before C++20.
+// in both compile phases. Hence, in a CUDA translation unit, the default constructors of __bfloat16_raw,
+// bfloat16_base and bfloat16 leave value indeterminate, in the host phase too: `bfloat16()`, `bfloat16{}` and
+// `std::vector<bfloat16>(n)` do not yield zero there, as for Eigen::half. Other translation units keep the zero
+// initialization. Such constructors cannot be constexpr before C++20.
 #define EIGEN_BF16_DEFAULT_CTOR_CONSTEXPR
 #else
 #define EIGEN_BF16_DEFAULT_CTOR_CONSTEXPR EIGEN_CONSTEXPR
