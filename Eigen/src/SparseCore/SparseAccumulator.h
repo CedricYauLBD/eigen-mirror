@@ -206,20 +206,84 @@ Index split_into_buckets(const StorageIndex* srcIndices, Scalar* srcValues, Inde
   return buckets;
 }
 
-// Whether index * 8 + position fits 64 bits for every index up to hi. An inner dimension of 2^61 or more is beyond
-// what a marker or a transposition can allocate, so the slower sort of such a vector is not worth more code.
-template <typename StorageIndex>
-bool fits_packed_key(StorageIndex hi) {
-  return sizeof(StorageIndex) < 8 || (std::uint64_t(hi) >> 61) == 0;
-}
+// Sorts the entries of one bucket and sums those of equal index. An entry becomes the 64-bit key
+// index * kCapacity + position; a fixed network of compare-exchanges orders the keys without a branch, which the
+// insertion sort of scattered indices cannot do, and each entry is then moved once. The position in the low bits
+// keeps equal indices in their order of arrival, so sums are formed in that order.
+template <typename Scalar, typename StorageIndex>
+class bucket_sorter {
+  using Key = std::uint64_t;
+  static constexpr int kPositionBits = 3;
+
+ public:
+  // The most entries of a bucket.
+  static constexpr Index kCapacity = Index(1) << kPositionBits;
+
+  // Whether every index up to hi fits a key: always for an index type narrower than 64 bits. An inner dimension of
+  // 2^61 or more is beyond what a marker or a transposition can allocate, so such a vector keeps the insertion sort.
+  static bool fits(StorageIndex hi) {
+    return sizeof(StorageIndex) < sizeof(Key) || (Key(hi) >> (64 - kPositionBits)) == 0;
+  }
+
+  // Takes the n <= kCapacity entries with the given indices.
+  EIGEN_ALWAYS_INLINE void pack(const StorageIndex* indices, Index n) {
+    m_size = n;
+    for (Index p = 0; p < n; ++p) m_key[p] = (Key(indices[p]) << kPositionBits) | Key(p);
+    for (Index p = n; p < kCapacity; ++p) m_key[p] = ~Key(0);
+  }
+
+  // Orders the keys; the padding ends up behind them.
+  EIGEN_ALWAYS_INLINE void sort() {
+    Key* k = m_key;
+    if (m_size <= 4) {
+      order(k[0], k[1]), order(k[2], k[3]), order(k[0], k[2]), order(k[1], k[3]), order(k[1], k[2]);
+      return;
+    }
+    order(k[0], k[1]), order(k[2], k[3]), order(k[4], k[5]), order(k[6], k[7]);
+    order(k[0], k[2]), order(k[1], k[3]), order(k[4], k[6]), order(k[5], k[7]);
+    order(k[1], k[2]), order(k[5], k[6]), order(k[0], k[4]), order(k[3], k[7]);
+    order(k[1], k[5]), order(k[2], k[6]);
+    order(k[1], k[4]), order(k[3], k[6]);
+    order(k[2], k[4]), order(k[3], k[5]);
+    order(k[3], k[4]);
+  }
+
+  // Appends the sorted entries to (indices, values) from position count, taking the value of the entry packed at
+  // position p from srcValues[p] and summing the values of equal indices. Returns the new count.
+  EIGEN_ALWAYS_INLINE Index merge(Scalar* srcValues, StorageIndex* indices, Scalar* values, Index count) const {
+    Index first = count;
+    for (Index q = 0; q < m_size; ++q) {
+      StorageIndex i = StorageIndex(m_key[q] >> kPositionBits);
+      Index p = Index(m_key[q] & Key(kCapacity - 1));
+      if (count > first && indices[count - 1] == i) {
+        values[count - 1] += srcValues[p];
+      } else {
+        indices[count] = i;
+        values[count] = move_if_assignable(srcValues[p]);
+        ++count;
+      }
+    }
+    return count;
+  }
+
+ private:
+  static EIGEN_ALWAYS_INLINE void order(Key& a, Key& b) {
+    Key lo = numext::mini(a, b), hi = numext::maxi(a, b);
+    a = lo;
+    b = hi;
+  }
+
+  Key m_key[kCapacity];
+  Index m_size = 0;
+};
 
 // Appends the entries of the buckets to (indices, values) from position count, sorted by index and with the values
 // of equal indices summed, and returns the new count. Bucket b is [cursor[base + b - 1], cursor[base + b]) of
 // (bucketIndices, bucketValues), bucket 0 beginning at 0, and the indices of a bucket are below those of the next.
 // (splitIndices, splitValues) has the extent of the buckets; both are overwritten. cursor is workspace.cursor.
 //
-// A bucket is sorted by a network over 64-bit keys, or by insertion unless packedKeys: every index is below 2^61, so
-// that index * 8 + position fits a key (fits_packed_key). One with more than kBucketMax entries holds a cluster, which
+// A bucket is sorted by a bucket_sorter if packedKeys, which says that every index fits its keys, and by insertion
+// otherwise. One with more than kBucketMax entries holds a cluster, which
 // a hash over all the buckets could not spread. It goes through a direct table if it is dense in its own range, and is
 // otherwise split again over that range. A split has at least two buckets, each with about half of the range or less,
 // so n entries cost O(n d) for d nested splits, d <= log2(hi - lo); d is 1 unless clusters lie within clusters.
@@ -229,6 +293,8 @@ Index merge_buckets(StorageIndex* bucketIndices, Scalar* bucketValues, StorageIn
                     StorageIndex* indices, Scalar* values, Index count, bool packedKeys) {
   using Workspace = inner_sort_workspace<Scalar, StorageIndex>;
   constexpr Index kBucketMax = Workspace::kBucketMax;
+  EIGEN_STATIC_ASSERT(Workspace::kBucketMax <= (bucket_sorter<Scalar, StorageIndex>::kCapacity),
+                      A_BUCKET_MUST_FIT_ITS_SORTER)
   // Known at compile time for an index type narrower than 64 bits.
   const bool packed = sizeof(StorageIndex) < 8 || packedKeys;
   EIGEN_STATIC_ASSERT(Workspace::kBucketMax >= 2 * Workspace::kBucketLoad, AN_OVERFULL_BUCKET_MUST_SPLIT_IN_TWO)
@@ -271,39 +337,11 @@ Index merge_buckets(StorageIndex* bucketIndices, Scalar* bucketValues, StorageIn
       continue;
     }
     Index first = count;
-    // Sort the keys index * 8 + position with a branch-free network, then move each entry once. Equal indices stay
-    // in order of arrival.
     if (packed && n > 1) {
-      std::uint64_t key[8];
-      for (Index p = 0; p < n; ++p) key[p] = (std::uint64_t(bucketIndices[begin + p]) << 3) | std::uint64_t(p);
-      for (Index p = n; p < 8; ++p) key[p] = ~std::uint64_t(0);
-      auto order = [&key](int a, int b) {
-        std::uint64_t lo = numext::mini(key[a], key[b]), hi = numext::maxi(key[a], key[b]);
-        key[a] = lo;
-        key[b] = hi;
-      };
-      if (n <= 4) {
-        order(0, 1), order(2, 3), order(0, 2), order(1, 3), order(1, 2);
-      } else {
-        order(0, 1), order(2, 3), order(4, 5), order(6, 7);
-        order(0, 2), order(1, 3), order(4, 6), order(5, 7);
-        order(1, 2), order(5, 6), order(0, 4), order(3, 7);
-        order(1, 5), order(2, 6);
-        order(1, 4), order(3, 6);
-        order(2, 4), order(3, 5);
-        order(3, 4);
-      }
-      for (Index q = 0; q < n; ++q) {
-        StorageIndex i = StorageIndex(key[q] >> 3);
-        Index p = begin + Index(key[q] & 7);
-        if (count > first && indices[count - 1] == i) {
-          values[count - 1] += bucketValues[p];
-        } else {
-          indices[count] = i;
-          values[count] = move_if_assignable(bucketValues[p]);
-          ++count;
-        }
-      }
+      bucket_sorter<Scalar, StorageIndex> sorter;
+      sorter.pack(bucketIndices + begin, n);
+      sorter.sort();
+      count = sorter.merge(bucketValues + begin, indices, values, count);
       begin = end;
       continue;
     }
@@ -381,7 +419,8 @@ void sort_inner_vector(StorageIndex* indices, Scalar* values, Index n, StorageIn
   Index buckets = split_into_buckets(indices, values, n, lo, hi, workspace.buckets.indexPtr(),
                                      workspace.buckets.valuePtr(), workspace.cursor, 0);
   merge_buckets(workspace.buckets.indexPtr(), workspace.buckets.valuePtr(), workspace.split.indexPtr(),
-                workspace.split.valuePtr(), workspace, 0, buckets, indices, values, 0, fits_packed_key(hi));
+                workspace.split.valuePtr(), workspace, 0, buckets, indices, values, 0,
+                bucket_sorter<Scalar, StorageIndex>::fits(hi));
 }
 
 // The entries a sparse product stores: all of them, or those with !(|value| <= tolerance), which keeps a NaN.
@@ -586,9 +625,9 @@ class sparse_accumulator {
       }
     });
     reserve(maxKeys);
-    Index end =
-        merge_buckets(bucketIndices, bucketValues, m_workspace.split.indexPtr(), m_workspace.split.valuePtr(),
-                      m_workspace, 0, buckets, m_data.indexPtr(), m_data.valuePtr(), m_size, fits_packed_key(hi));
+    Index end = merge_buckets(bucketIndices, bucketValues, m_workspace.split.indexPtr(), m_workspace.split.valuePtr(),
+                              m_workspace, 0, buckets, m_data.indexPtr(), m_data.valuePtr(), m_size,
+                              bucket_sorter<Scalar, StorageIndex>::fits(hi));
     Index keys = end - m_size;
     close(keys, keep);
     return keys;
