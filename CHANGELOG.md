@@ -51,6 +51,8 @@ Bug fixes:
 - `SparseVector::prune()` move-assigned the kept entries in front of the first dropped one onto themselves, which leaves them unspecified: with libstdc++, the value of a scalar holding a `std::vector` was lost [!3537]
 
 Breaking changes:
+- Removed triSYCL and ComputeCpp support from SYCL test builds. Use DPC++ instead of the removed
+  `EIGEN_SYCL_TRISYCL` and `EIGEN_SYCL_ComputeCpp` configurations; DPC++ is now the only supported backend.
 - `PaStiXSupport` now requires PaStiX 6.x; version 5 is no longer supported. `FindPASTIX.cmake` uses pkg-config metadata
   instead of dependency-selection components. Removed the unused `FindBLASEXT`, `FindHWLOC`, `FindSCOTCH` and
   `FindPTSCOTCH` modules. Renamed `FindMetis.cmake` to `FindMETIS.cmake` to match `find_package(METIS)` [#2256, !3467]
