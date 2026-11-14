@@ -71,10 +71,8 @@ EIGEN_DEFINE_FUNCTION_ALLOWING_MULTIPLE_DEFINITIONS Packet16f psqrt<Packet16f>(c
   // For a small x the residual, of the order of 2^-13 x, is subnormal: it loses the bits the correction needs, and
   // all of them when subnormal results are flushed to zero (FTZ), which left the result with the 14 bits of x r.
   // Below 2^-92 a flushed residual could move the result by more than 2^-11 ulp: those lanes take the square root
-  // instruction. bits(x) - 1 wraps +0 above every positive float, so that zeros, which are common, stay on the fast
-  // path.
-  const __mmask16 redo = _mm512_cmplt_epu32_mask(_mm512_sub_epi32(_mm512_castps_si512(x), _mm512_set1_epi32(1)),
-                                                 _mm512_set1_epi32(0x11800000 - 1));
+  // instruction. Zeros, which are common, are masked out and stay on the fast path.
+  const __mmask16 redo = _mm512_mask_cmplt_epu32_mask(nonzero, _mm512_castps_si512(x), _mm512_set1_epi32(0x11800000));
   return EIGEN_PREDICT_TRUE(redo == 0) ? res : _mm512_mask_sqrt_ps(res, redo, x);
 }
 
@@ -99,8 +97,8 @@ EIGEN_DEFINE_FUNCTION_ALLOWING_MULTIPLE_DEFINITIONS Packet8d psqrt<Packet8d>(con
   const __mmask8 keep = _mm512_mask_cmp_pd_mask(nonzero, x, _mm512_set1_pd(NumTraits<double>::infinity()), _CMP_NEQ_UQ);
   const Packet8d res = _mm512_mask_mov_pd(x, keep, s);
   // Below 2^-956 a residual flushed to zero could move the result by more than 2^-14 ulp.
-  const __mmask8 redo = _mm512_cmplt_epu64_mask(_mm512_sub_epi64(_mm512_castpd_si512(x), _mm512_set1_epi64(1)),
-                                                _mm512_set1_epi64(0x0430000000000000ll - 1));
+  const __mmask8 redo =
+      _mm512_mask_cmplt_epu64_mask(nonzero, _mm512_castpd_si512(x), _mm512_set1_epi64(0x0430000000000000ll));
   return EIGEN_PREDICT_TRUE(redo == 0) ? res : _mm512_mask_sqrt_pd(res, redo, x);
 #endif
 }
