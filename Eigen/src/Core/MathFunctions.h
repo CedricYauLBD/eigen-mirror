@@ -2687,20 +2687,13 @@ EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE std::complex<T> complex_divide_fast(const 
   return std::complex<T>((a_real * b_real + a_imag * b_imag) / norm, (a_imag * b_real - a_real * b_imag) / norm);
 }
 
-// Smith's quotient where a numerator or the denominator is large, which can overflow. If one has, a (b) is scaled by
-// 1/4 where a component exceeds highest / 4, and the quotient by the inverse scale; if none has, the unscaled quotient
-// is returned, as scaling can lose a subnormal component. rscale and iscale are Smith's ratios for b.
+// Smith's quotient where a numerator or the denominator has overflowed: a (b) is scaled by 1/4 where a component
+// exceeds highest / 4, and the quotient by the inverse scale. rscale and iscale are Smith's ratios for b.
 template <typename T>
 EIGEN_DEVICE_FUNC EIGEN_DONT_INLINE std::complex<T> complex_divide_smith_large(const std::complex<T>& a,
                                                                                const std::complex<T>& b, T rscale,
-                                                                               T iscale, T denominator,
-                                                                               T numerator_real, T numerator_imag) {
-  const T highest = NumTraits<T>::highest();
-  if (!(numext::abs(numerator_real) > highest || numext::abs(numerator_imag) > highest ||
-        numext::abs(denominator) > highest)) {
-    return std::complex<T>(numerator_real / denominator, numerator_imag / denominator);
-  }
-  const T quarter_highest = highest / T(4);
+                                                                               T iscale) {
+  const T quarter_highest = NumTraits<T>::highest() / T(4);
   const T a_real = numext::real(a);
   const T a_imag = numext::imag(a);
   const T b_real = numext::real(b);
@@ -2746,12 +2739,14 @@ EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE std::complex<T> complex_divide_smith(const
   const T numerator_real = a_real * rscale + a_imag * iscale;
   const T numerator_imag = a_imag * rscale - a_real * iscale;
   // The numerators are at most 2 max(|a_r|, |a_i|) and the denominator lies in [m, 2 m] for m = max(|b_r|, |b_i|), so
-  // any of them can overflow where the quotient does not, as in pdiv_complex, which this follows. s - s is NaN
-  // unless s, which sums them, is finite; a sum that overflows without any term doing so merely takes the cold path.
-  const T sum = numerator_real + numerator_imag + denominator;
-  // Under -ffinite-math-only this test is folded, and division then behaves as before the guard (no rescaling).
-  if (EIGEN_PREDICT_FALSE(sum - sum != T(0))) {
-    return complex_divide_smith_large(a, b, rscale, iscale, denominator, numerator_real, numerator_imag);
+  // any of them can overflow where the quotient does not, as in pdiv_complex, which this follows. Each is tested on its
+  // own, by a test that raises no exception for a NaN: a test of their sum raises FE_OVERFLOW, and FE_INVALID
+  // for inf - inf, where no term overflows. The tests are folded under -ffinite-math-only, where division then behaves
+  // as before the guard (no rescaling).
+  const int overflowed =
+      int((numext::isinf)(numerator_real)) | int((numext::isinf)(numerator_imag)) | int((numext::isinf)(denominator));
+  if (EIGEN_PREDICT_FALSE(overflowed != 0)) {
+    return complex_divide_smith_large(a, b, rscale, iscale);
   }
   return std::complex<T>(numerator_real / denominator, numerator_imag / denominator);
 }

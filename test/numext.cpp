@@ -1219,6 +1219,25 @@ void check_complex_divide_exceptions() {
     const int exceptions = complex_divide_exceptions(Complex(T(1), T(0)), b);
     if (exceptions >= 0) VERIFY_IS_EQUAL(exceptions, 0);
   }
+
+  // The test for an overflowed numerator or denominator raises nothing where no term overflows, although their sum
+  // does (the terms are at most 2 max|a| and 2 max|b|), and nothing for an infinite or NaN operand whose quotient
+  // is infinite or NaN without an invalid operation.
+  const T highest = (std::numeric_limits<T>::max)(), infinity = NumTraits<T>::infinity();
+  const T nan = NumTraits<T>::quiet_NaN(), one(1);
+  const Complex cases[][2] = {{Complex(highest / 4, zero), Complex(highest, zero)},
+                              {Complex(T(0.6) * highest, T(0.6) * highest), Complex(one, zero)},
+                              {Complex(highest, highest), Complex(one, zero)},
+                              {Complex(highest, zero), Complex(highest, zero)},
+                              {Complex(highest / 2, highest / 2), Complex(-one, zero)},
+                              {Complex(T(0.6) * highest, zero), Complex(zero, T(0.6) * highest)},
+                              {Complex(infinity, one), Complex(one, one)},
+                              {Complex(nan, one), Complex(one, one)},
+                              {Complex(one, one), Complex(infinity, one)}};
+  for (const auto& operands : cases) {
+    const int exceptions = complex_divide_exceptions(operands[0], operands[1]);
+    if (exceptions >= 0) VERIFY_IS_EQUAL(exceptions, 0);
+  }
 }
 
 // numext::fma(a, b, c) for half or bfloat16, and whether it raised FE_INVALID (-1 where the environment cannot be
