@@ -137,7 +137,8 @@ inline void setNbSmeUnits(int v) {
 // TODO(rmlarsen): Make the device API available instead of
 // storing a local static pointer variable to avoid the race condition below.
 
-/** Sets the ThreadPool used by Eigen's parallel matrix-matrix product, and returns the registered pool. A null
+/** \ingroup Core_Module
+ * Sets the ThreadPool used by Eigen's parallel matrix-matrix product, and returns the registered pool. A null
  * argument registers nothing and only returns the current pool. Registering a pool resets nbThreads() to the number of
  * threads of the pool. There is one registered pool and one nbThreads() for the whole process.
  *
@@ -179,7 +180,8 @@ inline ThreadPool* setGemmThreadPool(ThreadPool* new_pool) {
   return pool;
 }
 
-/** \returns the ThreadPool registered with setGemmThreadPool(), or a null pointer if there is none. */
+/** \ingroup Core_Module
+ * \returns the ThreadPool registered with setGemmThreadPool(), or a null pointer if there is none. */
 inline ThreadPool* getGemmThreadPool() { return setGemmThreadPool(nullptr); }
 #endif  // EIGEN_GEMM_THREADPOOL || EIGEN_PARSED_BY_DOXYGEN
 
