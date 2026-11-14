@@ -407,6 +407,74 @@ void test_realview_linear_coeff_ref() {
   VERIFY_IS_EQUAL(numext::imag(buffer(2 * (rows - 1))), RealScalar(5));
 }
 
+// A complex scalar whose members are in the reverse order of std::complex, so it is not an array of two reals: a
+// RealView of it reads through real() and imag() and has no coeffRef().
+namespace reordered_complex {
+struct Complex {
+  Complex(double r = 0, double i = 0) : imag_value(i), real_value(r) {}
+  double imag_value;
+  double real_value;
+};
+double real(const Complex& x) { return x.real_value; }
+double imag(const Complex& x) { return x.imag_value; }
+}  // namespace reordered_complex
+template <>
+struct Eigen::NumTraits<reordered_complex::Complex> : Eigen::NumTraits<double> {
+  static constexpr bool IsComplex = true;
+};
+
+// True when both coeffRef(row, col) and coeffRef(index) can be called on a V&.
+template <typename V, typename = void>
+struct has_coeff_ref : std::false_type {};
+template <typename V>
+struct has_coeff_ref<V, internal::void_t<decltype(std::declval<V&>().coeffRef(Index(0), Index(0))),
+                                         decltype(std::declval<V&>().coeffRef(Index(0)))>> : std::true_type {};
+
+// RealView::coeffRef() exists for std::complex views only: non-const with LvalueBit, const with DirectAccessBit.
+void test_realview_coeff_ref_availability() {
+  using StdVector = Matrix<std::complex<double>, Dynamic, 1>;
+  using StdView = decltype(std::declval<StdVector&>().realView());
+  using ConstStdView = decltype(std::declval<const StdVector&>().realView());
+  static_assert(has_coeff_ref<StdView>::value, "std::complex view");
+  static_assert(has_coeff_ref<const StdView>::value, "const view object");
+  static_assert(has_coeff_ref<ConstStdView>::value, "view of const xpr");
+  // A view of a const expression has no LvalueBit, so only the const overloads are candidates.
+  static_assert(std::is_same<decltype(std::declval<ConstStdView&>().coeffRef(Index(0))), const double&>::value,
+                "view of const xpr is read-only");
+  static_assert(std::is_same<decltype(std::declval<StdView&>().coeffRef(Index(0))), double&>::value, "writable");
+
+  using Custom = reordered_complex::Complex;
+  using CustomMatrix = Matrix<Custom, Dynamic, Dynamic>;
+  using CustomView = decltype(std::declval<CustomMatrix&>().realView());
+  using ConstCustomView = decltype(std::declval<const CustomMatrix&>().realView());
+  static_assert(!has_coeff_ref<CustomView>::value, "custom, non-const");
+  static_assert(!has_coeff_ref<const CustomView>::value, "custom, const view object");
+  static_assert(!has_coeff_ref<ConstCustomView>::value, "custom, view of const xpr");
+
+  // The coefficients are still read through real() and imag().
+  const Index rows = internal::random<Index>(1, 9), cols = internal::random<Index>(1, 9);
+  CustomMatrix m(rows, cols);
+  for (Index j = 0; j < cols; ++j)
+    for (Index i = 0; i < rows; ++i) m(i, j) = Custom(internal::random<double>(), internal::random<double>());
+  const CustomMatrix& cm = m;
+  auto view = m.realView();
+  auto constView = cm.realView();
+  for (Index j = 0; j < cols; ++j)
+    for (Index i = 0; i < rows; ++i) {
+      VERIFY_IS_EQUAL(view.coeff(2 * i, j), m(i, j).real_value);
+      VERIFY_IS_EQUAL(view.coeff(2 * i + 1, j), m(i, j).imag_value);
+      VERIFY_IS_EQUAL(constView.coeff(2 * i, j), m(i, j).real_value);
+      VERIFY_IS_EQUAL(constView.coeff(2 * i + 1, j), m(i, j).imag_value);
+    }
+  Matrix<Custom, Dynamic, 1> v(rows);
+  for (Index i = 0; i < rows; ++i) v(i) = Custom(internal::random<double>(), internal::random<double>());
+  auto vView = v.realView();
+  for (Index i = 0; i < rows; ++i) {
+    VERIFY_IS_EQUAL(vView.coeff(2 * i), v(i).real_value);
+    VERIFY_IS_EQUAL(vView.coeff(2 * i + 1), v(i).imag_value);
+  }
+}
+
 template <typename Scalar, int Rows, int Cols, int MaxRows = Rows, int MaxCols = Cols>
 void test_realview_readonly() {
   // if Rows == 1, don't test ColMajor as it is not a valid array
@@ -478,6 +546,7 @@ EIGEN_DECLARE_TEST(realview) {
     CALL_SUBTEST_12((test_realview_gemm_operand<std::complex<double>, RowMajor>()));
     CALL_SUBTEST_12((test_realview_linear_coeff_ref<std::complex<double>, ColMajor>()));
     CALL_SUBTEST_12((test_realview_linear_coeff_ref<std::complex<double>, RowMajor>()));
+    CALL_SUBTEST_11(test_realview_coeff_ref_availability());
     CALL_SUBTEST_13((test_realview_long_double<Dynamic, Dynamic, Dynamic, Dynamic>()));
     CALL_SUBTEST_13((test_realview_long_double<17, 19, 17, 19>()));
   }
