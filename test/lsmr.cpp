@@ -294,4 +294,5 @@ EIGEN_DECLARE_TEST(lsmr) {
   CALL_SUBTEST_12(test_lsmr_max_iterations<double>());
   CALL_SUBTEST_12(test_lsmr_max_iterations<std::complex<double> >());
   CALL_SUBTEST_12(test_lsmr_small_rhs<>());
+  CALL_SUBTEST_12((check_matrix_free_accessors<LSMR<MatrixFreeOperator, IdentityPreconditioner>>()));
 }

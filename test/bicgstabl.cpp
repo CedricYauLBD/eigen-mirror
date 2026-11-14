@@ -65,4 +65,5 @@ EIGEN_DECLARE_TEST(bicgstabl) {
   CALL_SUBTEST_3(test_bicgstabl_solve_with_guess_restart<>());
   CALL_SUBTEST_3(test_zero_rhs<>());
   CALL_SUBTEST_3(test_bicgstabl_small_rhs<>());
+  CALL_SUBTEST_3((check_matrix_free_accessors<BiCGSTABL<MatrixFreeOperator, IdentityPreconditioner>>()));
 }

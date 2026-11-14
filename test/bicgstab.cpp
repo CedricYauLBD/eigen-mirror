@@ -134,4 +134,5 @@ EIGEN_DECLARE_TEST(bicgstab) {
   CALL_SUBTEST_6(test_solve_with_guess_in_place());
   CALL_SUBTEST_6(test_zero_rhs());
   CALL_SUBTEST_3(test_bicgstab_small_rhs<>());
+  CALL_SUBTEST_6((check_matrix_free_accessors<BiCGSTAB<MatrixFreeOperator, IdentityPreconditioner>>()));
 }

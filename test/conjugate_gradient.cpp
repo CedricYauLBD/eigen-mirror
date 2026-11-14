@@ -101,4 +101,6 @@ EIGEN_DECLARE_TEST(conjugate_gradient) {
   CALL_SUBTEST_5(test_conjugate_gradient_extreme_rhs<>());
   CALL_SUBTEST_6(test_solve_with_guess_in_place<>());
   CALL_SUBTEST_5(test_conjugate_gradient_small_rhs<>());
+  CALL_SUBTEST_6(
+      (check_matrix_free_accessors<ConjugateGradient<MatrixFreeOperator, Lower | Upper, IdentityPreconditioner>>()));
 }

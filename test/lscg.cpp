@@ -285,4 +285,6 @@ EIGEN_DECLARE_TEST(lscg) {
   CALL_SUBTEST_5(test_lscg_sparse_tall<>());
   CALL_SUBTEST_5(test_lscg_small_rhs<>());
   CALL_SUBTEST_5(test_lscg_extreme_matrix<>());
+  CALL_SUBTEST_5(
+      (check_matrix_free_accessors<LeastSquaresConjugateGradient<MatrixFreeOperator, IdentityPreconditioner>>()));
 }

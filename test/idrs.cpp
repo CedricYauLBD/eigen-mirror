@@ -159,4 +159,5 @@ EIGEN_DECLARE_TEST(idrs) {
   CALL_SUBTEST_1(test_idrs_default_tolerance<double>());
   CALL_SUBTEST_2(test_idrs_default_tolerance<std::complex<double> >());
   CALL_SUBTEST_1(test_idrs_small_rhs<>());
+  CALL_SUBTEST_1((check_matrix_free_accessors<IDRS<MatrixFreeOperator, IdentityPreconditioner>>()));
 }

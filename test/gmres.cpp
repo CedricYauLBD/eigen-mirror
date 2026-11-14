@@ -147,4 +147,5 @@ EIGEN_DECLARE_TEST(gmres) {
   CALL_SUBTEST_4(test_zero_rhs());
   CALL_SUBTEST_4(test_gmres_max_iterations<>());
   CALL_SUBTEST_4(test_gmres_small_rhs<>());
+  CALL_SUBTEST_4((check_matrix_free_accessors<GMRES<MatrixFreeOperator, IdentityPreconditioner>>()));
 }

@@ -259,7 +259,8 @@ class MINRES : public IterativeSolverBase<MINRES<MatrixType_, UpLo_, Preconditio
     Base::m_tolerance = RealScalar(-1);
   }
 
-  /** \returns the tolerance set by setTolerance(), or by default \f$ 8 \sqrt{n}\, \epsilon \f$ for an n x n matrix.
+  /** \returns the tolerance set by setTolerance(), or by default \f$ 8 \sqrt{n}\, \epsilon \f$ for an n x n matrix,
+   * with n = 1 before a matrix is attached by compute().
    *
    * MINRES reports Success only when \f$ \| b - A x \| / \| b \| \f$, computed from the returned x, meets the
    * tolerance. The default is the least that can be confirmed reliably: the rounding error of b - A x is of order
@@ -268,9 +269,7 @@ class MINRES : public IterativeSolverBase<MINRES<MatrixType_, UpLo_, Preconditio
    * \f$ \epsilon \f$ is out of reach and would end in NoConvergence after maxIterations(). See also IDRS::tolerance().
    */
   RealScalar tolerance() const {
-    return Base::m_tolerance >= RealScalar(0)
-               ? Base::m_tolerance
-               : RealScalar(8) * numext::sqrt(RealScalar(Base::cols())) * NumTraits<RealScalar>::epsilon();
+    return Base::m_tolerance >= RealScalar(0) ? Base::m_tolerance : Base::sizeScaledTolerance();
   }
 
   /** \internal */

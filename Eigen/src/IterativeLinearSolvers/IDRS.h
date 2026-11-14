@@ -382,7 +382,8 @@ class IDRS : public IterativeSolverBase<IDRS<MatrixType_, Preconditioner_> > {
     Base::m_tolerance = RealScalar(-1);
   }
 
-  /** \returns the tolerance set by setTolerance(), or by default \f$ 8 \sqrt{n}\, \epsilon \f$ for an n x n matrix.
+  /** \returns the tolerance set by setTolerance(), or by default \f$ 8 \sqrt{n}\, \epsilon \f$ for an n x n matrix,
+   * with n = 1 before a matrix is attached by compute().
    *
    * The default is the smallest relative residual that b - A x, evaluated in floating point, can confirm reliably.
    * With m nonzeros in a row of A, each component carries a rounding error of order
@@ -393,9 +394,7 @@ class IDRS : public IterativeSolverBase<IDRS<MatrixType_, Preconditioner_> > {
    * \f$ \epsilon\, \|A\| \|x\| / \|b\| \f$ for an ill-conditioned A, can end in NoConvergence after maxIterations().
    */
   RealScalar tolerance() const {
-    return Base::m_tolerance >= RealScalar(0)
-               ? Base::m_tolerance
-               : RealScalar(8) * numext::sqrt(RealScalar(Base::cols())) * NumTraits<RealScalar>::epsilon();
+    return Base::m_tolerance >= RealScalar(0) ? Base::m_tolerance : Base::sizeScaledTolerance();
   }
 
   /** \internal */

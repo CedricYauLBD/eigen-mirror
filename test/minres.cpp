@@ -178,4 +178,5 @@ EIGEN_DECLARE_TEST(minres) {
   CALL_SUBTEST_4(test_minres_poisson<IdentityPreconditioner>());
   CALL_SUBTEST_4(test_minres_poisson<DiagonalPreconditioner<double> >());
   CALL_SUBTEST_4(test_minres_small_rhs<>());
+  CALL_SUBTEST_4((check_matrix_free_accessors<MINRES<MatrixFreeOperator, Lower | Upper, IdentityPreconditioner>>()));
 }

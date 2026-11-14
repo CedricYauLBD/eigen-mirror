@@ -80,4 +80,5 @@ EIGEN_DECLARE_TEST(idrstabl) {
   CALL_SUBTEST_1(test_zero_rhs<>());
   CALL_SUBTEST_1(test_normalization_breakdown<>());
   CALL_SUBTEST_1(test_idrstabl_small_rhs<>());
+  CALL_SUBTEST_1((check_matrix_free_accessors<IDRSTABL<MatrixFreeOperator, IdentityPreconditioner>>()));
 }

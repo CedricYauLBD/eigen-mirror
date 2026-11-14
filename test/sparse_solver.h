@@ -950,6 +950,60 @@ void check_sparse_default_tolerance(const Solver&) {
   VERIFY_LE((b - A * x).norm(), RealScalar(100 * n) * NumTraits<RealScalar>::epsilon() * b.norm());
 }
 
+// The matrix-free operator of doc/examples/matrixfree_cg.cpp without its product: enough to attach it to a solver and
+// query the solver.
+class MatrixFreeOperator;
+namespace Eigen {
+namespace internal {
+template <>
+struct traits<MatrixFreeOperator> : public traits<SparseMatrix<double>> {};
+}  // namespace internal
+}  // namespace Eigen
+
+class MatrixFreeOperator : public EigenBase<MatrixFreeOperator> {
+ public:
+  using Scalar = double;
+  using RealScalar = double;
+  using StorageIndex = int;
+  static constexpr int ColsAtCompileTime = Dynamic;
+  static constexpr int MaxColsAtCompileTime = Dynamic;
+  static constexpr bool IsRowMajor = false;
+
+  explicit MatrixFreeOperator(const SparseMatrix<double>& mat) : mp_mat(&mat) {}
+  Index rows() const { return mp_mat->rows(); }
+  Index cols() const { return mp_mat->cols(); }
+
+ private:
+  const SparseMatrix<double>* mp_mat;
+};
+
+// maxIterations() and, for IDRS and MINRES, tolerance() depend on n and used to dereference the null operator pointer
+// of a matrix-free Solver before compute(). With n = 0 until compute(): maxIterations() == 2 n and
+// eps <= tolerance() <= 8 sqrt(max(n, 1)) eps.
+template <typename Solver>
+void check_matrix_free_accessors() {
+  using RealScalar = typename Solver::RealScalar;
+  const RealScalar eps = NumTraits<RealScalar>::epsilon();
+  const Index n = 100;
+  SparseMatrix<double> S(n, n);
+  S.setIdentity();
+  const MatrixFreeOperator A(S);
+
+  Solver detached;
+  VERIFY_IS_EQUAL(detached.maxIterations(), Index(0));
+  VERIFY_LE(eps, detached.tolerance());
+  VERIFY_LE(detached.tolerance(), 8 * eps);
+  detached.setMaxIterations(7).setTolerance(RealScalar(1e-3));
+  VERIFY_IS_EQUAL(detached.maxIterations(), Index(7));
+  VERIFY_IS_EQUAL(detached.tolerance(), RealScalar(1e-3));
+
+  Solver attached;
+  attached.compute(A);
+  VERIFY_IS_EQUAL(attached.maxIterations(), 2 * n);
+  VERIFY_LE(eps, attached.tolerance());
+  VERIFY_LE(attached.tolerance(), 8 * numext::sqrt(RealScalar(n)) * eps);
+}
+
 // Solves A x = b for b = s A xt with A = tridiag(-1, 4, -1), n = 40, and |b| so small that tol |b| is below sqrt(min),
 // though |b| is a normal number: a stopping threshold raised to an absolute floor, to keep a tolerance of 0 from
 // dividing by zero, would then exceed tol |b|, and the solvers returned NoConvergence or an inaccurate x without

@@ -372,4 +372,5 @@ EIGEN_DECLARE_TEST(dgmres) {
   CALL_SUBTEST_8((test_dgmres_deflation<std::complex<double>, DiagonalPreconditioner<std::complex<double> > >(
       std::complex<double>(0, 1))));
   CALL_SUBTEST_9(test_dgmres_small_rhs<>());
+  CALL_SUBTEST_9((check_matrix_free_accessors<DGMRES<MatrixFreeOperator, IdentityPreconditioner>>()));
 }

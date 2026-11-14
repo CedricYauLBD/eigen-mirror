@@ -90,6 +90,8 @@ class generic_matrix_wrapper<MatrixType, false> {
 
   const ActualMatrixType& matrix() const { return m_matrix; }
 
+  bool hasMatrix() const { return true; }
+
   template <typename MatrixDerived>
   void grab(const EigenBase<MatrixDerived>& mat) {
     internal::destroy_at(&m_matrix);
@@ -125,6 +127,9 @@ class generic_matrix_wrapper<MatrixType, true> {
   generic_matrix_wrapper(const MatrixType& mat) : mp_matrix(&mat) {}
 
   const ActualMatrixType& matrix() const { return *mp_matrix; }
+
+  // False until compute(): a matrix-free operator has nothing to dereference before it is attached.
+  bool hasMatrix() const { return mp_matrix != nullptr; }
 
   void grab(const MatrixType& mat) { mp_matrix = &mat; }
 
@@ -268,9 +273,9 @@ class IterativeSolverBase : public SparseSolverBase<Derived> {
 
   /** \returns the max number of iterations.
    * It is either the value set by setMaxIterations or, by default,
-   * twice the number of columns of the matrix.
+   * twice the number of columns of the matrix, which is 0 for a matrix-free operator not yet attached by compute().
    */
-  Index maxIterations() const { return (m_maxIterations < 0) ? 2 * matrix().cols() : m_maxIterations; }
+  Index maxIterations() const { return (m_maxIterations < 0) ? 2 * attachedCols() : m_maxIterations; }
 
   /** Sets the max number of iterations.
    * Default is twice the number of columns of the matrix.
@@ -410,6 +415,15 @@ class IterativeSolverBase : public SparseSolverBase<Derived> {
   using ActualMatrixType = typename MatrixWrapper::ActualMatrixType;
 
   const ActualMatrixType& matrix() const { return m_matrixWrapper.matrix(); }
+
+  /** \internal The number of columns of the matrix, or 0 while a matrix-free operator is not attached yet. */
+  Index attachedCols() const { return m_matrixWrapper.hasMatrix() ? matrix().cols() : Index(0); }
+
+  /** \internal 8 sqrt(max(n, 1)) eps, the default tolerance of IDRS and MINRES, with n = attachedCols(). */
+  RealScalar sizeScaledTolerance() const {
+    return RealScalar(8) * numext::sqrt(RealScalar(numext::maxi(attachedCols(), Index(1)))) *
+           NumTraits<RealScalar>::epsilon();
+  }
 
   template <typename InputType>
   void grab(const InputType& A) {
