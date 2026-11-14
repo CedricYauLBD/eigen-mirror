@@ -144,9 +144,27 @@ void test_throwing_hook() {
   VERIFY_IS_APPROX(VectorXd(d_x.toHost(ctx.stream())), VectorXd(2.0 * x));
 }
 
+// A dimension beyond the int range of cuBLAS and cuSOLVER reaches the hook in a release build too, instead of
+// wrapping to another length.
+void test_dimension_narrowing() {
+  g_num_failures = 0;
+  VERIFY_IS_EQUAL(gpu::internal::to_blas_int(0), 0);
+  VERIFY_IS_EQUAL(gpu::internal::to_blas_int((std::numeric_limits<int>::max)()), (std::numeric_limits<int>::max)());
+  VERIFY_IS_EQUAL(g_num_failures, 0);
+
+  (void)gpu::internal::to_blas_int(int64_t(1) << 31);
+  VERIFY_IS_EQUAL(g_num_failures, 1);
+  (void)gpu::internal::to_blas_int((int64_t(1) << 32) + 5);
+  VERIFY_IS_EQUAL(g_num_failures, 2);
+  VERIFY(ends_with(g_last_failure.file, "GpuSupport.h"));
+  (void)gpu::internal::to_blas_int(-1);
+  VERIFY_IS_EQUAL(g_num_failures, 3);
+}
+
 EIGEN_DECLARE_TEST(gpu_runtime_checks) {
   gpu_test::require_cuda_device();
   CALL_SUBTEST(test_runtime_call());
   CALL_SUBTEST(test_library_checks());
   CALL_SUBTEST(test_throwing_hook());
+  CALL_SUBTEST(test_dimension_narrowing());
 }

@@ -13,9 +13,9 @@
 # happen: it affects the calling directory and below, and test/ and contrib/test/ are siblings.
 
 # Resolve EIGEN_CUDA_COMPUTE_ARCH against the toolkit version. Empty selects the oldest architecture the toolkit
-# still compiles for: sm_60, Eigen's documented floor (see Macros.h), or sm_75 from CUDA 13 on, which dropped
-# offline compilation for Pascal and Volta. Honor CMake's architecture setting (including CUDAARCHS) when the
-# Eigen-specific override is empty.
+# still compiles for among the tested architectures: sm_60 (Eigen's own floor is sm_50, see Macros.h), or sm_75 from
+# CUDA 13 on, which dropped offline compilation for Pascal and Volta. Honor CMake's architecture setting (including
+# CUDAARCHS) when the Eigen-specific override is empty.
 macro(ei_cuda_resolve_compute_arch)
   if("${EIGEN_CUDA_COMPUTE_ARCH}" STREQUAL "")
     if(DEFINED CMAKE_CUDA_ARCHITECTURES AND NOT "${CMAKE_CUDA_ARCHITECTURES}" STREQUAL "")

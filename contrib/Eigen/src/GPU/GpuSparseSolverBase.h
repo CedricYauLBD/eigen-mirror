@@ -55,9 +55,11 @@ enum class SparseReordering : int {
 };
 
 /** Matching algorithm, applied during analyzePattern() to improve numerical
- * robustness. Off by cuDSS default; primarily useful for SparseLU on
- * indefinite or badly scaled systems. Auto lets cuDSS pick. The named
- * algorithms are declared only for cuDSS >= 0.8. */
+ * robustness. Default keeps the cuDSS default, which depends on the cuDSS
+ * version (CUDSS_CONFIG_MATCHING_ALG in cudss_data_types.h: Auto for cuDSS 1.0);
+ * None disables matching. Primarily useful for SparseLU on indefinite or badly
+ * scaled systems. Auto lets cuDSS pick. The named algorithms are declared only
+ * for cuDSS >= 0.8. */
 enum class SparseMatching : int {
   Default = -1,
 #if EIGEN_HAS_CUDSS_SOLVER_CONFIG
@@ -89,10 +91,10 @@ enum class SparsePivoting : int {
 /** Pass-through configuration for the cuDSS-backed sparse direct solvers
  * (SparseLLT, SparseLDLT, SparseLU). Fields left at their defaults keep the
  * corresponding cuDSS default, which is tuned for performance rather than
- * maximum robustness (e.g. matching is off). Non-default fields require
- * cuDSS >= 0.8, whose cudssReorderingAlg_t etc. name the algorithms with
- * stable values; earlier versions declare no algorithm enumerator and accept
- * only a default config, which EIGEN_HAS_CUDSS_SOLVER_CONFIG reports. */
+ * maximum robustness. Non-default fields require cuDSS >= 0.8, whose
+ * cudssReorderingAlg_t etc. name the algorithms with stable values; earlier
+ * versions declare no algorithm enumerator and accept only a default config,
+ * which EIGEN_HAS_CUDSS_SOLVER_CONFIG reports. */
 struct SparseSolverConfig {
   SparseReordering reordering = SparseReordering::Default;
   SparseMatching matching = SparseMatching::Default;
@@ -194,6 +196,7 @@ class SparseSolverBase {
       config_opts_ = cfg;
       analysis_done_ = false;
       info_ = InvalidInput;
+      info_synced_ = true;
       return derived();
     }
 #endif
@@ -211,6 +214,7 @@ class SparseSolverBase {
       // info() rather than factorizing against the wrong analysis.
       analysis_done_ = false;
       info_ = InvalidInput;
+      info_synced_ = true;
     }
     return derived();
   }
@@ -237,6 +241,7 @@ class SparseSolverBase {
       // setConfig() refused this config; analyzing as if it had been applied
       // would hand factorize() state built for settings the caller replaced.
       info_ = InvalidInput;
+      info_synced_ = true;
       analysis_done_ = false;
       return derived();
     }
@@ -248,11 +253,13 @@ class SparseSolverBase {
 
     n_ = input.rows();
     info_ = InvalidInput;
+    info_synced_ = true;
     analysis_done_ = false;
 
     if (n_ == 0) {
       nnz_ = 0;
       info_ = Success;
+      info_synced_ = true;
       analysis_done_ = true;
       return derived();
     }
@@ -276,7 +283,11 @@ class SparseSolverBase {
     }
     create_cudss_matrix();
 
-    if (data_) EIGEN_CUDSS_CHECK(cudssDataDestroy(handle_, data_));
+    if (data_) {
+      cudssData_t old = data_;
+      data_ = nullptr;
+      EIGEN_CUDSS_CHECK(cudssDataDestroy(handle_, old));
+    }
     EIGEN_CUDSS_CHECK(cudssDataCreate(handle_, &data_));
 
     create_placeholder_dense();
@@ -285,6 +296,7 @@ class SparseSolverBase {
 
     analysis_done_ = true;
     info_ = Success;
+    info_synced_ = true;
     return derived();
   }
 
@@ -303,11 +315,13 @@ class SparseSolverBase {
       // Reachable in release builds whenever setConfig() invalidated the
       // analysis rather than applying the request; see setConfig().
       info_ = InvalidInput;
+      info_synced_ = true;
       return derived();
     }
 
     if (n_ == 0) {
       info_ = Success;
+      info_synced_ = true;
       return derived();
     }
 
@@ -632,7 +646,12 @@ class SparseSolverBase {
   }
 
   void create_cudss_matrix() {
-    if (d_A_cudss_) EIGEN_CUDSS_CHECK(cudssMatrixDestroy(d_A_cudss_));
+    if (d_A_cudss_) {
+      // Clear the member first: if the destroy or the create below throws, the destructor must not destroy it again.
+      cudssMatrix_t old = d_A_cudss_;
+      d_A_cudss_ = nullptr;
+      EIGEN_CUDSS_CHECK(cudssMatrixDestroy(old));
+    }
 
     constexpr cudss_value_type_t idx_type = to_cudss_data_type(cudss_index_type<StorageIndex>::value);
     constexpr cudss_value_type_t val_type = to_cudss_data_type(cuda_data_type<Scalar>::value);
@@ -654,8 +673,18 @@ class SparseSolverBase {
   void create_placeholder_dense() {
     // A new analysis may change n_, so the cached solve descriptors are stale.
     destroy_solve_descriptors();
-    if (d_x_cudss_) EIGEN_CUDSS_CHECK(cudssMatrixDestroy(d_x_cudss_));
-    if (d_b_cudss_) EIGEN_CUDSS_CHECK(cudssMatrixDestroy(d_b_cudss_));
+    // Clear each member before its destroy so a throwing check cannot leave a handle for the destructor to destroy
+    // again.
+    if (d_x_cudss_) {
+      cudssMatrix_t old = d_x_cudss_;
+      d_x_cudss_ = nullptr;
+      EIGEN_CUDSS_CHECK(cudssMatrixDestroy(old));
+    }
+    if (d_b_cudss_) {
+      cudssMatrix_t old = d_b_cudss_;
+      d_b_cudss_ = nullptr;
+      EIGEN_CUDSS_CHECK(cudssMatrixDestroy(old));
+    }
     constexpr cudss_value_type_t dtype = to_cudss_data_type(cuda_data_type<Scalar>::value);
     EIGEN_CUDSS_CHECK(cudssMatrixCreateDn(&d_x_cudss_, n_, 1, n_, nullptr, dtype, CUDSS_LAYOUT_COL_MAJOR));
     EIGEN_CUDSS_CHECK(cudssMatrixCreateDn(&d_b_cudss_, n_, 1, n_, nullptr, dtype, CUDSS_LAYOUT_COL_MAJOR));

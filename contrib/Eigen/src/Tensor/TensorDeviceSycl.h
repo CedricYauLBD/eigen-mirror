@@ -287,7 +287,7 @@ class QueueInterface {
     Index pow_of_2 = static_cast<Index>(std::log2(max_workgroup_Size));
     local_range[2] = static_cast<Index>(std::pow(2, static_cast<Index>(pow_of_2 / 3)));
     input_range[2] = input_dim[2];
-    if (input_range[2] == 0) input_range[1] = static_cast<Index>(1);
+    if (input_range[2] == 0) input_range[2] = static_cast<Index>(1);
     global_range[2] = input_range[2];
     if (local_range[2] > global_range[2])
       local_range[2] = global_range[2];

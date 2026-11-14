@@ -244,6 +244,27 @@ void test_empty() {
   VERIFY_IS_EQUAL(llt.cols(), 0);
 }
 
+// info() reads cuDSS's status lazily after factorize(). A status decided on the host afterwards, here the empty
+// system of analyzePattern(), must not be replaced by the status of the earlier factorization.
+template <typename Scalar>
+void test_info_after_empty_analysis() {
+  using SpMat = SparseMatrix<Scalar, ColMajor, int>;
+  SpMat indefinite(4, 4);
+  indefinite.setIdentity();
+  indefinite.coeffRef(1, 1) = Scalar(-1);
+  indefinite.makeCompressed();
+  SpMat empty(0, 0);
+  empty.makeCompressed();
+
+  gpu::SparseLLT<Scalar> llt;
+  llt.compute(indefinite);
+  VERIFY_IS_EQUAL(llt.info(), NumericalIssue);
+
+  llt.compute(indefinite);  // factorization pending: info() has not read its status
+  llt.analyzePattern(empty);
+  VERIFY_IS_EQUAL(llt.info(), Success);
+}
+
 // ---- Upper triangle ---------------------------------------------------------
 
 template <typename Scalar>
@@ -322,6 +343,8 @@ EIGEN_DECLARE_TEST(gpu_cudss_llt) {
   CALL_SUBTEST_5(test_empty<double>());
   CALL_SUBTEST_5(test_empty<std::complex<float>>());
   CALL_SUBTEST_5(test_empty<std::complex<double>>());
+  CALL_SUBTEST_5(test_info_after_empty_analysis<float>());
+  CALL_SUBTEST_5(test_info_after_empty_analysis<std::complex<double>>());
   CALL_SUBTEST_5(test_device_solve_context<float>(64));
   CALL_SUBTEST_5(test_device_solve_context<double>(64));
   CALL_SUBTEST_5(test_default_stream_context());

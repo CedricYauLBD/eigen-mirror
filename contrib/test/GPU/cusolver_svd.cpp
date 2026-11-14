@@ -164,6 +164,8 @@ void test_svd_solve_truncated(Index m, Index n) {
 
   gpu::SVD<Scalar> svd(A, ComputeThinU | ComputeThinV);
   Mat X_trunc = svd.solve(B, trunc);
+  // A literal selects the truncated solve, not the regularized one.
+  VERIFY_IS_APPROX(Mat(svd.solve(B, 2)), Mat(svd.solve(B, Index(2))));
 
   // Build CPU reference: truncated pseudoinverse.
   auto cpu_svd = BDCSVD<Mat, ComputeThinU | ComputeThinV>(A);
@@ -194,6 +196,8 @@ void test_svd_solve_regularized(Index m, Index n) {
 
   gpu::SVD<Scalar> svd(A, ComputeThinU | ComputeThinV);
   Mat X_reg = svd.solve(B, lambda);
+  // A double literal selects the regularized solve for float too.
+  VERIFY_IS_APPROX(Mat(svd.solve(B, 0.1)), X_reg);
 
   // CPU reference: D_ii = S_i / (S_i^2 + lambda^2).
   auto cpu_svd = BDCSVD<Mat, ComputeThinU | ComputeThinV>(A);
@@ -416,6 +420,35 @@ void test_svd_getters_ignore_other_streams(Index m, Index n) {
 
 // ---- Empty matrix -----------------------------------------------------------
 
+// The factors of an empty matrix are those of JacobiSVD: identities for the full ones, no columns or rows for the
+// thin ones. No factorization runs, so there is no device buffer to download them from.
+void test_svd_empty_factors(Index rows, Index cols, unsigned int options) {
+  MatrixXd A(rows, cols);
+  JacobiSVD<MatrixXd> ref(A, options);
+  gpu::SVD<double> svd(A, options);
+  VERIFY_IS_EQUAL(svd.info(), Success);
+  if (options & (ComputeThinU | ComputeFullU)) {
+    MatrixXd U = svd.matrixU();
+    VERIFY_IS_EQUAL(U.rows(), ref.matrixU().rows());
+    VERIFY_IS_EQUAL(U.cols(), ref.matrixU().cols());
+    VERIFY(U.isIdentity());
+    MatrixXd d_U = svd.d_matrixU().toHost();
+    VERIFY_IS_EQUAL(d_U.rows(), U.rows());
+    VERIFY_IS_EQUAL(d_U.cols(), U.cols());
+    VERIFY(d_U.isIdentity());
+  }
+  if (options & (ComputeThinV | ComputeFullV)) {
+    MatrixXd V = svd.matrixV();
+    VERIFY_IS_EQUAL(V.rows(), ref.matrixV().rows());
+    VERIFY_IS_EQUAL(V.cols(), ref.matrixV().cols());
+    VERIFY(V.isIdentity());
+    MatrixXd d_VT = svd.d_matrixVT().toHost();
+    VERIFY_IS_EQUAL(d_VT.rows(), V.cols());
+    VERIFY_IS_EQUAL(d_VT.cols(), V.rows());
+    VERIFY(d_VT.isIdentity());
+  }
+}
+
 void test_svd_empty() {
   ArrayXXd empty(0, 0);
   gpu::SVD<double> svd(empty, 0);
@@ -437,6 +470,12 @@ void test_svd_empty() {
   VERIFY_IS_EQUAL(svd.rows(), 5);
   VERIFY_IS_EQUAL(svd.cols(), 0);
   VERIFY_IS_EQUAL(svd.singularValues().size(), 0);
+
+  for (const unsigned int options : {unsigned(ComputeFullU | ComputeFullV), unsigned(ComputeThinU | ComputeThinV)}) {
+    test_svd_empty_factors(5, 0, options);
+    test_svd_empty_factors(0, 7, options);
+    test_svd_empty_factors(0, 0, options);
+  }
 }
 
 // ---- Device-resident solve ----------------------------------------------------
@@ -465,6 +504,10 @@ void test_device_solve(Index m, Index n, Index nrhs) {
   Mat Xt_host = svd.solve(B, trunc);
   gpu::DeviceMatrix<Scalar> d_Xt = svd.solve(d_B, trunc);
   VERIFY_IS_APPROX(d_Xt.toHost(), Xt_host);
+
+  // Literals pick the overload by their kind.
+  VERIFY_IS_APPROX(svd.solve(d_B, 2).toHost(), svd.solve(d_B, Index(2)).toHost());
+  VERIFY_IS_APPROX(svd.solve(d_B, 0.1).toHost(), svd.solve(d_B, typename NumTraits<Scalar>::Real(0.1)).toHost());
 }
 
 // ---- Per-scalar driver ------------------------------------------------------
