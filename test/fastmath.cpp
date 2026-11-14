@@ -571,23 +571,29 @@ void check_complex_exp_overflow() {
     z[i] = Complex(re, im);
   }
   const Array<Complex, Dynamic, 1> w = z.exp();
-  LongDoubleFunction volatile exp_function = ::expl, cos_function = ::cosl, sin_function = ::sinl;
-  const long double highest = static_cast<long double>(NumTraits<Scalar>::highest());
+  // The reference is exp(x) cos(y) = 2^n m with m = exp(r) cos(y), x = n ln2 + r, |r| <= ln2 / 2, in double: exp(x)
+  // itself overflows, and long double is no wider than double with MSVC and on Apple arm64. The constants are those of
+  // fdlibm's exp: ln2_hi has 32 trailing zero bits, so n ln2_hi is exact, and the first difference goes through a
+  // volatile because fast-math fuses n ln2_hi + n ln2_lo into the rounded n (ln2_hi + ln2_lo).
+  const volatile double ln2_hi = 6.93147180369123816490e-01, ln2_lo = 1.90821492927058770002e-10;
+  const double highest = static_cast<double>(NumTraits<Scalar>::highest());
+  const double tolerance = 8 * static_cast<double>(NumTraits<Scalar>::epsilon());
   for (Index i = 0; i < n; ++i) {
-    const long double magnitude = exp_function(static_cast<long double>(z[i].real()));
-    const long double expected_real = magnitude * cos_function(static_cast<long double>(z[i].imag()));
-    const long double expected_imag = magnitude * sin_function(static_cast<long double>(z[i].imag()));
-    const long double tolerance = 8 * static_cast<long double>(NumTraits<Scalar>::epsilon());
-    // A component above the largest finite value is infinite, which fast-math cannot be asked about.
-    if (numext::abs(expected_real) <= highest) {
-      VERIFY(has_finite_bits(w[i].real()));
-      VERIFY(numext::abs(static_cast<long double>(w[i].real()) - expected_real) <=
-             tolerance * numext::abs(expected_real));
-    }
-    if (numext::abs(expected_imag) <= highest) {
-      VERIFY(has_finite_bits(w[i].imag()));
-      VERIFY(numext::abs(static_cast<long double>(w[i].imag()) - expected_imag) <=
-             tolerance * numext::abs(expected_imag));
+    const double x = static_cast<double>(z[i].real()), y = static_cast<double>(z[i].imag());
+    const int exponent = static_cast<int>(std::floor(x / EIGEN_LN2 + 0.5));
+    const volatile double reduced_hi = x - exponent * ln2_hi;
+    const double r = reduced_hi - exponent * ln2_lo;
+    const double m = std::exp(r);
+    const double mantissa[2] = {m * std::cos(y), m * std::sin(y)};
+    const Scalar actual[2] = {w[i].real(), w[i].imag()};
+    for (int k = 0; k < 2; ++k) {
+      // A component above the largest finite value is infinite, which fast-math cannot be asked about. Compared before
+      // scaling, so that no infinity occurs.
+      if (numext::abs(mantissa[k]) <= std::ldexp(highest, -exponent)) {
+        const double expected = std::ldexp(mantissa[k], exponent);
+        VERIFY(has_finite_bits(actual[k]));
+        VERIFY(numext::abs(static_cast<double>(actual[k]) - expected) <= tolerance * numext::abs(expected));
+      }
     }
   }
 }
