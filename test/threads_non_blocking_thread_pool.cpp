@@ -178,6 +178,47 @@ static void test_cancel_while_task_schedules() {
   }
 }
 
+// A closure that is running at Cancel() may wait for something that a queued closure owns. Cancel() discards queued
+// closures without running them, so destroying them must not wait for the running one to return: it is destroyed
+// before the workers are joined. The pool is destroyed in a thread, so that a hang fails the test instead of
+// stopping it.
+static void test_cancel_destroys_queued_closures_before_join() {
+  struct State {
+    std::atomic<bool> finished{false}, released{false};
+  };
+  for (int threads : {1, 2, 4}) {
+    auto state = std::make_shared<State>();
+    std::thread driver([state, threads] {
+      {
+        ThreadPool tp(threads);
+        // The owner of a queued closure: its destruction releases the waiting closure.
+        std::shared_ptr<void> owner(nullptr, [state](void*) { state->released = true; });
+        std::atomic<int> running(0);
+        // Occupy every worker, so that the closure scheduled below stays queued.
+        for (int i = 0; i < threads; ++i) {
+          tp.Schedule([state, &running] {
+            ++running;
+            while (!state->released) std::this_thread::yield();
+          });
+        }
+        while (running < threads) std::this_thread::yield();
+        tp.Schedule([owner] {});
+        owner.reset();
+        tp.Cancel();
+      }
+      state->finished = true;
+    });
+    const bool done = spin_wait([&] { return state->finished.load(); }, 30);
+    if (!done) std::cerr << "~ThreadPool did not return after Cancel(), " << threads << " threads\n";
+    VERIFY(done);
+    if (!done) {
+      driver.detach();
+      return;
+    }
+    driver.join();
+  }
+}
+
 // A worker that passed the cancellation check of its loop may reach WaitForWork() after Cancel() has notified the
 // waiters. It must see the cancellation after Prewait(): the other workers leave without blocking, so nothing would
 // wake it again, and the destructor would wait for it forever. The window is narrow, so run many short lifetimes with
@@ -302,6 +343,7 @@ EIGEN_DECLARE_TEST(threads_non_blocking_thread_pool) {
   CALL_SUBTEST(test_parallelism(false));
   CALL_SUBTEST(test_cancel());
   CALL_SUBTEST(test_cancel_while_task_schedules());
+  CALL_SUBTEST(test_cancel_destroys_queued_closures_before_join());
   CALL_SUBTEST(test_cancel_races_with_idle_workers());
   CALL_SUBTEST(test_pool_partitions());
   CALL_SUBTEST(test_maybe_get_task_from_other_pool());

@@ -92,16 +92,21 @@ class ThreadPoolTempl : public Eigen::ThreadPoolInterface {
     // block, submit new work, unblock and otherwise live full life.
     if (!cancelled_) {
       ec_.Notify(true);
+    } else {
+      // Queued closures will never run. Destroy them before joining: a running closure may wait on something one of
+      // them owns (a promise, say). PopBack() locks and pops the end that is not the owner's, so it is safe beside a
+      // running worker; Flush() is not.
+      for (size_t i = 0; i < thread_data_.size(); i++) {
+        while (!thread_data_[i].queue.Empty()) thread_data_[i].queue.PopBack();
+      }
     }
     // Join threads explicitly (by destroying) to avoid destruction order within
     // this class.
     for (size_t i = 0; i < thread_data_.size(); ++i) thread_data_[i].thread.reset();
     if (cancelled_) {
-      // Since we were cancelled, there might be entries in the queues, also
-      // from closures that were still running at Cancel() and scheduled more.
-      // Empty them to prevent their destructor from asserting. This must wait
-      // until the workers have exited: Flush() pops from the owner's end of the
-      // queues, and a running worker may push to it.
+      // Closures that were still running at Cancel() may have scheduled more after the drain above. Empty the queues
+      // to prevent their destructor from asserting. This must wait until the workers have exited: Flush() pops from
+      // the owner's end of the queues, and a running worker may push to it.
       for (size_t i = 0; i < thread_data_.size(); i++) {
         thread_data_[i].queue.Flush();
       }
