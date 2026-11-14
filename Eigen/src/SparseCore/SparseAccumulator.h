@@ -207,9 +207,9 @@ Index split_into_buckets(const StorageIndex* srcIndices, Scalar* srcValues, Inde
 }
 
 // Sorts the entries of one bucket and sums those of equal index. An entry becomes the 64-bit key
-// index * kCapacity + position; a fixed network of compare-exchanges orders the keys without a branch, which the
-// insertion sort of scattered indices cannot do, and each entry is then moved once. The position in the low bits
-// keeps equal indices in their order of arrival, so sums are formed in that order.
+// index * kCapacity + position; a fixed network of compare-exchanges orders the keys without a data-dependent branch,
+// which the insertion sort of scattered indices cannot do, and each entry is then moved once. The position in the low
+// bits keeps equal indices in their order of arrival, so sums are formed in that order.
 template <typename Scalar, typename StorageIndex>
 class bucket_sorter {
   using Key = std::uint64_t;
@@ -228,25 +228,65 @@ class bucket_sorter {
   // Takes the n <= kCapacity entries with the given indices.
   EIGEN_ALWAYS_INLINE void pack(const StorageIndex* indices, Index n) {
     m_size = n;
-    // A fill of fixed length is two vector stores; padding from n would be a loop whose length varies per bucket.
-    std::fill_n(m_key, Index(kCapacity), ~Key(0));
     for (Index p = 0; p < n; ++p) m_key[p] = (Key(indices[p]) << kPositionBits) | Key(p);
   }
 
-  // Orders the keys; the padding ends up behind them.
+  // Orders the keys with one jump to the network of their number. The network of n keys is that of kCapacity keys
+  // without the compare-exchanges that touch a key from n on: those keys would hold padding above every entry.
   EIGEN_ALWAYS_INLINE void sort() {
     Key* k = m_key;
-    if (m_size <= 4) {
-      order(k[0], k[1]), order(k[2], k[3]), order(k[0], k[2]), order(k[1], k[3]), order(k[1], k[2]);
-      return;
+    switch (m_size) {
+      case 8:
+        order(k[0], k[1]), order(k[2], k[3]), order(k[4], k[5]), order(k[6], k[7]);
+        order(k[0], k[2]), order(k[1], k[3]), order(k[4], k[6]), order(k[5], k[7]);
+        order(k[1], k[2]), order(k[5], k[6]), order(k[0], k[4]), order(k[3], k[7]);
+        order(k[1], k[5]), order(k[2], k[6]);
+        order(k[1], k[4]), order(k[3], k[6]);
+        order(k[2], k[4]), order(k[3], k[5]);
+        order(k[3], k[4]);
+        break;
+      case 7:
+        order(k[0], k[1]), order(k[2], k[3]), order(k[4], k[5]);
+        order(k[0], k[2]), order(k[1], k[3]), order(k[4], k[6]);
+        order(k[1], k[2]), order(k[5], k[6]), order(k[0], k[4]);
+        order(k[1], k[5]), order(k[2], k[6]);
+        order(k[1], k[4]), order(k[3], k[6]);
+        order(k[2], k[4]), order(k[3], k[5]);
+        order(k[3], k[4]);
+        break;
+      case 6:
+        order(k[0], k[1]), order(k[2], k[3]), order(k[4], k[5]);
+        order(k[0], k[2]), order(k[1], k[3]);
+        order(k[1], k[2]), order(k[0], k[4]);
+        order(k[1], k[5]);
+        order(k[1], k[4]);
+        order(k[2], k[4]), order(k[3], k[5]);
+        order(k[3], k[4]);
+        break;
+      case 5:
+        order(k[0], k[1]), order(k[2], k[3]);
+        order(k[0], k[2]), order(k[1], k[3]);
+        order(k[1], k[2]), order(k[0], k[4]);
+        order(k[1], k[4]);
+        order(k[2], k[4]);
+        order(k[3], k[4]);
+        break;
+      case 4:
+        order(k[0], k[1]), order(k[2], k[3]);
+        order(k[0], k[2]), order(k[1], k[3]);
+        order(k[1], k[2]);
+        break;
+      case 3:
+        order(k[0], k[1]);
+        order(k[0], k[2]);
+        order(k[1], k[2]);
+        break;
+      case 2:
+        order(k[0], k[1]);
+        break;
+      default:
+        break;
     }
-    order(k[0], k[1]), order(k[2], k[3]), order(k[4], k[5]), order(k[6], k[7]);
-    order(k[0], k[2]), order(k[1], k[3]), order(k[4], k[6]), order(k[5], k[7]);
-    order(k[1], k[2]), order(k[5], k[6]), order(k[0], k[4]), order(k[3], k[7]);
-    order(k[1], k[5]), order(k[2], k[6]);
-    order(k[1], k[4]), order(k[3], k[6]);
-    order(k[2], k[4]), order(k[3], k[5]);
-    order(k[3], k[4]);
   }
 
   // Appends the sorted entries to (indices, values) from position count, taking the value of the entry packed at
