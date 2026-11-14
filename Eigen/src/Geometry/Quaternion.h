@@ -723,13 +723,10 @@ EIGEN_DEVICE_FUNC inline Derived& QuaternionBase<Derived>::setFromTwoVectors(con
     Vector3 axis = v0.cross(v1);
     axis -= axis.dot(v0) * v0;
     axis -= axis.dot(v0) * v0;
-    const Scalar axis_norm2 = axis.squaredNorm();
-    if (sum2 > numext::abs2(Scalar(4) * NumTraits<Scalar>::epsilon()) &&
-        axis_norm2 > (numext::numeric_limits<Scalar>::min)()) {
-      axis /= numext::sqrt(axis_norm2);
-    } else {
-      axis = v0.unitOrthogonal();
-    }
+    const bool nearly_antipodal = !(sum2 > numext::abs2(Scalar(4) * NumTraits<Scalar>::epsilon()));
+    // Not axis / sqrt(axis.squaredNorm()): for a narrow type the squared norm of a meaningful axis can underflow.
+    if (!nearly_antipodal) axis = internal::quaternion_normalized(axis);
+    if (nearly_antipodal || numext::is_exactly_zero(axis.squaredNorm())) axis = v0.unitOrthogonal();
     this->vec() = numext::sqrt((Scalar(1) - cos_half) * (Scalar(1) + cos_half)) * axis;
     this->w() = cos_half;
     return derived();

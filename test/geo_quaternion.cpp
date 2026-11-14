@@ -474,21 +474,24 @@ void quaternion_product_fma() {
 }
 
 // Checks that Quaternion::FromTwoVectors(a, b) is a unit quaternion that rotates the direction of a to the direction of
-// b, against a long double reference built from the rounded inputs. The tolerance is 16 eps. The largest rotation error
-// measured is 9.2 eps and the largest norm error 2 eps (float and double; 3e6 random inputs with pi - angle in
-// [eps^3, 16 eps] and 20000 repeats of the sweep below), so the tolerance leaves a factor of 1.7.
+// b, against a long double reference built from the rounded inputs, to within `tolerance_in_eps` eps. The default is 16
+// eps. The largest rotation error measured is 9.4 eps and the largest norm error 2.1 eps (float, double and half; 3e6
+// random inputs with pi - angle in [eps^3, 16 eps] and 1000 repeats of the sweep below), so the tolerance leaves a
+// factor of 1.7.
 template <typename Scalar>
-void check_from_two_vectors(const Matrix<Scalar, 3, 1>& a, const Matrix<Scalar, 3, 1>& b) {
+void check_from_two_vectors(const Matrix<Scalar, 3, 1>& a, const Matrix<Scalar, 3, 1>& b,
+                            double tolerance_in_eps = 16) {
   using LongDouble = long double;
   using Vector3L = Matrix<LongDouble, 3, 1>;
-  const Scalar tolerance = Scalar(16) * NumTraits<Scalar>::epsilon();
+  const LongDouble tolerance = LongDouble(tolerance_in_eps) * LongDouble(double(NumTraits<Scalar>::epsilon()));
   const Quaternion<Scalar> q = Quaternion<Scalar>::FromTwoVectors(a, b);
-  const Quaternion<LongDouble> ql(LongDouble(q.w()), LongDouble(q.x()), LongDouble(q.y()), LongDouble(q.z()));
+  const Quaternion<LongDouble> ql(LongDouble(double(q.w())), LongDouble(double(q.x())), LongDouble(double(q.y())),
+                                  LongDouble(double(q.z())));
   // stableNormalized(): the squared norm of an extreme input does not exist even in long double if that is double.
-  const Vector3L a_unit = a.template cast<LongDouble>().stableNormalized();
-  const Vector3L b_unit = b.template cast<LongDouble>().stableNormalized();
-  const Scalar norm_error = Scalar(std::abs(ql.norm() - 1));
-  const Scalar rotation_error = Scalar((ql * a_unit - b_unit).norm());
+  const Vector3L a_unit = a.template cast<double>().template cast<LongDouble>().stableNormalized();
+  const Vector3L b_unit = b.template cast<double>().template cast<LongDouble>().stableNormalized();
+  const LongDouble norm_error = std::abs(ql.norm() - 1);
+  const LongDouble rotation_error = (ql * a_unit - b_unit).norm();
   VERIFY(norm_error <= tolerance);
   VERIFY(rotation_error <= tolerance);
 }
@@ -502,6 +505,11 @@ void quaternion_two_vectors_accuracy() {
   using Vector3L = Matrix<LongDouble, 3, 1>;
   const LongDouble pi = LongDouble(3.141592653589793238462643383279502884L);
   const double eps = double(NumTraits<Scalar>::epsilon());
+  auto to_scalar = [](const Vector3L& x) {
+    Vector3 y;
+    for (int i = 0; i < 3; ++i) y[i] = Scalar(double(x[i]));
+    return y;
+  };
 
   // Vectors a and b at the angle pi - delta (cos = -cos(delta)) or at an angle with the given cosine, with random
   // axis and random norms.
@@ -511,8 +519,8 @@ void quaternion_two_vectors_accuracy() {
     perp = (perp - perp.dot(axis) * axis).normalized();
     const LongDouble sa = std::pow(LongDouble(10), LongDouble(internal::random<double>(-2, 2)));
     const LongDouble sb = std::pow(LongDouble(10), LongDouble(internal::random<double>(-2, 2)));
-    a = (sa * axis).template cast<Scalar>();
-    b = (sb * (cos_angle * axis + sin_angle * perp)).template cast<Scalar>();
+    a = to_scalar(sa * axis);
+    b = to_scalar(sb * (cos_angle * axis + sin_angle * perp));
   };
 
   // delta from 1 down to far below eps (exactly antipodal after rounding), and a coarse sweep of the angle from 0 to
@@ -558,6 +566,20 @@ void quaternion_two_vectors_accuracy() {
   check_from_two_vectors<Scalar>(
       Vector3(Scalar(-0.27598738739370821), Scalar(0.08133442155882098), Scalar(0.11249741522661272)),
       Vector3(Scalar(0.27598738739370815), Scalar(-0.081334421558820966), Scalar(-0.11249741522661269)));
+}
+
+// For half, sqrt(min) = 2^-7 is above the cutoff 4 eps = 2^-8 on |v0 + v1| below which the axis is replaced: the cross
+// product of such nearly antipodal inputs has a norm in the band (4 eps, sqrt(min)] whose square is subnormal. Its axis
+// is meaningful and must not be replaced by v0.unitOrthogonal(), which has an error of 7 to 16 eps in q v0 here where
+// the correct result has 0.13 eps or less. (t = 1/256 has |v0 + v1| = 4 eps exactly, where the replacement is
+// intended.)
+void quaternion_two_vectors_half_antipodal() {
+  using Vector3 = Matrix<half, 3, 1>;
+  for (double t : {1. / 64, 1. / 128, 1. / 200}) {
+    check_from_two_vectors<half>(Vector3(half(1), half(0), half(0)), Vector3(half(-1), half(t), half(0)), 1);
+    check_from_two_vectors<half>(Vector3(half(0), half(1), half(0)), Vector3(half(0), half(-1), half(t)), 1);
+    check_from_two_vectors<half>(Vector3(half(0), half(1), half(0)), Vector3(half(-t), half(-1), half(0)), 1);
+  }
 }
 
 // The inputs of FromTwoVectors need not be normalized: this holds for magnitudes whose square or whose squared norm is
@@ -657,5 +679,8 @@ EIGEN_DECLARE_TEST(geo_quaternion) {
     AnnoyingScalar::dont_throw = true;
 #endif
     CALL_SUBTEST_3((quaternion<AnnoyingScalar, AutoAlign>()));
+
+    CALL_SUBTEST_4(quaternion_two_vectors_accuracy<half>());
+    CALL_SUBTEST_4(quaternion_two_vectors_half_antipodal());
   }
 }
