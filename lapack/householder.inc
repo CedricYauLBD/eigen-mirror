@@ -143,7 +143,8 @@ EIGEN_LAPACK_FUNC(larf)
   if (*incv > 0) {
     apply_reflector(make_vector(v, lastv, *incv));
   } else {
-    auto v_reversed = make_vector(v, lastv, -*incv);
+    // After trimming k entries, idx = k |INCV| is the offset of the retained v(0:lastv-1).
+    auto v_reversed = make_vector(v + idx, lastv, -*incv);
     apply_reflector(v_reversed.reverse());
   }
 }

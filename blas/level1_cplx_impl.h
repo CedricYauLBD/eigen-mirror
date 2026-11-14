@@ -91,6 +91,8 @@ extern "C" RealScalar EIGEN_CAT(REAL_SCALAR_SUFFIX, EIGEN_BLAS_FUNC_NAME(nrm2))(
   if (n <= 0) return 0;
 
   Scalar *x = reinterpret_cast<Scalar *>(px);
+  // stableNorm() of one element is hypot(Re, Im), which is Inf for (Inf, NaN) under C99; the reference gives NaN.
+  if (n == 1 && (Eigen::numext::isnan)(*x)) return std::numeric_limits<RealScalar>::quiet_NaN();
   if (incx == 1) return make_vector(x, n).stableNorm();
   return make_vector(x, n, std::abs(incx)).stableNorm();
 }
