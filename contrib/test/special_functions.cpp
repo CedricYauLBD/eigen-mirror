@@ -737,6 +737,67 @@ void test_polygamma_sign_huge_order() {
   }
 }
 
+// For q >= 1 and q^-x below the smallest normal number, the terms of zeta(x, q) ~ q^(1-x) / (x - 1) underflow: the sum
+// was 0 or had the relative error of subnormals (zeta(27, 1e12 + 1.5) = 3.8e-314 was 0). For q = -N - 1/2 and odd x,
+// zeta(x, q) = zeta(x, N + 3/2), and for even n polygamma(n, q) = -n! zeta(n + 1, N + 3/2) is normal. References:
+// Euler-Maclaurin with 8 tail terms in 2000-bit MPFR. The log-domain form has the relative error ~ 2 eps x log(q); the
+// bounds are 2x that for zeta and 4x for polygamma, and the measured error is at most 0.3 of the bound. The float
+// cases are past the switch to the log-domain form (x log(q) > 92.6). polygamma(10, -2e4 - 1/2) is normal although
+// zeta(11, 2e4 + 3/2) = 9.8e-45 (7 denorm_min) is subnormal, through polygamma's substitution x -> 1 - x.
+template <typename Scalar>
+void test_zeta_underflowing_terms() {
+  struct Case {
+    double x, q, ref;
+  };
+  const bool is_float = sizeof(Scalar) == 4;
+  // zeta(x, q) = ref; for polygamma, n = x - 1 and q < 0 with ref = -n! zeta(x, 1 - q).
+  const Case zeta_cases_f[] = {{5, 1e9, 2.5000000050000001e-37}, {7, 1e6, 1.6666716666725001e-37}};
+  const Case zeta_cases_d[] = {{20, 1e16, 5.2631578947368468e-306}, {27, 1e12 + 1.5, 3.8461538460149259e-314}};
+  const Case poly_cases_f[] = {{9, -1e5 - 0.5, -5.039596816631546e-37}, {11, -2e4 - 0.5, -3.5419785715870746e-38}};
+  const Case poly_cases_d[] = {{27, -1e6 - 0.5, -1.5510806756860553e-131}, {27, -1e12 - 0.5, -1.5511210042927696e-287}};
+  const Case* zc = is_float ? zeta_cases_f : zeta_cases_d;
+  const Case* pc = is_float ? poly_cases_f : poly_cases_d;
+  const int num_cases = 2;
+  const double eps = double(NumTraits<Scalar>::epsilon());
+  // A subnormal result is rounded to a multiple of denorm_min.
+  const double denorm_min = double(std::numeric_limits<Scalar>::denorm_min());
+  for (int i = 0; i < num_cases; ++i) {
+    const double tol = 4 * eps * zc[i].x * std::log(zc[i].q);
+    const double v = double(numext::zeta(Scalar(zc[i].x), Scalar(zc[i].q)));
+    VERIFY(std::abs(v - zc[i].ref) <= denorm_min + tol * zc[i].ref);
+  }
+  Array<Scalar, Dynamic, 1> n(num_cases), x(num_cases);
+  for (int i = 0; i < num_cases; ++i) {
+    n(i) = Scalar(pc[i].x - 1);
+    x(i) = Scalar(pc[i].q);
+  }
+  const Array<Scalar, Dynamic, 1> res = polygamma(n, x);
+  for (int i = 0; i < num_cases; ++i) {
+    const double tol = 8 * eps * pc[i].x * std::log(-pc[i].q);
+    for (int path = 0; path < 2; ++path) {
+      const double v = double(path ? res(i) : numext::polygamma(n(i), x(i)));
+      VERIFY(std::abs(v - pc[i].ref) <= tol * std::abs(pc[i].ref));
+    }
+  }
+  if (!is_float) {
+    // zeta(27, -1e12 - 1/2) = zeta(27, 1e12 + 3/2), subnormal.
+    const double ref = 3.8461538460149259e-314;
+    const double tol = 4 * eps * 27 * std::log(1e12);
+    const double v = double(numext::zeta(Scalar(27), Scalar(-1e12 - 0.5)));
+    VERIFY(std::abs(v - ref) <= denorm_min + tol * ref);
+  }
+  // q = 1: x log(q) = 0, so zeta(x, 1) is the plain sum, bit for bit. Its relative error near the pole is 1 eps at
+  // x = 1 + 1e-10 (double); the log-domain form had 14.
+  const double one_plus = is_float ? 1.001 : 1.0000000001;
+  const double ref_pole = is_float ? 1000.5305606213946 : 9999999173.1735744;
+  VERIFY(std::abs(double(numext::zeta(Scalar(one_plus), Scalar(1))) - ref_pole) <= 8 * eps * ref_pole);
+  const double xs[] = {1.0000001, 1.5, 2, 3.5, 20, 100};
+  for (double xv : xs) {
+    VERIFY_IS_EQUAL(numext::zeta(Scalar(xv), Scalar(1)),
+                    (internal::zeta_impl<Scalar>::sum(Scalar(xv), Scalar(1), Scalar(1))));
+  }
+}
+
 // For huge a and x one ulp apart the continued fraction overflows and produces an internal NaN, which the clamping of
 // igamma to [0, 1] used to turn into 0 (igammac returned the NaN). The true values are P = 1 and Q = 0 (x - a is
 // ~1e8 standard deviations): the answer must be that or NaN, in the scalar and the array paths, never a silent 0.
@@ -1042,6 +1103,7 @@ EIGEN_DECLARE_TEST(special_functions) {
   CALL_SUBTEST_1(test_zeta_large_negative_q<float>());
   CALL_SUBTEST_1(test_polygamma_extreme_x<float>());
   CALL_SUBTEST_1(test_polygamma_sign_huge_order<float>());
+  CALL_SUBTEST_1(test_zeta_underflowing_terms<float>());
   CALL_SUBTEST_1(test_igamma_limits<float>());
   CALL_SUBTEST_1(test_igamma_internal_nan<float>());
   CALL_SUBTEST_1(test_igamma_large_arguments<float>());
@@ -1054,6 +1116,7 @@ EIGEN_DECLARE_TEST(special_functions) {
   CALL_SUBTEST_2(test_zeta_large_negative_q<double>());
   CALL_SUBTEST_2(test_polygamma_extreme_x<double>());
   CALL_SUBTEST_2(test_polygamma_sign_huge_order<double>());
+  CALL_SUBTEST_2(test_zeta_underflowing_terms<double>());
   CALL_SUBTEST_2(test_igamma_limits<double>());
   CALL_SUBTEST_2(test_igamma_internal_nan<double>());
   CALL_SUBTEST_2(test_igamma_large_arguments<double>());

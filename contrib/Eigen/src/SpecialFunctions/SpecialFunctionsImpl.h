@@ -1553,6 +1553,23 @@ struct zeta_impl {
     return s;
   }
 
+  /* sum(x, q, 1) for q >= 1, also where q^-x is subnormal or zero but the sum ~ q^(1-x) / (x - 1) is normal. A term
+   * (k + q)^-x = min 2^-m has the relative error eps 2^m. Once that exceeds the error ~ 2 eps x log(q) of the
+   * log-domain form, whose terms are O(1), use it instead:
+   *   zeta(x, q) = exp(log(sum(x, q, 1 / q)) - x log(q)).
+   * It applies only where q^-x < min, x log(q) > -log(min); this also excludes q = 1, where log(2 x log(q)) = -inf.
+   * 1 / q must be normal, also under flush to zero: q <= max / 16. */
+  EIGEN_DEVICE_FUNC static Scalar sum_without_underflow(Scalar x, Scalar q) {
+    if (q >= Scalar(1) && q <= (numext::numeric_limits<Scalar>::max)() / Scalar(16) && !(numext::isinf)(x)) {
+      const Scalar x_log_q = x * numext::log(q);
+      const Scalar log_min = numext::log((numext::numeric_limits<Scalar>::min)());
+      if (x_log_q > -log_min && x_log_q + log_min > numext::log(Scalar(2) * x_log_q)) {
+        return numext::exp(numext::log(sum(x, q, Scalar(1) / q)) - x_log_q);
+      }
+    }
+    return sum(x, q, Scalar(1));
+  }
+
   EIGEN_DEVICE_FUNC static Scalar run(Scalar x, Scalar q) {
     /*							zeta.c
      *
@@ -1650,10 +1667,10 @@ struct zeta_impl {
     if (q < -Scalar(kZetaMaxNegativeQ)) {
       const Scalar f = q - numext::floor(q);
       const Scalar x_is_even = (numext::rint(half * x) == half * x) ? one : -one;
-      return (sum(x, f, one) + x_is_even * sum(x, one - f, one)) - x_is_even * sum(x, one - q, one);
+      return (sum(x, f, one) + x_is_even * sum(x, one - f, one)) - x_is_even * sum_without_underflow(x, one - q);
     }
 
-    return sum(x, q, one);
+    return sum_without_underflow(x, q);
   }
 };
 
@@ -1680,7 +1697,11 @@ struct polygamma_impl {
     else {
       // (-1)^(n+1) from the parity of n: n + 1 is not representable for n >= 2^24 (float), 2^53 (double).
       const Scalar half = Scalar(0.5);
-      const Scalar sign = numext::floor(half * n) == half * n ? -one : one;
+      const bool n_is_even = numext::floor(half * n) == half * n;
+      const Scalar sign = n_is_even ? -one : one;
+      // For odd n + 1 and x = -M - 1/2 < -kZetaMaxNegativeQ the reflection in zeta_impl reduces exactly to
+      // zeta(n + 1, x) = zeta(n + 1, 1 - x); with 1 - x > 0 the log-domain evaluation below applies.
+      if (n_is_even && x < -Scalar(kZetaMaxNegativeQ) && x - numext::floor(x) == half) x = one - x;
       Scalar factorial = numext::exp(lgamma_impl<Scalar>::run(nplus));
       Scalar zeta = zeta_impl<Scalar>::run(nplus, x);
       // The limit at +inf is 0, with the sign of (-1)^(n+1); n! zeta(n + 1, inf) would be NaN for n! = inf.
