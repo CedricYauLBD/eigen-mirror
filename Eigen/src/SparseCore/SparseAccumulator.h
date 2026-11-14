@@ -309,7 +309,9 @@ class bucket_sorter {
 
  private:
   static EIGEN_ALWAYS_INLINE void order(Key& a, Key& b) {
-    Key lo = numext::mini(a, b), hi = numext::maxi(a, b);
+    bool swap = b < a;
+    Key lo = swap ? b : a;
+    Key hi = swap ? a : b;
     a = lo;
     b = hi;
   }
