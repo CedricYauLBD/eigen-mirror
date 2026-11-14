@@ -567,7 +567,8 @@ void check_complex_exp_overflow() {
   for (Index i = 0; i < n; ++i) {
     const volatile Scalar* x = &x_values[static_cast<size_t>(i / 4)];
     const volatile Scalar* y = &y_values[i % 4];
-    z[i] = Complex(*x, *y);
+    const Scalar re = *x, im = *y;  // std::complex takes const Scalar&, which cannot bind to a volatile lvalue.
+    z[i] = Complex(re, im);
   }
   const Array<Complex, Dynamic, 1> w = z.exp();
   LongDoubleFunction volatile exp_function = ::expl, cos_function = ::cosl, sin_function = ::sinl;
