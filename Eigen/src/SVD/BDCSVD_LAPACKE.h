@@ -120,6 +120,7 @@ class BDCSVD_LAPACKE : public BDCSVD<MatrixType_, Options> {
       SVD::m_info = NoConvergence;
     } else {
       SVD::m_info = Success;
+      SVD::m_nonzeroSingularValues = internal::count_nonzero_singular_values(SVD::m_singularValues);
       if (SVD::m_computeThinU && SVD::m_computeFullV) {
         SVD::m_matrixU = localU.leftCols(SVD::m_matrixU.cols());
       }

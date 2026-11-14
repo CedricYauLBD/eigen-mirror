@@ -10,6 +10,8 @@ namespace {
 const void* expected_a = nullptr;
 int svd_calls = 0;
 bool args_match = false;
+// When nonempty, the probes succeed and report these singular values, in this order, instead of failing.
+std::vector<double> mock_singular_values;
 
 // Columns of U, or rows of V^T, that a LAPACK job references; 0 when it references none.
 lapack_int job_extent(char job, lapack_int full, lapack_int thin) { return job == 'A' ? full : job == 'S' ? thin : 0; }
@@ -50,7 +52,9 @@ lapack_int svd_probe(int layout, char jobu, char jobvt, lapack_int m, lapack_int
   ++svd_calls;
   args_match = expected_a != nullptr && matches_expected(layout, jobu, jobvt, m, n, a, lda, ldu, ldvt);
   std::fill_n(s, numext::mini(m, n), RealScalar(0));
-  return 1;
+  if (mock_singular_values.empty()) return 1;
+  for (lapack_int i = 0; i < numext::mini(m, n); ++i) s[i] = RealScalar(mock_singular_values[i]);
+  return 0;
 }
 }  // namespace
 
@@ -127,6 +131,26 @@ void svd_lapacke_input_layout() {
   check_lapacke_empty<SVD>(m, 0);
 }
 
+// nonzeroSingularValues() is the number of singular values that are not exactly 0, as on the native paths, not the
+// number of values LAPACK returned.
+template <typename SVD>
+void svd_lapacke_nonzero_count() {
+  using MatrixType = typename SVD::MatrixType;
+  const Index rows = 6, cols = 4;
+  const std::vector<std::vector<double>> cases = {{3, 2, 1, 0.5}, {3, 1, 0, 0}, {0, 0, 0, 0}, {2, 0, 0, 0}};
+  const std::vector<Index> counts = {4, 2, 0, 1};
+  for (const bool transposed : {false, true}) {
+    for (size_t k = 0; k < cases.size(); ++k) {
+      mock_singular_values = cases[k];
+      const MatrixType m = transposed ? MatrixType(MatrixType::Random(cols, rows)) : MatrixType::Random(rows, cols);
+      const SVD svd(m);
+      mock_singular_values.clear();
+      VERIFY_IS_EQUAL(svd.info(), Success);
+      VERIFY_IS_EQUAL(svd.nonzeroSingularValues(), counts[k]);
+    }
+  }
+}
+
 template <typename Scalar, int Options>
 void svd_lapacke_options() {
   using ColMatrix = Matrix<Scalar, Dynamic, Dynamic>;
@@ -135,6 +159,10 @@ void svd_lapacke_options() {
   svd_lapacke_input_layout<JacobiSVD<RowMatrix, Options>>();
   svd_lapacke_input_layout<BDCSVD<ColMatrix, Options>>();
   svd_lapacke_input_layout<BDCSVD<RowMatrix, Options>>();
+  svd_lapacke_nonzero_count<JacobiSVD<ColMatrix, Options>>();
+  svd_lapacke_nonzero_count<JacobiSVD<RowMatrix, Options>>();
+  svd_lapacke_nonzero_count<BDCSVD<ColMatrix, Options>>();
+  svd_lapacke_nonzero_count<BDCSVD<RowMatrix, Options>>();
 }
 
 // ThinU | FullV is the case where the BDCSVD binding computes U in a local buffer.
