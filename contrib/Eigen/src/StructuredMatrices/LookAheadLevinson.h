@@ -159,9 +159,9 @@ class LookAheadLevinson : public SolverBase<LookAheadLevinson<Scalar_>> {
   /** \returns \c Success, or \c NumericalIssue when conditionEstimate() reaches
    * \f$ 1/\varepsilon \f$; a run of ill-conditioned leading submatrices longer
    * than the look-ahead is reported only through that estimate. If the recursion
-   * cannot proceed at all (non-finite generators, or overflow on an extremely
-   * ill-conditioned matrix), conditionEstimate() is infinite and every solve
-   * returns NaN. */
+   * cannot proceed at all (a non-finite generator entry, for every block size, or
+   * overflow on an extremely ill-conditioned matrix), conditionEstimate() is
+   * infinite and every solve returns NaN. */
   ComputationInfo info() const {
     eigen_assert(m_isInitialized && "LookAheadLevinson is not initialized.");
     return m_info;
@@ -258,6 +258,16 @@ LookAheadLevinson<Scalar_>& LookAheadLevinson<Scalar_>::compute(const Toeplitz<S
   m_complete = true;
   m_info = Success;
   m_normEst = c.cwiseAbs().sum() + r.cwiseAbs().sum();  // cheap upper bound on ||T||_2
+
+  if (!(c.allFinite() && r.allFinite())) {
+    // A non-finite entry of T is a breakdown whatever the block size: a block with a NaN entry has the computed
+    // singular value 0 (maxi drops the NaN), is accepted, and its LU solves to zeros or to partly finite vectors.
+    m_complete = false;
+    m_sMin = RealScalar(0);
+    m_info = NumericalIssue;
+    m_isInitialized = true;
+    return *this;
+  }
 
   Index k;
   DenseVector y, z;
@@ -389,7 +399,7 @@ LookAheadLevinson<Scalar_>& LookAheadLevinson<Scalar_>::compute(const Toeplitz<S
     }
 
     if (bestGamma.size() == 0) {
-      // Every candidate block has a NaN psi (non-finite generators, or an overflowing recursion): no step can be taken.
+      // Every candidate block has a NaN psi (an overflowing recursion on finite generators): no step can be taken.
       m_complete = false;
       m_steps.clear();
       m_sMin = RealScalar(0);

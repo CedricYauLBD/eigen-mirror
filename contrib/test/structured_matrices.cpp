@@ -1473,24 +1473,33 @@ void test_levinson_breakdown_solves(const Matrix<Scalar, Dynamic, 1>& c, const M
   VERIFY(structured_all_nan(Vec(H.solve(b))));
 }
 
+// A non-finite generator entry, anywhere and for any block size, is a breakdown: info() is NumericalIssue and every
+// solve is NaN of the right size. A look-ahead step of block size >= 2 would otherwise accept a block whose singular
+// value is reported as 0 (the NaN is dropped by maxi) and return zeros or partly finite vectors.
 template <typename Scalar>
 void test_levinson_breakdown() {
   using Real = typename NumTraits<Scalar>::Real;
   using Vec = Matrix<Scalar, Dynamic, 1>;
-  const Index n = 6;
   for (Real bad : {std::numeric_limits<Real>::quiet_NaN(), std::numeric_limits<Real>::infinity()}) {
-    Vec c = Vec::Random(n), r = Vec::Random(n);
-    r[0] = c[0];
-    c[3] = Scalar(bad);
-    if (!(numext::isnan)(bad)) {
-      // An infinite generator need not make every psi NaN; only require that nothing is read out of bounds.
-      Toeplitz<Scalar> T(c, r);
-      LookAheadLevinson<Scalar> lev(T);
-      const Vec x = lev.solve(Vec::Random(n).eval());
-      VERIFY_IS_EQUAL(x.size(), n);
-      continue;
+    for (Index n = 4; n <= 9; ++n) {
+      for (Index pos = 0; pos < n; ++pos) {
+        for (Index pmax = 1; pmax <= 4; ++pmax) {
+          for (int rep = 0; rep < 2; ++rep) {
+            Vec c = Vec::Random(n), r = Vec::Random(n);
+            c[pos] = Scalar(bad);
+            r[0] = c[0];
+            test_levinson_breakdown_solves<Scalar>(c, r, pmax);
+            // The same entry in the row generator (pos >= 1; r[0] is the shared diagonal).
+            if (pos >= 1) {
+              Vec c2 = Vec::Random(n), r2 = Vec::Random(n);
+              r2[0] = c2[0];
+              r2[pos] = Scalar(bad);
+              test_levinson_breakdown_solves<Scalar>(c2, r2, pmax);
+            }
+          }
+        }
+      }
     }
-    for (Index pmax : {1, 2, 4}) test_levinson_breakdown_solves<Scalar>(c, r, pmax);
   }
 }
 
