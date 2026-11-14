@@ -293,6 +293,38 @@ void determinant_scaling_plain_scalar() {
   VERIFY_IS_APPROX(float(lu.logAbsDeterminant()), std::log(4.0f));
 }
 
+// BunchKaufman balances the product of the blocks of D for the scalars that scaled_product multiplies directly.
+template <typename Scalar>
+void determinant_scaling_bunch_kaufman_plain_scalar() {
+  STATIC_CHECK(!internal::has_scaled_product<Scalar>::value);
+  using MatrixType = Matrix<Scalar, 4, 4>;
+  // big^2 overflows and small^2 underflows.
+  const int exponent = (std::numeric_limits<Scalar>::max_exponent + 1) / 2 + 1;
+  const Scalar big(std::ldexp(1.0f, exponent)), small(std::ldexp(1.0f, -exponent));
+  VERIFY(!(numext::isfinite)(big * big));
+
+  MatrixType A = MatrixType::Zero();
+  A.diagonal() << big, -big, small, small;
+  const BunchKaufman<MatrixType> pivots1x1(A);
+  VERIFY_IS_EQUAL(pivots1x1.info(), Success);
+  VERIFY_IS_EQUAL(pivots1x1.determinant(), Scalar(-1.0f));
+  VERIFY_IS_EQUAL(pivots1x1.absDeterminant(), Scalar(1.0f));
+  VERIFY_IS_EQUAL(pivots1x1.logAbsDeterminant(), Scalar(0.0f));
+
+  // Two 2x2 pivot blocks with determinants -big^2 and -small^2.
+  A.setZero();
+  A(0, 1) = A(1, 0) = big;
+  A(2, 3) = A(3, 2) = small;
+  const BunchKaufman<MatrixType> pivots2x2(A);
+  VERIFY_IS_EQUAL(pivots2x2.info(), Success);
+  VERIFY_IS_EQUAL(pivots2x2.determinant(), Scalar(1.0f));
+  VERIFY_IS_EQUAL(pivots2x2.absDeterminant(), Scalar(1.0f));
+
+  A.diagonal() << big, big, big, Scalar(0.0f);
+  A(0, 1) = A(1, 0) = A(2, 3) = A(3, 2) = Scalar(0.0f);
+  VERIFY_IS_EQUAL(BunchKaufman<MatrixType>(A).determinant(), Scalar(0.0f));
+}
+
 }  // namespace
 
 EIGEN_DECLARE_TEST(determinant_scaling) {
@@ -325,4 +357,6 @@ EIGEN_DECLARE_TEST(determinant_scaling) {
   CALL_SUBTEST_4(determinant_scaling_views<std::complex<double>>());
   CALL_SUBTEST_5(determinant_scaling_views<long double>());
   CALL_SUBTEST_1(determinant_scaling_plain_scalar());
+  CALL_SUBTEST_1(determinant_scaling_bunch_kaufman_plain_scalar<Eigen::half>());
+  CALL_SUBTEST_1(determinant_scaling_bunch_kaufman_plain_scalar<Eigen::bfloat16>());
 }

@@ -32,6 +32,35 @@ struct BunchKaufman_Traits;
 // constructor can pre-allocate the panel workspace.
 template <typename Scalar>
 inline Index bunch_kaufman_blocksize();
+
+// prod_k x_k = mantissa 2^exponent with frexp() keeping the mantissa in [1/2, 1), for the real scalars whose
+// scaled_product multiplies directly (half, bfloat16, custom types): only the result has to be representable.
+template <typename RealScalar>
+class bunch_kaufman_balanced_product {
+ public:
+  void multiply(const RealScalar& factor) {
+    RealScalar factorExponent, renorm;
+    const RealScalar factorMantissa = pfrexp<RealScalar>(factor, factorExponent);
+    // |factorMantissa| and |m_mantissa| are in [1/2, 1) unless zero, so the product stays normal and its rounding is
+    // the only error this step adds.
+    m_mantissa = pfrexp<RealScalar>(m_mantissa * factorMantissa, renorm);
+    m_exponent += Index(factorExponent) + Index(renorm);
+  }
+
+  RealScalar value() const {
+    // ldexp() saturates to zero or infinity but takes an int exponent; past this magnitude it has already
+    // saturated, so clamping first cannot change the result.
+    const Index limit = Index(NumTraits<RealScalar>::max_exponent()) - Index(NumTraits<RealScalar>::min_exponent()) +
+                        Index(NumTraits<RealScalar>::digits());
+    return numext::ldexp(m_mantissa, int(numext::mini(numext::maxi(m_exponent, -limit), limit)));
+  }
+  RealScalar abs() const { return numext::abs(value()); }
+  RealScalar logAbs() const { return numext::log(abs()); }
+
+ private:
+  RealScalar m_mantissa = RealScalar(1);
+  Index m_exponent = 0;
+};
 }  // namespace internal
 
 /** \ingroup Cholesky_Module
@@ -402,9 +431,12 @@ class BunchKaufman : public SolverBase<BunchKaufman<MatrixType_, UpLo_> > {
 
   /** \internal \returns \f$ \det(D) \f$, the product over the 1x1 and 2x2 diagonal blocks of D. D is
    * Hermitian, so a block determinant is real: \f$ d_{11} \f$ for a 1x1 block and
-   * \f$ d_{11} d_{22} - |d_{21}|^2 \f$ for a 2x2 one. Returned as a scaled product, so
+   * \f$ d_{11} d_{22} - |d_{21}|^2 \f$ for a 2x2 one. Returned as a mantissa and a power of two, so
    * that only the result has to be representable. */
-  internal::scaled_product<RealScalar> determinantD() const;
+  using DeterminantProduct =
+      std::conditional_t<internal::has_scaled_product<RealScalar>::value, internal::scaled_product<RealScalar>,
+                         internal::bunch_kaufman_balanced_product<RealScalar>>;
+  DeterminantProduct determinantD() const;
 
   MatrixType m_matrix;
   RealScalar m_l1_norm;
@@ -1028,10 +1060,9 @@ bool BunchKaufman<MatrixType, UpLo_>::solveInPlace(MatrixBase<Derived>& bAndX) c
 }
 
 template <typename MatrixType, int UpLo_>
-internal::scaled_product<typename BunchKaufman<MatrixType, UpLo_>::RealScalar>
-BunchKaufman<MatrixType, UpLo_>::determinantD() const {
+typename BunchKaufman<MatrixType, UpLo_>::DeterminantProduct BunchKaufman<MatrixType, UpLo_>::determinantD() const {
   const Index n = m_matrix.rows();
-  internal::scaled_product<RealScalar> product;
+  DeterminantProduct product;
   Index k = 0;
   while (k < n) {
     if (k + 1 < n && !numext::is_exactly_zero(m_subdiag.coeff(k))) {
