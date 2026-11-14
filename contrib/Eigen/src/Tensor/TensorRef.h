@@ -30,15 +30,17 @@ class TensorLazyBaseEvaluator {
   EIGEN_DEVICE_FUNC virtual const Scalar coeff(DenseIndex index) const = 0;
   EIGEN_DEVICE_FUNC virtual Scalar& coeffRef(DenseIndex index) = 0;
 
-  void incrRefCount() { ++m_refcount; }
-  void decrRefCount() { --m_refcount; }
-  int refCount() const { return m_refcount; }
+  // The count is shared by the TensorRef copies that a ThreadPoolDevice evaluator makes on each worker.
+  void incrRefCount() { m_refcount.fetch_add(1, std::memory_order_relaxed); }
+  // Returns true if the caller dropped the last reference and must delete the evaluator.
+  bool decrRefCount() { return m_refcount.fetch_sub(1, std::memory_order_acq_rel) == 1; }
+  int refCount() const { return m_refcount.load(std::memory_order_relaxed); }
 
  private:
   TensorLazyBaseEvaluator(const TensorLazyBaseEvaluator& other) = delete;
   TensorLazyBaseEvaluator& operator=(const TensorLazyBaseEvaluator& other) = delete;
 
-  int m_refcount = 0;
+  std::atomic<int> m_refcount{0};
 };
 
 template <typename Dimensions, typename Expr, typename Device>
@@ -234,8 +236,7 @@ class TensorRefBase : public TensorBase<Derived> {
  private:
   EIGEN_STRONG_INLINE void unrefEvaluator() {
     if (m_evaluator) {
-      m_evaluator->decrRefCount();
-      if (m_evaluator->refCount() == 0) {
+      if (m_evaluator->decrRefCount()) {
         delete m_evaluator;
       }
     }

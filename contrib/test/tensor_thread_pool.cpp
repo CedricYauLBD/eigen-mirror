@@ -148,6 +148,33 @@ void test_multithread_tensor_ref() {
   }
 }
 
+// Every worker copies the evaluator, and with it the TensorRef whose reference count it shares. The tensor must be
+// large enough that the cost model starts several workers; ThreadSanitizer reports a race on the count otherwise.
+template <int DataLayout, bool Async>
+void test_multithread_tensor_ref_shared_count() {
+  using Tensor2 = Tensor<float, 2, DataLayout>;
+  Tensor2 in(1024, 1024);
+  in.setRandom();
+  TensorRef<Tensor2> ref(in);
+  Tensor2 out(1024, 1024);
+
+  PoolDevice pool(8, 8);
+  const auto expr = ref * 2.0f;
+  {
+    TensorEvaluator<const decltype(expr), ThreadPoolDevice> evaluator(expr, pool.device);
+    VERIFY(TensorCostModel<ThreadPoolDevice>::numThreads(static_cast<double>(in.size()), evaluator.costPerCoeff(false),
+                                                         8) >= 2);
+  }
+  for (int iter = 0; iter < 10; ++iter) {
+    pool.assign<Async>(out, expr);
+    for (Index i = 0; i < in.size(); ++i) {
+      VERIFY_IS_EQUAL(out.data()[i], 2.0f * in.data()[i]);
+    }
+  }
+  // The reference must still be alive and usable after the copies were destroyed.
+  VERIFY_IS_EQUAL(ref(0, 0), in(0, 0));
+}
+
 struct SumOfCoordinates {
   float operator()(const array<Index, 2>& coords) const { return static_cast<float>(10 * coords[0] + coords[1]); }
 };
@@ -1319,6 +1346,9 @@ EIGEN_DECLARE_TEST(tensor_thread_pool) {
   CALL_SUBTEST_3(test_multithread_trace<RowMajor>());
   CALL_SUBTEST_3(test_multithread_tensor_ref<ColMajor>());
   CALL_SUBTEST_3(test_multithread_tensor_ref<RowMajor>());
+  CALL_SUBTEST_3((test_multithread_tensor_ref_shared_count<ColMajor, false>()));
+  CALL_SUBTEST_3((test_multithread_tensor_ref_shared_count<RowMajor, false>()));
+  CALL_SUBTEST_3((test_multithread_tensor_ref_shared_count<ColMajor, true>()));
   CALL_SUBTEST_3(test_async_forwarding_evaluators<ColMajor>());
   CALL_SUBTEST_3(test_async_forwarding_evaluators<RowMajor>());
 
