@@ -50,18 +50,16 @@ class _MatrixEntryIterator(object):
 	def __next__(self):
 		row = self.currentRow
 		col = self.currentCol
+		# An empty matrix has a null data pointer, so stop when either dimension is 0.
+		if row >= self.rows or col >= self.cols:
+			raise StopIteration
+
 		if self.rowMajor == 0:
-			if self.currentCol >= self.cols:
-				raise StopIteration
-				
 			self.currentRow += 1
 			if self.currentRow >= self.rows:
 				self.currentRow = 0
 				self.currentCol += 1
 		else:
-			if self.currentRow >= self.rows:
-				raise StopIteration
-				
 			self.currentCol += 1
 			if self.currentCol >= self.cols:
 				self.currentCol = 0
