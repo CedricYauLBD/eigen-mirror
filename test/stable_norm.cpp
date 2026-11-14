@@ -861,7 +861,8 @@ void stable_normalize_custom_scalar() {
 }
 
 // For integer scalars every norm is the l2 (lp) norm truncated to the integer type, as norm() is, and 0 for empty
-// inputs. The scaling in stableNorm() and blueNorm() and the real hypot in hypotNorm() are meaningless for integers.
+// inputs. The scaling in stableNorm() and blueNorm() and the real hypot in hypotNorm() are meaningless for integers;
+// those three also return the norm where norm() overflows in squaring.
 template <typename Scalar>
 void integer_norms() {
   using Vec = Matrix<Scalar, Dynamic, 1>;
@@ -921,6 +922,51 @@ void integer_norms() {
     Vec at_root(1);
     at_root << Scalar(r);  // r^3 does not exceed the sum
     VERIFY_IS_EQUAL(at_root.template lpNorm<3>(), Scalar(r));
+  }
+
+  // The squares overflow the integer type, but the norm is representable: the l2 family accumulates in double, and
+  // norm() (which squares in Scalar) is not compared. For (3a, 4a) the sum 25 a^2 is below 2^53 for int16_t and int,
+  // and the double sum is exact for int64_t, so that the result is exactly 5a.
+  {
+    const int64_t a = sizeof(Scalar) == 2 ? 5000 : (sizeof(Scalar) == 4 ? 10000000 : 2000000000);
+    const auto check_l2_family = [](const auto& m, Scalar expected) {
+      VERIFY_IS_EQUAL(m.stableNorm(), expected);
+      VERIFY_IS_EQUAL(m.blueNorm(), expected);
+      VERIFY_IS_EQUAL(m.hypotNorm(), expected);
+    };
+    Vec big(2);
+    big << Scalar(3 * a), Scalar(-4 * a);
+    check_l2_family(big, Scalar(5 * a));
+    VERIFY_IS_EQUAL((big.array() * Scalar(1)).matrix().stableNorm(), Scalar(5 * a));
+    // A norm above the highest value saturates.
+    const Scalar highest = NumTraits<Scalar>::highest(), lowest = NumTraits<Scalar>::lowest();
+    Vec huge(2);
+    huge << highest, highest;
+    check_l2_family(huge, highest);
+    // One coefficient is its absolute value, without a square.
+    for (const Scalar x :
+         {Scalar(a), Scalar(-a), Scalar(sizeof(Scalar) == 2 ? 200 : 50000), highest, Scalar(lowest + 1)}) {
+      const Scalar expected = x < 0 ? Scalar(-x) : x;
+      const Matrix<Scalar, 1, 1> single = Matrix<Scalar, 1, 1>::Constant(x);
+      const Vec single_dynamic = Vec::Constant(1, x);
+      check_l2_family(single, expected);
+      VERIFY_IS_EQUAL(single_dynamic.stableNorm(), expected);
+      VERIFY_IS_EQUAL(single_dynamic.hypotNorm(), expected);
+    }
+    VERIFY_IS_EQUAL(Vec::Constant(1, lowest).stableNorm(), highest);  // |lowest| is not representable
+    if (sizeof(Scalar) == 8) {
+      const Scalar beyond_double = Scalar((int64_t(1) << 60) + 1);  // not representable in double
+      VERIFY_IS_EQUAL(Vec::Constant(1, beyond_double).stableNorm(), beyond_double);
+      VERIFY_IS_EQUAL(Vec::Constant(1, Scalar(-beyond_double)).hypotNorm(), beyond_double);
+    }
+    // The truncation is exact where sqrt(n^2 - 1) rounds up to n in double: (n - 1)^2 + (2 k)^2 = n^2 - 1 for
+    // n = 2 k^2 + 1, with n^2 below 2^53 for k = 6000.
+    if (sizeof(Scalar) >= 4) {
+      const int64_t k = 6000, n = 2 * k * k + 1;
+      Vec edge(2);
+      edge << Scalar(n - 1), Scalar(-2 * k);
+      check_l2_family(edge, Scalar(n - 1));
+    }
   }
 
   // A p outside the documented domain terminates.
