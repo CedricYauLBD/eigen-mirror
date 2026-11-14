@@ -81,7 +81,7 @@ class FFT {
   template <typename Derived, std::enable_if_t<NumTraits<typename Derived::Scalar>::IsComplex>* = nullptr>
   ComplexVector fwd(const MatrixBase<Derived>& x) {
     const ComplexVector& input(x.derived());
-    const int n = static_cast<int>(input.size());
+    const int n = internal::to_blas_int(input.size());
     if (n == 0) return ComplexVector(0);
 
     ensure_buffers(n * sizeof(Complex), n * sizeof(Complex));
@@ -104,7 +104,7 @@ class FFT {
   ComplexVector inv(const MatrixBase<Derived>& X) {
     static_assert(NumTraits<typename Derived::Scalar>::IsComplex, "inv() requires complex input");
     const ComplexVector& input(X.derived());
-    const int n = static_cast<int>(input.size());
+    const int n = internal::to_blas_int(input.size());
     if (n == 0) return ComplexVector(0);
 
     ensure_buffers(n * sizeof(Complex), n * sizeof(Complex));
@@ -130,7 +130,7 @@ class FFT {
   template <typename Derived, std::enable_if_t<!NumTraits<typename Derived::Scalar>::IsComplex>* = nullptr>
   ComplexVector fwd(const MatrixBase<Derived>& x) {
     const RealVector& input(x.derived());
-    const int n = static_cast<int>(input.size());
+    const int n = internal::to_blas_int(input.size());
     if (n == 0) return ComplexVector(0);
 
     const int n_complex = n / 2 + 1;
@@ -155,7 +155,7 @@ class FFT {
   RealVector invReal(const MatrixBase<Derived>& X, Index nfft) {
     static_assert(NumTraits<typename Derived::Scalar>::IsComplex, "invReal() requires complex input");
     const ComplexVector& input(X.derived());
-    const int n = static_cast<int>(nfft);
+    const int n = internal::to_blas_int(nfft);
     const int n_complex = n / 2 + 1;
     eigen_assert(n == 0 || input.size() == n_complex);
     if (n == 0) return RealVector(0);
@@ -185,8 +185,8 @@ class FFT {
   ComplexMatrix fwd2(const MatrixBase<Derived>& A) {
     static_assert(NumTraits<typename Derived::Scalar>::IsComplex, "fwd2() requires complex input");
     const ComplexMatrix& input(A.derived());
-    const int rows = static_cast<int>(input.rows());
-    const int cols = static_cast<int>(input.cols());
+    const int rows = internal::to_blas_int(input.rows());
+    const int cols = internal::to_blas_int(input.cols());
     if (rows == 0 || cols == 0) return ComplexMatrix(rows, cols);
 
     const size_t total = static_cast<size_t>(rows) * static_cast<size_t>(cols) * sizeof(Complex);
@@ -209,8 +209,8 @@ class FFT {
   ComplexMatrix inv2(const MatrixBase<Derived>& A) {
     static_assert(NumTraits<typename Derived::Scalar>::IsComplex, "inv2() requires complex input");
     const ComplexMatrix& input(A.derived());
-    const int rows = static_cast<int>(input.rows());
-    const int cols = static_cast<int>(input.cols());
+    const int rows = internal::to_blas_int(input.rows());
+    const int cols = internal::to_blas_int(input.cols());
     if (rows == 0 || cols == 0) return ComplexMatrix(rows, cols);
 
     const size_t total = static_cast<size_t>(rows) * static_cast<size_t>(cols) * sizeof(Complex);
@@ -222,7 +222,7 @@ class FFT {
                                                       static_cast<Complex*>(d_out_.get()), CUFFT_INVERSE));
 
     // Scale by 1/(rows*cols).
-    const int total_elems = rows * cols;
+    const int64_t total_elems = static_cast<int64_t>(rows) * static_cast<int64_t>(cols);
     EIGEN_CUBLAS_CHECK(internal::cublasXscal(ctx_->cublasHandle(), total_elems, Scalar(1) / Scalar(total_elems),
                                              static_cast<Complex*>(d_out_.get()), 1));
 
@@ -316,7 +316,7 @@ class FFT {
     cufftHandle plan = get_plan_2d(rows, cols, internal::cufft_c2c_type<Scalar>::value);
     EIGEN_CUFFT_CHECK(
         internal::cufftExecC2C_dispatch(plan, const_cast<Complex*>(d_A.data()), d_B.data(), CUFFT_INVERSE));
-    const int total_elems = internal::to_blas_int(static_cast<int64_t>(rows) * static_cast<int64_t>(cols));
+    const int64_t total_elems = static_cast<int64_t>(rows) * static_cast<int64_t>(cols);
     EIGEN_CUBLAS_CHECK(
         internal::cublasXscal(ctx_->cublasHandle(), total_elems, Scalar(1) / Scalar(total_elems), d_B.data(), 1));
     d_B.recordReady(ctx_->stream());
@@ -389,8 +389,9 @@ class FFT {
 
     cufftHandle plan;
     EIGEN_CUFFT_CHECK(cufftPlan1d(&plan, n, type, /*batch=*/1));
+    internal::CufftPlan owned(plan);  // destroys the plan if a later check throws
     EIGEN_CUFFT_CHECK(cufftSetStream(plan, ctx_->stream()));
-    return plans_.insert(key, internal::CufftPlan(plan))->get();
+    return plans_.insert(key, std::move(owned))->get();
   }
 
   cufftHandle get_plan_2d(int rows, int cols, cufftType type) {
@@ -402,8 +403,9 @@ class FFT {
     // to get the correct 2D transform.
     cufftHandle plan;
     EIGEN_CUFFT_CHECK(cufftPlan2d(&plan, cols, rows, type));
+    internal::CufftPlan owned(plan);  // destroys the plan if a later check throws
     EIGEN_CUFFT_CHECK(cufftSetStream(plan, ctx_->stream()));
-    return plans_.insert(key, internal::CufftPlan(plan))->get();
+    return plans_.insert(key, std::move(owned))->get();
   }
 };
 }  // namespace gpu

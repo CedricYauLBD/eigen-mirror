@@ -133,7 +133,7 @@ __device__ EIGEN_STRONG_INLINE void EigenContractionKernelInternal(const LhsMapp
       const Index lhs_horiz_6 = base_k + thread_z + 6 * 8; \
       const Index lhs_horiz_7 = base_k + thread_z + 7 * 8; \
                                                            \
-      if (!needs_edge_check || lhs_horiz_7 < k_size) {     \
+      if (lhs_horiz_7 < k_size) {                          \
         lhs_pf0 = lhs(lhs_vert, lhs_horiz_0);              \
         lhs_pf1 = lhs(lhs_vert, lhs_horiz_1);              \
         lhs_pf2 = lhs(lhs_vert, lhs_horiz_2);              \
@@ -181,7 +181,7 @@ __device__ EIGEN_STRONG_INLINE void EigenContractionKernelInternal(const LhsMapp
     }                                                      \
                                                            \
     const Index rhs_vert = base_k + load_idx_vert;         \
-    if (!needs_edge_check || rhs_vert < k_size) {          \
+    if (rhs_vert < k_size) {                               \
       const Index rhs_horiz_0 = base_n + thread_z + 0 * 8; \
       const Index rhs_horiz_1 = base_n + thread_z + 1 * 8; \
       const Index rhs_horiz_2 = base_n + thread_z + 2 * 8; \

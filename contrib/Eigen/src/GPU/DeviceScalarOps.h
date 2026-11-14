@@ -18,6 +18,8 @@
 #include <cuda_runtime.h>
 #include <npps_arithmetic_and_logical_operations.h>
 
+#include <algorithm>
+
 #include "./GpuSupport.h"
 
 namespace Eigen {
@@ -97,37 +99,54 @@ inline void device_scalar_neg(const double* a, double* c, cudaStream_t stream) {
   EIGEN_NPP_CHECK(nppsMulC_64f_Ctx(a, -1.0, c, 1, npp_ctx));
 }
 
-// c[i] = a[i] * b[i].
-inline void device_cwiseProduct(const float* a, const float* b, float* c, int n, cudaStream_t stream) {
-  NppStreamContext npp_ctx = make_npp_stream_ctx(stream);
-  EIGEN_NPP_CHECK(nppsMul_32f_Ctx(a, b, c, n, npp_ctx));
+// Calls fn(offset, length) on consecutive pieces of [0, n) of at most 2^30 elements: older NPP releases take the
+// length of a signal as a 32-bit int (newer ones as size_t), and a longer vector would wrap to another length. A
+// power of two keeps every piece's start a multiple of 2^30 elements, so the pieces stay aligned.
+template <typename Fn>
+void for_each_npp_chunk(int64_t n, Fn fn) {
+  const int64_t max_length = int64_t(1) << 30;
+  for (int64_t offset = 0; offset < n; offset += max_length) {
+    fn(offset, static_cast<int>((std::min)(max_length, n - offset)));
+  }
 }
 
-inline void device_cwiseProduct(const double* a, const double* b, double* c, int n, cudaStream_t stream) {
+// c[i] = a[i] * b[i].
+inline void device_cwiseProduct(const float* a, const float* b, float* c, int64_t n, cudaStream_t stream) {
   NppStreamContext npp_ctx = make_npp_stream_ctx(stream);
-  EIGEN_NPP_CHECK(nppsMul_64f_Ctx(a, b, c, n, npp_ctx));
+  for_each_npp_chunk(
+      n, [&](int64_t i, int length) { EIGEN_NPP_CHECK(nppsMul_32f_Ctx(a + i, b + i, c + i, length, npp_ctx)); });
+}
+
+inline void device_cwiseProduct(const double* a, const double* b, double* c, int64_t n, cudaStream_t stream) {
+  NppStreamContext npp_ctx = make_npp_stream_ctx(stream);
+  for_each_npp_chunk(
+      n, [&](int64_t i, int length) { EIGEN_NPP_CHECK(nppsMul_64f_Ctx(a + i, b + i, c + i, length, npp_ctx)); });
 }
 
 // c[i] = a[i] / b[i], with operands swapped as in device_scalar_div.
-inline void device_cwiseQuotient(const float* a, const float* b, float* c, int n, cudaStream_t stream) {
+inline void device_cwiseQuotient(const float* a, const float* b, float* c, int64_t n, cudaStream_t stream) {
   NppStreamContext npp_ctx = make_npp_stream_ctx(stream);
-  EIGEN_NPP_CHECK(nppsDiv_32f_Ctx(b, a, c, n, npp_ctx));
+  for_each_npp_chunk(
+      n, [&](int64_t i, int length) { EIGEN_NPP_CHECK(nppsDiv_32f_Ctx(b + i, a + i, c + i, length, npp_ctx)); });
 }
 
-inline void device_cwiseQuotient(const double* a, const double* b, double* c, int n, cudaStream_t stream) {
+inline void device_cwiseQuotient(const double* a, const double* b, double* c, int64_t n, cudaStream_t stream) {
   NppStreamContext npp_ctx = make_npp_stream_ctx(stream);
-  EIGEN_NPP_CHECK(nppsDiv_64f_Ctx(b, a, c, n, npp_ctx));
+  for_each_npp_chunk(
+      n, [&](int64_t i, int length) { EIGEN_NPP_CHECK(nppsDiv_64f_Ctx(b + i, a + i, c + i, length, npp_ctx)); });
 }
 
 // x[i] /= alpha, a true division (NPP divide-by-constant, in place).
-inline void device_divC(float alpha, float* x, int n, cudaStream_t stream) {
+inline void device_divC(float alpha, float* x, int64_t n, cudaStream_t stream) {
   NppStreamContext npp_ctx = make_npp_stream_ctx(stream);
-  EIGEN_NPP_CHECK(nppsDivC_32f_I_Ctx(alpha, x, n, npp_ctx));
+  for_each_npp_chunk(
+      n, [&](int64_t i, int length) { EIGEN_NPP_CHECK(nppsDivC_32f_I_Ctx(alpha, x + i, length, npp_ctx)); });
 }
 
-inline void device_divC(double alpha, double* x, int n, cudaStream_t stream) {
+inline void device_divC(double alpha, double* x, int64_t n, cudaStream_t stream) {
   NppStreamContext npp_ctx = make_npp_stream_ctx(stream);
-  EIGEN_NPP_CHECK(nppsDivC_64f_I_Ctx(alpha, x, n, npp_ctx));
+  for_each_npp_chunk(
+      n, [&](int64_t i, int length) { EIGEN_NPP_CHECK(nppsDivC_64f_I_Ctx(alpha, x + i, length, npp_ctx)); });
 }
 
 }  // namespace internal

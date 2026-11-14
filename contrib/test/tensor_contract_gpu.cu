@@ -114,6 +114,52 @@ void test_gpu_contraction_double(int m_size, int k_size, int n_size) {
   }
 }
 
+// The generic kernel handles every scalar of at most 4 bytes other than float. Its full 64x64 tiles skip the m and n
+// edge checks but must still check the contracting index. The operands sit in buffers filled with ones beyond the
+// logical extent, so a read past k contributes a nonzero term. The entries are small integers, so every sum is exact.
+template <typename Scalar, int DataLayout>
+void test_gpu_contraction_k_edge(int m_size, int k_size, int n_size) {
+  Tensor<Scalar, 2, DataLayout> t_left(m_size, k_size);
+  Tensor<Scalar, 2, DataLayout> t_right(k_size, n_size);
+  for (DenseIndex i = 0; i < t_left.size(); i++) t_left.data()[i] = Scalar(internal::random<int>(-1, 1));
+  for (DenseIndex i = 0; i < t_right.size(); i++) t_right.data()[i] = Scalar(internal::random<int>(-1, 1));
+  Eigen::array<DimPair, 1> dims{DimPair(1, 0)};
+
+  tensor_test::GpuTensorTestFixture fixture;
+  const int padding = 64;
+  auto left_storage = fixture.tensor<Scalar, 1>(m_size * (k_size + padding));
+  auto right_storage = fixture.tensor<Scalar, 1>((k_size + padding) * n_size);
+  left_storage.device(fixture.device()) = left_storage.constant(Scalar(1));
+  right_storage.device(fixture.device()) = right_storage.constant(Scalar(1));
+  fixture.device().memcpyHostToDevice(left_storage.data(), t_left.data(), t_left.size() * sizeof(Scalar));
+  fixture.device().memcpyHostToDevice(right_storage.data(), t_right.data(), t_right.size() * sizeof(Scalar));
+  Eigen::TensorMap<Tensor<Scalar, 2, DataLayout>> gpu_t_left(left_storage.data(), m_size, k_size);
+  Eigen::TensorMap<Tensor<Scalar, 2, DataLayout>> gpu_t_right(right_storage.data(), k_size, n_size);
+  auto gpu_t_result = fixture.tensor<Scalar, 2, Eigen::Aligned, DataLayout>(m_size, n_size);
+
+  gpu_t_result.device(fixture.device()) = gpu_t_left.contract(gpu_t_right, dims);
+  const Tensor<float, 2, DataLayout> expected =
+      t_left.template cast<float>().contract(t_right.template cast<float>(), dims);
+
+  const auto t_result_gpu = fixture.toHost(gpu_t_result);
+  for (DenseIndex i = 0; i < expected.size(); i++) {
+    VERIFY_IS_EQUAL(expected.data()[i], static_cast<float>(t_result_gpu.data()[i]));
+  }
+}
+
+template <typename Scalar>
+void test_gpu_contraction_k_edge_sizes() {
+  // m, n: one or more full 64x64 tiles, with and without partial tiles next to them. k: not a multiple of 64.
+  test_gpu_contraction_k_edge<Scalar, ColMajor>(64, 65, 64);
+  test_gpu_contraction_k_edge<Scalar, RowMajor>(64, 65, 64);
+  test_gpu_contraction_k_edge<Scalar, ColMajor>(128, 100, 128);
+  test_gpu_contraction_k_edge<Scalar, RowMajor>(128, 100, 128);
+  test_gpu_contraction_k_edge<Scalar, ColMajor>(130, 71, 70);
+  test_gpu_contraction_k_edge<Scalar, RowMajor>(130, 71, 70);
+  test_gpu_contraction_k_edge<Scalar, ColMajor>(64, 63, 64);
+  test_gpu_contraction_k_edge<Scalar, ColMajor>(64, 64, 64);
+}
+
 template <int DataLayout>
 void test_scalar(int m_size, int k_size, int n_size) {
   std::cout << "Testing for (" << m_size << "," << k_size << "," << n_size << ")" << std::endl;
@@ -212,6 +258,9 @@ EIGEN_DECLARE_TEST(tensor_contract_gpu) {
   CALL_SUBTEST_1(test_gpu_contraction_double<RowMajor>(100, 100, 100));
   CALL_SUBTEST_1(test_gpu_contraction_double<ColMajor>(65, 129, 33));
   CALL_SUBTEST_1(test_gpu_contraction_double<RowMajor>(65, 129, 33));
+
+  CALL_SUBTEST_1(test_gpu_contraction_k_edge_sizes<Eigen::half>());
+  CALL_SUBTEST_1(test_gpu_contraction_k_edge_sizes<int>());
 
   CALL_SUBTEST_1(test_scalar<ColMajor>(128, 128, 128));
   CALL_SUBTEST_1(test_scalar<RowMajor>(128, 128, 128));

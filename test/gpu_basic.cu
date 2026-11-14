@@ -842,6 +842,48 @@ void test_bit_cast() {
 #endif
 }
 
+#if defined(EIGEN_CUDACC)
+// The four __shfl_*_sync(bfloat16) overloads of BFloat16.h move the 16 raw bits and return a bfloat16, not a float.
+// The tensor reducers shuffle only float, double and half, so nothing else instantiates them.
+struct bfloat16_shuffle_test {
+  __device__ void operator()(int i, const numext::uint16_t* in, numext::uint16_t* out) const {
+    const Eigen::bfloat16 v = numext::bit_cast<Eigen::bfloat16>(in[i]);
+    const unsigned mask = 0xffffffffu;
+    const auto from5 = __shfl_sync(mask, v, 5);
+    const auto up3 = __shfl_up_sync(mask, v, 3);
+    const auto down3 = __shfl_down_sync(mask, v, 3);
+    const auto xor1 = __shfl_xor_sync(mask, v, 1);
+    static_assert(std::is_same<decltype(from5), const Eigen::bfloat16>::value, "__shfl_sync(bfloat16)");
+    static_assert(std::is_same<decltype(up3), const Eigen::bfloat16>::value, "__shfl_up_sync(bfloat16)");
+    static_assert(std::is_same<decltype(down3), const Eigen::bfloat16>::value, "__shfl_down_sync(bfloat16)");
+    static_assert(std::is_same<decltype(xor1), const Eigen::bfloat16>::value, "__shfl_xor_sync(bfloat16)");
+    out[4 * i + 0] = numext::bit_cast<numext::uint16_t>(from5);
+    out[4 * i + 1] = numext::bit_cast<numext::uint16_t>(up3);
+    out[4 * i + 2] = numext::bit_cast<numext::uint16_t>(down3);
+    out[4 * i + 3] = numext::bit_cast<numext::uint16_t>(xor1);
+  }
+};
+
+void test_bfloat16_shuffle() {
+  constexpr int warp = 32;  // one full warp: all 32 lanes take part in the shuffles
+  Eigen::Array<numext::uint16_t, Eigen::Dynamic, 1> in(warp), out(4 * warp);
+  // Distinct patterns with both the sign bit and the low byte set, so that a 8-bit or float-converted path fails.
+  for (int i = 0; i < warp; ++i) in(i) = static_cast<numext::uint16_t>(0x8001u + 0x0f0fu * static_cast<unsigned>(i));
+  out.setConstant(0xa5a5);
+
+  run_on_gpu(bfloat16_shuffle_test(), warp, in, out);
+
+#if !defined(EIGEN_GPU_COMPILE_PHASE)
+  for (int i = 0; i < warp; ++i) {
+    VERIFY_IS_EQUAL(out(4 * i + 0), in(5));
+    VERIFY_IS_EQUAL(out(4 * i + 1), in(i >= 3 ? i - 3 : i));
+    VERIFY_IS_EQUAL(out(4 * i + 2), in(i + 3 < warp ? i + 3 : i));
+    VERIFY_IS_EQUAL(out(4 * i + 3), in(i ^ 1));
+  }
+#endif
+}
+#endif  // EIGEN_CUDACC
+
 // Eigen::half != is true when either operand is NaN, on the device as on the host.
 struct half_nan_not_equal_test {
   EIGEN_DEVICE_FUNC void operator()(int i, const float* in, float* out) const {
@@ -948,7 +990,7 @@ void test_with_infs_nans(const Kernel& ker, int n, const Input& in, Output& out)
   run_on_cpu(ker, n, in, out_ref);
   run_on_gpu(ker, n, in, out_gpu);
 #if !defined(EIGEN_GPU_COMPILE_PHASE)
-  verifyIsApproxWithInfsNans(out_ref, out_gpu);
+  VERIFY(verifyIsApproxWithInfsNans(out_ref, out_gpu));
 #endif
 }
 
@@ -1152,6 +1194,9 @@ EIGEN_DECLARE_TEST(gpu_basic) {
   CALL_SUBTEST(test_bit_count());
   CALL_SUBTEST(test_bit_cast());
   CALL_SUBTEST(test_half_nan_not_equal());
+#if defined(EIGEN_CUDACC)
+  CALL_SUBTEST(test_bfloat16_shuffle());
+#endif
   CALL_SUBTEST(test_complex_exp_overflow());
 
   // `preverse` on every GPU packet type. 32 elements cover several packets of

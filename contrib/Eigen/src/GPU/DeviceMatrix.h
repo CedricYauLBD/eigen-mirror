@@ -334,8 +334,10 @@ class DeviceMatrix {
     data_.reset();
     capacity_bytes_ = 0;
     if (ready_event_) {
-      EIGEN_CUDA_RUNTIME_CHECK(cudaEventDestroy(ready_event_));
+      // Clear the member first so a throwing check cannot leave a handle for the destructor to destroy again.
+      cudaEvent_t old = ready_event_;
       ready_event_ = nullptr;
+      EIGEN_CUDA_RUNTIME_CHECK(cudaEventDestroy(old));
     }
     ready_stream_ = nullptr;
     retained_buffer_ = internal::DeviceBuffer();
@@ -591,8 +593,10 @@ class DeviceMatrix {
     cols_ = 0;
     capacity_bytes_ = 0;
     if (ready_event_) {
-      EIGEN_CUDA_RUNTIME_CHECK(cudaEventDestroy(ready_event_));
+      // Clear the member first so a throwing check cannot leave a handle for the destructor to destroy again.
+      cudaEvent_t old = ready_event_;
       ready_event_ = nullptr;
+      EIGEN_CUDA_RUNTIME_CHECK(cudaEventDestroy(old));
     }
     ready_stream_ = nullptr;
     return p;

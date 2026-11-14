@@ -122,6 +122,18 @@ EIGEN_STRONG_INLINE EIGEN_DEVICE_FUNC uint16_t bit_cast<uint16_t, Eigen::bfloat1
 }  // namespace numext
 namespace bfloat16_impl {
 
+#if defined(EIGEN_CUDACC)
+// Like Eigen::half, bfloat16 is used as the element type of __shared__ arrays, whose type must have an empty default
+// constructor: clang's CUDA mode rejects `__shared__ bfloat16 a[N]` when a constructor in the chain initializes value,
+// in both compile phases. Hence, in a CUDA translation unit, the default constructors of __bfloat16_raw,
+// bfloat16_base and bfloat16 leave value indeterminate, in the host phase too: `bfloat16()`, `bfloat16{}` and
+// `std::vector<bfloat16>(n)` do not yield zero there, as for Eigen::half. Other translation units keep the zero
+// initialization. Such constructors cannot be constexpr before C++20.
+#define EIGEN_BF16_DEFAULT_CTOR_CONSTEXPR
+#else
+#define EIGEN_BF16_DEFAULT_CTOR_CONSTEXPR EIGEN_CONSTEXPR
+#endif
+
 #if defined(EIGEN_USE_HIP_BF16)
 
 struct __bfloat16_raw : public hip_bfloat16 {
@@ -134,8 +146,8 @@ struct __bfloat16_raw : public hip_bfloat16 {
 
 // Make our own __bfloat16_raw definition.
 struct __bfloat16_raw {
-#if defined(EIGEN_HAS_HIP_BF16) && !defined(EIGEN_GPU_COMPILE_PHASE)
-  EIGEN_DEVICE_FUNC EIGEN_CONSTEXPR __bfloat16_raw() {}
+#if defined(EIGEN_CUDACC) || (defined(EIGEN_HAS_HIP_BF16) && !defined(EIGEN_GPU_COMPILE_PHASE))
+  EIGEN_DEVICE_FUNC EIGEN_BF16_DEFAULT_CTOR_CONSTEXPR __bfloat16_raw() {}
 #else
   EIGEN_DEVICE_FUNC EIGEN_CONSTEXPR __bfloat16_raw() : value(0) {}
 #endif
@@ -157,7 +169,7 @@ EIGEN_STRONG_INLINE EIGEN_DEVICE_FUNC __bfloat16_raw float_to_bfloat16_rtne<true
 EIGEN_STRONG_INLINE EIGEN_DEVICE_FUNC float bfloat16_to_float(__bfloat16_raw h);
 
 struct bfloat16_base : public __bfloat16_raw {
-  EIGEN_DEVICE_FUNC EIGEN_CONSTEXPR bfloat16_base() {}
+  EIGEN_DEVICE_FUNC EIGEN_BF16_DEFAULT_CTOR_CONSTEXPR bfloat16_base() {}
   EIGEN_DEVICE_FUNC EIGEN_CONSTEXPR bfloat16_base(const __bfloat16_raw& h) : __bfloat16_raw(h) {}
 };
 
@@ -167,7 +179,7 @@ struct bfloat16_base : public __bfloat16_raw {
 struct bfloat16 : public bfloat16_impl::bfloat16_base {
   using __bfloat16_raw = bfloat16_impl::__bfloat16_raw;
 
-  EIGEN_DEVICE_FUNC EIGEN_CONSTEXPR bfloat16() {}
+  EIGEN_DEVICE_FUNC EIGEN_BF16_DEFAULT_CTOR_CONSTEXPR bfloat16() {}
 
   EIGEN_DEVICE_FUNC EIGEN_CONSTEXPR bfloat16(const __bfloat16_raw& h) : bfloat16_impl::bfloat16_base(h) {}
 
@@ -953,7 +965,9 @@ struct hash<Eigen::bfloat16> {
 #endif
 
 // Warp shuffle overloads for Eigen::bfloat16.
-// HIP uses non-sync __shfl variants; CUDA has native __nv_bfloat16 support in __shfl_sync.
+// HIP uses non-sync __shfl variants. Eigen::bfloat16 has no conversion to the CUDA __nv_bfloat16 type, so on CUDA the
+// 16 raw bits travel through the 32-bit __shfl_*_sync overloads. Without these overloads a bfloat16 argument converts
+// to float, and a shuffle of a bfloat16 value returns a float.
 // Note that the following are __device__ - only functions.
 #if defined(EIGEN_HIPCC)
 
@@ -985,7 +999,37 @@ __device__ EIGEN_STRONG_INLINE Eigen::bfloat16 __shfl_xor(Eigen::bfloat16 var, i
 
 #endif  // HIP
 
-#endif  // __shfl*
+#elif defined(EIGEN_CUDACC)
+
+__device__ EIGEN_STRONG_INLINE Eigen::bfloat16 __shfl_sync(unsigned mask, Eigen::bfloat16 var, int srcLane,
+                                                           int width = warpSize) {
+  const int ivar = static_cast<int>(Eigen::numext::bit_cast<Eigen::numext::uint16_t>(var));
+  return Eigen::numext::bit_cast<Eigen::bfloat16>(
+      static_cast<Eigen::numext::uint16_t>(__shfl_sync(mask, ivar, srcLane, width)));
+}
+
+__device__ EIGEN_STRONG_INLINE Eigen::bfloat16 __shfl_up_sync(unsigned mask, Eigen::bfloat16 var, unsigned int delta,
+                                                              int width = warpSize) {
+  const int ivar = static_cast<int>(Eigen::numext::bit_cast<Eigen::numext::uint16_t>(var));
+  return Eigen::numext::bit_cast<Eigen::bfloat16>(
+      static_cast<Eigen::numext::uint16_t>(__shfl_up_sync(mask, ivar, delta, width)));
+}
+
+__device__ EIGEN_STRONG_INLINE Eigen::bfloat16 __shfl_down_sync(unsigned mask, Eigen::bfloat16 var, unsigned int delta,
+                                                                int width = warpSize) {
+  const int ivar = static_cast<int>(Eigen::numext::bit_cast<Eigen::numext::uint16_t>(var));
+  return Eigen::numext::bit_cast<Eigen::bfloat16>(
+      static_cast<Eigen::numext::uint16_t>(__shfl_down_sync(mask, ivar, delta, width)));
+}
+
+__device__ EIGEN_STRONG_INLINE Eigen::bfloat16 __shfl_xor_sync(unsigned mask, Eigen::bfloat16 var, int laneMask,
+                                                               int width = warpSize) {
+  const int ivar = static_cast<int>(Eigen::numext::bit_cast<Eigen::numext::uint16_t>(var));
+  return Eigen::numext::bit_cast<Eigen::bfloat16>(
+      static_cast<Eigen::numext::uint16_t>(__shfl_xor_sync(mask, ivar, laneMask, width)));
+}
+
+#endif  // HIP vs CUDA
 
 #if defined(EIGEN_HIPCC)
 EIGEN_STRONG_INLINE __device__ Eigen::bfloat16 __ldg(const Eigen::bfloat16* ptr) {
@@ -993,5 +1037,7 @@ EIGEN_STRONG_INLINE __device__ Eigen::bfloat16 __ldg(const Eigen::bfloat16* ptr)
       __ldg(Eigen::numext::bit_cast<const Eigen::numext::uint16_t*>(ptr)));
 }
 #endif  // __ldg
+
+#undef EIGEN_BF16_DEFAULT_CTOR_CONSTEXPR
 
 #endif  // EIGEN_BFLOAT16_H

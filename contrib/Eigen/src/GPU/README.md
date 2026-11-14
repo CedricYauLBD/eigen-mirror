@@ -451,7 +451,7 @@ enabling matching and iterative refinement:
 ```cpp
 gpu::SparseSolverConfig cfg;
 cfg.reordering = gpu::SparseReordering::Amd;
-cfg.matching = gpu::SparseMatching::Auto;   // off by cuDSS default
+cfg.matching = gpu::SparseMatching::Auto;   // library-selected; the cuDSS default varies by version
 cfg.refinementSteps = 2;                    // iterative refinement in solve()
 gpu::SparseLU<double> lu;
 lu.setConfig(cfg);                          // before compute(): reordering and
@@ -1262,8 +1262,9 @@ template compatibility.
 - **Robustness-oriented cuDSS defaults.** `gpu::SparseSolverConfig` exposes
   matching, pivoting, refinement, and the hybrid modes, but a
   default-constructed solver still runs with cuDSS's performance-tuned
-  defaults (matching off). Consider flipping the shipped defaults toward
-  robustness now that users can override them.
+  defaults (for matching, whatever the installed cuDSS version defines).
+  Consider flipping the shipped defaults toward robustness now that users can
+  override them.
 
 - **cuDSS threading layer for host-side reordering.** As of cuDSS 0.7.1
   fill-reducing reordering runs on the CPU. cuDSS supports a "threading
