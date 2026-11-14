@@ -373,8 +373,9 @@ void symm_depth_blocks() {
 template <typename Scalar>
 void symm_tiny_cache_sizes() {
   using Mat = Matrix<Scalar, Dynamic, Dynamic>;
-  std::ptrdiff_t l1, l2, l3;
-  internal::manage_caching_sizes(GetAction, &l1, &l2, &l3);
+  // setCpuCacheSizes clears the per-CPU L3 size, so save and restore all four through manage_caching_sizes.
+  std::ptrdiff_t l1, l2, l3, l3_per_cpu;
+  internal::manage_caching_sizes(GetAction, &l1, &l2, &l3, &l3_per_cpu);
   // 16 bytes of L1 leave no room for a depth block of one packet: the blocking clamps kc to 1 on every target.
   setCpuCacheSizes(16, 2048, 4096);
   for (Index n : {5, 33, 100}) {
@@ -395,7 +396,10 @@ void symm_tiny_cache_sizes() {
       VERIFY_IS_APPROX(c, Mat(full * b));
     }
   }
-  setCpuCacheSizes(l1, l2, l3);
+  internal::manage_caching_sizes(SetAction, &l1, &l2, &l3, &l3_per_cpu);
+  std::ptrdiff_t restored_l1, restored_l2, restored_l3, restored_l3_per_cpu;
+  internal::manage_caching_sizes(GetAction, &restored_l1, &restored_l2, &restored_l3, &restored_l3_per_cpu);
+  VERIFY(restored_l1 == l1 && restored_l2 == l2 && restored_l3 == l3 && restored_l3_per_cpu == l3_per_cpu);
 }
 
 template <typename Scalar, int RhsOrder>
