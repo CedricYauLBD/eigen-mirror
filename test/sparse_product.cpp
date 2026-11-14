@@ -719,6 +719,41 @@ void test_sparse_product_few_terms_unsorted() {
   }
 }
 
+// An inner dimension of 2^62: indices there do not fit the packed keys of the bucket sort, which must then sort
+// by insertion. Three terms per vector with distinct indices keep the vectors on the appended path, and nothing of
+// the inner dimension is allocated.
+template <typename = void>
+void test_sparse_product_huge_inner_dimension() {
+  using StorageIndex = long long;
+  using SpMat = SparseMatrix<double, ColMajor, StorageIndex>;
+  if (sizeof(Index) < 8) return;
+  const Index rows = Index(1) << 62, perVector = 80, mid = 6;
+  SpMat a(rows, mid), b(mid, 2);
+  a.reserve(VectorXi::Constant(mid, int(perVector)));
+  std::map<StorageIndex, double> expected[2];
+  for (Index k = 0; k < mid; ++k)
+    for (Index q = 0; q < perVector; ++q) {
+      // Spread over the whole range, shifted per vector except for every seventh index, which the vectors share.
+      StorageIndex i = StorageIndex(rows - 1 - ((perVector - 1 - q) * (rows / 100) + (q % 7 == 0 ? 0 : k * 1000 + q)));
+      a.insertBackUncompressed(i, k) = double(1 + (q + k) % 5);
+    }
+  for (Index j = 0; j < 2; ++j)
+    for (Index t = 0; t < 3; ++t) b.insert(3 * j + t, j) = double(t + 2);
+  for (Index j = 0; j < 2; ++j)
+    for (SpMat::InnerIterator bi(b, j); bi; ++bi)
+      for (SpMat::InnerIterator ai(a, bi.index()); ai; ++ai) expected[j][ai.index()] += ai.value() * bi.value();
+  SpMat c = a * b;
+  VERIFY_IS_EQUAL(c.innerIndicesAreSorted(), c.outerSize());
+  VERIFY_IS_EQUAL(c.nonZeros(), Index(expected[0].size() + expected[1].size()));
+  VERIFY(Index(expected[0].size()) < 3 * perVector);
+  for (Index j = 0; j < 2; ++j)
+    for (SpMat::InnerIterator it(c, j); it; ++it) {
+      auto found = expected[j].find(it.index());
+      VERIFY(found != expected[j].end() && found->second == it.value());
+    }
+  VERIFY(c.innerIndexPtr()[c.nonZeros() - 1] > rows / 2);
+}
+
 template <typename = void>
 void test_pruned_product_row_vector() {
   SparseMatrix<double> A(4, 3);
@@ -1429,6 +1464,7 @@ EIGEN_DECLARE_TEST(sparse_product) {
     CALL_SUBTEST_6((test_pruned_product_front_insertion<>()));
     CALL_SUBTEST_6((test_pruned_product_cancelled_vector<>()));
     CALL_SUBTEST_6((test_sparse_product_few_terms_unsorted<>()));
+    CALL_SUBTEST_6((test_sparse_product_huge_inner_dimension<>()));
   }
   CALL_SUBTEST_3((sparse_product_long_vectors_all_orders<double, int>()));
   CALL_SUBTEST_4((sparse_product_long_vectors_all_orders<double, short>()));
