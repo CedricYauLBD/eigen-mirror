@@ -630,6 +630,9 @@ static void test_small_products() {
     shapes.push_back({mn[0], mn[1], k});
   }
   shapes.push_back({3 * sme_mr<Scalar>(), 3, 16});
+  // Both sides of the cost bound's depth limit at two rows.
+  shapes.push_back({2, 128, 256});
+  shapes.push_back({2, 128, 257});
   for (Index s : {12, 17, 20, 25, 29, 31}) shapes.push_back({s, s, s});
   for (auto s : std::vector<std::array<Index, 3>>{
            {2, 64, 48}, {4, 32, 64}, {8, 64, 64}, {32, 4, 32}, {64, 2, 64}, {16, 16, 32}, {12, 12, 64}, {3, 33, 97}})
@@ -666,20 +669,51 @@ static void test_small_products() {
 
 template <typename TestIndex>
 static void test_small_product_overflow() {
-  // With a 65536 threshold, products of the factors wrap a 32-bit index; the decision must not depend on its width.
-  for (const auto& s : std::vector<std::array<std::int64_t, 3>>{{65536, 65536, 1},
-                                                                {256, 256, 65536},
-                                                                {65536, 3, 65536},
-                                                                {16, 16, 256},
-                                                                {16, 16, 4096},
-                                                                {2, 4096, 16},
-                                                                {65537, 2, 2}})
-    VERIFY_IS_EQUAL(internal::sme_small_gemm_wins<float>(TestIndex(s[0]), TestIndex(s[1]), TestIndex(s[2])),
-                    internal::sme_small_gemm_wins<float>(s[0], s[1], s[2]));
+  // With a 65536 threshold, both the two-factor and three-factor products can wrap a 32-bit index to zero.
   VERIFY(!internal::sme_small_gemm_wins<float>(TestIndex(65536), TestIndex(65536), TestIndex(1)));
   VERIFY(!internal::sme_small_gemm_wins<float>(TestIndex(256), TestIndex(256), TestIndex(65536)));
+  VERIFY(!internal::sme_small_gemm_wins<float>(TestIndex(16), TestIndex(16), TestIndex(257)));
 #if !defined(EIGEN_SME_NO_NEON_SMALL_BLOCKS) && !defined(EIGEN_SME_FORCE_NEON_SMALL_BLOCKS) && !defined(EIGEN_USE_BLAS)
-  VERIFY(internal::sme_small_gemm_wins<float>(TestIndex(16), TestIndex(16), TestIndex(16)));
+  // The override replaces the cost bound, which takes 16 x 16 x 256 to ZA.
+  VERIFY(internal::sme_small_gemm_wins<float>(TestIndex(16), TestIndex(16), TestIndex(256)));
+#endif
+}
+
+// Hand-computed {m, n, k, NEON} on both sides of the cost bound, of its domain m, n <= 128, k <= 256, and of mnk <= S.
+template <typename Scalar>
+struct small_product_pins;
+template <>
+struct small_product_pins<float> {
+  // 4mnk < 8mn + 8nk + 4 * 24576, else mnk <= 28672; at m = 2 the cost bound holds at every depth.
+  static std::vector<std::array<Index, 4>> get() {
+    return {{16, 16, 111, 1}, {16, 16, 112, 0}, {2, 128, 256, 1}, {2, 128, 257, 0}, {2, 16, 16384, 0}, {128, 16, 14, 1},
+            {129, 16, 14, 0}, {24, 128, 10, 1}, {24, 129, 10, 0}, {256, 4, 16, 1},  {340, 3, 16, 0}};
+  }
+};
+template <>
+struct small_product_pins<double> {
+  // 4mnk < 8 ceil(m/8) ceil(n/8) k + 25mn + 4nk + 4 * 11264, else mnk <= 10240.
+  static std::vector<std::array<Index, 4>> get() {
+    return {{16, 16, 55, 1}, {16, 16, 56, 0}, {128, 5, 16, 1}, {129, 5, 16, 0}, {8, 425, 3, 1}};
+  }
+};
+template <>
+struct small_product_pins<std::complex<float>> {
+  // mnk <= 10240.
+  static std::vector<std::array<Index, 4>> get() { return {{16, 16, 40, 1}, {16, 16, 41, 0}, {140, 8, 8, 1}}; }
+};
+template <>
+struct small_product_pins<std::complex<double>> {
+  // mnk <= 5120.
+  static std::vector<std::array<Index, 4>> get() { return {{16, 16, 20, 1}, {16, 16, 21, 0}, {6, 425, 2, 1}}; }
+};
+
+template <typename Scalar>
+static void test_small_product_bound() {
+#if !defined(EIGEN_SME_NO_NEON_SMALL_BLOCKS) && !defined(EIGEN_SME_FORCE_NEON_SMALL_BLOCKS) && \
+    !defined(EIGEN_USE_BLAS) && !defined(EIGEN_SME_NEON_SMALL_PRODUCT)
+  for (const auto& p : small_product_pins<Scalar>::get())
+    VERIFY_IS_EQUAL(internal::sme_small_gemm_wins<Scalar>(p[0], p[1], p[2]), p[3] != 0);
 #endif
 }
 
@@ -1588,6 +1622,7 @@ EIGEN_DECLARE_TEST(product_sme) {
   CALL_SUBTEST_1(test_mapper_fallback<float>());
   CALL_SUBTEST_1(test_neon_small_blocks<float>());
   CALL_SUBTEST_1(test_small_products<float>());
+  CALL_SUBTEST_1(test_small_product_bound<float>());
   CALL_SUBTEST_1(test_direct_lhs<float>());
   CALL_SUBTEST_1(test_small_k_and_single_panel_rhs<float>());
   CALL_SUBTEST_1(test_deep_tail_panels<float>());
@@ -1609,6 +1644,7 @@ EIGEN_DECLARE_TEST(product_sme) {
   CALL_SUBTEST_2(test_mapper_fallback<double>());
   CALL_SUBTEST_2(test_neon_small_blocks<double>());
   CALL_SUBTEST_2(test_small_products<double>());
+  CALL_SUBTEST_2(test_small_product_bound<double>());
   CALL_SUBTEST_2(test_direct_lhs<double>());
   CALL_SUBTEST_2(test_small_k_and_single_panel_rhs<double>());
   CALL_SUBTEST_2(test_deep_tail_panels<double>());
@@ -1625,6 +1661,7 @@ EIGEN_DECLARE_TEST(product_sme) {
   CALL_SUBTEST_3(test_mapper_fallback<std::complex<float>>());
   CALL_SUBTEST_3(test_neon_small_blocks<std::complex<float>>());
   CALL_SUBTEST_3(test_small_products<std::complex<float>>());
+  CALL_SUBTEST_3(test_small_product_bound<std::complex<float>>());
   CALL_SUBTEST_3(test_fp_flags<std::complex<float>>());
   CALL_SUBTEST_3(test_disjoint_parts<std::complex<float>>());
   CALL_SUBTEST_3((test_complex_alpha_range<float, ColMajor>()));
@@ -1642,6 +1679,7 @@ EIGEN_DECLARE_TEST(product_sme) {
   CALL_SUBTEST_4(test_mapper_fallback<std::complex<double>>());
   CALL_SUBTEST_4(test_neon_small_blocks<std::complex<double>>());
   CALL_SUBTEST_4(test_small_products<std::complex<double>>());
+  CALL_SUBTEST_4(test_small_product_bound<std::complex<double>>());
   CALL_SUBTEST_4(test_fp_flags<std::complex<double>>());
   CALL_SUBTEST_4(test_disjoint_parts<std::complex<double>>());
   CALL_SUBTEST_4((test_complex_alpha_range<double, ColMajor>()));

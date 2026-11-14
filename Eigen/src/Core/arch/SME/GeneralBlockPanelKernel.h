@@ -3558,35 +3558,33 @@ bool sme_tiny_gemm(Index rows, Index cols, Index depth, const Scalar* lhs, Index
   return true;
 }
 
-// NEON iff 4mnk < tile*ceil(m/w)*ceil(n/w)*k + result*mn + rhs*nk + 4P, w = 64 B of Real; fitted on Apple M4 Pro.
+// Largest rows * cols * depth of a whole product the NEON kernel beats ZA on (fitted on Apple M4 Pro).
 #ifndef EIGEN_SME_NEON_SMALL_PRODUCT
 template <typename Scalar>
-struct sme_neon_small_product : std::integral_constant<int, 11264> {};
+struct sme_neon_small_product : std::integral_constant<int, 10240> {};
 template <>
-struct sme_neon_small_product<float> : std::integral_constant<int, 24576> {};
-template <>
-struct sme_neon_small_product<std::complex<float>> : std::integral_constant<int, 7168> {};
+struct sme_neon_small_product<float> : std::integral_constant<int, 28672> {};
 template <>
 struct sme_neon_small_product<std::complex<double>> : std::integral_constant<int, 5120> {};
 #else
 template <typename Scalar>
 struct sme_neon_small_product : std::integral_constant<int, EIGEN_SME_NEON_SMALL_PRODUCT> {};
 #endif
+// On m, n <= 128, k <= 256: NEON iff 4mnk < tile*ceil(m/w)*ceil(n/w)*k + result*mn + rhs*nk + 4*bias, w = 64 B.
 template <typename Scalar>
-struct sme_neon_small_weights {
-  static constexpr int tile = 8, result = 25, rhs = 4;
+struct sme_neon_small_cost {
+  static constexpr bool fitted = false;
+  static constexpr int tile = 0, result = 0, rhs = 0, bias = 0;
 };
 template <>
-struct sme_neon_small_weights<float> {
-  static constexpr int tile = 0, result = 8, rhs = 8;
+struct sme_neon_small_cost<float> {
+  static constexpr bool fitted = true;
+  static constexpr int tile = 0, result = 8, rhs = 8, bias = 24576;
 };
 template <>
-struct sme_neon_small_weights<std::complex<float>> {
-  static constexpr int tile = 96, result = 0, rhs = 0;
-};
-template <>
-struct sme_neon_small_weights<std::complex<double>> {
-  static constexpr int tile = 0, result = 0, rhs = 0;
+struct sme_neon_small_cost<double> {
+  static constexpr bool fitted = true;
+  static constexpr int tile = 8, result = 25, rhs = 4, bias = 11264;
 };
 
 template <typename Scalar, typename Index>
@@ -3599,20 +3597,30 @@ EIGEN_ALWAYS_INLINE bool sme_small_gemm_wins(Index rows, Index cols, Index depth
 #else
   constexpr bool kReal = !NumTraits<Scalar>::IsComplex;
   constexpr Index kRhs = Index(65536 / sizeof(Scalar));
-  constexpr int64_t kW = kSmeDesignVectorBytes / int(sizeof(typename NumTraits<Scalar>::Real));
-  using W = sme_neon_small_weights<Scalar>;
+  constexpr int kSize = sme_neon_small_product<Scalar>::value;
+  using Cost = sme_neon_small_cost<Scalar>;
+#ifdef EIGEN_SME_NEON_SMALL_PRODUCT
+  constexpr bool kFitted = false;
+#else
+  constexpr bool kFitted = Cost::fitted;
+#endif
   if (rows <= 0 || cols <= 0 || depth <= 0) return false;
   // Rows of at most two NEON vectors leave most of a ZA tile idle: NEON up to a 64 KB RHS, real ones 128 deep. The
   // factors are bounded before each product, which then fits a 32-bit Index.
   if (rows <= Index(32 / sizeof(Scalar)) && cols <= kRhs && depth <= (kReal ? Index(128) : kRhs) &&
       cols * depth <= kRhs)
     return true;
-  // Fitted on m, n <= 128, past which ZA wins; the bounds also keep every term below 2^40.
-  if (rows > Index(128) || cols > Index(128) || depth > Index(65536)) return false;
-  const int64_t m = int64_t(rows), n = int64_t(cols), k = int64_t(depth);
-  const int64_t tiles = ((m + kW - 1) / kW) * ((n + kW - 1) / kW) * k;
-  return 4 * m * n * k <
-         W::tile * tiles + W::result * m * n + W::rhs * n * k + 4 * int64_t(sme_neon_small_product<Scalar>::value);
+  if (kFitted && rows <= Index(128) && cols <= Index(128) && depth <= Index(256)) {
+    constexpr int64_t kW = kSmeDesignVectorBytes / int(sizeof(typename NumTraits<Scalar>::Real));
+    const int64_t m = int64_t(rows), n = int64_t(cols), k = int64_t(depth);
+    const int64_t tiles = numext::div_ceil(m, kW) * numext::div_ceil(n, kW) * k;
+    return 4 * m * n * k < Cost::tile * tiles + Cost::result * m * n + Cost::rhs * n * k + 4 * int64_t(Cost::bias);
+  }
+  // The narrow ZA kernel reads a tall real LHS in place.
+  if (kReal && cols <= 3 && rows >= 3 * Index(sme_block<Scalar>::mr)) return false;
+  // Each product is bounded by kSize^2. Widen before multiplying: kSize is an int, including overrides.
+  return rows <= kSize && cols <= kSize && int64_t(rows) * int64_t(cols) <= kSize && depth <= kSize &&
+         int64_t(rows) * int64_t(cols) * int64_t(depth) <= kSize;
 #endif
 }
 

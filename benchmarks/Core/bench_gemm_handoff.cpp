@@ -35,10 +35,10 @@ static bool product_ok(const Lhs& a, const Rhs& b, const Res& c) {
   return true;
 }
 
-template <int Order, HandoffMode Mode>
+template <int Order, int ResOrder, HandoffMode Mode>
 static void BM_GemmHandoff(benchmark::State& state) {
   using Mat = Matrix<Scalar, Dynamic, Dynamic, Order>;
-  using Res = Matrix<Scalar, Dynamic, Dynamic>;
+  using Res = Matrix<Scalar, Dynamic, Dynamic, ResOrder>;
   const Index m = state.range(0), n = state.range(1), k = state.range(2);
   const Mat a0 = Mat::Random(m, k), b0 = Mat::Random(k, n);
   const Res c0 = Res::Random(m, n);
@@ -69,14 +69,21 @@ static void BM_GemmHandoff(benchmark::State& state) {
   }
 }
 
-// Products with m, n <= 128 on both sides of the SME backend's NEON small-product bound, at three depths.
+// The NEON small-product bound on its domain m, n <= 128, k <= 256, two-row results, and shallow products past it.
 // clang-format off
-#define HANDOFF_SIZES ->ArgsProduct({{3, 6, 12, 24, 48, 96, 128}, {3, 6, 12, 24, 48, 96, 128}, {8, 32, 128}})
+#define HANDOFF_SIZES \
+  ->ArgsProduct({{12, 24, 48, 96, 128}, {3, 6, 12, 24, 48, 96, 128}, {8, 32, 128, 256}}) \
+  ->ArgsProduct({{2}, {16, 64, 128}, {128, 256, 512, 2048, 16384}}) \
+  ->ArgsProduct({{200, 256, 340}, {3, 4, 8}, {8, 16}}) \
+  ->ArgsProduct({{6, 8}, {425}, {2, 3}})
 // clang-format on
 
-BENCHMARK_TEMPLATE(BM_GemmHandoff, ColMajor, Repeated) HANDOFF_SIZES;
-BENCHMARK_TEMPLATE(BM_GemmHandoff, RowMajor, Repeated) HANDOFF_SIZES;
-BENCHMARK_TEMPLATE(BM_GemmHandoff, ColMajor, Handoff) HANDOFF_SIZES->UseManualTime();
-BENCHMARK_TEMPLATE(BM_GemmHandoff, RowMajor, Handoff) HANDOFF_SIZES->UseManualTime();
-BENCHMARK_TEMPLATE(BM_GemmHandoff, ColMajor, ReadOnly) HANDOFF_SIZES->UseManualTime();
-BENCHMARK_TEMPLATE(BM_GemmHandoff, RowMajor, ReadOnly) HANDOFF_SIZES->UseManualTime();
+#define HANDOFF_LAYOUT(Order, ResOrder)                                                        \
+  BENCHMARK_TEMPLATE(BM_GemmHandoff, Order, ResOrder, Repeated) HANDOFF_SIZES;                 \
+  BENCHMARK_TEMPLATE(BM_GemmHandoff, Order, ResOrder, Handoff) HANDOFF_SIZES->UseManualTime(); \
+  BENCHMARK_TEMPLATE(BM_GemmHandoff, Order, ResOrder, ReadOnly) HANDOFF_SIZES->UseManualTime()
+
+HANDOFF_LAYOUT(ColMajor, ColMajor);
+HANDOFF_LAYOUT(RowMajor, ColMajor);
+HANDOFF_LAYOUT(ColMajor, RowMajor);
+HANDOFF_LAYOUT(RowMajor, RowMajor);
