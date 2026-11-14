@@ -99,9 +99,9 @@ inline void device_scalar_neg(const double* a, double* c, cudaStream_t stream) {
   EIGEN_NPP_CHECK(nppsMulC_64f_Ctx(a, -1.0, c, 1, npp_ctx));
 }
 
-// Calls fn(offset, length) on consecutive pieces of [0, n) of at most 2^30 elements: the NPP signal functions take
-// their length as a 32-bit int before CUDA 13 (size_t from CUDA 13), and a longer vector would wrap to another
-// length. A power of two keeps every piece's start a multiple of 2^30 elements, so the pieces stay aligned.
+// Calls fn(offset, length) on consecutive pieces of [0, n) of at most 2^30 elements: older NPP releases take the
+// length of a signal as a 32-bit int (newer ones as size_t), and a longer vector would wrap to another length. A
+// power of two keeps every piece's start a multiple of 2^30 elements, so the pieces stay aligned.
 template <typename Fn>
 void for_each_npp_chunk(int64_t n, Fn fn) {
   const int64_t max_length = int64_t(1) << 30;
