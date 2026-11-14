@@ -102,21 +102,35 @@ EIGEN_DONT_INLINE bool least_square_conjugate_gradient(const MatrixType& mat, co
     if (pNorm2 > RealScalar(0) && (numext::isfinite)(pNorm2))
       normA = numext::maxi(normA, RealScalar(apNorm / numext::sqrt(pNorm2)));
     const RealScalar rNorm2 = (residual / residualScale).squaredNorm();
-    return (numext::isfinite)(rNorm2) ? RealScalar(sqrtLength * eps * normA * numext::sqrt(rNorm2)) : RealScalar(0);
+    const RealScalar floor = RealScalar(sqrtLength * eps * normA * numext::sqrt(rNorm2));
+    return (numext::isfinite)(floor) ? floor : RealScalar(0);
   };
   bool atFloor = false;
   while (i < maxIters) {
     tmp.noalias() = mat * p;
 
+    // The step along p, in units of the unscaled residual: residualScale |g|^2 / |A p|^2.
     const RealScalar tmpNorm2 = tmp.squaredNorm();
-    Scalar alpha = absNew / tmpNorm2;  // the amount we travel on dir
-    if (!(tmpNorm2 > RealScalar(0)) || !(numext::isfinite)(numext::real(alpha))) {
-      // A p vanishes, so the step is not defined: p is numerically in the null space of A.
-      atFloor = residualNorm <= gradientFloor(numext::sqrt(tmpNorm2));
-      break;
+    RealScalar apNorm = numext::sqrt(tmpNorm2);
+    RealScalar step = RealScalar(residualScale * (absNew / tmpNorm2));
+    if (!(tmpNorm2 > RealScalar(0) && (numext::isfinite)(tmpNorm2)) || !(numext::isfinite)(step)) {
+      // |A p|^2 or the step over- or underflows: use the scaled norm, as the product (|g|^2 / |A p|) (scale / |A p|)
+      // whose factors are applied one after the other.
+      apNorm = tmp.stableNorm();
+      step = RealScalar(absNew / apNorm);
+      const RealScalar tail = RealScalar(residualScale / apNorm);
+      if (!(numext::isfinite)(step) || !(numext::isfinite)(tail) || !(numext::isfinite)(apNorm)) {
+        // A p vanishes or is not finite, so the step is not defined: p is numerically in the null space of A. Only a
+        // gradient below its finite floor counts as converged.
+        atFloor = residualNorm <= gradientFloor(apNorm);
+        break;
+      }
+      x += step * (tail * p);           // update solution
+      residual -= step * (tail * tmp);  // update residual
+    } else {
+      x += step * p;           // update solution
+      residual -= step * tmp;  // update residual
     }
-    x += (residualScale * alpha) * p;                      // update solution
-    residual -= (residualScale * alpha) * tmp;             // update residual
     normal_residual.noalias() = mat.adjoint() * residual;  // update residual of the normal equation
     normal_residual /= residualScale;
 
@@ -124,7 +138,7 @@ EIGEN_DONT_INLINE bool least_square_conjugate_gradient(const MatrixType& mat, co
     if (residualNorm < threshold) break;
 
     // Past the floor the gradient is noise: stop with the current iterate, which is as good as any later one.
-    if (residualNorm <= gradientFloor(numext::sqrt(tmpNorm2))) {
+    if (residualNorm <= gradientFloor(apNorm)) {
       atFloor = true;
       break;
     }

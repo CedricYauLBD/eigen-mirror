@@ -226,6 +226,54 @@ void test_lscg_sparse_tall() {
   check_lscg_sparse_tall<IdentityPreconditioner>(A, b);
 }
 
+// Matrices whose entries are so large or small that |A p|^2 over- or underflows while the solution is representable.
+// For a 1 x 1 matrix with a = 1e200 or 1e150, |A p|^2 overflowed to infinity, the step |g|^2 / |A p|^2 became 0 and the
+// gradient floor infinite, so the solver returned x = 0 with error() = 1 and info() = Success; for diag(a, 2a) it
+// returned NaN or NoConvergence. Both a sparse and a dense matrix must give info() = Success and a solution accurate to
+// a few eps.
+template <typename Preconditioner>
+void check_lscg_extreme_matrix(double a, double rhs) {
+  const double eps = NumTraits<double>::epsilon();
+  SparseMatrix<double> A(2, 2);
+  A.insert(0, 0) = a;
+  A.insert(1, 1) = 2 * a;
+  const Vector2d b = rhs * Vector2d(1, 1);
+  const Vector2d ref = (rhs / a) * Vector2d(1, 0.5);
+
+  LeastSquaresConjugateGradient<SparseMatrix<double>, Preconditioner> sparse_solver(A);
+  Vector2d x = sparse_solver.solve(b);
+  VERIFY_IS_EQUAL(sparse_solver.info(), Success);
+  VERIFY(x.allFinite());
+  VERIFY_LE((x - ref).stableNorm(), 100 * eps * ref.stableNorm());
+
+  const Matrix2d D = A.toDense();
+  LeastSquaresConjugateGradient<Matrix2d, Preconditioner> dense_solver(D);
+  x = dense_solver.solve(b);
+  VERIFY_IS_EQUAL(dense_solver.info(), Success);
+  VERIFY(x.allFinite());
+  VERIFY_LE((x - ref).stableNorm(), 100 * eps * ref.stableNorm());
+}
+
+template <typename = void>
+void test_lscg_extreme_matrix() {
+  for (double a : {1e200, 1e150, 1e-150, 1e-200}) {
+    check_lscg_extreme_matrix<IdentityPreconditioner>(a, 1e-100);
+    // The diagonal preconditioner forms the squared column norms, which overflow for a = 1e200.
+    if (a != 1e200) check_lscg_extreme_matrix<LeastSquareDiagonalPreconditioner<double> >(a, 1e-100);
+  }
+  // A 1 x 1 matrix: the step is 1e-400 in terms of the unscaled residual for a = 1e200.
+  for (double a : {1e200, 1e150}) {
+    SparseMatrix<double> A(1, 1);
+    A.insert(0, 0) = a;
+    const VectorXd b = VectorXd::Constant(1, 1e-100);
+    const double ref = 1e-100 / a;
+    LeastSquaresConjugateGradient<SparseMatrix<double>, IdentityPreconditioner> solver(A);
+    const VectorXd x = solver.solve(b);
+    VERIFY_IS_EQUAL(solver.info(), Success);
+    VERIFY_LE(numext::abs(x(0) - ref), 100 * NumTraits<double>::epsilon() * ref);
+  }
+}
+
 EIGEN_DECLARE_TEST(lscg) {
   CALL_SUBTEST_1(test_lscg_T<double>());
   CALL_SUBTEST_2(test_lscg_T<std::complex<double> >());
@@ -236,4 +284,5 @@ EIGEN_DECLARE_TEST(lscg) {
   CALL_SUBTEST_5(test_lscg_truthful_info<>());
   CALL_SUBTEST_5(test_lscg_sparse_tall<>());
   CALL_SUBTEST_5(test_lscg_small_rhs<>());
+  CALL_SUBTEST_5(test_lscg_extreme_matrix<>());
 }
