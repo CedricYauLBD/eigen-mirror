@@ -273,7 +273,9 @@ template <typename MatrixType>
 ComplexEigenSolver<MatrixType>& ComplexEigenSolver<MatrixType>::computeFromSchur(bool computeEigenvectors) {
   if (m_schur.info() == Success) {
     m_eivalues = m_schur.matrixT().diagonal();
-    if (computeEigenvectors) doComputeEigenvectors(m_schur.matrixT().stableNorm());
+    // |T|_F is infinite for a finite T with entries near max; every use below needs only a bound on max |t_ij|.
+    if (computeEigenvectors)
+      doComputeEigenvectors(numext::mini(m_schur.matrixT().stableNorm(), NumTraits<RealScalar>::highest()));
     sortEigenvalues(computeEigenvectors);
   }
 
@@ -298,8 +300,9 @@ void ComplexEigenSolver<MatrixType>::doComputeEigenvectors(RealScalar matrixnorm
   // |X(i,k)| = |num| / (g |z|) = B. All entries of X then stay below B, and the products with T below max / 4
   // for B <= max / (4 n |T|_F). Sizes are measured by the larger of the real and imaginary parts.
   RealScalar bigThreshold = numext::sqrt(NumTraits<RealScalar>::highest());
+  // Divide in this order: 4 n |T|_F overflows for |T|_F > max / (4 n), and the bound would become 0.
   if (matrixnorm > RealScalar(0))
-    bigThreshold = numext::mini(bigThreshold, NumTraits<RealScalar>::highest() / (RealScalar(4 * n) * matrixnorm));
+    bigThreshold = numext::mini(bigThreshold, NumTraits<RealScalar>::highest() / matrixnorm / RealScalar(4 * n));
   for (Index k = n - 1; k >= 0; k--) {
     RealScalar diagonalScale(1);  // X(k,k) after the rescalings of column k
     // Compute X(i,k) using the (i,k) entry of the equation X T = D X
@@ -319,7 +322,8 @@ void ComplexEigenSolver<MatrixType>::doComputeEigenvectors(RealScalar matrixnorm
           numext::maxi(numext::abs(numext::real(matX.coeff(i, k))), numext::abs(numext::imag(matX.coeff(i, k))));
       const RealScalar zMax = numext::maxi(numext::abs(numext::real(z)), numext::abs(numext::imag(z)));
       if (numMax > zMax * bigThreshold) {
-        const RealScalar g = (numMax / bigThreshold) / zMax;
+        // zMax * B < numMax, so the product cannot overflow; numMax / B can, for B < 1.
+        const RealScalar g = numMax / (zMax * bigThreshold);
         matX.col(k).head(k) /= g;
         diagonalScale /= g;
       }
