@@ -315,6 +315,24 @@ void check_norms(Pair<F> nrm2, Pair<F> asum) {
       }
 }
 
+// nrm2 of a complex vector with one element (re, im) of Inf and NaN parts: Inf if a part is infinite and none is NaN,
+// else NaN, whether the vector has one element or several.
+template <typename T, typename F>
+void check_nrm2_nonfinite(Pair<F> nrm2) {
+  using R = Real<T>;
+  const R inf = std::numeric_limits<R>::infinity(), nan = std::numeric_limits<R>::quiet_NaN();
+  for (Index n : {1, 2, 3})
+    for (Index incx : {1, -2})
+      for (R re : {R(1), inf, -inf, nan})
+        for (R im : {R(1), inf, -inf, nan}) {
+          BlasInt bn = n, bx = incx;
+          std::vector<T> x = strided_vector<T>(n, incx);
+          x[(n - 1) * std::abs(incx)] = T(re, im);
+          verify_same(nrm2.eig(&bn, rp(x), &bx), nrm2.ref(&bn, rp(x), &bx), n, "nrm2",
+                      BLAS_ARGS(BLAS_ARG(n), BLAS_ARG(incx), BLAS_ARG(re), BLAS_ARG(im)));
+        }
+}
+
 template <typename T, typename F>
 void check_iamax(Pair<F> f) {
   for (Index n : kSizes1)
@@ -863,6 +881,7 @@ EIGEN_DECLARE_TEST(blas_reference) {
                 check_dot<cd, complex_double_result>(BOTH(zdotu), "zdotu")));
   CALL_SUBTEST((check_norms<float>(BOTH(snrm2), BOTH(sasum)), check_norms<double>(BOTH(dnrm2), BOTH(dasum)),
                 check_norms<cf>(BOTH(scnrm2), BOTH(scasum)), check_norms<cd>(BOTH(dznrm2), BOTH(dzasum))));
+  CALL_SUBTEST((check_nrm2_nonfinite<cf>(BOTH(scnrm2)), check_nrm2_nonfinite<cd>(BOTH(dznrm2))));
   CALL_SUBTEST((check_iamax<float>(BOTH(isamax)), check_iamax<double>(BOTH(idamax)), check_iamax<cf>(BOTH(icamax)),
                 check_iamax<cd>(BOTH(izamax))));
   CALL_SUBTEST((check_rot<float>(BOTH(srot)), check_rot<double>(BOTH(drot)), check_rot<cf>(BOTH(csrot)),

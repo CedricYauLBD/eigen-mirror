@@ -99,6 +99,51 @@ void test_larfb_nan_propagation() {
   VERIFY(C.col(1).allFinite());
 }
 
+void larf(const char* side, int* m, int* n, double* v, int* incv, double* tau, double* c, int* ldc, double* work) {
+  BLASFUNC(dlarf)(side, m, n, v, incv, tau, c, ldc, work);
+}
+void larf(const char* side, int* m, int* n, complex<double>* v, int* incv, complex<double>* tau, complex<double>* c,
+          int* ldc, complex<double>* work) {
+  BLASFUNC(zlarf)
+  (side, m, n, reinterpret_cast<double*>(v), incv, reinterpret_cast<double*>(tau), reinterpret_cast<double*>(c), ldc,
+   reinterpret_cast<double*>(work));
+}
+
+// xLARF applies H = I - tau v v^H from the left or right, where v(i), i = 0..len-1, lies at offset i * INCV for
+// INCV > 0 and at offset (len - 1 - i) * |INCV| for INCV < 0, and the routine skips the trailing zeros of v. This
+// compares with H formed explicitly, for a v whose last `zeros` entries are zero. NaN fills the gaps between the
+// stored entries to show that only v(i) is read.
+template <typename Scalar>
+void check_larf(char side, int incv, int zeros) {
+  using Mat = ColMat<Scalar>;
+  int m = internal::random<int>(zeros + 1, 7), n = internal::random<int>(zeros + 1, 7);
+  const int len = side == 'L' ? m : n;
+  const int stride = std::abs(incv);
+
+  using Vec = Matrix<Scalar, Dynamic, 1>;
+  Vec v_logical = Vec::Random(len);
+  v_logical.tail(zeros).setZero();
+  Vec v_storage = Vec::Constant((len - 1) * stride + 1, Scalar(std::numeric_limits<double>::quiet_NaN()));
+  for (int i = 0; i < len; ++i) v_storage((incv > 0 ? i : len - 1 - i) * stride) = v_logical(i);
+
+  Scalar tau = internal::random<Scalar>();
+  Mat C = Mat::Random(m, n);
+  const Mat H = Mat::Identity(len, len) - tau * v_logical * v_logical.adjoint();
+  const Mat expected = side == 'L' ? Mat(H * C) : Mat(C * H);
+
+  int ldc = m;
+  Vec work((std::max)(m, n));
+  larf(&side, &m, &n, v_storage.data(), &incv, &tau, C.data(), &ldc, work.data());
+  VERIFY_IS_APPROX(C, expected);
+}
+
+template <typename Scalar>
+void test_larf() {
+  for (char side : {'L', 'R'})
+    for (int incv : {-3, -2, -1, 1, 2})
+      for (int zeros : {0, 1, 2}) check_larf<Scalar>(side, incv, zeros);
+}
+
 complex<float> ladiv(float a, float b, float c, float d) {
   float p, q;
   BLASFUNC(sladiv)(&a, &b, &c, &d, &p, &q);
@@ -462,6 +507,8 @@ EIGEN_DECLARE_TEST(lapack_routines) {
     CALL_SUBTEST(test_larfb<complex<double> >());
   }
   CALL_SUBTEST(test_larfb_nan_propagation());
+  CALL_SUBTEST(test_larf<double>());
+  CALL_SUBTEST(test_larf<complex<double> >());
   CALL_SUBTEST(test_ladiv());
   CALL_SUBTEST(test_ladiv_special<float>());
   CALL_SUBTEST(test_ladiv_special<double>());
