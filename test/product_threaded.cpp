@@ -12,6 +12,11 @@
 #include "main.h"
 #include "product_test_helpers.h"
 
+#include <condition_variable>
+#include <mutex>
+#include <thread>
+#include <vector>
+
 // Eigen::setGemmThreadPool(nullptr) is the *getter*: Parallelizer.h only stores the pointer when
 // it is non-null, so once any test registers a pool it stays registered for the rest of the
 // process.  A "serial" reference computed after that point is really a threaded one, and the
@@ -22,9 +27,7 @@
 // stale registration harmless.
 struct ScopedSerialGemm {
   ScopedSerialGemm() : saved_threads_(Eigen::nbThreads()) { Eigen::setNbThreads(1); }
-  // In a thread-pool build nbThreads() reports the raw -1 that means "never set", and
-  // setNbThreads rejects a negative count.  0 is its documented "back to the pool's count".
-  ~ScopedSerialGemm() { Eigen::setNbThreads(saved_threads_ > 0 ? saved_threads_ : 0); }
+  ~ScopedSerialGemm() { Eigen::setNbThreads(saved_threads_); }
   ScopedSerialGemm(const ScopedSerialGemm&) = delete;
   ScopedSerialGemm& operator=(const ScopedSerialGemm&) = delete;
 
@@ -346,6 +349,76 @@ void test_parallelize_gemm_assign() {
   VERIFY_IS_APPROX(c, serial);
 }
 
+// Independent caller threads share one pool. The parts of one product wait for each other's packed panels, so two
+// products must not both hold the pool's workers: with 3 workers and 3 callers each worker used to pick up the first
+// part of a different product, and no product could finish. A watchdog turns such a hang into a failure.
+template <typename = void>
+void test_parallelize_gemm_concurrent_callers() {
+  constexpr int pool_threads = 3, callers = 4, iterations = 300, n = 192;
+  static ThreadPool pool(pool_threads);
+  Eigen::setGemmThreadPool(&pool);
+  Eigen::setNbThreads(0);
+
+  std::mutex mutex;
+  std::condition_variable cv;
+  bool finished = false;
+  std::thread watchdog([&] {
+    std::unique_lock<std::mutex> lock(mutex);
+    if (!cv.wait_for(lock, std::chrono::seconds(60), [&] { return finished; })) {
+      std::fprintf(stderr, "concurrent GEMM callers on one pool made no progress for 60 s\n");
+      std::fflush(stderr);
+      std::_Exit(1);
+    }
+  });
+
+  std::vector<int> wrong(callers, 0);
+  std::vector<std::thread> threads;
+  for (int c = 0; c < callers; ++c)
+    threads.emplace_back([&wrong, c, n] {
+      const MatrixXf a = MatrixXf::Constant(n, n, 1.f + c), b = MatrixXf::Constant(n, n, 1.f);
+      MatrixXf r(n, n);
+      for (int i = 0; i < iterations; ++i) {
+        r.noalias() = a * b;
+        if (r(5, 7) != float(n) * (1.f + c) || r(n - 1, n - 1) != float(n) * (1.f + c)) ++wrong[c];
+      }
+    });
+  for (std::thread& t : threads) t.join();
+  {
+    std::lock_guard<std::mutex> lock(mutex);
+    finished = true;
+  }
+  cv.notify_one();
+  watchdog.join();
+  for (int c = 0; c < callers; ++c) VERIFY_IS_EQUAL(wrong[c], 0);
+}
+
+// A product issued from a task on the pool runs on that worker, also while another caller's product holds the pool.
+template <typename = void>
+void test_parallelize_gemm_from_pool_task() {
+  constexpr int n = 192;
+  static ThreadPool pool(3);
+  Eigen::setGemmThreadPool(&pool);
+  Eigen::setNbThreads(0);
+  const MatrixXf a = MatrixXf::Constant(n, n, 1.f), b = MatrixXf::Constant(n, n, 2.f);
+  Barrier barrier(1);
+  MatrixXf from_task(n, n), from_caller(n, n);
+  pool.Schedule([&] {
+    from_task.noalias() = a * b;
+    barrier.Notify();
+  });
+  from_caller.noalias() = a * b;
+  barrier.Wait();
+  VERIFY_IS_EQUAL(from_task(3, 4), 2.f * n);
+  VERIFY_IS_EQUAL(from_caller(3, 4), 2.f * n);
+}
+
+// nbThreads() is a count of threads: 1 until a pool is registered or setNbThreads is called, never the -1 of "unset".
+// It runs first, before any other subtest registers a pool.
+template <typename = void>
+void test_nb_threads_unset() {
+  VERIFY(Eigen::nbThreads() >= 1);
+}
+
 // Runs a test with the given SME unit count: a nonzero count splits products on the SME kernel into disjoint parts,
 // 0 keeps the shared parallel session, so both paths are covered on every host.
 template <typename Test>
@@ -357,6 +430,7 @@ void with_sme_units(int units, Test test) {
 }
 
 EIGEN_DECLARE_TEST(product_threaded) {
+  CALL_SUBTEST_12(test_nb_threads_unset<>());
   // Off SME the unit count does nothing, so only the default runs there.
 #ifdef EIGEN_VECTORIZE_SME
   for (int units : {2, 3, 0}) {
@@ -377,6 +451,8 @@ EIGEN_DECLARE_TEST(product_threaded) {
     CALL_SUBTEST_10(with_sme_units(units, test_parallelize_gemm_assign<float>));
     CALL_SUBTEST_10(with_sme_units(units, test_parallelize_gemm_assign<std::complex<double>>));
   }
+  CALL_SUBTEST_11(test_parallelize_gemm_concurrent_callers<>());
+  CALL_SUBTEST_11(test_parallelize_gemm_from_pool_task<>());
   CALL_SUBTEST_3(test_balanced_gemm_range<>());
   CALL_SUBTEST_5(test_parallelize_gemm_require_initialization<>());
 }
