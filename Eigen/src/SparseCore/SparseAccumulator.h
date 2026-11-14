@@ -228,8 +228,9 @@ class bucket_sorter {
   // Takes the n <= kCapacity entries with the given indices.
   EIGEN_ALWAYS_INLINE void pack(const StorageIndex* indices, Index n) {
     m_size = n;
+    // A fill of fixed length is two vector stores; padding from n would be a loop whose length varies per bucket.
+    std::fill_n(m_key, Index(kCapacity), ~Key(0));
     for (Index p = 0; p < n; ++p) m_key[p] = (Key(indices[p]) << kPositionBits) | Key(p);
-    for (Index p = n; p < kCapacity; ++p) m_key[p] = ~Key(0);
   }
 
   // Orders the keys; the padding ends up behind them.
