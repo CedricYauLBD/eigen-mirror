@@ -144,6 +144,7 @@ template <typename MatrixType, unsigned int UpLo>
 EIGEN_DEVICE_FUNC inline typename SelfAdjointView<MatrixType, UpLo>::RealScalar
 SelfAdjointView<MatrixType, UpLo>::operatorNorm() const {
   PlainObject thisAsMatrix(*this);
+  if (thisAsMatrix.size() == 0) return RealScalar(0);
   // The solver ignores the imaginary part of the diagonal, so does the check below.
   EIGEN_IF_CONSTEXPR (NumTraits<Scalar>::IsComplex) {
     thisAsMatrix.diagonal() = thisAsMatrix.diagonal().real();
