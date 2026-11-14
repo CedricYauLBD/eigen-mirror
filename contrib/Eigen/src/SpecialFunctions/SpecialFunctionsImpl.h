@@ -1669,7 +1669,7 @@ struct polygamma_impl {
     const Scalar nan = NumTraits<Scalar>::quiet_NaN();
 
     // Check that n is a non-negative integer
-    if (numext::floor(n) != n || n < zero) {
+    if (numext::floor(n) != n || n < zero || (numext::isinf)(n)) {
       return nan;
     }
     // Just return the digamma function for n = 0
@@ -1678,10 +1678,13 @@ struct polygamma_impl {
     }
     // Use the same implementation as scipy
     else {
+      // (-1)^(n+1) from the parity of n: n + 1 is not representable for n >= 2^24 (float), 2^53 (double).
+      const Scalar half = Scalar(0.5);
+      const Scalar sign = numext::floor(half * n) == half * n ? -one : one;
       Scalar factorial = numext::exp(lgamma_impl<Scalar>::run(nplus));
       Scalar zeta = zeta_impl<Scalar>::run(nplus, x);
       // The limit at +inf is 0, with the sign of (-1)^(n+1); n! zeta(n + 1, inf) would be NaN for n! = inf.
-      if (x == NumTraits<Scalar>::infinity()) return numext::pow(-one, nplus) * zero;
+      if (x == NumTraits<Scalar>::infinity()) return sign * zero;
       // 1 / x must be a normal number, also when subnormals are flushed to zero: for x <= max / 16 it is >= 16 / max,
       // which is above the smallest normal number (4.7e-38 vs 1.2e-38 in float, 8.9e-308 vs 2.2e-308 in double).
       if (x > zero && x <= (numext::numeric_limits<Scalar>::max)() / Scalar(16) &&
@@ -1692,14 +1695,13 @@ struct polygamma_impl {
         //   n! zeta(n + 1, x) = exp(lgamma(n + 1) - (n + 1) log x + log Z).
         const Scalar log_z = numext::log(zeta_impl<Scalar>::sum(nplus, x, one / x));
         if ((numext::isfinite)(log_z)) {
-          return numext::pow(-one, nplus) *
-                 numext::exp(lgamma_impl<Scalar>::run(nplus) - nplus * numext::log(x) + log_z);
+          return sign * numext::exp(lgamma_impl<Scalar>::run(nplus) - nplus * numext::log(x) + log_z);
         }
       }
       // x < 0: zeta(n + 1, x) = 0 where the sums cancel exactly (x = -N - 1/2) and the true value, n! zeta(n + 1, 1 -
       // x) with 1 - x > 1000, underflows; likewise for x > max / 16, where n! x^-n underflows. inf * 0 would be NaN.
-      if ((numext::isinf)(factorial) && zeta == zero) return numext::pow(-one, nplus) * zero;
-      return numext::pow(-one, nplus) * factorial * zeta;
+      if ((numext::isinf)(factorial) && zeta == zero) return sign * zero;
+      return sign * factorial * zeta;
     }
   }
 };

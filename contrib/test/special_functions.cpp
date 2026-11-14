@@ -708,6 +708,35 @@ void test_zeta_large_negative_q() {
                   std::numeric_limits<Scalar>::infinity());
 }
 
+// The sign of polygamma(n, x) = (-1)^(n+1) n! zeta(n + 1, x) is that of n even: n + 1 is not representable for
+// n >= 2^24 (float), 2^53 (double), where n is even and (-1)^(n+1) = -1. The values are -inf where n! zeta(n + 1, x)
+// overflows (x = 1, 2) and -0 in the limit x = +inf, scalar and array. n = +inf is not an integer: NaN.
+template <typename Scalar>
+void test_polygamma_sign_huge_order() {
+  const Scalar inf = std::numeric_limits<Scalar>::infinity();
+  const Scalar n0 = Scalar(sizeof(Scalar) == 4 ? 16777216.0 : 9007199254740992.0);
+  const int num = 9;
+  Array<Scalar, Dynamic, 1> n(num), x(num);
+  n << n0, n0, n0, n0 * 2, n0 * 2, n0 * 2, inf, inf, inf;
+  x << Scalar(1), Scalar(2), inf, Scalar(1), Scalar(2), inf, Scalar(1), Scalar(2), inf;
+  const Array<Scalar, Dynamic, 1> res = polygamma(n, x);
+  for (int i = 0; i < num; ++i) {
+    for (int path = 0; path < 2; ++path) {
+      const Scalar v = path ? res(i) : numext::polygamma(n(i), x(i));
+      if (n(i) == inf) {
+        VERIFY((numext::isnan)(v));
+        continue;
+      }
+      VERIFY((std::signbit)(v));
+      if (x(i) == inf) {
+        VERIFY_IS_EQUAL(v, Scalar(0));
+      } else {
+        VERIFY_IS_EQUAL(v, -inf);
+      }
+    }
+  }
+}
+
 // For huge a and x one ulp apart the continued fraction overflows and produces an internal NaN, which the clamping of
 // igamma to [0, 1] used to turn into 0 (igammac returned the NaN). The true values are P = 1 and Q = 0 (x - a is
 // ~1e8 standard deviations): the answer must be that or NaN, in the scalar and the array paths, never a silent 0.
@@ -1012,6 +1041,7 @@ EIGEN_DECLARE_TEST(special_functions) {
   CALL_SUBTEST_1(test_polygamma_large_order<float>());
   CALL_SUBTEST_1(test_zeta_large_negative_q<float>());
   CALL_SUBTEST_1(test_polygamma_extreme_x<float>());
+  CALL_SUBTEST_1(test_polygamma_sign_huge_order<float>());
   CALL_SUBTEST_1(test_igamma_limits<float>());
   CALL_SUBTEST_1(test_igamma_internal_nan<float>());
   CALL_SUBTEST_1(test_igamma_large_arguments<float>());
@@ -1023,6 +1053,7 @@ EIGEN_DECLARE_TEST(special_functions) {
   CALL_SUBTEST_2(test_polygamma_large_order<double>());
   CALL_SUBTEST_2(test_zeta_large_negative_q<double>());
   CALL_SUBTEST_2(test_polygamma_extreme_x<double>());
+  CALL_SUBTEST_2(test_polygamma_sign_huge_order<double>());
   CALL_SUBTEST_2(test_igamma_limits<double>());
   CALL_SUBTEST_2(test_igamma_internal_nan<double>());
   CALL_SUBTEST_2(test_igamma_large_arguments<double>());
