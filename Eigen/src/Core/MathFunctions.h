@@ -2687,6 +2687,14 @@ EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE std::complex<T> complex_divide_fast(const 
   return std::complex<T>((a_real * b_real + a_imag * b_imag) / norm, (a_imag * b_real - a_real * b_imag) / norm);
 }
 
+// x / y as a scalar division, which the optimizer cannot pack with another one. Clang 14 packs the two quotients of
+// complex_divide_smith_large into one divps, whose spare lanes divide the denominator by itself (or another value that
+// is not an operand), so an infinite denominator raises FE_INVALID where both quotients are zeros.
+template <typename T>
+EIGEN_DEVICE_FUNC EIGEN_DONT_INLINE T complex_divide_scalar_quotient(T x, T y) {
+  return x / y;
+}
+
 // Smith's quotient where a numerator or the denominator has overflowed: a (b) is scaled by 1/4 where a component
 // exceeds highest / 4, and the quotient by the inverse scale. rscale and iscale are Smith's ratios for b.
 template <typename T>
@@ -2704,8 +2712,11 @@ EIGEN_DEVICE_FUNC EIGEN_DONT_INLINE std::complex<T> complex_divide_smith_large(c
   const T b_scale = large_b ? T(0.25) : T(1);
   const T scaled_denominator = (b_real * b_scale) * rscale + (b_imag * b_scale) * iscale;
   const T unscale = (large_a ? T(4) : T(1)) * b_scale;
-  return std::complex<T>(((a_real * a_scale) * rscale + (a_imag * a_scale) * iscale) / scaled_denominator * unscale,
-                         ((a_imag * a_scale) * rscale - (a_real * a_scale) * iscale) / scaled_denominator * unscale);
+  const T real_quotient =
+      complex_divide_scalar_quotient((a_real * a_scale) * rscale + (a_imag * a_scale) * iscale, scaled_denominator);
+  const T imag_quotient =
+      complex_divide_scalar_quotient((a_imag * a_scale) * rscale - (a_real * a_scale) * iscale, scaled_denominator);
+  return std::complex<T>(real_quotient * unscale, imag_quotient * unscale);
 }
 
 template <typename T>
