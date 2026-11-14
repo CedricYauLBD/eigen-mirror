@@ -303,6 +303,8 @@ void hessenberg_decomposition_inplace(MatrixType& matA, CoeffVectorType& hCoeffs
   EIGEN_INTERNAL_ASSERT_SQUARE(matA);
   Index n = matA.rows();
   temp.resize(n);
+  // The largest component of A, the scale against which a tail is negligible below.
+  const RealScalar matrixScale = n > 1 ? RealScalar(matA.realView().cwiseAbs().maxCoeff()) : RealScalar(0);
   for (Index i = 0; i < n - 1; ++i) {
     // let's consider the vector v = i-th column starting at position i+1
     Index remainingSize = n - i - 1;
@@ -314,7 +316,28 @@ void hessenberg_decomposition_inplace(MatrixType& matA, CoeffVectorType& hCoeffs
     const RealScalar tol = (std::numeric_limits<RealScalar>::min)();
     // Preserve negligible subdiagonal entries instead of rotating them into much larger matrix coefficients.  The
     // latter can erase small eigenvalues through cancellation even though the reflector itself is accurate.
-    if (tailSqNorm <= tol && numext::abs2(numext::imag(householder.coeff(0))) <= tol) {
+    // Negligible means |tail|_inf <= sqrt(tol) * m and |Im head| <= sqrt(tol) * m, for the largest component m of the
+    // entries the reflector touches, A(i+1:n, i:n) and A(:, i+1:n); for callers that scale A to O(1) (RealSchur,
+    // ComplexSchur) and a matrix without separated blocks that is the absolute test |tail|^2 <= tol. The test on
+    // tailSqNorm against the largest component of A is a cheap prefilter; it underflows for entries below sqrt(tol).
+    bool negligibleTail = false;
+    if (tailSqNorm <= tol * matrixScale * matrixScale && (numext::isfinite)(matrixScale)) {
+      const RealScalar tailMax =
+          remainingSize == 1
+              ? RealScalar(0)
+              : RealScalar(householder.tail(remainingSize - 1).unwind().realView().cwiseAbs().maxCoeff());
+      const RealScalar headImag = numext::abs(numext::imag(householder.coeff(0)));
+      if (numext::is_exactly_zero(tailMax) && numext::is_exactly_zero(headImag)) {
+        negligibleTail = true;  // the reflector would be the identity
+      } else {
+        const RealScalar localScale = numext::maxi(
+            RealScalar(matA.bottomRightCorner(remainingSize, remainingSize + 1).realView().cwiseAbs().maxCoeff()),
+            RealScalar(matA.rightCols(remainingSize).realView().cwiseAbs().maxCoeff()));
+        const RealScalar threshold = numext::sqrt(tol) * localScale;
+        negligibleTail = tailMax <= threshold && headImag <= threshold;
+      }
+    }
+    if (negligibleTail) {
       h = Scalar(0);
       beta = numext::real(householder.coeff(0));
       householder.tail(remainingSize - 1).setZero();
