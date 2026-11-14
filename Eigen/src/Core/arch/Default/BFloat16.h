@@ -122,6 +122,16 @@ EIGEN_STRONG_INLINE EIGEN_DEVICE_FUNC uint16_t bit_cast<uint16_t, Eigen::bfloat1
 }  // namespace numext
 namespace bfloat16_impl {
 
+#if defined(EIGEN_CUDACC)
+// Like Eigen::half, bfloat16 is used as the element type of __shared__ arrays, whose type must have an empty default
+// constructor: clang's CUDA mode rejects `__shared__ bfloat16 a[N]` when a constructor in the chain initializes value,
+// in both compile phases. Hence the CUDA default constructors leave value uninitialized, and cannot be constexpr
+// before C++20.
+#define EIGEN_BF16_DEFAULT_CTOR_CONSTEXPR
+#else
+#define EIGEN_BF16_DEFAULT_CTOR_CONSTEXPR EIGEN_CONSTEXPR
+#endif
+
 #if defined(EIGEN_USE_HIP_BF16)
 
 struct __bfloat16_raw : public hip_bfloat16 {
@@ -134,8 +144,8 @@ struct __bfloat16_raw : public hip_bfloat16 {
 
 // Make our own __bfloat16_raw definition.
 struct __bfloat16_raw {
-#if defined(EIGEN_HAS_HIP_BF16) && !defined(EIGEN_GPU_COMPILE_PHASE)
-  EIGEN_DEVICE_FUNC EIGEN_CONSTEXPR __bfloat16_raw() {}
+#if defined(EIGEN_CUDACC) || (defined(EIGEN_HAS_HIP_BF16) && !defined(EIGEN_GPU_COMPILE_PHASE))
+  EIGEN_DEVICE_FUNC EIGEN_BF16_DEFAULT_CTOR_CONSTEXPR __bfloat16_raw() {}
 #else
   EIGEN_DEVICE_FUNC EIGEN_CONSTEXPR __bfloat16_raw() : value(0) {}
 #endif
@@ -157,7 +167,7 @@ EIGEN_STRONG_INLINE EIGEN_DEVICE_FUNC __bfloat16_raw float_to_bfloat16_rtne<true
 EIGEN_STRONG_INLINE EIGEN_DEVICE_FUNC float bfloat16_to_float(__bfloat16_raw h);
 
 struct bfloat16_base : public __bfloat16_raw {
-  EIGEN_DEVICE_FUNC EIGEN_CONSTEXPR bfloat16_base() {}
+  EIGEN_DEVICE_FUNC EIGEN_BF16_DEFAULT_CTOR_CONSTEXPR bfloat16_base() {}
   EIGEN_DEVICE_FUNC EIGEN_CONSTEXPR bfloat16_base(const __bfloat16_raw& h) : __bfloat16_raw(h) {}
 };
 
@@ -167,7 +177,7 @@ struct bfloat16_base : public __bfloat16_raw {
 struct bfloat16 : public bfloat16_impl::bfloat16_base {
   using __bfloat16_raw = bfloat16_impl::__bfloat16_raw;
 
-  EIGEN_DEVICE_FUNC EIGEN_CONSTEXPR bfloat16() {}
+  EIGEN_DEVICE_FUNC EIGEN_BF16_DEFAULT_CTOR_CONSTEXPR bfloat16() {}
 
   EIGEN_DEVICE_FUNC EIGEN_CONSTEXPR bfloat16(const __bfloat16_raw& h) : bfloat16_impl::bfloat16_base(h) {}
 
@@ -1025,5 +1035,7 @@ EIGEN_STRONG_INLINE __device__ Eigen::bfloat16 __ldg(const Eigen::bfloat16* ptr)
       __ldg(Eigen::numext::bit_cast<const Eigen::numext::uint16_t*>(ptr)));
 }
 #endif  // __ldg
+
+#undef EIGEN_BF16_DEFAULT_CTOR_CONSTEXPR
 
 #endif  // EIGEN_BFLOAT16_H
