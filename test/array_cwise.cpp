@@ -335,10 +335,13 @@ void ldexp_test() {
     const Array<Scalar, Dynamic, 1> global_result = Eigen::ldexp(x, exponent);
     for (Index i = 0; i < x.size(); ++i) {
       // double covers every tested Scalar, so one conversion back gives the exact reference.
-      const double expected = static_cast<double>(static_cast<Scalar>(std::ldexp(static_cast<double>(x(i)), exponent)));
+      const double exact = std::ldexp(static_cast<double>(x(i)), exponent);
+      const double expected = static_cast<double>(static_cast<Scalar>(exact));
 #if EIGEN_ARCH_ARM
-      // Work around 32-bit ARM flush-to-zero mode: skip cases with subnormal results.
-      if (expected != 0.0 && std::abs(expected) < static_cast<double>((std::numeric_limits<Scalar>::min)())) continue;
+      // Work around 32-bit ARM flush-to-zero mode: skip cases with subnormal results. Tininess is detected before
+      // rounding, so a result below the smallest normal that rounds up to it, such as (2 - 2^-23) * 2^-127, is
+      // flushed too.
+      if (expected != 0.0 && std::abs(exact) < static_cast<double>((std::numeric_limits<Scalar>::min)())) continue;
 #endif
       for (const Scalar& result : {method_result(i), global_result(i)}) {
         const double actual = static_cast<double>(result);
