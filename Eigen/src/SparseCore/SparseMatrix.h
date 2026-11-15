@@ -1160,10 +1160,10 @@ template <typename InputIterator, typename SparseMatrixType, typename DupFunctor
 void set_from_triplets(const InputIterator& begin, const InputIterator& end, SparseMatrixType& mat,
                        DupFunctor dup_func) {
   constexpr bool IsRowMajor = SparseMatrixType::IsRowMajor;
+  using Scalar = typename SparseMatrixType::Scalar;
   using StorageIndex = typename SparseMatrixType::StorageIndex;
   using IndexMap = typename VectorX<StorageIndex>::AlignedMapType;
-  using TransposedSparseMatrix =
-      SparseMatrix<typename SparseMatrixType::Scalar, IsRowMajor ? ColMajor : RowMajor, StorageIndex>;
+  using TransposedSparseMatrix = SparseMatrix<Scalar, IsRowMajor ? ColMajor : RowMajor, StorageIndex>;
 
   if (begin == end) {
     // Clear out existing data (if any), including the inner non-zero counts of an uncompressed matrix.
@@ -1177,8 +1177,9 @@ void set_from_triplets(const InputIterator& begin, const InputIterator& end, Spa
   // B) construct the transposed matrix and use an implicit sort upon assignment to `mat` (less time).
   // This routine uses B) for faster execution time.
   TransposedSparseMatrix trmat(mat.rows(), mat.cols());
+  StorageIndex* outer = trmat.outerIndexPtr();
 
-  // scan triplets to determine allocation size before constructing matrix
+  // outer[j + 1] = number of triplets in vector j.
   Index nonZeros = 0;
   for (InputIterator it(begin); it != end; ++it) {
     eigen_assert(it->row() >= 0 && it->row() < mat.rows() && it->col() >= 0 && it->col() < mat.cols());
@@ -1186,28 +1187,31 @@ void set_from_triplets(const InputIterator& begin, const InputIterator& end, Spa
     eigen_assert(nonZeros < NumTraits<StorageIndex>::highest() &&
                  "non-zero count exceeds StorageIndex range, use a wider StorageIndex (e.g. int64_t)");
     if (nonZeros >= NumTraits<StorageIndex>::highest()) internal::throw_std_bad_alloc();
-    trmat.outerIndexPtr()[j + 1]++;
+    ++outer[j + 1];
     nonZeros++;
   }
 
-  std::partial_sum(trmat.outerIndexPtr(), trmat.outerIndexPtr() + trmat.outerSize() + 1, trmat.outerIndexPtr());
-  eigen_assert(nonZeros == trmat.outerIndexPtr()[trmat.outerSize()]);
+  // outer[j + 1] = start of vector j; pushing the triplets of vector j advances it to the start of vector j + 1.
+  StorageIndex start = 0;
+  for (Index j = 0; j < trmat.outerSize(); ++j) {
+    StorageIndex size = outer[j + 1];
+    outer[j + 1] = start;
+    start += size;
+  }
+  eigen_assert(start == nonZeros);
   trmat.resizeNonZeros(nonZeros);
 
-  // construct temporary array to track insertions (outersize) and collapse duplicates (innersize)
-  ei_declare_aligned_stack_constructed_variable(StorageIndex, tmp, numext::maxi(mat.innerSize(), mat.outerSize()), 0);
-  smart_copy(trmat.outerIndexPtr(), trmat.outerIndexPtr() + trmat.outerSize(), tmp);
-
-  // push triplets to back of each vector
+  StorageIndex* cursor = outer + 1;
+  StorageIndex* indices = trmat.innerIndexPtr();
+  Scalar* values = trmat.valuePtr();
   for (InputIterator it(begin); it != end; ++it) {
     StorageIndex j = convert_index<StorageIndex>(IsRowMajor ? it->col() : it->row());
-    StorageIndex i = convert_index<StorageIndex>(IsRowMajor ? it->row() : it->col());
-    StorageIndex k = tmp[j];
-    trmat.data().index(k) = i;
-    trmat.data().value(k) = it->value();
-    tmp[j]++;
+    StorageIndex pos = cursor[j]++;
+    indices[pos] = convert_index<StorageIndex>(IsRowMajor ? it->row() : it->col());
+    values[pos] = it->value();
   }
 
+  ei_declare_aligned_stack_constructed_variable(StorageIndex, tmp, trmat.innerSize(), 0);
   IndexMap wi(tmp, trmat.innerSize());
   trmat.collapseDuplicates(wi, dup_func);
   // implicit sorting

@@ -11,18 +11,18 @@ using namespace Eigen;
 
 using Scalar = double;
 using SpMat = SparseMatrix<Scalar>;
+using Triplets = std::vector<Triplet<Scalar, SpMat::StorageIndex>>;
 
 static void fillMatrix(float density, int rows, int cols, SpMat& dst) {
-  dst.resize(rows, cols);
-  dst.reserve(static_cast<int>(rows * cols * density));
+  Triplets t;
+  t.reserve(static_cast<std::size_t>(double(rows) * cols * density));
   for (int j = 0; j < cols; ++j) {
     for (int i = 0; i < rows; ++i) {
-      if (internal::random<float>(0, 1) < density) {
-        dst.insert(i, j) = internal::random<Scalar>();
-      }
+      if (internal::random<float>(0, 1) < density) t.emplace_back(i, j, internal::random<Scalar>());
     }
   }
-  dst.makeCompressed();
+  dst.resize(rows, cols);
+  dst.setFromTriplets(t.begin(), t.end());
 }
 
 static void BM_SparseTranspose(benchmark::State& state) {
@@ -40,8 +40,6 @@ static void BM_SparseTranspose(benchmark::State& state) {
 
 // Args: {size, density*10000}: 1%, 0.5%, 0.1%, 0.04%
 BENCHMARK(BM_SparseTranspose)->ArgsProduct({{1000, 10000}, {100, 50, 10, 4}});
-
-using Triplets = std::vector<Triplet<Scalar, SpMat::StorageIndex>>;
 
 static SpMat fromTriplets(Index rows, Index cols, const Triplets& t) {
   SpMat m(rows, cols);
