@@ -963,34 +963,73 @@ void test_igamma_large_arguments() {
   }
 }
 
-// In the band near x = a where Lentz's fraction does not converge (|t| <~ 0.4 for a >~ 1e7 in double, 5e7 in float),
-// the ordinary recurrence is wrong, and used to give values above 1
-// (igammac(1.1959741656683808e15, 1.1959741715277768e15) was 842.8, true 0.43), which the clamp turned into exactly 1;
-// float igammac(1e8, 1e8) was 1.25e-4, true 0.5. igammac and igamma (for x > a) return NaN there, in the scalar and the
-// array paths.
+// Temme's uniform expansion (igamma_temme) is used for a >= 1e5 (double), 1e4 (float). It covers the band near x = a
+// where Lentz's fraction does not converge (|t| <~ 0.4 for a >~ 1e7 in double, 5e7 in float, where the recurrence gave
+// values above 1: igammac(1.1959741656683808e15, 1.1959741715277768e15) was 842.8, true 0.4327; float igammac(1e8, 1e8)
+// was 1.25e-4, true 0.5) and the series side, with no iterations. References as in test_igamma_stirling_regime (the
+// terms c0 and c1 of the same expansion in 800-bit MPFR above 2e6, for which this checks the double evaluation of
+// c0(eta), c1(eta) and of the cancelling forms; mpfr_gamma_inc below, an independent reference at a = 1e5). The
+// bound is the 2 (log(a) / 2 + t^2 + 2) eps of that test, measured at most 0.7 of it. The last two points of each type
+// are at |eta| ~ 0.1, in the Taylor series of c0 and c1 (P and Q ~ 1e-206 and 1e-235 in double), and the one before is
+// just below the threshold, which takes the continued fraction and the series. P is relative only where it is tiny; it
+// is otherwise 1 - Q, or the series, whose error is that of the sum of ~ sqrt(a) terms.
 template <typename Scalar>
-void test_igamma_unconverged_band() {
+void test_igamma_temme_regime() {
+  struct Reference {
+    double a, x, p, q;
+  };
+  const Reference refs_f[] = {{1e8, 100000008, 0.50033245185326008, 0.49966754814673992},
+                              {1e9, 1000001024, 0.51292037981548138, 0.48707962018451862},
+                              {3e8, 300000512, 0.5117988173178956, 0.4882011826821044},
+                              {999999995904.0, 1000000126976.0, 0.55214095428130504, 0.44785904571869496},
+                              {1e4, 10050, 0.69234244070256556, 0.30765755929743444},
+                              {1e4, 10000, 0.5013298083399552, 0.4986701916600448},
+                              {9999.9990234375, 9949.9990234375, 0.30941787626932313, 0.69058212373067687},
+                              {10000, 10900, 1, 1.0988648788660544e-18},
+                              {10000, 9100, 8.3344447234757691e-21, 1}};
+  const Reference refs_d[] = {{1195974165668380.8, 1195974171527776.8, 0.56727104130332627, 0.43272895869667373},
+                              {11000000, 11000008, 0.50100237890445836, 0.49899762109554164},
+                              {1000000000000.0, 1000000300000.0, 0.61791153787658355, 0.38208846212341645},
+                              {10000000000.0, 10000010000.0, 0.53982914722011697, 0.46017085277988303},
+                              {100000, 100100, 0.6244451307044055, 0.3755548692955945},
+                              {100000, 99684, 0.15882956241747924, 0.84117043758252076},
+                              {99999.999999999985, 99899.999999999985, 0.3762748927543433, 0.6237251072456567},
+                              {100000, 110000, 1, 2.6554004793766945e-206},
+                              {100000, 90000, 1.9782570322356405e-235, 1}};
   const bool is_float = sizeof(Scalar) == 4;
-  const double a_f[] = {1e8, 1e9, 3e8, 1e12};
-  const double x_f[] = {1e8 + 8, 1e9 + 1000, 3e8 + 512, 1e12 + 1e5};
-  const double a_d[] = {1.1959741656683808e15, 1.1e7, 1e12, 1e10};
-  const double x_d[] = {1.1959741715277768e15, 1.1e7 + 8, 1e12 + 3e5, 1e10 + 1e4};
-  const int n = 4;
-  Array<Scalar, Dynamic, 1> a(n), x(n);
+  const Reference* refs = is_float ? refs_f : refs_d;
+  const int n = 9;
+  using ArrayType = Array<Scalar, Dynamic, 1>;
+  ArrayType a(n), x(n);
   for (int i = 0; i < n; ++i) {
-    a(i) = Scalar(is_float ? a_f[i] : a_d[i]);
-    x(i) = Scalar(is_float ? x_f[i] : x_d[i]);
+    a(i) = Scalar(refs[i].a);
+    x(i) = Scalar(refs[i].x);
   }
-  const Array<Scalar, Dynamic, 1> p_array = igamma(a, x), q_array = igammac(a, x);
+  const ArrayType p_array = igamma(a, x), q_array = igammac(a, x);
+  const double eps = double(NumTraits<Scalar>::epsilon());
   for (int i = 0; i < n; ++i) {
-    bool converged = true;
-    internal::igammac_cf_lentz<Scalar>(a(i), x(i), &converged);
-    VERIFY(!converged);
-    VERIFY(x(i) > a(i));
-    VERIFY((numext::isnan)(numext::igammac(a(i), x(i))));
-    VERIFY((numext::isnan)(numext::igamma(a(i), x(i))));
-    VERIFY((numext::isnan)(q_array(i)));
-    VERIFY((numext::isnan)(p_array(i)));
+    const double t = (double(x(i)) - double(a(i))) / std::sqrt(double(a(i)));
+    const double tol = 2 * (0.5 * std::log(double(a(i))) + t * t + 2) * eps;
+    if (i < 4) {  // The band of the continued fraction.
+      bool converged = true;
+      internal::igammac_cf_lentz<Scalar>(a(i), x(i), &converged);
+      VERIFY(!converged);
+    }
+    for (int path = 0; path < 2; ++path) {
+      const double p = double(path ? p_array(i) : numext::igamma(a(i), x(i)));
+      const double q = double(path ? q_array(i) : numext::igammac(a(i), x(i)));
+      VERIFY(numext::abs(q - refs[i].q) <= tol * refs[i].q);
+      VERIFY(numext::abs(p - refs[i].p) <=
+             (refs[i].p < 1e-3 ? tol * refs[i].p : 2 * eps * refs[i].p + tol * refs[i].q));
+    }
+  }
+  // |eta| > 0.15 (here x / a < 0.8 or > 1.2 or a, x far apart): the smaller of P and Q is below denorm_min / 2.
+  const Scalar a0 = Scalar(is_float ? 1e4 : 1e5), inf = std::numeric_limits<Scalar>::infinity();
+  const Scalar xs[] = {a0 * Scalar(1.3), a0 * Scalar(0.7), inf, Scalar(0), Scalar(1)};
+  const Scalar p_ref[] = {1, 0, 1, 0, 0}, q_ref[] = {0, 1, 0, 1, 1};
+  for (int i = 0; i < 5; ++i) {
+    VERIFY_IS_EQUAL(numext::igamma(a0, xs[i]), p_ref[i]);
+    VERIFY_IS_EQUAL(numext::igammac(a0, xs[i]), q_ref[i]);
   }
 }
 
@@ -1060,44 +1099,31 @@ void test_igamma_stirling_regime() {
   }
 }
 
-// P = igamma(a, x) for x <= a above igamma_use_stirling_main_term's threshold evaluates the power series, which used to
-// stop after 2000 terms, and the ordinary main term with the error eps a log(a) in its exponent. The terms decay as
-// exp(-k^2 / (2 a)), so ~ 8.6 sqrt(a) (double) or 5.8 sqrt(a) (float) are needed near x = a: double igamma(1e6, 1e6)
-// was 0.477 (true 0.5001), igamma(1e7, 9999900) 0.234 (true 0.4874) and float igamma(1e5, 99990) 0.447 (true 0.4878),
-// with P + Q != 1. The series now takes the Stirling main term, its limit grows with sqrt(a), and it returns NaN where
-// the limit (1e5 terms) is reached, a >~ 1.4e8 (double), 3e8 (float) near x = a. In float r += 1 stalled above
-// a = 2^24 (the points at a = 5e7 and 1e8). References as in test_igamma_stirling_regime (MPFR; Temme's expansion above
-// 2e6). The error of P is ~ eps sqrt(a) from the sum of ~ sqrt(a) terms; the bound is (10 + sqrt(a) / 4) eps, and the
-// measured error at most 0.5 of it.
+// P = igamma(a, x) for x <= a (and igamma at x = a), below the threshold of igamma_temme (a < 1e5 in double, 1e4 in
+// float) and above that of the Stirling main term (a >~ 2.3e4, 29): the power series stopped after 2000 terms and used
+// the ordinary main term with the error eps a log(a) in its exponent. The terms decay as exp(-k^2 / (2 a)), so
+// ~ 8.6 sqrt(a) (double) are needed near x = a, 2700 at a = 1e5. Double igamma(99990, 99990) had the relative error
+// 2.7e-10 (1.2e6 eps), float igamma(5000, 4990) 2.4e-3. The series takes the Stirling main term and a limit that grows
+// with sqrt(a). References as in test_igamma_stirling_regime, here all mpfr_gamma_inc. The error of P is ~ eps sqrt(a),
+// from the sum of ~ sqrt(a) terms; the bound is (10 + sqrt(a) / 4) eps, measured at most 0.5 of it.
 template <typename Scalar>
 void test_igamma_series_side() {
   struct Reference {
     double a, x, p, q;
   };
-  const Reference refs_f[] = {{29, 25, 0.23659925813359777, 0.76340074186640223},
-                              {29, 29, 0.52469827185745882, 0.47530172814254118},
-                              {100, 90, 0.15822098918643017, 0.84177901081356983},
-                              {100000, 99990, 0.48780634174477317, 0.51219365825522683},
-                              {100000, 100000, 0.50042052211036518, 0.49957947788963482},
-                              {1000000, 1000000, 0.50013298076087259, 0.49986701923912741},
-                              {10000000, 9997000, 0.17139353340097207, 0.82860646659902793},
-                              {50000000, 49993000, 0.16109963271860337, 0.83890036728139663},
-                              {100000000, 99996000, 0.34458857000643982, 0.65541142999356018}};
+  const Reference refs_f[] = {
+      {29, 25, 0.23659925813359777, 0.76340074186640223},     {29, 29, 0.52469827185745882, 0.47530172814254118},
+      {100, 90, 0.15822098918643017, 0.84177901081356983},    {1000, 1000, 0.50420524418021551, 0.49579475581978449},
+      {5000, 4990, 0.44559408878966122, 0.55440591121033878}, {9999, 9999, 0.50132987483543325, 0.49867012516456675}};
   const Reference refs_d[] = {{23300, 23150, 0.16289860911857687, 0.83710139088142313},
                               {23300, 23300, 0.50087118613331477, 0.49912881386668523},
-                              {100000, 99990, 0.48780634174477317, 0.51219365825522683},
-                              {100000, 100000, 0.50042052211036518, 0.49957947788963482},
-                              {1000000, 1000000, 0.50013298076087259, 0.49986701923912741},
-                              {1000000, 999500, 0.30862555689081532, 0.69137444310918468},
-                              {5000000, 4997000, 0.089836891739721374, 0.91016310826027863},
-                              {10000000, 9999900, 0.48742842894636062, 0.51257157105363938},
-                              {10000000, 10000000, 0.5000420522087237, 0.4999579477912763},
-                              {100000000, 99999992, 0.49969414427323586, 0.50030585572676414},
-                              {90000000, 90000000, 0.50001401740290098, 0.49998598259709902},
-                              {300000000, 299900000, 3.8676982391297455e-09, 0.99999999613230176}};
+                              {50000, 50000, 0.50059470810479331, 0.49940529189520669},
+                              {99000, 99000, 0.50042264062330677, 0.49957735937669323},
+                              {99990, 99990, 0.50042054313805012, 0.49957945686194988},
+                              {99990, 99390, 0.02870242637511175, 0.97129757362488825}};
   const bool is_float = sizeof(Scalar) == 4;
   const Reference* refs = is_float ? refs_f : refs_d;
-  const int n = is_float ? 9 : 12;
+  const int n = 6;
   using ArrayType = Array<Scalar, Dynamic, 1>;
   ArrayType a(n), x(n);
   for (int i = 0; i < n; ++i) {
@@ -1108,34 +1134,13 @@ void test_igamma_series_side() {
   const double eps = double(NumTraits<Scalar>::epsilon());
   for (int i = 0; i < n; ++i) {
     const double tol = (10 + std::sqrt(refs[i].a) / 4) * eps;
-    bool q_converges = true;
-    if (x(i) >= a(i)) internal::igammac_cf_lentz<Scalar>(a(i), x(i), &q_converges);
     for (int path = 0; path < 2; ++path) {
       const double p = double(path ? p_array(i) : numext::igamma(a(i), x(i)));
       const double q = double(path ? q_array(i) : numext::igammac(a(i), x(i)));
       VERIFY(numext::abs(p - refs[i].p) <= tol * refs[i].p);
-      if (q_converges) {
-        VERIFY(numext::abs(q - refs[i].q) <= tol * refs[i].q);
-        VERIFY(numext::abs(p + q - 1) <= 2 * tol);
-      } else {
-        // Q takes the continued fraction at x = a, which does not converge for a >~ 1.1e7 (double), 5.6e7 (float).
-        VERIFY((numext::isnan)(q));
-      }
+      VERIFY(numext::abs(q - refs[i].q) <= tol * refs[i].q);
+      VERIFY(numext::abs(p + q - 1) <= 2 * tol);
     }
-  }
-  // Beyond the limit of the series (1e5 terms): NaN, as igammac on the continued-fraction side.
-  const double a_nan_f[] = {1e9, 1e12}, x_nan_f[] = {1e9, 999999995904.0 - 4e6};
-  const double a_nan_d[] = {1e9, 1e12}, x_nan_d[] = {1e9, 1e12 - 4e6};
-  ArrayType an(2), xn(2);
-  for (int i = 0; i < 2; ++i) {
-    an(i) = Scalar(is_float ? a_nan_f[i] : a_nan_d[i]);
-    xn(i) = Scalar(is_float ? x_nan_f[i] : x_nan_d[i]);
-  }
-  const ArrayType pn = igamma(an, xn), qn = igammac(an, xn);
-  for (int i = 0; i < 2; ++i) {
-    VERIFY(xn(i) <= an(i));
-    VERIFY((numext::isnan)(pn(i)) && (numext::isnan)(qn(i)));
-    VERIFY((numext::isnan)(numext::igamma(an(i), xn(i))) && (numext::isnan)(numext::igammac(an(i), xn(i))));
   }
 }
 
@@ -1317,7 +1322,7 @@ EIGEN_DECLARE_TEST(special_functions) {
   CALL_SUBTEST_1(test_igamma_internal_nan<float>());
   CALL_SUBTEST_1(test_igamma_huge_x<float>());
   CALL_SUBTEST_1(test_igamma_large_arguments<float>());
-  CALL_SUBTEST_1(test_igamma_unconverged_band<float>());
+  CALL_SUBTEST_1(test_igamma_temme_regime<float>());
   CALL_SUBTEST_1(test_igamma_series_side<float>());
   CALL_SUBTEST_1(test_igamma_stirling_regime<float>());
   CALL_SUBTEST_2(ndtri_tail_accuracy<double>());
@@ -1334,7 +1339,7 @@ EIGEN_DECLARE_TEST(special_functions) {
   CALL_SUBTEST_2(test_igamma_internal_nan<double>());
   CALL_SUBTEST_2(test_igamma_huge_x<double>());
   CALL_SUBTEST_2(test_igamma_large_arguments<double>());
-  CALL_SUBTEST_2(test_igamma_unconverged_band<double>());
+  CALL_SUBTEST_2(test_igamma_temme_regime<double>());
   CALL_SUBTEST_2(test_igamma_series_side<double>());
   CALL_SUBTEST_2(test_igamma_stirling_regime<double>());
   CALL_SUBTEST_3(scalar_ndtri<long double>());

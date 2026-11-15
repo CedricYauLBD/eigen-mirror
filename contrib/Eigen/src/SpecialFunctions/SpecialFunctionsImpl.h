@@ -891,6 +891,88 @@ EIGEN_DEVICE_FUNC constexpr int igamma_num_iterations() {
                                                : 2000;
 }
 
+/* log1p(d) - d for |d| < 1/4, with s = d / (2 + d), so that log1p(d) = 2 atanh(s):
+ *   log1p(d) - d = -d s + 2 (s^3 / 3 + s^5 / 5 + ...),   |s| < 1/7: the tail past s^21 / 21 is below 2^-60 relative. */
+template <typename Scalar>
+EIGEN_DEVICE_FUNC static Scalar igamma_log1p_minus_d(Scalar d) {
+  const Scalar s = d / (Scalar(2) + d);
+  const Scalar s2 = s * s;
+  Scalar power = s * s2;
+  Scalar sum = Scalar(0);
+  for (int k = 3; k <= 21; k += 2) {
+    sum += power / Scalar(k);
+    power *= s2;
+  }
+  return Scalar(2) * sum - d * s;
+}
+
+/* Temme's uniform asymptotic expansion of P = igamma(a, x) and Q = igammac(a, x) = 1 - P for large a
+ * (DLMF 8.12.3, 8.12.4 and 8.12.8; Temme, SIAM J. Math. Anal. 10, 1979):
+ *
+ *   Q = erfc(z) / 2 + R,   P = erfc(-z) / 2 - R,   R = exp(-a psi) / sqrt(2 pi a) (c_0(eta) + c_1(eta) / a + O(a^-2)),
+ *
+ * with d = (x - a) / a, psi = d - log1p(d) = eta^2 / 2, sign(eta) = sign(d), z = eta sqrt(a / 2) = sign(d) sqrt(a psi),
+ *   c_0(eta) = 1 / d - 1 / eta,   c_1(eta) = 1 / eta^3 - 1 / d^3 - 1 / d^2 - 1 / (12 d).
+ * Both cancel for small eta and are evaluated from their Taylor series at eta = 0, c_0 = -1/3 + eta/12 - 2 eta^2 / 135
+ * +
+ * ..., c_1 = -1/540 - eta/288 + eta^2 / 378 - .... These were obtained by series reversion of eta^2 / 2 = d - log1p(d)
+ * in exact rational arithmetic; the leading terms are in DLMF 8.12(ii).
+ *
+ * Used for |eta| <= 0.15, where the series have the truncation error 1e-17, and a >= 1e5 (double), 1e4 (float).
+ * Outside, a psi > 1125 (112 in float), and P (x < a) or Q (x > a) is <= exp(-a psi) (Chernoff bound) < denorm_min / 2,
+ * so it is 0 and the other is 1. The error of the O(a^-2) term is the measured one: Q to 53 epsilon at a = 1e5 and |t|
+ * <= 8, t = (x - a) / sqrt(a), against mpfr_gamma_inc, 0.7 of 2 (log(a) / 2 + t^2 + 2) epsilon. It takes no iterations
+ * and is accurate near x = a for every a, where the continued fraction and the series need ~ sqrt(a) of them. */
+template <typename Scalar>
+EIGEN_DEVICE_FUNC static EIGEN_STRONG_INLINE bool igamma_use_temme(Scalar a) {
+  return (numext::isfinite)(a) && a >= (sizeof(Scalar) == 4 ? Scalar(1e4) : Scalar(1e5));
+}
+
+template <typename Scalar>
+EIGEN_DEVICE_FUNC static void igamma_temme(Scalar a, Scalar x, Scalar* p, Scalar* q) {
+  const Scalar zero = 0, one = 1, half = Scalar(0.5);
+  const Scalar d = (x - a) / a;
+  // |d| >= 1/4 gives |eta| >= 0.23. The series for log1p(d) - d needs |d| < 1/4.
+  const Scalar psi = numext::abs(d) < Scalar(0.25) ? -igamma_log1p_minus_d(d) : Scalar(1);
+  if (!(Scalar(2) * psi <= Scalar(0.15) * Scalar(0.15))) {
+    *p = d > zero ? one : zero;
+    *q = one - *p;
+    return;
+  }
+  const Scalar eta = (d < zero ? -one : one) * numext::sqrt(Scalar(2) * psi);
+  const Scalar c0[] = {Scalar(-1) / Scalar(3),
+                       Scalar(1) / Scalar(12),
+                       Scalar(-2) / Scalar(135),
+                       Scalar(1) / Scalar(864),
+                       Scalar(1) / Scalar(2835),
+                       Scalar(-139) / Scalar(777600),
+                       Scalar(1) / Scalar(25515),
+                       Scalar(-571) / Scalar(261273600),
+                       Scalar(-281) / Scalar(151559100),
+                       Scalar(163879) / Scalar(197522841600.0),
+                       Scalar(-5221) / Scalar(29554024500.0),
+                       Scalar(5246819) / Scalar(782190452736000.0),
+                       Scalar(5459) / Scalar(531972441000.0)};
+  const Scalar c1[] = {Scalar(-1) / Scalar(540),          Scalar(-1) / Scalar(288),
+                       Scalar(1) / Scalar(378),           Scalar(-77) / Scalar(77760),
+                       Scalar(1) / Scalar(4860),          Scalar(-1) / Scalar(2488320),
+                       Scalar(-2743) / Scalar(151559100), Scalar(41969) / Scalar(5486745600.0),
+                       Scalar(-11) / Scalar(6823440)};
+  Scalar c0_eta = c0[12], c1_eta = c1[8];
+  for (int k = 11; k >= 0; --k) c0_eta = c0_eta * eta + c0[k];
+  for (int k = 7; k >= 0; --k) c1_eta = c1_eta * eta + c1[k];
+  const Scalar a_psi = a * psi;
+  const Scalar r = numext::exp(-a_psi) / (numext::sqrt(Scalar(2 * EIGEN_PI)) * numext::sqrt(a)) * (c0_eta + c1_eta / a);
+  const Scalar half_erfc = half * erfc_impl<Scalar>::run(numext::sqrt(a_psi));
+  if (d >= zero) {
+    *q = igamma_clamp_to_unit_interval(half_erfc + r);
+    *p = one - *q;
+  } else {
+    *p = igamma_clamp_to_unit_interval(half_erfc - r);
+    *q = one - *p;
+  }
+}
+
 /* The iteration limit of the power series of igamma(a, x) for x <= a in VALUE mode. The terms are
  * c_k = prod_{j <= k} x / (a + j) <= exp(-k^2 / (2 a)) for x <= a, so the sum has converged to machep (c_k <= machep,
  * and the sum is >= 1) once k >= sqrt(-2 a log(machep)), at most 8.6 sqrt(a) in double and 5.8 sqrt(a) in float, which
@@ -903,12 +985,10 @@ EIGEN_DEVICE_FUNC static int igamma_series_num_iterations(Scalar a) {
 }
 
 /* x^a exp(-x) / Gamma(a) for x > 0 and a >> 1 from Stirling's series. a log(x) - x - lgamma(a) in main_igamma_term
- * cancels to an absolute error of about eps a log(a), more than 1 for a >~ 1 / eps. With d = (x - a) / a and
- * s = d / (2 + d), so that log1p(d) = 2 atanh(s):
+ * cancels to an absolute error of about eps a log(a), more than 1 for a >~ 1 / eps. With d = (x - a) / a:
  *
  *   log(x^a exp(-x) / Gamma(a)) = a (log1p(d) - d) + (1/2) log(a / (2 pi)) - 1 / (12 a) + O(a^-3),
- *   log1p(d) - d = -d s + 2 (s^3 / 3 + s^5 / 5 + ...),   |s| < 1/7 for -1/4 < d < 1/4: the tail past s^21 / 21 is
- *   below 2^-60 relative.
+ *   with log1p(d) - d from igamma_log1p_minus_d for -1/4 < d < 1/4.
  * For d <= -1/4 (x <= 3a/4), 1 + d = x / a is formed by the division, not as 1 + d, which has the absolute error eps
  * and so the relative error eps / (1 + d) for x << a. */
 template <typename Scalar>
@@ -920,15 +1000,7 @@ EIGEN_DEVICE_FUNC static Scalar main_igamma_term_stirling(Scalar a, Scalar x) {
   } else if (d <= Scalar(-0.25)) {
     log1pmx = numext::log(x / a) - d;
   } else {
-    const Scalar s = d / (Scalar(2) + d);
-    const Scalar s2 = s * s;
-    Scalar power = s * s2;
-    Scalar sum = Scalar(0);
-    for (int k = 3; k <= 21; k += 2) {
-      sum += power / Scalar(k);
-      power *= s2;
-    }
-    log1pmx = Scalar(2) * sum - d * s;
+    log1pmx = igamma_log1p_minus_d(d);
   }
   const Scalar logax =
       a * log1pmx + Scalar(0.5) * (numext::log(a) - numext::log(Scalar(2 * EIGEN_PI))) - Scalar(1) / (Scalar(12) * a);
@@ -959,7 +1031,8 @@ EIGEN_DEVICE_FUNC static EIGEN_STRONG_INLINE bool igamma_use_stirling_main_term(
  * The fraction needs ~ 355 / t^2 iterations (double), t = (x - a) / sqrt(a), for large a. It does not converge within
  * the iteration limit from (measured) a ~ 1.1e7 at t = 0, 1.8e7 at t = 0.1, 3.3e7 at t = 0.2, 1.4e8 at t = 0.3 and
  * 8e10 at t = 0.4 in double, and from a ~ 5.6e7 at t = 0 and 2.2e8 at t = 0.1 in float. Then *converged is false and
- * the returned value is meaningless; igammac_cf_impl returns NaN. */
+ * the returned value is meaningless; igammac_cf_impl returns NaN. igamma and igammac use igamma_temme from a = 1e5
+ * (double), 1e4 (float), so this band is not reached through them. */
 template <typename Scalar>
 EIGEN_DEVICE_FUNC static Scalar igammac_cf_lentz(Scalar a, Scalar x, bool* converged) {
   const Scalar one = 1;
@@ -1018,9 +1091,9 @@ struct igammac_cf_impl {
       if (ax_stirling == zero) return zero;
       bool converged;
       const Scalar h = igammac_cf_lentz<Scalar>(a, x, &converged);
-      // Unconverged only in the band documented at igammac_cf_lentz (|t| <~ 0.4, a >~ 1e7 in double, 5e7 in float). The
-      // recurrence and the ordinary main term are wrong there (values above 1, or float igammac(1e8, 1e8) = 1.25e-4
-      // for a true value ~ 0.5), so the result is NaN: a converged fraction or NaN.
+      // Unconverged only in the band documented at igammac_cf_lentz, where igamma_temme is used instead. The recurrence
+      // and the ordinary main term are wrong there (values above 1, or float igammac(1e8, 1e8) = 1.25e-4 for a true
+      // value ~ 0.5), so the result is NaN: a converged fraction or NaN.
       if (!converged) return NumTraits<Scalar>::quiet_NaN();
       return ax_stirling * h;
     }
@@ -1270,6 +1343,12 @@ struct igammac_impl {
       return nan;
     }
 
+    if (igamma_use_temme(a)) {
+      Scalar p, q;
+      igamma_temme(a, x, &p, &q);
+      return q;
+    }
+
     if ((x < one) || (x < a)) {
       // Clamp to [0,1] since 1-igamma can produce tiny negative values
       // due to floating-point cancellation for extreme arguments.
@@ -1308,6 +1387,12 @@ struct igamma_generic_impl {
 
     if ((x < zero) || (a <= zero)) {  // domain error
       return nan;
+    }
+
+    if (mode == VALUE && igamma_use_temme(a)) {
+      Scalar p, q;
+      igamma_temme(a, x, &p, &q);
+      return p;
     }
 
     if ((x > one) && (x > a)) {
