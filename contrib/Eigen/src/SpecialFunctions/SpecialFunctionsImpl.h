@@ -1564,7 +1564,12 @@ struct zeta_impl {
       const Scalar x_log_q = x * numext::log(q);
       const Scalar log_min = numext::log((numext::numeric_limits<Scalar>::min)());
       if (x_log_q > -log_min && x_log_q + log_min > numext::log(Scalar(2) * x_log_q)) {
-        return numext::exp(numext::log(sum(x, q, Scalar(1) / q)) - x_log_q);
+        const Scalar log_sum = numext::log(sum(x, q, Scalar(1) / q));
+        if ((numext::isfinite)(log_sum)) return numext::exp(log_sum - x_log_q);
+        // The tail term ~ q / (x - 1) of that sum overflows for x - 1 < 1/16 and q near max / 16. Scale by
+        // c = q^((x-1)/x) instead: the terms are ~ 1/q and the sum ~ 1 / (x - 1). x - 1 is exact for x < 2.
+        const Scalar log_scale_x = (x - Scalar(1)) * numext::log(q);  // log(c^x)
+        return numext::exp(numext::log(sum(x, q, numext::exp(-log_scale_x / x))) - log_scale_x);
       }
     }
     return sum(x, q, Scalar(1));

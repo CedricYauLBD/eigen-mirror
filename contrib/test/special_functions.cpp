@@ -786,6 +786,33 @@ void test_zeta_underflowing_terms() {
     const double v = double(numext::zeta(Scalar(27), Scalar(-1e12 - 0.5)));
     VERIFY(std::abs(v - ref) <= denorm_min + tol * ref);
   }
+  if (!is_float) {
+    // The log-domain sum scaled by 1 / q has the tail term ~ q / (x - 1), which overflows for x - 1 < 1/16 and q near
+    // max / 16 (x in [1.013, 1.061] at q = 1e307), where the result is normal; the sum is then rescaled by
+    // q^((x-1)/x). Subnormal terms of the plain sum are good to 1.8e-8 at (1.03, 1e307) and 2e-2 at (1.05, 1.1e307).
+    // Float has no such band: its log-domain form needs x log(q) > 92.6, which q <= max / 16 only meets for x > 1.08.
+    // The measured error is at most 32 epsilon (730 points in the band).
+    const Case overflow_cases[] = {{1.03, 1e307, 2.05531667287156683e-08},
+                                   {1.02, 1e307, 3.62217980037490158e-05},
+                                   {1.05, 1.1e307, 8.89119963076898069e-15},
+                                   {1.06, 1.1e307, 6.30035743129460931e-18}};
+    const int num_overflow_cases = 4;
+    Array<Scalar, Dynamic, 1> xv(num_overflow_cases), qv(num_overflow_cases);
+    for (int i = 0; i < num_overflow_cases; ++i) {
+      xv(i) = Scalar(overflow_cases[i].x);
+      qv(i) = Scalar(overflow_cases[i].q);
+    }
+    const Array<Scalar, Dynamic, 1> zv = zeta(xv, qv);
+    for (int i = 0; i < num_overflow_cases; ++i) {
+      const Case& c = overflow_cases[i];
+      VERIFY(!(numext::isfinite)(
+          numext::log(internal::zeta_impl<Scalar>::sum(Scalar(c.x), Scalar(c.q), 1 / Scalar(c.q)))));
+      for (int path = 0; path < 2; ++path) {
+        const double v = double(path ? zv(i) : numext::zeta(Scalar(c.x), Scalar(c.q)));
+        VERIFY(std::abs(v - c.ref) <= 100 * eps * c.ref);
+      }
+    }
+  }
   // q = 1: x log(q) = 0, so zeta(x, 1) is the plain sum, bit for bit. Its relative error near the pole is 1 eps at
   // x = 1 + 1e-10 (double); the log-domain form had 14.
   const double one_plus = is_float ? 1.001 : 1.0000000001;
