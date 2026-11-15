@@ -113,7 +113,8 @@ EIGEN_DONT_INLINE bool least_square_conjugate_gradient(const MatrixType& mat, co
     const RealScalar tmpNorm2 = tmp.squaredNorm();
     RealScalar apNorm = numext::sqrt(tmpNorm2);
     RealScalar step = RealScalar(residualScale * (absNew / tmpNorm2));
-    if (!(tmpNorm2 > RealScalar(0) && (numext::isfinite)(tmpNorm2)) || !(numext::isfinite)(step)) {
+    if (!(tmpNorm2 >= (std::numeric_limits<RealScalar>::min)() && (numext::isfinite)(tmpNorm2)) ||
+        !(numext::isfinite)(step)) {
       // |A p|^2 or the step over- or underflows: use the scaled norm, as the product (|g|^2 / |A p|) (scale / |A p|)
       // whose factors are applied one after the other.
       apNorm = tmp.stableNorm();

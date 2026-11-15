@@ -261,6 +261,12 @@ void test_lscg_extreme_matrix() {
     // The diagonal preconditioner forms the squared column norms, which overflow for a = 1e200.
     if (a != 1e200) check_lscg_extreme_matrix<LeastSquareDiagonalPreconditioner<double> >(a, 1e-100);
   }
+  // |A p|^2 subnormal: it has lost most of its precision, and the step was off by 4e-9 (a, b).
+  for (const std::pair<double, double>& ab :
+       {std::make_pair(1e-80, 1.0), std::make_pair(1e-30, 1e-100), std::make_pair(1e-130, 1e100)}) {
+    check_lscg_extreme_matrix<IdentityPreconditioner>(ab.first, ab.second);
+    check_lscg_extreme_matrix<LeastSquareDiagonalPreconditioner<double> >(ab.first, ab.second);
+  }
   // A 1 x 1 matrix: the step is 1e-400 in terms of the unscaled residual for a = 1e200.
   for (double a : {1e200, 1e150}) {
     SparseMatrix<double> A(1, 1);
