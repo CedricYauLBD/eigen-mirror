@@ -154,12 +154,21 @@ void check_division_by_tiny_divisor() {
     VERIFY(numext::abs(q.derivatives()[0] * v[1] - Scalar(1)) <= 4 * eps);
     VERIFY(numext::abs(q.derivatives()[1] * v[1] + Scalar(1)) <= 4 * eps);
   }
+  // c / b has the derivative -(c/b) db / b, which is -1/b for c = b and db = 1; b*b underflows or overflows here.
+  for (Scalar b : {small, root_min * Scalar(0.99), large, -small, -large}) {
+    const AD q = b / AD(b, Derivatives::Ones(2));
+    VERIFY(numext::abs(q.value() - Scalar(1)) <= 2 * eps);
+    VERIFY(numext::abs(q.derivatives()[0] * b + Scalar(1)) <= 4 * eps);
+    VERIFY(numext::abs(q.derivatives()[1] * b + Scalar(1)) <= 4 * eps);
+  }
   // An ordinary divisor keeps the quotient rule (da b - a db) / b^2.
   const Derivatives seed_a = (Derivatives(2) << Scalar(0.5), Scalar(-2)).finished();
   const Derivatives seed_b = (Derivatives(2) << Scalar(3), Scalar(0.25)).finished();
   const AD a(Scalar(1.5), seed_a), b(Scalar(-0.75), seed_b);
   const Derivatives expected = (seed_a * b.value() - seed_b * a.value()) / (b.value() * b.value());
   VERIFY(((a / b).derivatives() - expected).norm() <= 4 * eps * expected.norm());
+  const Derivatives expected_scalar = -Scalar(2) * seed_b / (b.value() * b.value());
+  VERIFY(((Scalar(2) / b).derivatives() - expected_scalar).norm() <= 4 * eps * expected_scalar.norm());
 }
 
 // d/dx x^0 = 0 also at x = 0, where y * x^(y-1) is 0 * inf.

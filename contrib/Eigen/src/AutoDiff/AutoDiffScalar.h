@@ -297,7 +297,9 @@ class AutoDiffScalar
   }
 
   friend inline auto operator/(const Scalar& other, const AutoDiffScalar& a) {
-    return MakeAutoDiffScalar(other / a.value(), a.derivatives() * (Scalar(-other) / (a.value() * a.value())));
+    // d(c/b) = -(c/b) db / b: dividing by b twice keeps every intermediate bounded by the result, whereas b*b can
+    // underflow or overflow.
+    return MakeAutoDiffScalar(other / a.value(), a.derivatives() * (-(other / a.value()) / a.value()));
   }
 
   template <typename OtherDerType>
