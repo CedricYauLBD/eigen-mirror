@@ -267,6 +267,13 @@ void test_lscg_extreme_matrix() {
     check_lscg_extreme_matrix<IdentityPreconditioner>(ab.first, ab.second);
     check_lscg_extreme_matrix<LeastSquareDiagonalPreconditioner<double> >(ab.first, ab.second);
   }
+  // |A' b| subnormal or underflowed to 0: the normal rhs has lost its precision, and the solver returned Success with a
+  // relative error of 1e-4, or x = 0.
+  for (const std::pair<double, double>& ab :
+       {std::make_pair(1e-220, 1e-100), std::make_pair(1e-200, 1e-150), std::make_pair(1e-200, 1e-200),
+        std::make_pair(1e-250, 1e-100), std::make_pair(1e-160, 1e-160)}) {
+    check_lscg_extreme_matrix<IdentityPreconditioner>(ab.first, ab.second);
+  }
   // A 1 x 1 matrix: the step is 1e-400 in terms of the unscaled residual for a = 1e200.
   for (double a : {1e200, 1e150}) {
     SparseMatrix<double> A(1, 1);

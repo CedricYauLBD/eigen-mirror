@@ -60,6 +60,23 @@ EIGEN_DONT_INLINE bool least_square_conjugate_gradient(const MatrixType& mat, co
   VectorType normal_rhs = mat.adjoint() * rhs;
 
   RealScalar rhsNorm = normal_rhs.stableNorm();
+  // A'b below the smallest normal number has lost its precision or underflowed to 0, which would return x = 0 with
+  // Success. The problem is invariant under b -> b / |b|, x -> x / |b|, and A' (b / |b|) is representable when |A| is.
+  RealScalar rhsScale(1);
+  if (rhsNorm < (std::numeric_limits<RealScalar>::min)()) {
+    const RealScalar bNorm = rhs.stableNorm();
+    if (bNorm >= (std::numeric_limits<RealScalar>::min)() && (numext::isfinite)(bNorm)) {
+      rhsScale = bNorm;
+      x /= rhsScale;
+      residual = rhs / rhsScale - mat * x;
+      normal_residual = mat.adjoint() * residual;
+      normal_rhs = mat.adjoint() * (rhs / rhsScale);
+      rhsNorm = normal_rhs.stableNorm();
+    }
+  }
+  const auto restoreScale = [&]() {
+    if (rhsScale != RealScalar(1)) x *= rhsScale;
+  };
   if (rhsNorm == 0) {
     x.setZero();
     iters = 0;
@@ -69,6 +86,7 @@ EIGEN_DONT_INLINE bool least_square_conjugate_gradient(const MatrixType& mat, co
   RealScalar threshold = tol * rhsNorm;
   RealScalar residualNorm = normal_residual.stableNorm();
   if (residualNorm == 0 || residualNorm < threshold) {
+    restoreScale();
     iters = 0;
     tol_error = residualNorm / rhsNorm;
     return true;
@@ -152,6 +170,7 @@ EIGEN_DONT_INLINE bool least_square_conjugate_gradient(const MatrixType& mat, co
     p = z + beta * p;                   // update search direction
     i++;
   }
+  restoreScale();
   tol_error = residualNorm / (rhsNorm / residualScale);
   iters = i;
   return tol_error <= tol || atFloor;
