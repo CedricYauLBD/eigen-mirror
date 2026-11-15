@@ -240,6 +240,15 @@ void eigensolver_scale_sweep() {
   }
 }
 
+// Every eigenvector column has unit norm: a finite, small-residual check alone passes a zero column.
+template <typename RealScalar>
+void eigensolver_verify_unit_columns(const EigenSolver<Matrix<RealScalar, Dynamic, Dynamic>>& eig) {
+  const RealScalar eps = NumTraits<RealScalar>::epsilon();
+  const Index n = eig.eigenvectors().cols();
+  for (Index j = 0; j < n; ++j)
+    VERIFY(numext::abs(eig.eigenvectors().col(j).norm() - RealScalar(1)) <= RealScalar(10 * n) * eps);
+}
+
 // T = [d, g; 0, 2d] has the eigenvectors (1, 0) and (g / d, 1) / norm: the second one has a component g / d that
 // overflows when d is tiny, though the normalized vector is representable.
 template <typename RealScalar>
@@ -254,6 +263,29 @@ void eigensolver_triangular_overflow() {
   VERIFY_IS_EQUAL(eig.info(), Success);
   VERIFY(eig.eigenvectors().allFinite());
   VERIFY((eigensolver_scaled_residual<RealScalar>(A0, RealScalar(1), eig)) <= RealScalar(100) * eps);
+  eigensolver_verify_unit_columns<RealScalar>(eig);
+}
+
+// A = [a, -1.5 s, 1.5 s; 0, s, 1.5 s; 0, 0, a / 2] with a << s: the back-substitution scales T by about 1/s, which
+// makes the divisor a - a / 2 of the third eigenvector subnormal, and the factor |divisor| / |r| that rescales the
+// column underflows to 0. The eigenvector (-1, 0, 0) must not be zeroed. sExp and aExp are the binary exponents of
+// s and a.
+template <typename RealScalar>
+void eigensolver_subnormal_divisor(int sExp, int aExp) {
+  using MatrixType = Matrix<RealScalar, Dynamic, Dynamic>;
+  const RealScalar eps = NumTraits<RealScalar>::epsilon();
+  const RealScalar s = std::ldexp(RealScalar(1), sExp);
+  const RealScalar a = std::ldexp(RealScalar(1), aExp);
+  MatrixType A(3, 3);
+  A << a, RealScalar(-1.5) * s, RealScalar(1.5) * s, RealScalar(0), s, RealScalar(1.5) * s, RealScalar(0),
+      RealScalar(0), a / RealScalar(2);
+  EigenSolver<MatrixType> eig(A);
+  VERIFY_IS_EQUAL(eig.info(), Success);
+  VERIFY(eig.eigenvectors().allFinite());
+  eigensolver_verify_unit_columns<RealScalar>(eig);
+  // A / s is exact: a power-of-two scaling of entries that stay representable.
+  MatrixType A0 = A / s;
+  VERIFY((eigensolver_scaled_residual<RealScalar>(A0, s, eig)) <= RealScalar(100 * 3) * eps);
 }
 
 // A pair of complex eigenvalues whose imaginary part is below 2*eps*|real part| is still a pair: the Schur form has
@@ -329,6 +361,8 @@ EIGEN_DECLARE_TEST(eigensolver_generic) {
   CALL_SUBTEST_5(eigensolver_scale_sweep<double>());
   CALL_SUBTEST_5(eigensolver_triangular_overflow<float>());
   CALL_SUBTEST_5(eigensolver_triangular_overflow<double>());
+  CALL_SUBTEST_5(eigensolver_subnormal_divisor<float>(75, -74));
+  CALL_SUBTEST_5(eigensolver_subnormal_divisor<double>(600, -473));
   CALL_SUBTEST_5(eigensolver_tiny_imaginary_pair<float>());
   CALL_SUBTEST_5(eigensolver_tiny_imaginary_pair<double>());
 

@@ -520,11 +520,13 @@ void EigenSolver<MatrixType>::doComputeEigenvectors() {
           if (eivalues.coeff(i).imag() == Scalar(0)) {
             const Scalar divisor = w != Scalar(0) ? w : eps * norm;
             // |r / divisor| > max would overflow the component. The column is determined up to a factor, so scale
-            // the components computed so far, and r with them, by f = |divisor| / |r| to make |x_i| = 1.
+            // the components computed so far, and r with them, by f = |divisor| / |r| to make |x_i| = 1. The scaled
+            // r is sign(r) |divisor| by construction; assign it, since r *= f gives 0 when f underflows (a subnormal
+            // divisor) and the column would be zeroed.
             if (numext::abs(r) > numext::abs(divisor) * NumTraits<Scalar>::highest() && (numext::isfinite)(r)) {
               const Scalar f = numext::abs(divisor) / numext::abs(r);
               matT.col(n).tail(size - i - 1) *= f;
-              r *= f;
+              r = r < Scalar(0) ? -numext::abs(divisor) : numext::abs(divisor);
             }
             matT.coeffRef(i, n) = -r / divisor;
           } else  // Solve real equations
