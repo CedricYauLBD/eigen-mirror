@@ -120,12 +120,17 @@ void test_idrs_default_tolerance() {
   const MatrixType A = MatrixType::Identity(n, n) + RealScalar(0.1) * MatrixType::Random(n, n);
   IDRS<MatrixType, IdentityPreconditioner> solver(A);
   const RealScalar eps = NumTraits<RealScalar>::epsilon();
-  VERIFY_IS_EQUAL(solver.tolerance(), RealScalar(8) * numext::sqrt(RealScalar(n)) * eps);
+  const RealScalar confirmable = RealScalar(8) * numext::sqrt(RealScalar(n)) * eps;
+  VERIFY_IS_EQUAL(solver.tolerance(), eps);
 
   const VectorType b = VectorType::Random(n);
   VectorType x = solver.solve(b);
   VERIFY_IS_EQUAL(solver.info(), Success);
-  VERIFY_LE((b - A * x).norm(), RealScalar(2) * solver.tolerance() * b.norm());
+  VERIFY_LE((b - A * x).norm(), RealScalar(2) * confirmable * b.norm());
+
+  // A negative tolerance selects the default, see MINRES::tolerance().
+  solver.setTolerance(RealScalar(-1));
+  VERIFY_IS_EQUAL(solver.tolerance(), eps);
 
   solver.setTolerance(RealScalar(1e3) * eps);
   VERIFY_IS_EQUAL(solver.tolerance(), RealScalar(1e3) * eps);
@@ -145,6 +150,34 @@ void test_idrs_small_rhs() {
   IDRS<SparseMatrix<float>, DiagonalPreconditioner<float> > solver_float;
   check_sparse_small_rhs(solver_double);
   check_sparse_small_rhs(solver_float);
+}
+
+// The default tolerance is eps, so that a well-conditioned system is solved to the accuracy of the arithmetic: for
+// tridiag(-1, 4, -1) and x = 1 in float, a default of 8 sqrt(n) eps stopped at a forward error of 3e-5 for n = 10000,
+// and eps gives 3e-8.
+template <typename = void>
+void test_idrs_default_accuracy() {
+  using SpMat = SparseMatrix<float>;
+  const float eps = NumTraits<float>::epsilon();
+  for (Index n : {40, 10000}) {
+    std::vector<Triplet<float> > triplets;
+    for (Index i = 0; i < n; ++i) {
+      triplets.emplace_back(i, i, 4.0f);
+      if (i + 1 < n) {
+        triplets.emplace_back(i, i + 1, -1.0f);
+        triplets.emplace_back(i + 1, i, -1.0f);
+      }
+    }
+    SpMat A(n, n);
+    A.setFromTriplets(triplets.begin(), triplets.end());
+    const VectorXf ones = VectorXf::Ones(n);
+    const VectorXf b = A * ones;
+    IDRS<SpMat, DiagonalPreconditioner<float> > solver(A);
+    VERIFY_IS_EQUAL(solver.tolerance(), eps);
+    const VectorXf x = solver.solve(b);
+    VERIFY_IS_EQUAL(solver.info(), Success);
+    VERIFY_LE((x - ones).norm() / ones.norm(), 10 * eps);
+  }
 }
 
 // The 5-point Laplacian on an m x m grid.
@@ -187,6 +220,16 @@ void test_idrs_stagnation() {
     VERIFY_LE(res, double(n) * eps);
     VERIFY_LE(numext::abs(solver.error() - res), res / 2 + eps);
     VERIFY_IS_EQUAL(solver.info(), solver.error() <= eps ? Success : NoConvergence);
+
+    // The default tolerance is eps too. The residual stagnates above it, and IDRS returns Success there as it is at
+    // most 8 sqrt(n) eps.
+    IDRS<SpMat, DiagonalPreconditioner<double> > defaultSolver(A);
+    const VectorXd xd = defaultSolver.solve(b);
+    VERIFY_IS_EQUAL(defaultSolver.tolerance(), eps);
+    VERIFY_IS_EQUAL(defaultSolver.info(), Success);
+    VERIFY_LE(defaultSolver.error(), 8 * numext::sqrt(double(n)) * eps);
+    VERIFY_LE(defaultSolver.iterations(), 5 * m);
+    VERIFY_LE((b - A * xd).norm(), 2 * 8 * numext::sqrt(double(n)) * eps * b.norm());
   }
 }
 
@@ -203,5 +246,6 @@ EIGEN_DECLARE_TEST(idrs) {
   CALL_SUBTEST_2(test_idrs_default_tolerance<std::complex<double> >());
   CALL_SUBTEST_1(test_idrs_small_rhs<>());
   CALL_SUBTEST_1(test_idrs_stagnation<>());
+  CALL_SUBTEST_1(test_idrs_default_accuracy<>());
   CALL_SUBTEST_1((check_matrix_free_accessors<IDRS<MatrixFreeOperator, IdentityPreconditioner>>()));
 }

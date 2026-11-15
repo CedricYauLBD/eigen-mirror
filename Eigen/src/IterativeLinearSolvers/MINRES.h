@@ -276,9 +276,7 @@ class MINRES : public IterativeSolverBase<MINRES<MatrixType_, UpLo_, Preconditio
    * The default is selected by a negative stored tolerance, which no residual can meet, so setTolerance() with a
    * negative value restores the default behavior instead of asking for the impossible.
    */
-  RealScalar tolerance() const {
-    return Base::m_tolerance >= RealScalar(0) ? Base::m_tolerance : NumTraits<RealScalar>::epsilon();
-  }
+  RealScalar tolerance() const { return Base::toleranceOrEps(); }
 
   /** \internal */
   template <typename Rhs, typename Dest>
@@ -302,9 +300,7 @@ class MINRES : public IterativeSolverBase<MINRES<MatrixType_, UpLo_, Preconditio
     m_error = tol;
     RowMajorWrapper row_mat(matrix());
     internal::minres(SelfAdjointWrapper(row_mat), b, x, Base::m_preconditioner, m_iterations, m_error);
-    const bool confirmed =
-        m_error <= tol || (Base::m_tolerance < RealScalar(0) && m_error <= Base::sizeScaledTolerance());
-    m_info = confirmed ? Success : NoConvergence;
+    m_info = Base::infoAtDefaultOrSetTolerance(m_error, tol);
   }
 
  protected:

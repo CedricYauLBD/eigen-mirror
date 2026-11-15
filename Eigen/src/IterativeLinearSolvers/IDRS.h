@@ -346,10 +346,11 @@ struct traits<Eigen::IDRS<MatrixType_, Preconditioner_> > {
  *
  * The maximal number of iterations and tolerance value can be controlled via the setMaxIterations()
  * and setTolerance() methods. The defaults are twice the number of columns of the matrix for the maximal
- * number of iterations and \f$ 8 \sqrt{n}\, \epsilon \f$ for the tolerance, see tolerance().
+ * number of iterations and NumTraits<Scalar>::epsilon() for the tolerance, see tolerance().
  *
  * The tolerance corresponds to the relative residual error: |Ax-b|/|b|. The solver reports Success only when
- * \f$ \| b - A x \| \f$, computed from the returned x, meets it.
+ * \f$ \| b - A x \| / \| b \| \f$, computed from the returned x, meets it, or, with the default tolerance, the
+ * confirmable bound \f$ 8 \sqrt{n}\, \epsilon \f$, see tolerance().
  *
  * \b Performance: when using sparse matrices, best performance is achieved for a row-major sparse matrix format.
  * Moreover, in this case multi-threading can be exploited if the user code is compiled with OpenMP enabled.
@@ -401,20 +402,20 @@ class IDRS : public IterativeSolverBase<IDRS<MatrixType_, Preconditioner_> > {
     Base::m_tolerance = RealScalar(-1);
   }
 
-  /** \returns the tolerance set by setTolerance(), or by default \f$ 8 \sqrt{n}\, \epsilon \f$ for an n x n matrix,
-   * with n = 1 before a matrix is attached by compute().
+  /** \returns the tolerance set by setTolerance(), or by default NumTraits<Scalar>::epsilon().
    *
-   * The default is the smallest relative residual that b - A x, evaluated in floating point, can confirm reliably.
-   * With m nonzeros in a row of A, each component carries a rounding error of order
-   * \f$ \sqrt{m+1}\, u\, (|b_i| + (|A| |x|)_i) \f$ (Higham and Mary, A new approach to probabilistic rounding error
-   * analysis, SIAM J. Sci. Comput. 41(5), 2019), so \f$ \|b - A x\| / \|b\| \f$ cannot be certified much below
-   * \f$ \sqrt{m+1}\, \epsilon \f$ even for a well-conditioned A, and m + 1 is at most about n. The factor 8 leaves
-   * room for \f$ \| |A| |x| \| \f$ exceeding \f$ \|b\| \f$. A tolerance below this level, or below about
-   * \f$ \epsilon\, \|A\| \|x\| / \|b\| \f$ for an ill-conditioned A, can end in NoConvergence after maxIterations().
+   * IDRS reports Success only when \f$ \| b - A x \| / \| b \| \f$, computed from the returned x, meets the
+   * tolerance. With m nonzeros in a row of A, each component of the computed b - A x carries a rounding error of order
+   * \f$ \sqrt{m+1}\, \epsilon\, (|b_i| + (|A| |x|)_i) \f$ (Higham and Mary, A new approach to probabilistic
+   * rounding error analysis, SIAM J. Sci. Comput. 41(5), 2019), and the recurrences for r and x add to it, so the
+   * residual of the computed x stagnates at a level that depends on the matrix and often exceeds
+   * \f$ \epsilon \f$. With the default tolerance the iteration therefore aims at \f$ \epsilon \f$, ends when the
+   * computed residual stagnates, and reports Success if the computed residual is then at most
+   * \f$ 8 \sqrt{n}\, \epsilon \f$ for an n x n matrix, whichever way it ends. A tolerance set by setTolerance() is
+   * never relaxed, so a tolerance below what the arithmetic can confirm ends in NoConvergence. See MINRES::tolerance()
+   * for the same rule, and for the meaning of a negative tolerance.
    */
-  RealScalar tolerance() const {
-    return Base::m_tolerance >= RealScalar(0) ? Base::m_tolerance : Base::sizeScaledTolerance();
-  }
+  RealScalar tolerance() const { return Base::toleranceOrEps(); }
 
   /** \internal */
   /**     Loops over the number of columns of b and does the following:
@@ -430,7 +431,7 @@ class IDRS : public IterativeSolverBase<IDRS<MatrixType_, Preconditioner_> > {
     bool ret = internal::idrs(matrix(), b, x, Base::m_preconditioner, m_iterations, m_error, m_S, m_smoothing, m_angle,
                               m_residual);
 
-    m_info = (!ret) ? NumericalIssue : m_error <= tol ? Success : NoConvergence;
+    m_info = (!ret) ? NumericalIssue : Base::infoAtDefaultOrSetTolerance(m_error, tol);
   }
 
   /** Sets the parameter S, indicating the dimension of the shadow space. Default is 4*/
