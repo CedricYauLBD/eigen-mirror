@@ -2498,40 +2498,42 @@ packetmath_special_value_lanes() {
   }
 }
 
-// 32-bit ARM NEON reads a subnormal input as zero. A subnormal lane of psqrt may then give the input or a zero (or the
-// root, where the lane is not flushed), and one of prsqrt a signed infinity, but neither may give a NaN, nor disturb
-// the other lanes. clang compiled the zero test of psqrt on the bits of the input, which is false for a subnormal,
-// while vrsqrte and vmul flush it: the lane became 0 * inf = NaN.
+// A float packet op that reads a subnormal input as zero (32-bit ARM NEON always; AArch64 under FPCR.FZ) may give a
+// subnormal lane of psqrt the input or a zero, and one of prsqrt a signed infinity, but neither may give a NaN, nor
+// disturb the other lanes. clang compiled the zero test of psqrt on the bits of the input, which is false for a
+// subnormal, while vrsqrte and vmul flush it: the lane became 0 * inf = NaN. prsqrt on AArch64 OR-ed the bits of a
+// flushed subnormal into the infinity, which also gave a NaN. The inputs are built from their bits, since scalar
+// arithmetic would flush them too.
 template <typename Scalar, typename Packet>
 std::enable_if_t<!std::is_same<Scalar, float>::value, void> packetmath_flushed_subnormal_lanes() {}
 
-template <typename Scalar, typename Packet>
-std::enable_if_t<std::is_same<Scalar, float>::value, void> packetmath_flushed_subnormal_lanes() {
-#if EIGEN_ARCH_ARM
+#if EIGEN_ARCH_ARM_OR_ARM64
+template <typename Packet>
+void packetmath_flushed_subnormal_lanes_check() {
+  using Scalar = float;
   using PacketTraits = internal::packet_traits<Scalar>;
   constexpr bool kCheck = !internal::is_scalar<Packet>::value && PacketTraits::HasSqrt && PacketTraits::HasRsqrt;
   EIGEN_IF_CONSTEXPR (kCheck) {
     constexpr int PacketSize = internal::unpacket_traits<Packet>::size;
-    const Scalar norm_min = (std::numeric_limits<Scalar>::min)();
-    const Scalar denorm_min = std::numeric_limits<Scalar>::denorm_min();
     const Scalar inf = NumTraits<Scalar>::infinity();
-    const Scalar subnormals[] = {denorm_min, Scalar(1024) * denorm_min, norm_min / Scalar(2), norm_min - denorm_min};
+    const numext::uint32_t subnormal_bits[] = {0x00000001u, 0x00000400u, 0x00400000u, 0x007fffffu};
     const Scalar neighbors[] = {Scalar(4), Scalar(0), inf};
     EIGEN_ALIGN_TO_BOUNDARY(internal::unpacket_traits<Packet>::alignment) Scalar in[PacketSize];
     EIGEN_ALIGN_TO_BOUNDARY(internal::unpacket_traits<Packet>::alignment) Scalar root[PacketSize];
     EIGEN_ALIGN_TO_BOUNDARY(internal::unpacket_traits<Packet>::alignment) Scalar rroot[PacketSize];
     test::packet_helper<PacketTraits::HasSqrt, Packet> h;
-    for (const Scalar sign : {Scalar(1), Scalar(-1)}) {
-      for (const Scalar subnormal : subnormals) {
+    for (const bool negative : {false, true}) {
+      for (const numext::uint32_t magnitude : subnormal_bits) {
+        const Scalar subnormal = numext::bit_cast<Scalar>(magnitude | (negative ? 0x80000000u : 0u));
         for (int k = 0; k < PacketSize; ++k) {
-          for (int i = 0; i < PacketSize; ++i) in[i] = i == k ? sign * subnormal : neighbors[(i + k) % 3];
+          for (int i = 0; i < PacketSize; ++i) in[i] = i == k ? subnormal : neighbors[(i + k) % 3];
           h.store(root, internal::psqrt(h.load(in)));
           h.store(rroot, internal::prsqrt(h.load(in)));
           for (int i = 0; i < PacketSize; ++i) {
             if (i == k) {
               VERIFY(test::biteq(root[i], in[i]) || root[i] == Scalar(0) ||
-                     (sign > 0 && numext::abs(root[i] - numext::sqrt(in[i])) <= Scalar(1e-3) * numext::sqrt(in[i])));
-              VERIFY(!(numext::isnan)(rroot[i]) && (rroot[i] > 0) == (sign > 0));
+                     (!negative && numext::abs(root[i] - numext::sqrt(in[i])) <= Scalar(1e-3) * numext::sqrt(in[i])));
+              VERIFY(!(numext::isnan)(rroot[i]) && (rroot[i] > 0) == !negative);
             } else if (in[i] == Scalar(4)) {
               VERIFY_IS_APPROX(root[i], Scalar(2));
               VERIFY_IS_APPROX(rroot[i], Scalar(0.5));
@@ -2547,6 +2549,18 @@ std::enable_if_t<std::is_same<Scalar, float>::value, void> packetmath_flushed_su
       }
     }
   }
+}
+#endif
+
+template <typename Scalar, typename Packet>
+std::enable_if_t<std::is_same<Scalar, float>::value, void> packetmath_flushed_subnormal_lanes() {
+#if EIGEN_ARCH_ARM
+  packetmath_flushed_subnormal_lanes_check<Packet>();  // 32-bit ARM flushes whatever FPSCR says.
+#elif EIGEN_ARCH_ARM64
+  ScopedFlushToZero flush;
+  if (!flush.isSupported()) return;
+  VERIFY(ScopedFlushToZero::hardwareFlushesSubnormalInputs());
+  packetmath_flushed_subnormal_lanes_check<Packet>();
 #endif
 }
 

@@ -4624,14 +4624,14 @@ Packet prsqrt_float_common(const Packet& a) {
   Packet return_zero = pcmp_eq(a, cst_inf);
 #if EIGEN_ARCH_ARM64
   Packet return_inf = pcmp_eq(a, pzero(a));
-  const Packet inf_with_sign_of_a = por(cst_inf, a);
 #else
   // ARMv7 NEON flushes subnormals, so the estimate is +-inf for a subnormal a as for +-0. Select on |a| < min_normal,
-  // which holds for a subnormal in every reading of the input (a == 0 can be compiled to a compare of the bits), and
-  // keep only the sign of a, since the bits of a subnormal would make a NaN of the infinity.
+  // which holds for a subnormal in every reading of the input (a == 0 can be compiled to a compare of the bits).
   Packet return_inf = pcmp_lt(pabs(a), pset1<Packet>((std::numeric_limits<float>::min)()));
-  const Packet inf_with_sign_of_a = por(cst_inf, pand(a, psignmask<Packet>()));
 #endif
+  // Keep only the sign of a: where the lane is selected for a subnormal a (always on ARMv7; on AArch64 when FPCR.FZ
+  // makes a == 0 true for it), the bits of a would make a NaN of the infinity.
+  const Packet inf_with_sign_of_a = por(cst_inf, pand(a, psignmask<Packet>()));
   Packet result = prsqrt_float_unsafe(a);
   result = pselect(return_inf, inf_with_sign_of_a, result);
   result = pandnot(result, return_zero);
