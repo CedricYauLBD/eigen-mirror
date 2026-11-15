@@ -151,7 +151,7 @@ when there are no longer runs.
 | Member | Meaning |
 |---|---|
 | `setMaxBlockSize(p)` | $`p_{\max}`$, default 4; call before `compute()` |
-| `info()` | `Success`, or `NumericalIssue` when `conditionEstimate()` reaches $`1/\varepsilon`$; a run of ill-conditioned leading submatrices longer than the look-ahead is reported only through that estimate; if the recursion cannot proceed at all (non-finite generators, overflow) the estimate is infinite and every solve returns NaN |
+| `info()` | `Success`, or `NumericalIssue` when `conditionEstimate()` reaches $`1/\varepsilon`$; a run of ill-conditioned leading submatrices longer than the look-ahead is reported only through that estimate; if the recursion cannot proceed at all (non-finite generators, or an overflow that leaves no acceptable candidate block) the estimate is infinite and every solve returns NaN; a finite generator whose overflow still leaves an accepted block, possible with `setMaxBlockSize(p)`, `p >= 2`, is also reported as `NumericalIssue`, but its solutions are unspecified and may be only partly NaN |
 | `conditionEstimate()` | estimate of $`\kappa_2(T)`$, the "algorithm condition number" of [1] |
 | `transpose().solve(b)`, `adjoint().solve(b)` | reuse the factorization through the persymmetry $`T^T = E T E`$ ($`E`$ the exchange matrix) |
 

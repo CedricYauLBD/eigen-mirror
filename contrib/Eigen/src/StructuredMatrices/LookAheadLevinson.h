@@ -160,8 +160,11 @@ class LookAheadLevinson : public SolverBase<LookAheadLevinson<Scalar_>> {
    * \f$ 1/\varepsilon \f$; a run of ill-conditioned leading submatrices longer
    * than the look-ahead is reported only through that estimate. If the recursion
    * cannot proceed at all (a non-finite generator entry, for every block size, or
-   * overflow on an extremely ill-conditioned matrix), conditionEstimate() is
-   * infinite and every solve returns NaN. */
+   * an overflow that leaves no acceptable candidate block), conditionEstimate() is
+   * infinite and every solve returns NaN. A finite generator whose overflow still
+   * leaves an accepted block, possible with setMaxBlockSize(p), p >= 2, is also
+   * reported as \c NumericalIssue with a large or infinite estimate, but its
+   * solutions are unspecified and may be only partly NaN (the rest zeros). */
   ComputationInfo info() const {
     eigen_assert(m_isInitialized && "LookAheadLevinson is not initialized.");
     return m_info;
