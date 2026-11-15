@@ -353,7 +353,7 @@ void test_lscg_underflowing_normal_rhs() {
       Matrix<float, Dynamic, Dynamic> B(2, 1), ref(1, 1);
       B << b.first, b.second;
       ref << b.first;
-      ok &= check_lscg_case<IdentityPreconditioner>("exact b(0), float", colf, B, ref, 4 * feps);
+      ok &= check_lscg_case<IdentityPreconditioner>("exact b(0), float", colf, B, ref, double(4 * feps));
     }
   }
   {  // A' b = 0: x = 0.
