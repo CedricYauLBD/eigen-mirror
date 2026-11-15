@@ -287,6 +287,118 @@ void test_lscg_extreme_matrix() {
   }
 }
 
+// Solves A X = B column by column for the least-squares solutions and reports a failing case on stderr instead of
+// stopping, so that one failure does not hide the others: Success, finite X and |X - ref| <= relTol |ref| (so X = 0 for
+// ref = 0) for every column, with solve() or, for one column and a non-null guess, solveWithGuess().
+template <typename Preconditioner, typename Scalar>
+bool check_lscg_case(const char* name, const SparseMatrix<Scalar>& A, const Matrix<Scalar, Dynamic, Dynamic>& B,
+                     const Matrix<Scalar, Dynamic, Dynamic>& ref, double relTol,
+                     const Matrix<Scalar, Dynamic, 1>* guess = nullptr) {
+  LeastSquaresConjugateGradient<SparseMatrix<Scalar>, Preconditioner> solver(A);
+  Matrix<Scalar, Dynamic, Dynamic> X;
+  if (guess)
+    X = solver.solveWithGuess(B.col(0), *guess);
+  else
+    X = solver.solve(B);
+  bool ok = solver.info() == Success && X.allFinite() && (numext::isfinite)(solver.error());
+  for (Index j = 0; j < ref.cols() && ok; ++j) {
+    const double err = double((X.col(j) - ref.col(j)).stableNorm());
+    ok = err <= relTol * double(ref.col(j).stableNorm());
+    if (!ok)
+      std::cerr << "check_lscg_case " << name << ": column " << j << ", |x - ref| " << err << ", |ref| "
+                << ref.col(j).stableNorm() << "\n";
+  }
+  if (!ok)
+    std::cerr << "check_lscg_case " << name << ": info " << int(solver.info()) << ", error() " << solver.error()
+              << "\n";
+  return ok;
+}
+
+// A' b below the smallest normal number (subnormal, or 0 after underflow) and its neighbors. The solver rescales b
+// then,
+// by a power of two at most |b|, and only when |b| < 1: dividing by a |b| above 1 shrank A' b further and returned
+// x = 0 with Success for A = (1, 0)' and b = (1.5e-308, 1e20), or x off by 1e-11 for b = (1e-310, 1e3).
+template <typename = void>
+void test_lscg_underflowing_normal_rhs() {
+  using Mat = Matrix<double, Dynamic, Dynamic>;
+  const double eps = NumTraits<double>::epsilon();
+  bool ok = true;
+
+  // A = (1, 0)': the solution is b(0), exactly, however large the part of b orthogonal to the range of A.
+  SparseMatrix<double> col(2, 1);
+  col.insert(0, 0) = 1;
+  for (const std::pair<double, double>& b : {std::make_pair(1.5e-308, 1e20), std::make_pair(1e-310, 1e3),
+                                             std::make_pair(1e-310, 1e-3), std::make_pair(3e-310, 3e-200)}) {
+    Mat B(2, 1), ref(1, 1);
+    B << b.first, b.second;
+    ref << b.first;
+    ok &= check_lscg_case<IdentityPreconditioner>("exact b(0)", col, B, ref, 4 * eps);
+    ok &= check_lscg_case<LeastSquareDiagonalPreconditioner<double> >("exact b(0), diagonal", col, B, ref, 4 * eps);
+  }
+  {  // A' b = 0: x = 0.
+    Mat B(2, 1), ref = Mat::Zero(1, 1);
+    B << 0, 1e-200;
+    ok &= check_lscg_case<IdentityPreconditioner>("A'b = 0", col, B, ref, 0);
+  }
+
+  SparseMatrix<double> D(2, 2);
+  D.insert(0, 0) = 1e-200;
+  D.insert(1, 1) = 2e-200;
+  {  // The diagonal preconditioner too.
+    Mat B(2, 1), ref(2, 1);
+    B << 1e-150, 1e-150;
+    ref << 1e50, 0.5e50;
+    ok &= check_lscg_case<LeastSquareDiagonalPreconditioner<double> >("diagonal preconditioner", D, B, ref, 100 * eps);
+  }
+  {  // Two right-hand sides, of which only the first needs rescaling.
+    Mat B(2, 2), ref(2, 2);
+    B << 1e-150, 1, 1e-150, 1;
+    ref << 1e50, 1e200, 0.5e50, 0.5e200;
+    ok &= check_lscg_case<IdentityPreconditioner>("two right-hand sides", D, B, ref, 100 * eps);
+  }
+  {  // Inconsistent and overdetermined: the least-squares solution of the scaled problem, times the scale.
+    Mat A0(3, 2);
+    A0 << 1, 0, 0, 2, 1, 1;
+    Mat b0(3, 1);
+    b0 << 1, 1, 3;
+    const Mat x0 = A0.colPivHouseholderQr().solve(b0);
+    SparseMatrix<double> A = (1e-200 * A0).sparseView();
+    const Mat B = 1e-150 * b0, ref = 1e50 * x0;
+    ok &= check_lscg_case<IdentityPreconditioner>("overdetermined", A, B, ref, 100 * eps);
+    ok &= check_lscg_case<LeastSquareDiagonalPreconditioner<double> >("overdetermined, diagonal", A, B, ref, 100 * eps);
+  }
+  {  // Complex, with |A| |b| below the smallest normal number.
+    using C = std::complex<double>;
+    SparseMatrix<C> A(2, 2);
+    A.insert(0, 0) = C(1e-200, 0);
+    A.insert(1, 1) = C(0, 2e-200);
+    Matrix<C, Dynamic, Dynamic> B(2, 1), ref(2, 1);
+    B << C(1e-150, 0), C(1e-150, 1e-150);
+    ref << C(1e50, 0), C(0.5e50, -0.5e50);
+    ok &= check_lscg_case<IdentityPreconditioner>("complex", A, B, ref, 100 * eps);
+  }
+  {  // A guess is scaled with b, and left alone when its scaled value would overflow.
+    Mat B(2, 1), ref(2, 1);
+    B << 1e-150, 1e-150;
+    ref << 1e50, 0.5e50;
+    const VectorXd guess = VectorXd::Constant(2, 1e49);
+    ok &= check_lscg_case<IdentityPreconditioner>("guess scaled with b", D, B, ref, 100 * eps, &guess);
+
+    // The solution 1e-290 (1, 1) is representable, but 1e10 / 2^-997 is not: the solver used to return infinity and an
+    // error() of NaN.
+    SparseMatrix<double> E(2, 2);
+    E.insert(0, 0) = 1e-10;
+    E.insert(1, 1) = 1e-10;
+    LeastSquaresConjugateGradient<SparseMatrix<double>, IdentityPreconditioner> solver(E);
+    const Vector2d b(1e-300, 1e-300), hugeGuess(1e10, 1e10);
+    const Vector2d x = solver.solveWithGuess(b, hugeGuess);
+    const bool finite = x.allFinite() && (numext::isfinite)(solver.error());
+    if (!finite) std::cerr << "huge guess: x " << x.transpose() << ", error() " << solver.error() << "\n";
+    ok &= finite;
+  }
+  VERIFY(ok);
+}
+
 EIGEN_DECLARE_TEST(lscg) {
   CALL_SUBTEST_1(test_lscg_T<double>());
   CALL_SUBTEST_2(test_lscg_T<std::complex<double> >());
@@ -298,6 +410,7 @@ EIGEN_DECLARE_TEST(lscg) {
   CALL_SUBTEST_5(test_lscg_sparse_tall<>());
   CALL_SUBTEST_5(test_lscg_small_rhs<>());
   CALL_SUBTEST_5(test_lscg_extreme_matrix<>());
+  CALL_SUBTEST_5(test_lscg_underflowing_normal_rhs<>());
   CALL_SUBTEST_5(
       (check_matrix_free_accessors<LeastSquaresConjugateGradient<MatrixFreeOperator, IdentityPreconditioner>>()));
 }

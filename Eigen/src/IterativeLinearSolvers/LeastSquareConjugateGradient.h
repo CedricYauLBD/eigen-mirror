@@ -60,18 +60,24 @@ EIGEN_DONT_INLINE bool least_square_conjugate_gradient(const MatrixType& mat, co
   VectorType normal_rhs = mat.adjoint() * rhs;
 
   RealScalar rhsNorm = normal_rhs.stableNorm();
-  // A'b below the smallest normal number has lost its precision or underflowed to 0, which would return x = 0 with
-  // Success. The problem is invariant under b -> b / |b|, x -> x / |b|, and A' (b / |b|) is representable when |A| is.
+  // A'b below the smallest normal number has lost its precision or underflowed to 0, and x = 0 would be returned with
+  // Success. When |b| < 1, solve for b / s and x / s instead, with s the power of two at most |b| so that the scaling is
+  // exact: that only raises A'b, unlike a division by a |b| above 1. The guess is left alone if x / s overflows.
   RealScalar rhsScale(1);
   if (rhsNorm < (std::numeric_limits<RealScalar>::min)()) {
     const RealScalar bNorm = rhs.stableNorm();
-    if (bNorm >= (std::numeric_limits<RealScalar>::min)() && (numext::isfinite)(bNorm)) {
-      rhsScale = bNorm;
-      x /= rhsScale;
-      residual = rhs / rhsScale - mat * x;
-      normal_residual = mat.adjoint() * residual;
-      normal_rhs = mat.adjoint() * (rhs / rhsScale);
-      rhsNorm = normal_rhs.stableNorm();
+    if (bNorm > RealScalar(0) && bNorm < RealScalar(1)) {
+      RealScalar scale(1);
+      while (scale > bNorm) scale *= RealScalar(0.5);
+      const VectorType scaledGuess = x / scale;
+      if (scaledGuess.allFinite()) {
+        rhsScale = scale;
+        x = scaledGuess;
+        residual = rhs / rhsScale - mat * x;
+        normal_residual = mat.adjoint() * residual;
+        normal_rhs = mat.adjoint() * (rhs / rhsScale);
+        rhsNorm = normal_rhs.stableNorm();
+      }
     }
   }
   const auto restoreScale = [&]() {
