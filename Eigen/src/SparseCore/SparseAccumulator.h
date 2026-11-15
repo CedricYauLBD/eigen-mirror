@@ -527,6 +527,16 @@ class sparse_accumulator {
   using Workspace = inner_sort_workspace<Scalar, StorageIndex>;
   // A vector with fewer distinct indices than this is marked; setting up the other two ways costs more.
   static constexpr Index kUnmarkedMin = 48;
+  // A direct vector of a keep that rejects zero uses a table of values alone, sumDirectValues, if its range has at most
+  // this many slots per expected index. That table touches every slot of the range and the keyed table of sumDirect
+  // skips empty blocks, so the keyed table wins on sparser ranges.
+  static constexpr Index kValuesRatio = 8;
+  // The scalars sumDirectValues accepts: an arithmetic type or std::complex of one, for which -0 + x == x holds. Not
+  // every Scalar whose NumTraits::Real is arithmetic: a custom Scalar may declare a real type of double.
+  using RealScalar = typename NumTraits<Scalar>::Real;
+  static constexpr bool kValuesScalar =
+      is_arithmetic<Scalar>::value ||
+      (is_arithmetic<RealScalar>::value && std::is_same<Scalar, std::complex<RealScalar>>::value);
 
  public:
   // Vectors have indices in [0, innerSize) and are written to data from position 0.
@@ -549,7 +559,7 @@ class sparse_accumulator {
         direct = m_workspace.acc.direct(lo, hi, m_marked ? m_prevKeys : maxKeys);
       }
       if (direct)
-        keys = sumDirect(terms, lo, hi, keep);
+        keys = sumDirect(terms, lo, hi, m_marked ? m_prevKeys : maxKeys, keep);
       else if (!m_marked)
         keys = sumAppended(terms, lo, hi, maxKeys, keep);
       else
@@ -624,8 +634,14 @@ class sparse_accumulator {
     return n;
   }
 
+  // expectedKeys is the estimate of the distinct indices that chose the direct path.
   template <typename Terms, typename Keep>
-  Index sumDirect(const Terms& terms, StorageIndex lo, StorageIndex hi, const Keep& keep) {
+  Index sumDirect(const Terms& terms, StorageIndex lo, StorageIndex hi, Index expectedKeys, const Keep& keep) {
+    // A tag rather than EIGEN_IF_CONSTEXPR, which is a plain if in C++14: sumDirectValues needs -x and x != y, which
+    // a custom Scalar may lack.
+    Index valueKeys = 0;
+    if (trySumDirectValues(terms, lo, hi, expectedKeys, keep, valueKeys, bool_constant<kValuesScalar>()))
+      return valueKeys;
     direct_accumulator<Scalar, StorageIndex>& acc = m_workspace.acc;
     reserve(acc.size(lo, hi));
     acc.init(m_data.indexPtr() + m_size, m_data.valuePtr() + m_size, lo, hi);
@@ -639,6 +655,53 @@ class sparse_accumulator {
     });
     Index keys = acc.compact();
     close(keys, keep);
+    return keys;
+  }
+
+  // Sets keys to sumDirectValues() and returns true if keep rejects zero and the range has at most kValuesRatio slots
+  // per expected index; otherwise returns false and writes nothing.
+  template <typename Terms, typename Keep>
+  bool trySumDirectValues(const Terms& terms, StorageIndex lo, StorageIndex hi, Index expectedKeys, const Keep& keep,
+                          Index& keys, true_type) {
+    if (keep(Scalar(0)) || direct_accumulator<Scalar, StorageIndex>::size(lo, hi) > kValuesRatio * expectedKeys)
+      return false;
+    keys = sumDirectValues(terms, lo, hi, keep);
+    return true;
+  }
+  template <typename Terms, typename Keep>
+  bool trySumDirectValues(const Terms&, StorageIndex, StorageIndex, Index, const Keep&, Index&, false_type) {
+    return false;
+  }
+
+  // sumDirect for a keep that rejects zero: a table of values alone, with no keys. Keep drops a slot whose sum is
+  // zero, whether no term reached it or its terms cancel. A slot starts at -0 rather than +0: in round-to-nearest,
+  // -0 + x == x for every x, signed zeros included, and per component of a complex, so the sums are those of sumDirect
+  // bit for bit, up to the contraction of each addition into an FMA, which the compiler may make here and not in
+  // sumDirect. Limited to kValuesScalar, for which this identity is known to hold. Returns the number of nonzero sums,
+  // which counts a cancelled index as absent. Out of line so as not to enlarge append(): its work is proportional to
+  // the range of the vector, which dwarfs a call.
+  template <typename Terms, typename Keep>
+  EIGEN_DONT_INLINE Index sumDirectValues(const Terms& terms, StorageIndex lo, StorageIndex hi, const Keep& keep) {
+    const Index span = direct_accumulator<Scalar, StorageIndex>::size(lo, hi);
+    reserve(span);
+    StorageIndex* indices = m_data.indexPtr() + m_size;
+    Scalar* values = m_data.valuePtr() + m_size;
+    std::fill_n(values, span, -Scalar(0));
+    const Index base = Index(lo);
+    terms.forEachTerm([&](typename Terms::Term term) {
+      for (; term; ++term) term.addTo(values[Index(term.index()) - base]);
+    });
+    // Branch-free: a pruned product rejects about half of the sums at a median tolerance. kept <= s, so each slot is
+    // read before it can be overwritten.
+    Index keys = 0, kept = 0;
+    for (Index s = 0; s < span; ++s) {
+      Scalar value = values[s];
+      keys += Index(value != Scalar(0));
+      indices[kept] = StorageIndex(base + s);
+      values[kept] = value;
+      kept += Index(keep(value));
+    }
+    m_size += kept;
     return keys;
   }
 
