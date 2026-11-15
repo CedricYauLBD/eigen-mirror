@@ -1012,14 +1012,17 @@ struct igammac_cf_impl {
     }
 
     if (mode == VALUE && igamma_use_stirling_main_term(a)) {
+      // Where the main term underflows so does Q. The fraction ~ 1 / x is below the smallest normal number for
+      // x > 1 / min (8.5e37 in float, 4.5e307 in double), where Lentz's method clamps it and does not converge.
+      const Scalar ax_stirling = main_igamma_term_stirling<Scalar>(a, x);
+      if (ax_stirling == zero) return zero;
       bool converged;
       const Scalar h = igammac_cf_lentz<Scalar>(a, x, &converged);
       // Unconverged only in the band documented at igammac_cf_lentz (|t| <~ 0.4, a >~ 1e7 in double, 5e7 in float). The
       // recurrence and the ordinary main term are wrong there (values above 1, or float igammac(1e8, 1e8) = 1.25e-4
       // for a true value ~ 0.5), so the result is NaN: a converged fraction or NaN.
       if (!converged) return NumTraits<Scalar>::quiet_NaN();
-      const Scalar ax_stirling = main_igamma_term_stirling<Scalar>(a, x);
-      return ax_stirling == zero ? zero : ax_stirling * h;
+      return ax_stirling * h;
     }
 
     Scalar ax = main_igamma_term<Scalar>(a, x);

@@ -895,6 +895,24 @@ void test_igamma_internal_nan() {
   }
 }
 
+// For x > 1 / min (8.5e37 in float, 4.5e307 in double) the continued fraction of igammac, ~ 1 / x, is subnormal and
+// Lentz's method, which clamps it at min, does not converge. The main term underflows there, so Q = 0 and P = 1, which
+// was reported as NaN (the check for convergence preceded that for the main term).
+template <typename Scalar>
+void test_igamma_huge_x() {
+  const bool is_float = sizeof(Scalar) == 4;
+  const double a_f[] = {30, 79.6292877, 5000, 9999}, a_d[] = {24000, 50000, 99000, 99999};
+  const Scalar x = is_float ? Scalar(9.41301965e37) : Scalar(1.7e308);
+  for (int i = 0; i < 4; ++i) {
+    const Scalar a = Scalar(is_float ? a_f[i] : a_d[i]);
+    bool converged = true;
+    internal::igammac_cf_lentz<Scalar>(a, x, &converged);
+    VERIFY(!converged);
+    VERIFY_IS_EQUAL(numext::igammac(a, x), Scalar(0));
+    VERIFY_IS_EQUAL(numext::igamma(a, x), Scalar(1));
+  }
+}
+
 // For a ~ x >~ 1 / eps, ax = x^a exp(-x) / Gamma(a) is inaccurate, and the igammac recurrence overflows once
 // (x - a) x > max (inf - inf = NaN, which igamma turned into 0). For finite arguments with x != a, P and Q must not be
 // NaN (they are clamped to [0, 1]), with P + Q = 1 where both use the same evaluation. Where the recurrence overflows
@@ -1297,6 +1315,7 @@ EIGEN_DECLARE_TEST(special_functions) {
   CALL_SUBTEST_1(test_zeta_log_domain_range<float>());
   CALL_SUBTEST_1(test_igamma_limits<float>());
   CALL_SUBTEST_1(test_igamma_internal_nan<float>());
+  CALL_SUBTEST_1(test_igamma_huge_x<float>());
   CALL_SUBTEST_1(test_igamma_large_arguments<float>());
   CALL_SUBTEST_1(test_igamma_unconverged_band<float>());
   CALL_SUBTEST_1(test_igamma_series_side<float>());
@@ -1313,6 +1332,7 @@ EIGEN_DECLARE_TEST(special_functions) {
   CALL_SUBTEST_2(test_zeta_log_domain_range<double>());
   CALL_SUBTEST_2(test_igamma_limits<double>());
   CALL_SUBTEST_2(test_igamma_internal_nan<double>());
+  CALL_SUBTEST_2(test_igamma_huge_x<double>());
   CALL_SUBTEST_2(test_igamma_large_arguments<double>());
   CALL_SUBTEST_2(test_igamma_unconverged_band<double>());
   CALL_SUBTEST_2(test_igamma_series_side<double>());
