@@ -133,6 +133,13 @@ bool idrs(const MatrixType& A, const Rhs& b, Dest& x, const Preconditioner& prec
   // then fall below the tolerance while b - A x does not. Accept convergence only when b - A x confirms it, and restart
   // from the current iterate otherwise, unless no iteration is left. A restart counts as an iteration, which bounds
   // their number by maxit. A residual that is not finite ends the iteration, and the caller reports NoConvergence.
+  // Stagnation exit: when |b - A x| cannot reach the threshold (a tolerance below the rounding error of b - A x), the
+  // confirmations fail again and again. A failed confirmation at least 5 iterations after |b - A x| last dropped to
+  // half of its reference value, without such a drop, ends the iteration instead of restarting until maxit.
+  // residualIsTrue is set when normr is the computed |b - A x| at the end of the iteration.
+  bool residualIsTrue = false;
+  RealScalar referenceNorm = (std::numeric_limits<RealScalar>::max)();
+  Index referenceIter = 0;
   const auto done = [&]() {
     if (!(numext::isfinite)(normr)) {
       return true;
@@ -146,6 +153,14 @@ bool idrs(const MatrixType& A, const Rhs& b, Dest& x, const Preconditioner& prec
     r.noalias() = b - A * x;
     normr = r.stableNorm();
     if (normr <= tolb || iter >= maxit) {
+      residualIsTrue = true;
+      return true;
+    }
+    if (normr <= RealScalar(0.5) * referenceNorm) {
+      referenceNorm = normr;
+      referenceIter = iter;
+    } else if (iter - referenceIter >= 5) {
+      residualIsTrue = true;
       return true;
     }
     if (smoothing) {
@@ -281,6 +296,10 @@ bool idrs(const MatrixType& A, const Rhs& b, Dest& x, const Preconditioner& prec
 
   if (smoothing) {
     x = x_s;
+  }
+  if (!residualIsTrue && (numext::isfinite)(normr)) {
+    // The loop ended at maxit with the recurrence residual: report the computed b - A x, which relres documents.
+    normr = (b - A * x).stableNorm();
   }
   relres = normr / normb;
   return true;

@@ -147,6 +147,49 @@ void test_idrs_small_rhs() {
   check_sparse_small_rhs(solver_float);
 }
 
+// The 5-point Laplacian on an m x m grid.
+template <typename SpMat>
+SpMat idrs_poisson2d(Index m) {
+  std::vector<Triplet<double> > triplets;
+  for (Index i = 0; i < m; ++i) {
+    for (Index j = 0; j < m; ++j) {
+      const Index k = i * m + j;
+      triplets.emplace_back(k, k, 4.0);
+      if (j + 1 < m) triplets.emplace_back(k, k + 1, -1.0);
+      if (j > 0) triplets.emplace_back(k, k - 1, -1.0);
+      if (i + 1 < m) triplets.emplace_back(k, k + m, -1.0);
+      if (i > 0) triplets.emplace_back(k, k - m, -1.0);
+    }
+  }
+  SpMat A(m * m, m * m);
+  A.setFromTriplets(triplets.begin(), triplets.end());
+  return A;
+}
+
+// A tolerance of eps is below the rounding error of b - A x on this matrix. IDRS used to restart after every failed
+// confirmation until maxIterations() = 2 n (1800 iterations for m = 30, against about 25 that suffice). It now stops
+// when a failed confirmation comes 5 iterations after |b - A x| last halved, and error() is the computed
+// |b - A x| / |b| whichever way it ends. A tolerance set by the caller is not relaxed: Success exactly when it is met.
+template <typename = void>
+void test_idrs_stagnation() {
+  using SpMat = SparseMatrix<double>;
+  const double eps = NumTraits<double>::epsilon();
+  for (Index m : {25, 30}) {
+    const SpMat A = idrs_poisson2d<SpMat>(m);
+    const Index n = A.rows();
+    const VectorXd b = VectorXd::Random(n);
+    IDRS<SpMat, DiagonalPreconditioner<double> > solver(A);
+    solver.setTolerance(eps);
+    const VectorXd x = solver.solve(b);
+    VERIFY(x.allFinite());
+    VERIFY_LE(solver.iterations(), 5 * m);
+    const double res = (b - A * x).norm() / b.norm();
+    VERIFY_LE(res, double(n) * eps);
+    VERIFY_LE(numext::abs(solver.error() - res), res / 2 + eps);
+    VERIFY_IS_EQUAL(solver.info(), solver.error() <= eps ? Success : NoConvergence);
+  }
+}
+
 EIGEN_DECLARE_TEST(idrs) {
   CALL_SUBTEST_1(test_idrs_T<double>());
   CALL_SUBTEST_2(test_idrs_T<std::complex<double> >());
@@ -159,5 +202,6 @@ EIGEN_DECLARE_TEST(idrs) {
   CALL_SUBTEST_1(test_idrs_default_tolerance<double>());
   CALL_SUBTEST_2(test_idrs_default_tolerance<std::complex<double> >());
   CALL_SUBTEST_1(test_idrs_small_rhs<>());
+  CALL_SUBTEST_1(test_idrs_stagnation<>());
   CALL_SUBTEST_1((check_matrix_free_accessors<IDRS<MatrixFreeOperator, IdentityPreconditioner>>()));
 }
