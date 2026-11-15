@@ -267,10 +267,14 @@ class MINRES : public IterativeSolverBase<MINRES<MatrixType_, UpLo_, Preconditio
    * component for m nonzeros in a row of A (Higham and Mary, A new approach to probabilistic rounding error analysis,
    * SIAM J. Sci. Comput. 41(5), 2019), and the recurrence for x adds to it, so the residual of the computed x
    * stagnates at a level that depends on the matrix and often exceeds \f$ \epsilon \f$. With the default tolerance
-   * the iteration therefore aims at \f$ \epsilon \f$, ends when the computed residual stagnates, and reports Success
-   * if it is then at most \f$ 8 \sqrt{n}\, \epsilon \f$ for an n x n matrix, the default tolerance of IDRS. A
-   * tolerance set by setTolerance() is never relaxed, so a tolerance below what the arithmetic can confirm ends in
-   * NoConvergence with the best iterate and its residual in error().
+   * the iteration therefore aims at \f$ \epsilon \f$, and whichever way it ends (stagnation of the computed residual,
+   * maxIterations(), or an exhausted Krylov space) it reports Success if the computed \f$ \| b - A x \| / \| b \| \f$
+   * is at most \f$ 8 \sqrt{n}\, \epsilon \f$ for an n x n matrix, the default tolerance of IDRS. A tolerance set
+   * by setTolerance() is never relaxed, so a tolerance below what the arithmetic can confirm ends in NoConvergence
+   * with the best iterate and its residual in error().
+   *
+   * The default is selected by a negative stored tolerance, which no residual can meet, so setTolerance() with a
+   * negative value restores the default behavior instead of asking for the impossible.
    */
   RealScalar tolerance() const {
     return Base::m_tolerance >= RealScalar(0) ? Base::m_tolerance : NumTraits<RealScalar>::epsilon();

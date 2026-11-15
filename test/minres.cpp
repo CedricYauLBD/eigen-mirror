@@ -162,7 +162,8 @@ void test_minres_poisson() {
     solver.setTolerance(eps);
     x = solver.solve(b);
     VERIFY(x.allFinite());
-    VERIFY(solver.info() == Success || solver.info() == NoConvergence);
+    // A tolerance set by the caller is never relaxed to the confirmable bound: Success exactly when it is met.
+    VERIFY_IS_EQUAL(solver.info(), solver.error() <= eps ? Success : NoConvergence);
     // The recurrence reaches eps after about 4.5 m iterations (136 for m = 30), and stagnation is detected within 5
     // more iterations plus the spacing of the confirmations.
     VERIFY_LE(solver.iterations(), 5 * m + 10);
@@ -170,6 +171,10 @@ void test_minres_poisson() {
     const double res = (b - A * x).norm() / b.norm();
     VERIFY_LE(res, double(n) * eps);
     VERIFY_LE(numext::abs(solver.error() - res), res / 2 + eps);
+
+    // A negative tolerance selects the default, see MINRES::tolerance().
+    solver.setTolerance(-1.0);
+    VERIFY_IS_EQUAL(solver.tolerance(), eps);
   }
 }
 
