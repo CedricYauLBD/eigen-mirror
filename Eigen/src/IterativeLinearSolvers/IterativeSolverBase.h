@@ -44,10 +44,12 @@ inline ComputationInfo most_severe_info(ComputationInfo a, ComputationInfo b) {
 
 template <typename RealScalar>
 EIGEN_DEVICE_FUNC RealScalar iterative_solver_scaling_factor(RealScalar norm) {
-  // Scale only when forming a quadratic recurrence term from norm may underflow or overflow.
+  // Scale only when forming a quadratic recurrence term from norm, or from the eps norm that a solver can reduce it
+  // to, may underflow or overflow. A square below the smallest normal number is subnormal, which loses precision, and
+  // is flushed to 0 where subnormals are not supported (float NEON on ARMv7).
   const RealScalar sqrtMin = numext::sqrt((std::numeric_limits<RealScalar>::min)());
   const RealScalar sqrtMax = numext::sqrt((std::numeric_limits<RealScalar>::max)());
-  return norm < sqrtMin || norm > sqrtMax ? norm : RealScalar(1);
+  return norm < sqrtMin / NumTraits<RealScalar>::epsilon() || norm > sqrtMax ? norm : RealScalar(1);
 }
 
 // The least residual norm that a stopping rule can ask for. Recurrences that form squares of residual norms underflow

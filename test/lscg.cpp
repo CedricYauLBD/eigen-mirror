@@ -443,6 +443,21 @@ void test_lscg_power_of_two_scale() {
   check(T(1) - std::numeric_limits<T>::epsilon() / 2);
 }
 
+// The residual is scaled to unit norm when the squares of its eps multiple would be subnormal: float NEON on ARMv7
+// flushes them to 0, and everywhere they lose precision.
+template <typename T>
+void test_iterative_scaling_factor() {
+  const T sqrtMin = numext::sqrt((std::numeric_limits<T>::min)());
+  const T eps = NumTraits<T>::epsilon();
+  VERIFY_IS_EQUAL(internal::iterative_solver_scaling_factor(T(1)), T(1));
+  VERIFY_IS_EQUAL(internal::iterative_solver_scaling_factor(T(1e-3)), T(1));
+  const T tiny = T(0.5) * sqrtMin / eps;
+  VERIFY_IS_EQUAL(internal::iterative_solver_scaling_factor(tiny), tiny);
+  VERIFY_IS_EQUAL(internal::iterative_solver_scaling_factor(T(0.5) * sqrtMin), T(0.5) * sqrtMin);
+  const T bigNorm = T(2) * numext::sqrt((std::numeric_limits<T>::max)());
+  VERIFY_IS_EQUAL(internal::iterative_solver_scaling_factor(bigNorm), bigNorm);
+}
+
 EIGEN_DECLARE_TEST(lscg) {
   CALL_SUBTEST_1(test_lscg_T<double>());
   CALL_SUBTEST_2(test_lscg_T<std::complex<double> >());
@@ -455,6 +470,8 @@ EIGEN_DECLARE_TEST(lscg) {
   CALL_SUBTEST_5(test_lscg_small_rhs<>());
   CALL_SUBTEST_5(test_lscg_extreme_matrix<>());
   CALL_SUBTEST_5(test_lscg_underflowing_normal_rhs<>());
+  CALL_SUBTEST_5(test_iterative_scaling_factor<float>());
+  CALL_SUBTEST_5(test_iterative_scaling_factor<double>());
   CALL_SUBTEST_5(test_lscg_power_of_two_scale<float>());
   CALL_SUBTEST_5(test_lscg_power_of_two_scale<double>());
   CALL_SUBTEST_5(test_lscg_power_of_two_scale<long double>());
