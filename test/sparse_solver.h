@@ -977,7 +977,7 @@ class MatrixFreeOperator : public EigenBase<MatrixFreeOperator> {
   const SparseMatrix<double>* mp_mat;
 };
 
-// maxIterations() and, for IDRS and MINRES, tolerance() depend on n and used to dereference the null operator pointer
+// maxIterations() and, for IDRS, tolerance() depend on n and used to dereference the null operator pointer
 // of a matrix-free Solver before compute(). With n = 0 until compute(): maxIterations() == 2 n and
 // eps <= tolerance() <= 8 sqrt(max(n, 1)) eps.
 template <typename Solver>

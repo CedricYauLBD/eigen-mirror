@@ -128,8 +128,9 @@ SpMat minres_poisson2d(Index m) {
 
 // A tolerance of eps is below the rounding error of b - A x, which MINRES evaluates to confirm convergence. It used to
 // keep iterating until maxIterations() = 2 n, 1800 iterations for m = 30 instead of the 136 that stop on the recurrence
-// residual. It now stops when a failed confirmation comes 5 iterations after |b - A x| last halved. The default
-// tolerance is 8 sqrt(n) eps, which MINRES can confirm; the confirmation of the former default eps failed.
+// residual. It now stops when a failed confirmation comes 5 iterations after |b - A x| last halved. The residual of the
+// computed x stagnates above eps (28 eps for m = 30), so with the default tolerance, eps, MINRES reports Success when
+// the stagnated residual is at most 8 sqrt(n) eps, and with a tolerance set by the caller only when it meets it.
 template <typename Preconditioner>
 void test_minres_poisson() {
   using SpMat = SparseMatrix<double>;
@@ -140,13 +141,23 @@ void test_minres_poisson() {
     const VectorXd b = VectorXd::Random(n);
     MINRES<SpMat, Lower | Upper, Preconditioner> solver(A);
 
-    // The default tolerance, 8 sqrt(n) eps, can be confirmed: MINRES returns Success after about 4.5 m iterations.
+    // The default tolerance is eps. The residual stagnates above it, and MINRES returns Success there as it is at most
+    // 8 sqrt(n) eps.
+    const double confirmable = 8 * numext::sqrt(double(n)) * eps;
     VectorXd x = solver.solve(b);
-    VERIFY_IS_EQUAL(solver.tolerance(), 8 * numext::sqrt(double(n)) * eps);
+    VERIFY_IS_EQUAL(solver.tolerance(), eps);
     VERIFY_IS_EQUAL(solver.info(), Success);
-    VERIFY_LE(solver.iterations(), 5 * m);
-    VERIFY_LE((b - A * x).norm(), 2 * solver.tolerance() * b.norm());
+    VERIFY(solver.error() > eps);
+    VERIFY_LE(solver.iterations(), 5 * m + 10);
+    VERIFY_LE((b - A * x).norm(), 2 * confirmable * b.norm());
     const Index defaultIterations = solver.iterations();
+
+    // A tolerance set by the caller is not relaxed, but 8 sqrt(n) eps can be confirmed after about 4.5 m iterations.
+    solver.setTolerance(confirmable);
+    x = solver.solve(b);
+    VERIFY_IS_EQUAL(solver.info(), Success);
+    VERIFY_LE(solver.error(), confirmable);
+    VERIFY_LE(solver.iterations(), defaultIterations);
 
     solver.setTolerance(eps);
     x = solver.solve(b);
@@ -159,6 +170,34 @@ void test_minres_poisson() {
     const double res = (b - A * x).norm() / b.norm();
     VERIFY_LE(res, double(n) * eps);
     VERIFY_LE(numext::abs(solver.error() - res), res / 2 + eps);
+  }
+}
+
+// The default tolerance is eps, so that a well-conditioned system is solved to the accuracy of the arithmetic: for
+// tridiag(-1, 4, -1) and x = 1 in float, a default of 8 sqrt(n) eps stopped at a forward error of 4e-5 for n = 10000,
+// and eps gives 2e-7.
+template <typename = void>
+void test_minres_default_accuracy() {
+  using SpMat = SparseMatrix<float>;
+  const float eps = NumTraits<float>::epsilon();
+  for (Index n : {40, 10000}) {
+    std::vector<Triplet<float> > triplets;
+    for (Index i = 0; i < n; ++i) {
+      triplets.emplace_back(i, i, 4.0f);
+      if (i + 1 < n) {
+        triplets.emplace_back(i, i + 1, -1.0f);
+        triplets.emplace_back(i + 1, i, -1.0f);
+      }
+    }
+    SpMat A(n, n);
+    A.setFromTriplets(triplets.begin(), triplets.end());
+    const VectorXf ones = VectorXf::Ones(n);
+    const VectorXf b = A * ones;
+    MINRES<SpMat, Lower | Upper, IdentityPreconditioner> solver(A);
+    VERIFY_IS_EQUAL(solver.tolerance(), eps);
+    const VectorXf x = solver.solve(b);
+    VERIFY_IS_EQUAL(solver.info(), Success);
+    VERIFY_LE((x - ones).norm() / ones.norm(), 10 * eps);
   }
 }
 
@@ -178,5 +217,6 @@ EIGEN_DECLARE_TEST(minres) {
   CALL_SUBTEST_4(test_minres_poisson<IdentityPreconditioner>());
   CALL_SUBTEST_4(test_minres_poisson<DiagonalPreconditioner<double> >());
   CALL_SUBTEST_4(test_minres_small_rhs<>());
+  CALL_SUBTEST_4(test_minres_default_accuracy<>());
   CALL_SUBTEST_4((check_matrix_free_accessors<MINRES<MatrixFreeOperator, Lower | Upper, IdentityPreconditioner>>()));
 }

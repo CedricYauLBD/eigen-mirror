@@ -194,10 +194,11 @@ struct traits<MINRES<MatrixType_, UpLo_, Preconditioner_> > {
  *
  * The maximal number of iterations and tolerance value can be controlled via the setMaxIterations()
  * and setTolerance() methods. The defaults are twice the number of columns of the matrix for the maximal
- * number of iterations and \f$ 8 \sqrt{n}\, \epsilon \f$ for the tolerance, see tolerance().
+ * number of iterations and NumTraits<Scalar>::epsilon() for the tolerance, see tolerance().
  *
  * The tolerance corresponds to the relative residual error: |Ax-b|/|b|. The solver reports Success only when
- * \f$ \| b - A x \| \f$, computed from the returned x, meets it.
+ * \f$ \| b - A x \| / \| b \| \f$, computed from the returned x, meets it, or, with the default tolerance, the
+ * confirmable bound \f$ 8 \sqrt{n}\, \epsilon \f$, see tolerance().
  *
  * This class can be used as the direct solver classes. Here is a typical usage example:
  * \code
@@ -259,17 +260,20 @@ class MINRES : public IterativeSolverBase<MINRES<MatrixType_, UpLo_, Preconditio
     Base::m_tolerance = RealScalar(-1);
   }
 
-  /** \returns the tolerance set by setTolerance(), or by default \f$ 8 \sqrt{n}\, \epsilon \f$ for an n x n matrix,
-   * with n = 1 before a matrix is attached by compute().
+  /** \returns the tolerance set by setTolerance(), or by default NumTraits<Scalar>::epsilon().
    *
    * MINRES reports Success only when \f$ \| b - A x \| / \| b \| \f$, computed from the returned x, meets the
-   * tolerance. The default is the least that can be confirmed reliably: the rounding error of b - A x is of order
-   * \f$ \sqrt{m+1}\, \epsilon\, (|b_i| + (|A| |x|)_i) \f$ per component for m nonzeros in a row of A (Higham and Mary,
-   * A new approach to probabilistic rounding error analysis, SIAM J. Sci. Comput. 41(5), 2019), so a tolerance of
-   * \f$ \epsilon \f$ is out of reach and would end in NoConvergence after maxIterations(). See also IDRS::tolerance().
+   * tolerance. The rounding error of b - A x is of order \f$ \sqrt{m+1}\, \epsilon\, (|b_i| + (|A| |x|)_i) \f$ per
+   * component for m nonzeros in a row of A (Higham and Mary, A new approach to probabilistic rounding error analysis,
+   * SIAM J. Sci. Comput. 41(5), 2019), and the recurrence for x adds to it, so the residual of the computed x
+   * stagnates at a level that depends on the matrix and often exceeds \f$ \epsilon \f$. With the default tolerance
+   * the iteration therefore aims at \f$ \epsilon \f$, ends when the computed residual stagnates, and reports Success
+   * if it is then at most \f$ 8 \sqrt{n}\, \epsilon \f$ for an n x n matrix, the default tolerance of IDRS. A
+   * tolerance set by setTolerance() is never relaxed, so a tolerance below what the arithmetic can confirm ends in
+   * NoConvergence with the best iterate and its residual in error().
    */
   RealScalar tolerance() const {
-    return Base::m_tolerance >= RealScalar(0) ? Base::m_tolerance : Base::sizeScaledTolerance();
+    return Base::m_tolerance >= RealScalar(0) ? Base::m_tolerance : NumTraits<RealScalar>::epsilon();
   }
 
   /** \internal */
@@ -294,7 +298,9 @@ class MINRES : public IterativeSolverBase<MINRES<MatrixType_, UpLo_, Preconditio
     m_error = tol;
     RowMajorWrapper row_mat(matrix());
     internal::minres(SelfAdjointWrapper(row_mat), b, x, Base::m_preconditioner, m_iterations, m_error);
-    m_info = m_error <= tol ? Success : NoConvergence;
+    const bool confirmed =
+        m_error <= tol || (Base::m_tolerance < RealScalar(0) && m_error <= Base::sizeScaledTolerance());
+    m_info = confirmed ? Success : NoConvergence;
   }
 
  protected:

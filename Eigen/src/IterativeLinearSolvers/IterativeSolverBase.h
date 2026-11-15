@@ -256,7 +256,8 @@ class IterativeSolverBase : public SparseSolverBase<Derived> {
    * documents instead; LeastSquaresConjugateGradient bounds the normal-equation residual |A'(Ax-b)|/|A'b|, and
    * LSMR bounds |A'(Ax-b)|/(|A| |Ax-b|).
    * The default value is the machine precision given by NumTraits<Scalar>::epsilon(), unless the solver documents
-   * another; IDRS and MINRES derive their default from the size of the matrix.
+   * another; IDRS derives its default from the size of the matrix, and MINRES reports Success up to that bound,
+   * see MINRES::tolerance().
    * A tolerance of 0 asks for iterating until the residual vanishes or maxIterations() is reached. The solvers stop
    * earlier when it underflows or the Krylov space is exhausted, and return a finite solution.
    */
@@ -419,7 +420,8 @@ class IterativeSolverBase : public SparseSolverBase<Derived> {
   /** \internal The number of columns of the matrix, or 0 while a matrix-free operator is not attached yet. */
   Index attachedCols() const { return m_matrixWrapper.hasMatrix() ? matrix().cols() : Index(0); }
 
-  /** \internal 8 sqrt(max(n, 1)) eps, the default tolerance of IDRS and MINRES, with n = attachedCols(). */
+  /** \internal 8 sqrt(max(n, 1)) eps with n = attachedCols(): the default tolerance of IDRS, and the residual that
+   * MINRES accepts as Success at its default tolerance. */
   RealScalar sizeScaledTolerance() const {
     return RealScalar(8) * numext::sqrt(RealScalar(numext::maxi(attachedCols(), Index(1)))) *
            NumTraits<RealScalar>::epsilon();
