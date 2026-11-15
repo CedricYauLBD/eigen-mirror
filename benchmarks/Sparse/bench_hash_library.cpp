@@ -211,6 +211,16 @@ static void BM_ccr(benchmark::State& s) {
   }
   s.SetLabel(k.name);
 }
+static void BM_rrc(benchmark::State& s) {
+  const PCase& k = pcases()[s.range(0)];
+  SpMatR A = k.A, B = k.B;
+  SpMat C;
+  for (auto _ : s) {
+    C = A * B;
+    benchmark::DoNotOptimize(C.valuePtr());
+  }
+  s.SetLabel(k.name);
+}
 // (A * B).pruned(1, tolerance), col*col->col. Arg 1 selects the tolerance: 0 drops only exact zeros, 1 is the median
 // magnitude of the entries of A * B and drops about half of them.
 static void BM_ccc_pruned(benchmark::State& s) {
@@ -257,6 +267,7 @@ BENCHMARK(BM_ccc)->DenseRange(0, 23)->Unit(benchmark::kMillisecond);
 BENCHMARK(BM_rrr)->DenseRange(0, 7)->Unit(benchmark::kMillisecond);
 BENCHMARK(BM_rcc)->DenseRange(0, 7)->Unit(benchmark::kMillisecond);
 BENCHMARK(BM_ccr)->DenseRange(0, 7)->Unit(benchmark::kMillisecond);
+BENCHMARK(BM_rrc)->DenseRange(0, 7)->Unit(benchmark::kMillisecond);
 BENCHMARK(BM_ccc_pruned)->ArgsProduct({benchmark::CreateDenseRange(0, 23, 1), {0, 1}})->Unit(benchmark::kMillisecond);
 BENCHMARK(BM_rrr_pruned)->DenseRange(0, 7)->Unit(benchmark::kMillisecond);
 BENCHMARK(BM_ccr_pruned)->DenseRange(0, 7)->Unit(benchmark::kMillisecond);

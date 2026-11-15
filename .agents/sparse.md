@@ -70,13 +70,16 @@ into a sparse destination. So `Q`, unlike `R`, comes out sorted.
 - `insert()` requires that the entry not already exist. Use `coeffRef()` when it might exist. Before inserting in random
   order, call `reserve(const SizesType&)`: the sequential fast path applies only when outer indices increase.
 - The sparse-sparse product selectors keep the result sorted on purpose. All eight combinations of storage
-  orders run one kernel that builds each inner vector sorted, in the storage order of the result. A selector first
-  converts each operand that lacks that order
-  ([`ConservativeSparseSparseProduct.h`](../Eigen/src/SparseCore/ConservativeSparseSparseProduct.h)). Do not replace
-  the conversion of both operands with a storage-order change of the result: that form measured up to 1.44 times
-  slower, because the result usually has more entries than the operands. A new product,
-  permutation, or assembly path must also leave the indices sorted. `sortInnerIndices()` and `innerIndicesAreSorted()`
-  on `SparseCompressedBase` are the tools for this. Check `innerIndicesAreSorted()` in a test, not only in reasoning.
+  orders run one kernel that builds each inner vector sorted
+  ([`ConservativeSparseSparseProduct.h`](../Eigen/src/SparseCore/ConservativeSparseSparseProduct.h)). A selector
+  converts each operand that lacks the storage order of the result. When both lack it, the selector can instead run
+  the kernel in the operands' order and convert the result. The comment above the selectors gives the rule, which
+  compares the operands' entry counts and the number of products. Neither form wins everywhere: converting the result
+  is faster for `A * P` products in algebraic multigrid, and slower for `A * A` and for products whose result has more
+  entries than the operands. Benchmark all three kinds, on a machine with a small cache too, before you change the
+  rule. A new product, permutation, or assembly path must also leave the indices sorted. `sortInnerIndices()` and
+  `innerIndicesAreSorted()` on `SparseCompressedBase` are the tools for this. Check `innerIndicesAreSorted()` in a
+  test, not only in reasoning.
 - When a new kernel must produce sorted inner vectors, read "Postconditions And Invariants" in
   [`benchmarking.md`](benchmarking.md) before you choose a structure that keeps a vector sorted while it accumulates.
   The inner vector is read only when it is complete, so the order is a postcondition.

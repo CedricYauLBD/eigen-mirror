@@ -229,8 +229,44 @@ template <typename Lhs, typename Rhs, typename ResultType,
 struct conservative_sparse_sparse_product_selector;
 
 // The kernel yields sorted vectors in the storage order of its operands, so each selector below converts the operands
-// that lack the storage order of the result. Converting both costs a pass over the operands; multiplying first and
-// converting the result costs a pass over the result, which usually has more entries.
+// that lack the storage order of the result. Where both lack it, the selector can instead run the kernel in the
+// storage order of the operands and convert the result: a change of storage order is a counting transpose, which
+// leaves the vectors sorted.
+//
+// For the kernel run on (K, T), which sums one term per entry (k, j) of T, the term being vector k of K, converting
+// the result beat converting the operands when
+//
+//   nnz(K) > 2 nnz(T)   and   flops < 2 (nnz(K) + nnz(T)),   flops = sum over entries (k, j) of T of nnz(K_k).
+//
+// The kernel in the storage order of the result has nnz(K) terms, and a term has a fixed cost, so fewer terms are
+// cheaper. nnz(C) <= flops, and converting C costs about as much per entry as converting K and T, so the second
+// condition bounds the conversion. The factor 2 in the first keeps products of similar operands, such as A * A, on the
+// conversion of the operands. flops is counted only up to its bound. The rule cannot see how scattered the vectors of
+// C are, which decides the cost of converting C on a machine with a small cache.
+template <typename K, typename T>
+bool sparse_product_converts_result(const K& kernelLhs, const T& kernelRhs) {
+  using StorageIndex = typename K::StorageIndex;
+  using TIterator = typename evaluator<T>::InnerIterator;
+  evaluator<K> kEval(kernelLhs);
+  evaluator<T> tEval(kernelRhs);
+  const Index kNonZeros = kEval.nonZerosEstimate(), tNonZeros = tEval.nonZerosEstimate();
+  if (!(kNonZeros > 2 * tNonZeros)) return false;
+  const Index outer = kernelLhs.outerSize();
+  ei_declare_aligned_stack_constructed_variable(Index, count, outer, 0);
+  ei_declare_aligned_stack_constructed_variable(StorageIndex, lo, outer, 0);
+  ei_declare_aligned_stack_constructed_variable(StorageIndex, hi, outer, 0);
+  ei_declare_aligned_stack_constructed_variable(bool, known, outer, 0);
+  sparse_product_lhs_stats<K, StorageIndex> kStats(kernelLhs, kEval, false, count, lo, hi, known);
+  const Index bound = 2 * (kNonZeros + tNonZeros);
+  Index flops = 0;
+  for (Index j = 0; j < kernelRhs.outerSize(); ++j)
+    for (TIterator tIt(tEval, j); tIt; ++tIt) {
+      flops += kStats.count(tIt.index());
+      if (flops >= bound) return false;
+    }
+  return true;
+}
+
 template <typename Lhs, typename Rhs, typename ResultType>
 struct conservative_sparse_sparse_product_selector<Lhs, Rhs, ResultType, ColMajor, ColMajor, ColMajor> {
   template <typename Keep = sparse_product_keep_all>
@@ -272,6 +308,13 @@ template <typename Lhs, typename Rhs, typename ResultType>
 struct conservative_sparse_sparse_product_selector<Lhs, Rhs, ResultType, RowMajor, RowMajor, ColMajor> {
   template <typename Keep = sparse_product_keep_all>
   static void run(const Lhs& lhs, const Rhs& rhs, ResultType& res, const Keep& keep = Keep()) {
+    if (sparse_product_converts_result(rhs, lhs)) {
+      using RowMajorRes = WithStorageOrder<ResultType, RowMajor>;
+      RowMajorRes resRow(lhs.rows(), rhs.cols());
+      internal::conservative_sparse_sparse_product_sorted_impl<Rhs, Lhs, RowMajorRes, true>(rhs, lhs, resRow, keep);
+      res = resRow;
+      return;
+    }
     using ColMajorLhs = WithStorageOrder<Lhs, ColMajor>;
     ColMajorLhs lhsCol = lhs;
     using ColMajorRhs = WithStorageOrder<Rhs, ColMajor>;
@@ -288,6 +331,13 @@ template <typename Lhs, typename Rhs, typename ResultType>
 struct conservative_sparse_sparse_product_selector<Lhs, Rhs, ResultType, ColMajor, ColMajor, RowMajor> {
   template <typename Keep = sparse_product_keep_all>
   static void run(const Lhs& lhs, const Rhs& rhs, ResultType& res, const Keep& keep = Keep()) {
+    if (sparse_product_converts_result(lhs, rhs)) {
+      using ColMajorRes = WithStorageOrder<ResultType, ColMajor>;
+      ColMajorRes resCol(lhs.rows(), rhs.cols());
+      internal::conservative_sparse_sparse_product_sorted_impl<Lhs, Rhs, ColMajorRes>(lhs, rhs, resCol, keep);
+      res = resCol;
+      return;
+    }
     using RowMajorLhs = WithStorageOrder<Lhs, RowMajor>;
     RowMajorLhs lhsRow = lhs;
     using RowMajorRhs = WithStorageOrder<Rhs, RowMajor>;

@@ -20,6 +20,7 @@ inline void on_temporary_creation() {
 
 #include "sparse.h"
 #include <map>
+#include <set>
 
 #define EIGEN_TEST_ANNOYING_SCALAR_DONT_THROW
 #include "AnnoyingScalar.h"
@@ -986,6 +987,87 @@ void test_sparse_product_operand_order() {
   }
 }
 
+// Operands that both lack the storage order of the result. The selector converts the operands, or, when the kernel in
+// their storage order has far fewer terms and few products, runs it there and converts the result; the shapes take
+// each way, and the last two have far fewer terms but too many products. The scalar
+// does not commute, so a swapped operand order shows, and some sums cancel to zero, which the pruned product drops.
+template <int OperandOrder>
+void test_sparse_product_result_conversion() {
+  using Scalar = noncommutative_scalar::NoncommutingBlock;
+  constexpr int ResOrder = OperandOrder == ColMajor ? RowMajor : ColMajor;
+  using Operand = SparseMatrix<Scalar, OperandOrder>;
+  using Result = SparseMatrix<Scalar, ResOrder>;
+  auto random_operand = [](Index rows, Index cols, Index perColumn) {
+    Operand m(rows, cols);
+    m.reserve(VectorXi::Constant(m.outerSize(), int(perColumn * cols / m.outerSize() + perColumn)));
+    for (Index j = 0; j < cols; ++j) {
+      std::set<Index> chosen;
+      while (Index(chosen.size()) < perColumn) chosen.insert(internal::random<Index>(0, rows - 1));
+      // A fifth of the entries are stored zeros, so that some sums are zero.
+      for (Index i : chosen) {
+        Scalar& entry = m.insert(i, j);
+        if (internal::random<int>(0, 4) != 0)
+          for (int& value : entry.values) value = internal::random<int>(-2, 2);
+      }
+    }
+    return m;
+  };
+  struct Shape {
+    Index rows, mid, cols, lhsPerColumn, rhsPerColumn;
+  };
+  const Shape shapes[] = {
+      {60, 40, 30, 6, 1}, {30, 40, 60, 1, 6}, {40, 40, 40, 3, 3}, {60, 10, 30, 30, 4}, {30, 10, 60, 12, 5}};
+  for (int s = 0; s < 5; ++s) {
+    const Shape& shape = shapes[s];
+    Operand lhs = random_operand(shape.rows, shape.mid, shape.lhsPerColumn);
+    Operand rhs = random_operand(shape.mid, shape.cols, shape.rhsPerColumn);
+    const bool convertsResult = OperandOrder == ColMajor ? internal::sparse_product_converts_result(lhs, rhs)
+                                                         : internal::sparse_product_converts_result(rhs, lhs);
+    const Index lhsNonZeros = lhs.nonZeros(), rhsNonZeros = rhs.nonZeros();
+    const bool fewerTerms = OperandOrder == ColMajor ? lhsNonZeros > 2 * rhsNonZeros : rhsNonZeros > 2 * lhsNonZeros;
+    VERIFY_IS_EQUAL(fewerTerms, s == (OperandOrder == ColMajor ? 0 : 1) || s == (OperandOrder == ColMajor ? 3 : 4));
+    VERIFY_IS_EQUAL(convertsResult, s == (OperandOrder == ColMajor ? 0 : 1));
+
+    // The reference sums the products in a dense matrix and marks the entries that the patterns generate.
+    using Dense = Matrix<Scalar, Dynamic, Dynamic>;
+    Dense expected = Dense::Constant(shape.rows, shape.cols, Scalar(0));
+    Matrix<bool, Dynamic, Dynamic> generated = Matrix<bool, Dynamic, Dynamic>::Constant(shape.rows, shape.cols, false);
+    for (Index lhsOuter = 0; lhsOuter < lhs.outerSize(); ++lhsOuter)
+      for (typename Operand::InnerIterator lhsIt(lhs, lhsOuter); lhsIt; ++lhsIt)
+        for (Index rhsOuter = 0; rhsOuter < rhs.outerSize(); ++rhsOuter)
+          for (typename Operand::InnerIterator rhsIt(rhs, rhsOuter); rhsIt; ++rhsIt)
+            if (rhsIt.row() == lhsIt.col()) {
+              expected(lhsIt.row(), rhsIt.col()) += lhsIt.value() * rhsIt.value();
+              generated(lhsIt.row(), rhsIt.col()) = true;
+            }
+    Index generatedCount = 0, nonZeroCount = 0;
+    for (Index j = 0; j < shape.cols; ++j)
+      for (Index i = 0; i < shape.rows; ++i) {
+        generatedCount += generated(i, j);
+        nonZeroCount += expected(i, j).values != Scalar(0).values;
+      }
+    VERIFY(nonZeroCount < generatedCount);
+
+    for (int compressed = 0; compressed < 2; ++compressed) {
+      Result conservative = lhs * rhs;
+      // The public pruned product runs the selector for its own plain type; this selector is reached directly.
+      Result pruned(shape.rows, shape.cols);
+      internal::conservative_sparse_sparse_product_selector<Operand, Operand, Result>::run(
+          lhs, rhs, pruned, internal::sparse_product_keep_above<double>{0.0});
+      Result publicPruned = (lhs * rhs).pruned(Scalar(0), 0.0);
+      for (const Result* result : {&conservative, &pruned, &publicPruned}) {
+        VERIFY(result->isCompressed());
+        VERIFY_IS_EQUAL(result->innerIndicesAreSorted(), result->outerSize());
+        VERIFY_IS_EQUAL(result->nonZeros(), result == &conservative ? generatedCount : nonZeroCount);
+        for (Index j = 0; j < shape.cols; ++j)
+          for (Index i = 0; i < shape.rows; ++i) VERIFY(result->coeff(i, j).values == expected(i, j).values);
+      }
+      lhs.makeCompressed();
+      rhs.makeCompressed();
+    }
+  }
+}
+
 template <typename = void>
 void test_sparse_outer_operand_types() {
   SparseVector<noncommutative_scalar::TaggedScalar<0>> column(2);
@@ -1459,6 +1541,8 @@ EIGEN_DECLARE_TEST(sparse_product) {
     CALL_SUBTEST_11((test_sparse_product_operand_order<true, RowMajor, ColMajor, RowMajor>()));
     CALL_SUBTEST_11((test_sparse_product_operand_order<true, RowMajor, RowMajor, ColMajor>()));
     CALL_SUBTEST_11((test_sparse_product_operand_order<true, RowMajor, RowMajor, RowMajor>()));
+    CALL_SUBTEST_11((test_sparse_product_result_conversion<ColMajor>()));
+    CALL_SUBTEST_11((test_sparse_product_result_conversion<RowMajor>()));
 
     CALL_SUBTEST_6((test_pruned_product_custom_scalar<>()));
     CALL_SUBTEST_6((test_pruned_product_front_insertion<>()));
