@@ -329,6 +329,8 @@ ArpackGeneralizedSelfAdjointEigenSolver<MatrixType, MatrixSolver, BisSPD>::compu
   m_info = InvalidInput;
   m_isInitialized = false;
   m_eigenvectorsOk = false;
+  m_nbrConverged = 0;
+  m_nbrIterations = 0;
 
   bool isBempty = (B.rows() == 0) || (B.cols() == 0);
 

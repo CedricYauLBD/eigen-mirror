@@ -85,12 +85,25 @@ void test_arpack_state_across_computations() {
   VERIFY_IS_EQUAL(solver.info(), Success);
   VERIFY_IS_EQUAL(solver.eigenvalues().size(), nev);
   VERIFY_IS_EQUAL(solver.eigenvectors().cols(), nev);
+  VERIFY_IS_EQUAL(solver.getNbrConvergedEigenValues(), size_t(3));
+  VERIFY_IS_EQUAL(solver.getNbrIterations(), size_t(7));
 
   // A later failure invalidates the previous result.
   g_saupd_info = 1;
   solver.compute(A, nev, "LM", ComputeEigenvectors);
   VERIFY_IS_EQUAL(solver.info(), NoConvergence);
   VERIFY_RAISES_ASSERT(solver.eigenvalues());
+  VERIFY_IS_EQUAL(solver.getNbrConvergedEigenValues(), size_t(0));
+  VERIFY_IS_EQUAL(solver.getNbrIterations(), size_t(0));
+
+  // So does a failed factorization, which returns before ARPACK runs.
+  g_saupd_info = 0;
+  solver.compute(A, nev, "LM", ComputeEigenvectors);
+  VERIFY_IS_EQUAL(solver.getNbrConvergedEigenValues(), size_t(3));
+  solver.compute(diagonal_matrix(n, -1.0), nev, "SM");
+  VERIFY_IS_EQUAL(solver.info(), NumericalIssue);
+  VERIFY_IS_EQUAL(solver.getNbrConvergedEigenValues(), size_t(0));
+  VERIFY_IS_EQUAL(solver.getNbrIterations(), size_t(0));
 
   // So does a later computation without eigenvectors.
   g_saupd_info = 0;
