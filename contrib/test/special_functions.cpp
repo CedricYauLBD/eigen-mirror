@@ -1042,6 +1042,85 @@ void test_igamma_stirling_regime() {
   }
 }
 
+// P = igamma(a, x) for x <= a above igamma_use_stirling_main_term's threshold evaluates the power series, which used to
+// stop after 2000 terms, and the ordinary main term with the error eps a log(a) in its exponent. The terms decay as
+// exp(-k^2 / (2 a)), so ~ 8.6 sqrt(a) (double) or 5.8 sqrt(a) (float) are needed near x = a: double igamma(1e6, 1e6)
+// was 0.477 (true 0.5001), igamma(1e7, 9999900) 0.234 (true 0.4874) and float igamma(1e5, 99990) 0.447 (true 0.4878),
+// with P + Q != 1. The series now takes the Stirling main term, its limit grows with sqrt(a), and it returns NaN where
+// the limit (1e5 terms) is reached, a >~ 1.4e8 (double), 3e8 (float) near x = a. In float r += 1 stalled above
+// a = 2^24 (the points at a = 5e7 and 1e8). References as in test_igamma_stirling_regime (MPFR; Temme's expansion above
+// 2e6). The error of P is ~ eps sqrt(a) from the sum of ~ sqrt(a) terms; the bound is (10 + sqrt(a) / 4) eps, and the
+// measured error at most 0.5 of it.
+template <typename Scalar>
+void test_igamma_series_side() {
+  struct Reference {
+    double a, x, p, q;
+  };
+  const Reference refs_f[] = {{29, 25, 0.23659925813359777, 0.76340074186640223},
+                              {29, 29, 0.52469827185745882, 0.47530172814254118},
+                              {100, 90, 0.15822098918643017, 0.84177901081356983},
+                              {100000, 99990, 0.48780634174477317, 0.51219365825522683},
+                              {100000, 100000, 0.50042052211036518, 0.49957947788963482},
+                              {1000000, 1000000, 0.50013298076087259, 0.49986701923912741},
+                              {10000000, 9997000, 0.17139353340097207, 0.82860646659902793},
+                              {50000000, 49993000, 0.16109963271860337, 0.83890036728139663},
+                              {100000000, 99996000, 0.34458857000643982, 0.65541142999356018}};
+  const Reference refs_d[] = {{23300, 23150, 0.16289860911857687, 0.83710139088142313},
+                              {23300, 23300, 0.50087118613331477, 0.49912881386668523},
+                              {100000, 99990, 0.48780634174477317, 0.51219365825522683},
+                              {100000, 100000, 0.50042052211036518, 0.49957947788963482},
+                              {1000000, 1000000, 0.50013298076087259, 0.49986701923912741},
+                              {1000000, 999500, 0.30862555689081532, 0.69137444310918468},
+                              {5000000, 4997000, 0.089836891739721374, 0.91016310826027863},
+                              {10000000, 9999900, 0.48742842894636062, 0.51257157105363938},
+                              {10000000, 10000000, 0.5000420522087237, 0.4999579477912763},
+                              {100000000, 99999992, 0.49969414427323586, 0.50030585572676414},
+                              {90000000, 90000000, 0.50001401740290098, 0.49998598259709902},
+                              {300000000, 299900000, 3.8676982391297455e-09, 0.99999999613230176}};
+  const bool is_float = sizeof(Scalar) == 4;
+  const Reference* refs = is_float ? refs_f : refs_d;
+  const int n = is_float ? 9 : 12;
+  using ArrayType = Array<Scalar, Dynamic, 1>;
+  ArrayType a(n), x(n);
+  for (int i = 0; i < n; ++i) {
+    a(i) = Scalar(refs[i].a);
+    x(i) = Scalar(refs[i].x);
+  }
+  const ArrayType p_array = igamma(a, x), q_array = igammac(a, x);
+  const double eps = double(NumTraits<Scalar>::epsilon());
+  for (int i = 0; i < n; ++i) {
+    const double tol = (10 + std::sqrt(refs[i].a) / 4) * eps;
+    bool q_converges = true;
+    if (x(i) >= a(i)) internal::igammac_cf_lentz<Scalar>(a(i), x(i), &q_converges);
+    for (int path = 0; path < 2; ++path) {
+      const double p = double(path ? p_array(i) : numext::igamma(a(i), x(i)));
+      const double q = double(path ? q_array(i) : numext::igammac(a(i), x(i)));
+      VERIFY(numext::abs(p - refs[i].p) <= tol * refs[i].p);
+      if (q_converges) {
+        VERIFY(numext::abs(q - refs[i].q) <= tol * refs[i].q);
+        VERIFY(numext::abs(p + q - 1) <= 2 * tol);
+      } else {
+        // Q takes the continued fraction at x = a, which does not converge for a >~ 1.1e7 (double), 5.6e7 (float).
+        VERIFY((numext::isnan)(q));
+      }
+    }
+  }
+  // Beyond the limit of the series (1e5 terms): NaN, as igammac on the continued-fraction side.
+  const double a_nan_f[] = {1e9, 1e12}, x_nan_f[] = {1e9, 999999995904.0 - 4e6};
+  const double a_nan_d[] = {1e9, 1e12}, x_nan_d[] = {1e9, 1e12 - 4e6};
+  ArrayType an(2), xn(2);
+  for (int i = 0; i < 2; ++i) {
+    an(i) = Scalar(is_float ? a_nan_f[i] : a_nan_d[i]);
+    xn(i) = Scalar(is_float ? x_nan_f[i] : x_nan_d[i]);
+  }
+  const ArrayType pn = igamma(an, xn), qn = igammac(an, xn);
+  for (int i = 0; i < 2; ++i) {
+    VERIFY(xn(i) <= an(i));
+    VERIFY((numext::isnan)(pn(i)) && (numext::isnan)(qn(i)));
+    VERIFY((numext::isnan)(numext::igamma(an(i), xn(i))) && (numext::isnan)(numext::igammac(an(i), xn(i))));
+  }
+}
+
 // Limiting values, in the scalar and the array code paths. NaN must not be turned into a number by the clamping of
 // igamma to [0, 1].
 template <typename Scalar>
@@ -1220,6 +1299,7 @@ EIGEN_DECLARE_TEST(special_functions) {
   CALL_SUBTEST_1(test_igamma_internal_nan<float>());
   CALL_SUBTEST_1(test_igamma_large_arguments<float>());
   CALL_SUBTEST_1(test_igamma_unconverged_band<float>());
+  CALL_SUBTEST_1(test_igamma_series_side<float>());
   CALL_SUBTEST_1(test_igamma_stirling_regime<float>());
   CALL_SUBTEST_2(ndtri_tail_accuracy<double>());
   CALL_SUBTEST_2(array_special_functions<ArrayXd>());
@@ -1235,6 +1315,7 @@ EIGEN_DECLARE_TEST(special_functions) {
   CALL_SUBTEST_2(test_igamma_internal_nan<double>());
   CALL_SUBTEST_2(test_igamma_large_arguments<double>());
   CALL_SUBTEST_2(test_igamma_unconverged_band<double>());
+  CALL_SUBTEST_2(test_igamma_series_side<double>());
   CALL_SUBTEST_2(test_igamma_stirling_regime<double>());
   CALL_SUBTEST_3(scalar_ndtri<long double>());
   CALL_SUBTEST_4(scalar_erf_erfc<long double>());

@@ -891,19 +891,34 @@ EIGEN_DEVICE_FUNC constexpr int igamma_num_iterations() {
                                                : 2000;
 }
 
-/* x^a exp(-x) / Gamma(a) for x >= a >> 1 from Stirling's series. a log(x) - x - lgamma(a) in main_igamma_term
+/* The iteration limit of the power series of igamma(a, x) for x <= a in VALUE mode. The terms are
+ * c_k = prod_{j <= k} x / (a + j) <= exp(-k^2 / (2 a)) for x <= a, so the sum has converged to machep (c_k <= machep,
+ * and the sum is >= 1) once k >= sqrt(-2 a log(machep)), at most 8.6 sqrt(a) in double and 5.8 sqrt(a) in float, which
+ * exceeds the limit 2000 of igamma_num_iterations for a >~ 5e4 (double) and 1.2e5 (float). The limit is 1.25 times
+ * that, but at most 1e5. */
+template <typename Scalar>
+EIGEN_DEVICE_FUNC static int igamma_series_num_iterations(Scalar a) {
+  const Scalar n = Scalar(1.25) * numext::sqrt(-Scalar(2) * a * numext::log(cephes_helper<Scalar>::machep()));
+  return !(n > Scalar(2000)) ? 2000 : n > Scalar(100000) ? 100000 : static_cast<int>(n);
+}
+
+/* x^a exp(-x) / Gamma(a) for x > 0 and a >> 1 from Stirling's series. a log(x) - x - lgamma(a) in main_igamma_term
  * cancels to an absolute error of about eps a log(a), more than 1 for a >~ 1 / eps. With d = (x - a) / a and
  * s = d / (2 + d), so that log1p(d) = 2 atanh(s):
  *
  *   log(x^a exp(-x) / Gamma(a)) = a (log1p(d) - d) + (1/2) log(a / (2 pi)) - 1 / (12 a) + O(a^-3),
- *   log1p(d) - d = -d s + 2 (s^3 / 3 + s^5 / 5 + ...),   0 <= s < 1/9 for d < 1/4: the tail past s^21 / 21 is
- *   below 2^-64 relative. */
+ *   log1p(d) - d = -d s + 2 (s^3 / 3 + s^5 / 5 + ...),   |s| < 1/7 for -1/4 < d < 1/4: the tail past s^21 / 21 is
+ *   below 2^-60 relative.
+ * For d <= -1/4 (x <= 3a/4), 1 + d = x / a is formed by the division, not as 1 + d, which has the absolute error eps
+ * and so the relative error eps / (1 + d) for x << a. */
 template <typename Scalar>
 EIGEN_DEVICE_FUNC static Scalar main_igamma_term_stirling(Scalar a, Scalar x) {
   const Scalar d = (x - a) / a;
   Scalar log1pmx;
   if (d >= Scalar(0.25)) {
     log1pmx = numext::log1p(d) - d;
+  } else if (d <= Scalar(-0.25)) {
+    log1pmx = numext::log(x / a) - d;
   } else {
     const Scalar s = d / (Scalar(2) + d);
     const Scalar s2 = s * s;
@@ -917,7 +932,8 @@ EIGEN_DEVICE_FUNC static Scalar main_igamma_term_stirling(Scalar a, Scalar x) {
   }
   const Scalar logax =
       a * log1pmx + Scalar(0.5) * (numext::log(a) - numext::log(Scalar(2 * EIGEN_PI))) - Scalar(1) / (Scalar(12) * a);
-  return logax < -numext::log(NumTraits<Scalar>::highest()) ? Scalar(0) : numext::exp(logax);
+  // Written so that a NaN, from a = inf, gives 0 as main_igamma_term does.
+  return !(logax >= -numext::log(NumTraits<Scalar>::highest())) ? Scalar(0) : numext::exp(logax);
 }
 
 /* Whether igammac_cf_impl evaluates igammac(a, x), x >= a, as main_igamma_term_stirling * igammac_cf_lentz rather
@@ -1000,7 +1016,7 @@ struct igammac_cf_impl {
       const Scalar h = igammac_cf_lentz<Scalar>(a, x, &converged);
       // Unconverged only in the band documented at igammac_cf_lentz (|t| <~ 0.4, a >~ 1e7 in double, 5e7 in float). The
       // recurrence and the ordinary main term are wrong there (values above 1, or float igammac(1e8, 1e8) = 1.25e-4
-      // for a true value ~ 0.5), so the result is NaN: the true value or NaN, never a confident wrong one.
+      // for a true value ~ 0.5), so the result is NaN: a converged fraction or NaN.
       if (!converged) return NumTraits<Scalar>::quiet_NaN();
       const Scalar ax_stirling = main_igamma_term_stirling<Scalar>(a, x);
       return ax_stirling == zero ? zero : ax_stirling * h;
@@ -1118,7 +1134,8 @@ struct igamma_series_impl {
     const Scalar one = 1;
     const Scalar machep = cephes_helper<Scalar>::machep();
 
-    Scalar ax = main_igamma_term<Scalar>(a, x);
+    const bool stirling = mode == VALUE && igamma_use_stirling_main_term(a);
+    Scalar ax = stirling ? main_igamma_term_stirling<Scalar>(a, x) : main_igamma_term<Scalar>(a, x);
 
     // This is independent of mode. If this value is zero,
     // then the function value is zero. If the function value is zero,
@@ -1138,8 +1155,11 @@ struct igamma_series_impl {
     Scalar dc_da = zero;
     Scalar dans_da = zero;
 
-    for (int i = 0; i < igamma_num_iterations<Scalar, mode>(); i++) {
-      r += one;
+    const int num_iterations = mode == VALUE ? igamma_series_num_iterations(a) : igamma_num_iterations<Scalar, mode>();
+    bool converged = false;
+    for (int i = 0; i < num_iterations; i++) {
+      // r += 1 stalls once a >= 2^24 in float: a + 1 rounds to a.
+      r = mode == VALUE ? a + Scalar(i + 1) : r + one;
       Scalar term = x / r;
       Scalar dterm_da = -x / (r * r);
       dc_da = term * dc_da + dterm_da * c;
@@ -1149,6 +1169,7 @@ struct igamma_series_impl {
 
       if (mode == VALUE) {
         if (c <= machep * ans) {
+          converged = true;
           break;
         }
       } else {
@@ -1157,6 +1178,9 @@ struct igamma_series_impl {
         }
       }
     }
+    // A truncated sum is wrong by an unbounded amount (double igamma(1e6, 1e6) was 0.477, true 0.500): a converged sum
+    // or NaN.
+    if (mode == VALUE && !converged) return NumTraits<Scalar>::quiet_NaN();
 
     Scalar dlogax_da = numext::log(x) - digamma_impl<Scalar>::run(a + one);
     Scalar dax_da = ax * dlogax_da;
