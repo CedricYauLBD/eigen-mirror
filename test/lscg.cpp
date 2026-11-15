@@ -327,13 +327,34 @@ void test_lscg_underflowing_normal_rhs() {
   // A = (1, 0)': the solution is b(0), exactly, however large the part of b orthogonal to the range of A.
   SparseMatrix<double> col(2, 1);
   col.insert(0, 0) = 1;
-  for (const std::pair<double, double>& b : {std::make_pair(1.5e-308, 1e20), std::make_pair(1e-310, 1e3),
-                                             std::make_pair(1e-310, 1e-3), std::make_pair(3e-310, 3e-200)}) {
+  // Including |b| just below 1, equal to the smallest normal number, subnormal, and the least positive number.
+  const std::pair<double, double> exactCases[] = {std::make_pair(1.5e-308, 1e20),
+                                                  std::make_pair(1e-310, 1e3),
+                                                  std::make_pair(1e-310, 1e-3),
+                                                  std::make_pair(3e-310, 3e-200),
+                                                  std::make_pair(1e-310, 0.99999999999999989),
+                                                  std::make_pair(1e-310, (std::numeric_limits<double>::min)()),
+                                                  std::make_pair(1e-310, 0.0),
+                                                  std::make_pair(std::numeric_limits<double>::denorm_min(), 0.0)};
+  for (const std::pair<double, double>& b : exactCases) {
     Mat B(2, 1), ref(1, 1);
     B << b.first, b.second;
     ref << b.first;
     ok &= check_lscg_case<IdentityPreconditioner>("exact b(0)", col, B, ref, 4 * eps);
     ok &= check_lscg_case<LeastSquareDiagonalPreconditioner<double> >("exact b(0), diagonal", col, B, ref, 4 * eps);
+  }
+  {  // The same in float.
+    SparseMatrix<float> colf(2, 1);
+    colf.insert(0, 0) = 1;
+    const float feps = NumTraits<float>::epsilon();
+    for (const std::pair<float, float>& b :
+         {std::make_pair(1e-40f, 1e-3f), std::make_pair(1e-40f, 0.99999994f), std::make_pair(1e-40f, 1e20f),
+          std::make_pair(1e-40f, 0.0f), std::make_pair(std::numeric_limits<float>::denorm_min(), 0.0f)}) {
+      Matrix<float, Dynamic, Dynamic> B(2, 1), ref(1, 1);
+      B << b.first, b.second;
+      ref << b.first;
+      ok &= check_lscg_case<IdentityPreconditioner>("exact b(0), float", colf, B, ref, 4 * feps);
+    }
   }
   {  // A' b = 0: x = 0.
     Mat B(2, 1), ref = Mat::Zero(1, 1);
@@ -399,6 +420,29 @@ void test_lscg_underflowing_normal_rhs() {
   VERIFY(ok);
 }
 
+// The scale of the rescaling is the largest power of two at most |b|, for every exponent down to the least positive
+// number, and values around the powers of two.
+template <typename T>
+void test_lscg_power_of_two_scale() {
+  const int lo = std::numeric_limits<T>::min_exponent - std::numeric_limits<T>::digits;
+  const auto check = [](T v) {
+    if (!(v > T(0) && v < T(1))) return;
+    int e;
+    std::frexp(v, &e);
+    VERIFY_IS_EQUAL(internal::least_square_power_of_two_at_most(v), std::ldexp(T(1), e - 1));
+  };
+  for (int k = lo; k <= 0; ++k) {
+    const T p = std::ldexp(T(1), k);
+    check(p);
+    check(T(1.5) * p);
+    check(std::nextafter(p, T(0)));
+    check(std::nextafter(p, T(2)));
+  }
+  check(std::numeric_limits<T>::denorm_min());
+  check((std::numeric_limits<T>::min)());
+  check(T(1) - std::numeric_limits<T>::epsilon() / 2);
+}
+
 EIGEN_DECLARE_TEST(lscg) {
   CALL_SUBTEST_1(test_lscg_T<double>());
   CALL_SUBTEST_2(test_lscg_T<std::complex<double> >());
@@ -411,6 +455,9 @@ EIGEN_DECLARE_TEST(lscg) {
   CALL_SUBTEST_5(test_lscg_small_rhs<>());
   CALL_SUBTEST_5(test_lscg_extreme_matrix<>());
   CALL_SUBTEST_5(test_lscg_underflowing_normal_rhs<>());
+  CALL_SUBTEST_5(test_lscg_power_of_two_scale<float>());
+  CALL_SUBTEST_5(test_lscg_power_of_two_scale<double>());
+  CALL_SUBTEST_5(test_lscg_power_of_two_scale<long double>());
   CALL_SUBTEST_5(
       (check_matrix_free_accessors<LeastSquaresConjugateGradient<MatrixFreeOperator, IdentityPreconditioner>>()));
 }

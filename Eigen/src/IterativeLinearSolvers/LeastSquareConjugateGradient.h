@@ -18,6 +18,24 @@ namespace Eigen {
 
 namespace internal {
 
+/** \internal The largest power of two that is at most \a v, for 0 < v < 1, so that s <= v < 2 s. It is found in
+ * O(log log (1 / v)) products: the squares 2^-1, 2^-2, 2^-4, ... that exceed v, then a binary descent over them for the
+ * largest exponent e with 2^-e > v, and the result is 2^-(e+1). Every product is a power of two, so it is exact, and a
+ * product below the least positive number rounds to 0, which does not exceed v and is rejected: nothing is taken from
+ * an underflowed value. Only comparison and multiplication of RealScalar are used. */
+template <typename RealScalar>
+RealScalar least_square_power_of_two_at_most(const RealScalar& v) {
+  RealScalar factors[32];  // 2^-2^k, beyond the exponent range of any scalar
+  int count = 0;
+  for (RealScalar f = RealScalar(0.5); count < 32 && f > v; f = RealScalar(f * f)) factors[count++] = f;
+  RealScalar s(1);  // 2^-e with s > v
+  for (int k = count - 1; k >= 0; --k) {
+    const RealScalar t = RealScalar(s * factors[k]);
+    if (t > v) s = t;
+  }
+  return RealScalar(s * RealScalar(0.5));
+}
+
 /** \internal The number of terms of a dot product of A' r: the average number of nonzeros per column of A when A
  * exposes nonZeros() (for a dense matrix that is its number of rows), and else the number of rows. */
 template <typename RealScalar, typename MatrixType>
@@ -61,14 +79,13 @@ EIGEN_DONT_INLINE bool least_square_conjugate_gradient(const MatrixType& mat, co
 
   RealScalar rhsNorm = normal_rhs.stableNorm();
   // A'b below the smallest normal number has lost its precision or underflowed to 0, and x = 0 would be returned with
-  // Success. When |b| < 1, solve for b / s and x / s instead, with s the power of two at most |b| so that the scaling is
-  // exact: that only raises A'b, unlike a division by a |b| above 1. The guess is left alone if x / s overflows.
+  // Success. When |b| < 1, solve for b / s and x / s instead, with s the power of two at most |b| so that the scaling
+  // is exact: that only raises A'b, unlike a division by a |b| above 1. The guess is left alone if x / s overflows.
   RealScalar rhsScale(1);
   if (rhsNorm < (std::numeric_limits<RealScalar>::min)()) {
     const RealScalar bNorm = rhs.stableNorm();
     if (bNorm > RealScalar(0) && bNorm < RealScalar(1)) {
-      RealScalar scale(1);
-      while (scale > bNorm) scale *= RealScalar(0.5);
+      const RealScalar scale = least_square_power_of_two_at_most(bNorm);
       const VectorType scaledGuess = x / scale;
       if (scaledGuess.allFinite()) {
         rhsScale = scale;
