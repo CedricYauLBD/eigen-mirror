@@ -210,8 +210,8 @@ struct reach_reorder<true, Upper, StorageIndex> {  // iterator reach: already in
 // insert reading values from xwork, and clear xwork and mark for the next column.
 // The reach is a structural bound, not a numeric one: a reached coefficient can be
 // exactly zero (a zero rhs entry, or numerical cancellation), so skip exact zeros at
-// insertion. This matches the AmbiVector path, which pruned zeros, and keeps a zero rhs
-// from materializing O(|reach|) stored zeros. xwork and mark are cleared regardless.
+// insertion, which keeps a zero rhs from materializing O(|reach|) stored zeros. xwork
+// and mark are cleared regardless.
 template <bool Ordered, bool Upper, typename Res, typename StorageIndex, typename Scalar>
 void reach_insert_column(Res& res, Index col, StorageIndex* xi, Index top, Index n, Scalar* xwork, uint8_t* mark) {
   reach_reorder<Ordered, Upper, StorageIndex>::run(xi + top, xi + n);
