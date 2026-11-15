@@ -416,7 +416,9 @@ bool check_fastmath_accuracy(const char* name, const std::vector<Scalar>& values
   for (Index i = 0; i < n; ++i) {
     const long double expected = ref(static_cast<long double>(x[i]));
     const long double error = numext::abs(static_cast<long double>(y[i]) - expected);
-    if (!has_finite_bits(y[i]) || !(error <= tolerance * numext::abs(expected))) {
+    // An infinite reference would make the comparison below true for every finite y.
+    if (!has_finite_bits(static_cast<Scalar>(expected)) || !has_finite_bits(y[i]) ||
+        !(error <= tolerance * numext::abs(expected))) {
       passed = false;
       if (static_cast<size_t>(i) < values.size()) {
         std::cerr << std::setprecision(std::numeric_limits<Scalar>::max_digits10) << name << "(" << x[i]
@@ -483,9 +485,12 @@ void check_exp_family_accuracy() {
 
   // sinh and cosh scale exp(r) by 2^(n - 1) from the same reduction as expm1, and are finite up to ln(2 highest).
   std::vector<Scalar> hyperbolic_values = large_values;
-  hyperbolic_values.push_back(is_float ? Scalar(89.2) : Scalar(710.3));
+  // sinhl and coshl overflow at 710.3 where long double has the range of double (MSVC, Apple arm64).
+  if (std::numeric_limits<long double>::max_exponent > std::numeric_limits<Scalar>::max_exponent) {
+    hyperbolic_values.push_back(is_float ? Scalar(89.2) : Scalar(710.3));
+    hyperbolic_values.push_back(is_float ? Scalar(-89.2) : Scalar(-710.3));
+  }
   hyperbolic_values.push_back(Scalar(-1.5));
-  hyperbolic_values.push_back(is_float ? Scalar(-89.2) : Scalar(-710.3));
   passed &= check_fastmath_accuracy("sinh", hyperbolic_values, sinh_fn, sinh_ref);
   passed &= check_fastmath_accuracy("cosh", hyperbolic_values, cosh_fn, cosh_ref);
   VERIFY(passed);
