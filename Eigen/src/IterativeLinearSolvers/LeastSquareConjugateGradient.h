@@ -25,7 +25,9 @@ namespace internal {
  * an underflowed value. Only comparison and multiplication of RealScalar are used. */
 template <typename RealScalar>
 RealScalar least_square_power_of_two_at_most(const RealScalar& v) {
-  RealScalar factors[32];  // 2^-2^k, beyond the exponent range of any scalar
+  // 2^-2^k for k < 32, which covers the exponents up to 2^32 - 1. For a scalar with a wider range the result is the
+  // power of two 2^-2^32 if that is above v: still an exact scale of b, but it raises b by less than s <= v < 2 s does.
+  RealScalar factors[32];
   int count = 0;
   for (RealScalar f = RealScalar(0.5); count < 32 && f > v; f = RealScalar(f * f)) factors[count++] = f;
   RealScalar s(1);  // 2^-e with s > v

@@ -180,6 +180,40 @@ void test_idrs_default_accuracy() {
   }
 }
 
+// On D T D for T = tridiag(-1, 4, -1) and D spread over 10^4, without a preconditioner, the recurrence residual of IDRS
+// drifts from b - A x, and a solve that ended at maxIterations() reported the recurrence residual: error() was up to
+// 10^4 times too small (about one solve in seven had it off by more than a factor of 2). error() is now the computed
+// |b - A x| / |b| at every exit but a breakdown.
+template <typename = void>
+void test_idrs_final_residual() {
+  using SpMat = SparseMatrix<double>;
+  const Index n = 120;
+  VectorXd d(n);
+  for (Index i = 0; i < n; ++i) d(i) = std::pow(1e4, double((i * 7) % 9) / 8.0 - 0.5);
+  std::vector<Triplet<double> > triplets;
+  for (Index i = 0; i < n; ++i) {
+    triplets.emplace_back(i, i, d(i) * d(i) * 4);
+    if (i + 1 < n) {
+      triplets.emplace_back(i, i + 1, -d(i) * d(i + 1));
+      triplets.emplace_back(i + 1, i, -d(i) * d(i + 1));
+    }
+  }
+  SpMat A(n, n);
+  A.setFromTriplets(triplets.begin(), triplets.end());
+  for (int trial = 0; trial < 20; ++trial) {
+    const VectorXd b = VectorXd::Random(n);
+    for (Index maxit : {60, 80, 100}) {
+      IDRS<SpMat, IdentityPreconditioner> solver(A);
+      solver.setTolerance(1e-14);
+      solver.setMaxIterations(maxit);
+      const VectorXd x = solver.solve(b);
+      if (solver.info() == NumericalIssue) continue;  // a breakdown leaves error() at the tolerance
+      const double res = (b - A * x).norm() / b.norm();
+      VERIFY_LE(numext::abs(solver.error() - res), res / 2);
+    }
+  }
+}
+
 // The 5-point Laplacian on an m x m grid.
 template <typename SpMat>
 SpMat idrs_poisson2d(Index m) {
@@ -207,7 +241,7 @@ template <typename = void>
 void test_idrs_stagnation() {
   using SpMat = SparseMatrix<double>;
   const double eps = NumTraits<double>::epsilon();
-  for (Index m : {25, 30}) {
+  for (Index m : {30, 40}) {
     const SpMat A = idrs_poisson2d<SpMat>(m);
     const Index n = A.rows();
     const VectorXd b = VectorXd::Random(n);
@@ -220,17 +254,29 @@ void test_idrs_stagnation() {
     VERIFY_LE(res, double(n) * eps);
     VERIFY_LE(numext::abs(solver.error() - res), res / 2 + eps);
     VERIFY_IS_EQUAL(solver.info(), solver.error() <= eps ? Success : NoConvergence);
-
-    // The default tolerance is eps too. The residual stagnates above it, and IDRS returns Success there as it is at
-    // most 8 sqrt(n) eps.
-    IDRS<SpMat, DiagonalPreconditioner<double> > defaultSolver(A);
-    const VectorXd xd = defaultSolver.solve(b);
-    VERIFY_IS_EQUAL(defaultSolver.tolerance(), eps);
-    VERIFY_IS_EQUAL(defaultSolver.info(), Success);
-    VERIFY_LE(defaultSolver.error(), 8 * numext::sqrt(double(n)) * eps);
-    VERIFY_LE(defaultSolver.iterations(), 5 * m);
-    VERIFY_LE((b - A * xd).norm(), 2 * 8 * numext::sqrt(double(n)) * eps * b.norm());
   }
+
+  // The default tolerance is eps too. The residual stagnates above it, and IDRS returns Success there as it is at most
+  // 8 sqrt(n) eps. That error() exceeds eps, which proves that the relaxed branch ran, holds for almost every solve but
+  // not for all (a solve confirms eps in about one of a few thousand for m = 40, and in 3% for m = 25), so it is
+  // required of at least one of four.
+  const Index m = 40;
+  const SpMat A = idrs_poisson2d<SpMat>(m);
+  const Index n = A.rows();
+  const double confirmable = 8 * numext::sqrt(double(n)) * eps;
+  bool relaxed = false;
+  for (int trial = 0; trial < 4; ++trial) {
+    const VectorXd b = VectorXd::Random(n);
+    IDRS<SpMat, DiagonalPreconditioner<double> > solver(A);
+    const VectorXd x = solver.solve(b);
+    VERIFY_IS_EQUAL(solver.tolerance(), eps);
+    VERIFY_IS_EQUAL(solver.info(), Success);
+    VERIFY_LE(solver.error(), confirmable);
+    VERIFY_LE(solver.iterations(), 5 * m);
+    VERIFY_LE((b - A * x).norm(), 2 * confirmable * b.norm());
+    relaxed |= solver.error() > eps;
+  }
+  VERIFY(relaxed);
 }
 
 EIGEN_DECLARE_TEST(idrs) {
@@ -246,6 +292,7 @@ EIGEN_DECLARE_TEST(idrs) {
   CALL_SUBTEST_2(test_idrs_default_tolerance<std::complex<double> >());
   CALL_SUBTEST_1(test_idrs_small_rhs<>());
   CALL_SUBTEST_1(test_idrs_stagnation<>());
+  CALL_SUBTEST_1(test_idrs_final_residual<>());
   CALL_SUBTEST_1(test_idrs_default_accuracy<>());
   CALL_SUBTEST_1((check_matrix_free_accessors<IDRS<MatrixFreeOperator, IdentityPreconditioner>>()));
 }
