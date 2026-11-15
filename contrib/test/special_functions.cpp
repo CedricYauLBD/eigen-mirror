@@ -786,33 +786,6 @@ void test_zeta_underflowing_terms() {
     const double v = double(numext::zeta(Scalar(27), Scalar(-1e12 - 0.5)));
     VERIFY(std::abs(v - ref) <= denorm_min + tol * ref);
   }
-  if (!is_float) {
-    // The log-domain sum scaled by 1 / q has the tail term ~ q / (x - 1), which overflows for x - 1 < 1/16 and q near
-    // max / 16 (x in [1.013, 1.061] at q = 1e307), where the result is normal; the sum is then rescaled by
-    // q^((x-1)/x). Subnormal terms of the plain sum are good to 1.8e-8 at (1.03, 1e307) and 2e-2 at (1.05, 1.1e307).
-    // Float has no such band: its log-domain form needs x log(q) > 92.6, which q <= max / 16 only meets for x > 1.08.
-    // The measured error is at most 32 epsilon (730 points in the band).
-    const Case overflow_cases[] = {{1.03, 1e307, 2.05531667287156683e-08},
-                                   {1.02, 1e307, 3.62217980037490158e-05},
-                                   {1.05, 1.1e307, 8.89119963076898069e-15},
-                                   {1.06, 1.1e307, 6.30035743129460931e-18}};
-    const int num_overflow_cases = 4;
-    Array<Scalar, Dynamic, 1> xv(num_overflow_cases), qv(num_overflow_cases);
-    for (int i = 0; i < num_overflow_cases; ++i) {
-      xv(i) = Scalar(overflow_cases[i].x);
-      qv(i) = Scalar(overflow_cases[i].q);
-    }
-    const Array<Scalar, Dynamic, 1> zv = zeta(xv, qv);
-    for (int i = 0; i < num_overflow_cases; ++i) {
-      const Case& c = overflow_cases[i];
-      VERIFY(!(numext::isfinite)(
-          numext::log(internal::zeta_impl<Scalar>::sum(Scalar(c.x), Scalar(c.q), 1 / Scalar(c.q)))));
-      for (int path = 0; path < 2; ++path) {
-        const double v = double(path ? zv(i) : numext::zeta(Scalar(c.x), Scalar(c.q)));
-        VERIFY(std::abs(v - c.ref) <= 100 * eps * c.ref);
-      }
-    }
-  }
   // q = 1: x log(q) = 0, so zeta(x, 1) is the plain sum, bit for bit. Its relative error near the pole is 1 eps at
   // x = 1 + 1e-10 (double); the log-domain form had 14.
   const double one_plus = is_float ? 1.001 : 1.0000000001;
@@ -822,6 +795,86 @@ void test_zeta_underflowing_terms() {
   for (double xv : xs) {
     VERIFY_IS_EQUAL(numext::zeta(Scalar(xv), Scalar(1)),
                     (internal::zeta_impl<Scalar>::sum(Scalar(xv), Scalar(1), Scalar(1))));
+  }
+}
+
+// The log-domain forms of zeta(x, q) for q^-x below the smallest normal number: the sum scaled by 1 / q is
+// ~ q / (x - 1), which overflows for x - 1 < 1/16 and q near max / 16 (double zeta(1.03, 1e307) was inf), and 1 / q is
+// subnormal for q > 1 / min and flushed to zero for q > max / 16, where the plain sum returned 0 or had the error of
+// subnormal terms (zeta(1.0624, max / 16 + 1ulp) = 0, true 1.1e-18; zeta(1.05, max) = 0, true 7.7e-15). The rescaled
+// form, selected for x < 2 or q > max / 16, forms neither. References: Euler-Maclaurin in 3000-bit MPFR at the
+// arguments rounded to Scalar; the error of the forms is ~ eps (1 + (x - 1) log(q)), measured at most 0.5 of the bound.
+// The two float cases at x log(q) just above 87.3 are left to the plain sum, whose subnormal terms are still accurate
+// there.
+template <typename Scalar>
+void test_zeta_log_domain_range() {
+  struct Case {
+    double x, q, ref;
+    char form;  // 'R': rescaled, 'B': scaled by 1 / q, 'P': plain sum.
+  };
+  const bool is_float = sizeof(Scalar) == 4;
+  const Case cases_f[] = {{1.0623999834060669, 2.1267647932558654e+37, 0.075087293531669665, 'R'},
+                          {1.0499999523162842, 3.4028234663852886e+38, 0.23683194202994449, 'R'},
+                          {1.0499999523162842, 2.4999999200714231e+37, 0.26985793539306468, 'R'},
+                          {1.0299999713897705, 2.1267647932558654e+37, 2.5295813085892365, 'P'},
+                          {1.0269999504089355, 1.9999999867631625e+37, 3.643435398682416, 'P'},
+                          {2, 3.4028234663852886e+38, 2.9387360522180373e-39, 'R'},
+                          {1.5, 3.4028234663852886e+38, 1.0842022047972486e-19, 'R'},
+                          {1.0010000467300415, 3.0000000054977558e+38, 915.16791680630282, 'R'},
+                          {1.2000000476837158, 9.9999996802856925e+37, 1.2559376842600161e-07, 'R'},
+                          {30, 3.4028234663852886e+38, 0, 'R'},
+                          {2, 1.9999999867631625e+37, 5.000000033092094e-38, 'B'},
+                          {1.0000001192092896, 3.4028234663852886e+38, 8388519.2776301387, 'R'}};
+  const Case cases_d[] = {{1.0624, 1.1235582092889474e+307, 1.1088128397196225e-18, 'R'},
+                          {1.05, 2.2500000000000001e+307, 8.5786879325781094e-15, 'R'},
+                          {1.05, 1.7976931348623157e+308, 7.7320422357738033e-15, 'R'},
+                          {1.03, 1.1235582092889474e+307, 2.0481458411441312e-08, 'R'},
+                          {1.03, 1e307, 2.05531667287156683e-08, 'R'},
+                          {1.02, 1e307, 3.62217980037490158e-05, 'R'},
+                          {1.05, 1.1e307, 8.89119963076898069e-15, 'R'},
+                          {1.0124, 9.9999999999999999e+306, 0.012582829586234699, 'R'},
+                          {2, 1.7976931348623157e+308, 5.5626846462680041e-309, 'R'},
+                          {1.5, 1.7976931348623157e+308, 1.4916681462400414e-154, 'R'},
+                          {1.0001, 1.7976931348623157e+308, 9314.8213181353866, 'R'},
+                          {1.2, 4.5000000000000002e+307, 1.4734231924042045e-61, 'R'},
+                          {27, 1.7976931348623157e+308, 0, 'R'},
+                          {1.0000001000000001, 1.7976931348623157e+308, 9999290.2366374139, 'R'},
+                          {2, 9.9999999999999999e+306, 1e-307, 'B'}};
+  const Case* cases = is_float ? cases_f : cases_d;
+  const int num_cases = is_float ? 12 : 15;
+  Array<Scalar, Dynamic, 1> xv(num_cases), qv(num_cases);
+  for (int i = 0; i < num_cases; ++i) {
+    xv(i) = Scalar(cases[i].x);
+    qv(i) = Scalar(cases[i].q);
+  }
+  const Array<Scalar, Dynamic, 1> zv = zeta(xv, qv);
+  const double eps = double(NumTraits<Scalar>::epsilon());
+  const double denorm_min = double(std::numeric_limits<Scalar>::denorm_min());
+  for (int i = 0; i < num_cases; ++i) {
+    const Case& c = cases[i];
+    const Scalar x = Scalar(c.x), q = Scalar(c.q);
+    // The form that ran: the result is its value bit for bit.
+    const Scalar form = c.form == 'R'   ? internal::zeta_impl<Scalar>::log_domain_sum_rescaled(x, q)
+                        : c.form == 'B' ? internal::zeta_impl<Scalar>::log_domain_sum_scaled_by_q(x, q)
+                                        : internal::zeta_impl<Scalar>::sum(x, q, Scalar(1));
+    VERIFY_IS_EQUAL(numext::zeta(x, q), form);
+    const double tol = 8 * eps * (1 + (c.x - 1) * std::log(c.q));
+    for (int path = 0; path < 2; ++path) {
+      const double v = double(path ? zv(i) : numext::zeta(x, q));
+      VERIFY(std::abs(v - c.ref) <= denorm_min + tol * c.ref);
+    }
+    // polygamma(1, q) = zeta(2, q); for larger n the product n! zeta(n + 1, q) underflows to a signed zero.
+    if (c.x == 2) {
+      const double v = double(numext::polygamma(Scalar(1), q));
+      VERIFY(std::abs(v - c.ref) <= denorm_min + tol * c.ref);
+    }
+    if (c.x == 2 && c.form == 'R') {
+      const Scalar even = numext::polygamma(Scalar(2), q), odd = numext::polygamma(Scalar(3), q);
+      VERIFY_IS_EQUAL(even, Scalar(0));
+      VERIFY((std::signbit)(even));
+      VERIFY_IS_EQUAL(odd, Scalar(0));
+      VERIFY(!(std::signbit)(odd));
+    }
   }
 }
 
@@ -1162,6 +1215,7 @@ EIGEN_DECLARE_TEST(special_functions) {
   CALL_SUBTEST_1(test_polygamma_extreme_x<float>());
   CALL_SUBTEST_1(test_polygamma_sign_huge_order<float>());
   CALL_SUBTEST_1(test_zeta_underflowing_terms<float>());
+  CALL_SUBTEST_1(test_zeta_log_domain_range<float>());
   CALL_SUBTEST_1(test_igamma_limits<float>());
   CALL_SUBTEST_1(test_igamma_internal_nan<float>());
   CALL_SUBTEST_1(test_igamma_large_arguments<float>());
@@ -1176,6 +1230,7 @@ EIGEN_DECLARE_TEST(special_functions) {
   CALL_SUBTEST_2(test_polygamma_extreme_x<double>());
   CALL_SUBTEST_2(test_polygamma_sign_huge_order<double>());
   CALL_SUBTEST_2(test_zeta_underflowing_terms<double>());
+  CALL_SUBTEST_2(test_zeta_log_domain_range<double>());
   CALL_SUBTEST_2(test_igamma_limits<double>());
   CALL_SUBTEST_2(test_igamma_internal_nan<double>());
   CALL_SUBTEST_2(test_igamma_large_arguments<double>());

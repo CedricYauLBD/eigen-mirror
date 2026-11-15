@@ -1552,23 +1552,44 @@ struct zeta_impl {
     return s;
   }
 
-  /* sum(x, q, 1) for q >= 1, also where q^-x is subnormal or zero but the sum ~ q^(1-x) / (x - 1) is normal. A term
-   * (k + q)^-x = min 2^-m has the relative error eps 2^m. Once that exceeds the error ~ 2 eps x log(q) of the
-   * log-domain form, whose terms are O(1), use it instead:
-   *   zeta(x, q) = exp(log(sum(x, q, 1 / q)) - x log(q)).
-   * It applies only where q^-x < min, x log(q) > -log(min); this also excludes q = 1, where log(2 x log(q)) = -inf.
-   * 1 / q must be normal, also under flush to zero: q <= max / 16. */
+  /* zeta(x, q) = exp(log(sum(x, q, 1 / q)) - x log(q)), for q >= 1. The terms are scaled to ~ 1 and the sum to
+   * ~ q / (x - 1), which is finite for x >= 2 and q <= max / 16; 1 / q is then also normal under flush to zero. */
+  EIGEN_DEVICE_FUNC static Scalar log_domain_sum_scaled_by_q(Scalar x, Scalar q) {
+    return numext::exp(numext::log(sum(x, q, Scalar(1) / q)) - x * numext::log(q));
+  }
+
+  /* The same for any finite q >= 1 and x > 1, with the terms scaled to ~ 1 / q_c, q_c = min(q, 1 / (16 min)), so
+   * that neither the first term nor the sum ~ q / (q_c (x - 1)) <= 64 / (x - 1) leaves the normal range, however
+   * close x is to 1 and up to q = max. With L = log(q), L_c = log(q_c) and e = L_c - x L = (L_c - L) - (x - 1) L:
+   *   zeta(x, q) = exp(log(sum(x, q, exp(e / x))) + e).
+   * The relative error is ~ eps (x - 1) log(q). Where e < log(denorm_min) - 6, x - 1 > 1 and the sum is < 64, so zeta
+   * rounds to 0; returning it there also avoids exp(e / x) ~ 1 / q, which is subnormal or flushed to zero. */
+  EIGEN_DEVICE_FUNC static Scalar log_domain_sum_rescaled(Scalar x, Scalar q) {
+    const Scalar log_q = numext::log(q);
+    const Scalar q_c = numext::mini(q, Scalar(1) / (Scalar(16) * (numext::numeric_limits<Scalar>::min)()));
+    const Scalar e = (numext::log(q_c) - log_q) - (x - Scalar(1)) * log_q;
+    const Scalar log_denorm_min = numext::log((numext::numeric_limits<Scalar>::min)()) -
+                                  Scalar(numext::numeric_limits<Scalar>::digits - 1) * Scalar(0.6931471805599453);
+    if (e < log_denorm_min - Scalar(6)) return Scalar(0);
+    return numext::exp(numext::log(sum(x, q, numext::exp(e / x))) + e);
+  }
+
+  /* sum(x, q, 1) for q >= 1, also where q^-x is subnormal or zero but the sum ~ q^(1-x) / (x - 1) is normal. The
+   * first term b = q^-x = min 2^-k then has the relative error ~ eps 2^k and dominates the sum for x near 1. Once
+   * that exceeds the error ~ eps (1 + 2 (x - 1) log(q)) of a log-domain form, use one. For x >= 2 and q <= max / 16
+   * that is the scaling by 1 / q; otherwise the rescaled form, since the sum ~ q / (x - 1) of the first overflows for
+   * x - 1 < 1/16 and its 1 / q is subnormal, or flushed to zero, for q > max / 16. q^-x < min is x log(q) > -log(min);
+   * this also excludes q = 1. */
   EIGEN_DEVICE_FUNC static Scalar sum_without_underflow(Scalar x, Scalar q) {
-    if (q >= Scalar(1) && q <= (numext::numeric_limits<Scalar>::max)() / Scalar(16) && !(numext::isinf)(x)) {
-      const Scalar x_log_q = x * numext::log(q);
+    if (q >= Scalar(1) && !(numext::isinf)(x)) {
+      const Scalar log_q = numext::log(q);
+      const Scalar x_log_q = x * log_q;
       const Scalar log_min = numext::log((numext::numeric_limits<Scalar>::min)());
-      if (x_log_q > -log_min && x_log_q + log_min > numext::log(Scalar(2) * x_log_q)) {
-        const Scalar log_sum = numext::log(sum(x, q, Scalar(1) / q));
-        if ((numext::isfinite)(log_sum)) return numext::exp(log_sum - x_log_q);
-        // The tail term ~ q / (x - 1) of that sum overflows for x - 1 < 1/16 and q near max / 16. Scale by
-        // c = q^((x-1)/x) instead: the terms are ~ 1/q and the sum ~ 1 / (x - 1). x - 1 is exact for x < 2.
-        const Scalar log_scale_x = (x - Scalar(1)) * numext::log(q);  // log(c^x)
-        return numext::exp(numext::log(sum(x, q, numext::exp(-log_scale_x / x))) - log_scale_x);
+      if (x_log_q > -log_min && x_log_q + log_min > numext::log(Scalar(2) * (Scalar(1) + (x - Scalar(1)) * log_q))) {
+        if (x >= Scalar(2) && q <= (numext::numeric_limits<Scalar>::max)() / Scalar(16)) {
+          return log_domain_sum_scaled_by_q(x, q);
+        }
+        return log_domain_sum_rescaled(x, q);
       }
     }
     return sum(x, q, Scalar(1));
