@@ -943,7 +943,7 @@ EIGEN_DEVICE_FUNC static EIGEN_STRONG_INLINE bool igamma_use_stirling_main_term(
  * The fraction needs ~ 355 / t^2 iterations (double), t = (x - a) / sqrt(a), for large a. It does not converge within
  * the iteration limit from (measured) a ~ 1.1e7 at t = 0, 1.8e7 at t = 0.1, 3.3e7 at t = 0.2, 1.4e8 at t = 0.3 and
  * 8e10 at t = 0.4 in double, and from a ~ 5.6e7 at t = 0 and 2.2e8 at t = 0.1 in float. Then *converged is false and
- * the returned value is meaningless. */
+ * the returned value is meaningless; igammac_cf_impl returns NaN. */
 template <typename Scalar>
 EIGEN_DEVICE_FUNC static Scalar igammac_cf_lentz(Scalar a, Scalar x, bool* converged) {
   const Scalar one = 1;
@@ -998,12 +998,12 @@ struct igammac_cf_impl {
     if (mode == VALUE && igamma_use_stirling_main_term(a)) {
       bool converged;
       const Scalar h = igammac_cf_lentz<Scalar>(a, x, &converged);
-      if (converged) {
-        const Scalar ax_stirling = main_igamma_term_stirling<Scalar>(a, x);
-        return ax_stirling == zero ? zero : ax_stirling * h;
-      }
-      // Unconverged only in the band documented at igammac_cf_lentz (|t| <~ 0.4, a >~ 1e7 in double, 5e7 in float):
-      // fall back to the recurrence.
+      // Unconverged only in the band documented at igammac_cf_lentz (|t| <~ 0.4, a >~ 1e7 in double, 5e7 in float). The
+      // recurrence and the ordinary main term are wrong there (values above 1, or float igammac(1e8, 1e8) = 1.25e-4
+      // for a true value ~ 0.5), so the result is NaN: the true value or NaN, never a confident wrong one.
+      if (!converged) return NumTraits<Scalar>::quiet_NaN();
+      const Scalar ax_stirling = main_igamma_term_stirling<Scalar>(a, x);
+      return ax_stirling == zero ? zero : ax_stirling * h;
     }
 
     Scalar ax = main_igamma_term<Scalar>(a, x);
@@ -1090,8 +1090,7 @@ struct igammac_cf_impl {
 
     switch (mode) {
       case VALUE: {
-        // Non-finite only for a >~ 1 / eps where Lentz's fraction did not converge: the recurrence gave inf - inf, or
-        // the cancelling ax overflowed.
+        // An overflow of the recurrence (inf - inf) is reported as NaN rather than returned as inf or a silent 0.
         const Scalar result = ans * ax;
         return EIGEN_PREDICT_FALSE(!(numext::isfinite)(result)) ? NumTraits<Scalar>::quiet_NaN() : result;
       }
@@ -1250,7 +1249,7 @@ struct igammac_impl {
       return igamma_clamp_to_unit_interval(one - igamma_series_impl<Scalar, VALUE>::run(a, x));
     }
 
-    // ax is inaccurate for a >~ 1 / eps, and ans * ax can exceed 1 there.
+    // NaN where Lentz's fraction does not converge (igammac_cf_impl); the clamp keeps NaN.
     return igamma_clamp_to_unit_interval(igammac_cf_impl<Scalar, VALUE>::run(a, x));
   }
 };

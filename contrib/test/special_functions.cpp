@@ -892,6 +892,37 @@ void test_igamma_large_arguments() {
   }
 }
 
+// In the band near x = a where Lentz's fraction does not converge (|t| <~ 0.4 for a >~ 1e7 in double, 5e7 in float),
+// the ordinary recurrence is wrong, and used to give values above 1
+// (igammac(1.1959741656683808e15, 1.1959741715277768e15) was 842.8, true 0.43), which the clamp turned into exactly 1;
+// float igammac(1e8, 1e8) was 1.25e-4, true 0.5. igammac and igamma (for x > a) return NaN there, in the scalar and the
+// array paths.
+template <typename Scalar>
+void test_igamma_unconverged_band() {
+  const bool is_float = sizeof(Scalar) == 4;
+  const double a_f[] = {1e8, 1e9, 3e8, 1e12};
+  const double x_f[] = {1e8 + 8, 1e9 + 1000, 3e8 + 512, 1e12 + 1e5};
+  const double a_d[] = {1.1959741656683808e15, 1.1e7, 1e12, 1e10};
+  const double x_d[] = {1.1959741715277768e15, 1.1e7 + 8, 1e12 + 3e5, 1e10 + 1e4};
+  const int n = 4;
+  Array<Scalar, Dynamic, 1> a(n), x(n);
+  for (int i = 0; i < n; ++i) {
+    a(i) = Scalar(is_float ? a_f[i] : a_d[i]);
+    x(i) = Scalar(is_float ? x_f[i] : x_d[i]);
+  }
+  const Array<Scalar, Dynamic, 1> p_array = igamma(a, x), q_array = igammac(a, x);
+  for (int i = 0; i < n; ++i) {
+    bool converged = true;
+    internal::igammac_cf_lentz<Scalar>(a(i), x(i), &converged);
+    VERIFY(!converged);
+    VERIFY(x(i) > a(i));
+    VERIFY((numext::isnan)(numext::igammac(a(i), x(i))));
+    VERIFY((numext::isnan)(numext::igamma(a(i), x(i))));
+    VERIFY((numext::isnan)(q_array(i)));
+    VERIFY((numext::isnan)(p_array(i)));
+  }
+}
+
 // Q = igammac(a, x) and P = igamma(a, x), x = a + t sqrt(a), through the scalar and array functions, for a above
 // igamma_use_stirling_main_term's threshold (a >~ 29 in float, a >~ 2.3e4 in double). The ordinary main term would
 // have the error eps a log(a) in its exponent: 1e3 eps at a = 1e3, O(1) for a >~ 1 / eps. References: MPFR (>= 600
@@ -1134,6 +1165,7 @@ EIGEN_DECLARE_TEST(special_functions) {
   CALL_SUBTEST_1(test_igamma_limits<float>());
   CALL_SUBTEST_1(test_igamma_internal_nan<float>());
   CALL_SUBTEST_1(test_igamma_large_arguments<float>());
+  CALL_SUBTEST_1(test_igamma_unconverged_band<float>());
   CALL_SUBTEST_1(test_igamma_stirling_regime<float>());
   CALL_SUBTEST_2(ndtri_tail_accuracy<double>());
   CALL_SUBTEST_2(array_special_functions<ArrayXd>());
@@ -1147,6 +1179,7 @@ EIGEN_DECLARE_TEST(special_functions) {
   CALL_SUBTEST_2(test_igamma_limits<double>());
   CALL_SUBTEST_2(test_igamma_internal_nan<double>());
   CALL_SUBTEST_2(test_igamma_large_arguments<double>());
+  CALL_SUBTEST_2(test_igamma_unconverged_band<double>());
   CALL_SUBTEST_2(test_igamma_stirling_regime<double>());
   CALL_SUBTEST_3(scalar_ndtri<long double>());
   CALL_SUBTEST_4(scalar_erf_erfc<long double>());
