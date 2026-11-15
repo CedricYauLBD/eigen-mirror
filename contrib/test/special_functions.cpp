@@ -804,42 +804,45 @@ void test_zeta_underflowing_terms() {
 // subnormal terms (zeta(1.0624, max / 16 + 1ulp) = 0, true 1.1e-18; zeta(1.05, max) = 0, true 7.7e-15). The rescaled
 // form, selected for x < 2 or q > max / 16, forms neither. References: Euler-Maclaurin in 3000-bit MPFR at the
 // arguments rounded to Scalar; the error of the forms is ~ eps (1 + (x - 1) log(q)), measured at most 0.5 of the bound.
-// The two float cases at x log(q) just above 87.3 are left to the plain sum, whose subnormal terms are still accurate
-// there.
+// Cases marked 'N' are those where the plain sum is within the tolerance of the log-domain form, so the choice of
+// form is not visible (float x log(q) just above 87.3, x within 1e-4 of 1, q^-x normal), and are checked against the
+// reference only. The tolerance is the bound 8 eps (1 + (x - 1) log(q)) also for the forms' agreement, since the
+// rounding of their exponent differs between compilers and targets.
 template <typename Scalar>
 void test_zeta_log_domain_range() {
   struct Case {
     double x, q, ref;
-    char form;  // 'R': rescaled, 'B': scaled by 1 / q, 'P': plain sum.
+    char form;  // 'L': the log-domain form, which differs from the plain sum by more than the tolerance; 'N': not
+                // checked.
   };
   const bool is_float = sizeof(Scalar) == 4;
-  const Case cases_f[] = {{1.0623999834060669, 2.1267647932558654e+37, 0.075087293531669665, 'R'},
-                          {1.0499999523162842, 3.4028234663852886e+38, 0.23683194202994449, 'R'},
-                          {1.0499999523162842, 2.4999999200714231e+37, 0.26985793539306468, 'R'},
-                          {1.0299999713897705, 2.1267647932558654e+37, 2.5295813085892365, 'P'},
-                          {1.0269999504089355, 1.9999999867631625e+37, 3.643435398682416, 'P'},
-                          {2, 3.4028234663852886e+38, 2.9387360522180373e-39, 'R'},
-                          {1.5, 3.4028234663852886e+38, 1.0842022047972486e-19, 'R'},
-                          {1.0010000467300415, 3.0000000054977558e+38, 915.16791680630282, 'R'},
-                          {1.2000000476837158, 9.9999996802856925e+37, 1.2559376842600161e-07, 'R'},
-                          {30, 3.4028234663852886e+38, 0, 'R'},
-                          {2, 1.9999999867631625e+37, 5.000000033092094e-38, 'B'},
-                          {1.0000001192092896, 3.4028234663852886e+38, 8388519.2776301387, 'R'}};
-  const Case cases_d[] = {{1.0624, 1.1235582092889474e+307, 1.1088128397196225e-18, 'R'},
-                          {1.05, 2.2500000000000001e+307, 8.5786879325781094e-15, 'R'},
-                          {1.05, 1.7976931348623157e+308, 7.7320422357738033e-15, 'R'},
-                          {1.03, 1.1235582092889474e+307, 2.0481458411441312e-08, 'R'},
-                          {1.03, 1e307, 2.05531667287156683e-08, 'R'},
-                          {1.02, 1e307, 3.62217980037490158e-05, 'R'},
-                          {1.05, 1.1e307, 8.89119963076898069e-15, 'R'},
-                          {1.0124, 9.9999999999999999e+306, 0.012582829586234699, 'R'},
-                          {2, 1.7976931348623157e+308, 5.5626846462680041e-309, 'R'},
-                          {1.5, 1.7976931348623157e+308, 1.4916681462400414e-154, 'R'},
-                          {1.0001, 1.7976931348623157e+308, 9314.8213181353866, 'R'},
-                          {1.2, 4.5000000000000002e+307, 1.4734231924042045e-61, 'R'},
-                          {27, 1.7976931348623157e+308, 0, 'R'},
-                          {1.0000001000000001, 1.7976931348623157e+308, 9999290.2366374139, 'R'},
-                          {2, 9.9999999999999999e+306, 1e-307, 'B'}};
+  const Case cases_f[] = {{1.0623999834060669, 2.1267647932558654e+37, 0.075087293531669665, 'N'},
+                          {1.0499999523162842, 3.4028234663852886e+38, 0.23683194202994449, 'L'},
+                          {1.0499999523162842, 2.4999999200714231e+37, 0.26985793539306468, 'N'},
+                          {1.0299999713897705, 2.1267647932558654e+37, 2.5295813085892365, 'N'},
+                          {1.0269999504089355, 1.9999999867631625e+37, 3.643435398682416, 'N'},
+                          {2, 3.4028234663852886e+38, 2.9387360522180373e-39, 'L'},
+                          {1.5, 3.4028234663852886e+38, 1.0842022047972486e-19, 'L'},
+                          {1.0010000467300415, 3.0000000054977558e+38, 915.16791680630282, 'N'},
+                          {1.2000000476837158, 9.9999996802856925e+37, 1.2559376842600161e-07, 'L'},
+                          {30, 3.4028234663852886e+38, 0, 'N'},
+                          {2, 1.9999999867631625e+37, 5.000000033092094e-38, 'L'},
+                          {1.0000001192092896, 3.4028234663852886e+38, 8388519.2776301387, 'N'}};
+  const Case cases_d[] = {{1.0624, 1.1235582092889474e+307, 1.1088128397196225e-18, 'L'},
+                          {1.05, 2.2500000000000001e+307, 8.5786879325781094e-15, 'L'},
+                          {1.05, 1.7976931348623157e+308, 7.7320422357738033e-15, 'L'},
+                          {1.03, 1.1235582092889474e+307, 2.0481458411441312e-08, 'L'},
+                          {1.03, 1e307, 2.05531667287156683e-08, 'L'},
+                          {1.02, 1e307, 3.62217980037490158e-05, 'L'},
+                          {1.05, 1.1e307, 8.89119963076898069e-15, 'L'},
+                          {1.0124, 9.9999999999999999e+306, 0.012582829586234699, 'L'},
+                          {2, 1.7976931348623157e+308, 5.5626846462680041e-309, 'L'},
+                          {1.5, 1.7976931348623157e+308, 1.4916681462400414e-154, 'L'},
+                          {1.0001, 1.7976931348623157e+308, 9314.8213181353866, 'N'},
+                          {1.2, 4.5000000000000002e+307, 1.4734231924042045e-61, 'L'},
+                          {27, 1.7976931348623157e+308, 0, 'N'},
+                          {1.0000001000000001, 1.7976931348623157e+308, 9999290.2366374139, 'N'},
+                          {2, 9.9999999999999999e+306, 1e-307, 'L'}};
   const Case* cases = is_float ? cases_f : cases_d;
   const int num_cases = is_float ? 12 : 15;
   Array<Scalar, Dynamic, 1> xv(num_cases), qv(num_cases);
@@ -853,12 +856,14 @@ void test_zeta_log_domain_range() {
   for (int i = 0; i < num_cases; ++i) {
     const Case& c = cases[i];
     const Scalar x = Scalar(c.x), q = Scalar(c.q);
-    // The form that ran: the result is its value bit for bit.
-    const Scalar form = c.form == 'R'   ? internal::zeta_impl<Scalar>::log_domain_sum_rescaled(x, q)
-                        : c.form == 'B' ? internal::zeta_impl<Scalar>::log_domain_sum_scaled_by_q(x, q)
-                                        : internal::zeta_impl<Scalar>::sum(x, q, Scalar(1));
-    VERIFY_IS_EQUAL(numext::zeta(x, q), form);
     const double tol = 8 * eps * (1 + (c.x - 1) * std::log(c.q));
+    if (c.form == 'L') {
+      // The result is the rescaled form up to the rounding of its exponent, not the plain sum, which is off by more.
+      const double form = double(internal::zeta_impl<Scalar>::log_domain_sum_rescaled(x, q));
+      const double plain = double(internal::zeta_impl<Scalar>::sum(x, q, Scalar(1)));
+      VERIFY(std::abs(double(numext::zeta(x, q)) - form) <= denorm_min + tol * form);
+      VERIFY(std::abs(plain - form) > tol * form);
+    }
     for (int path = 0; path < 2; ++path) {
       const double v = double(path ? zv(i) : numext::zeta(x, q));
       VERIFY(std::abs(v - c.ref) <= denorm_min + tol * c.ref);
@@ -868,7 +873,7 @@ void test_zeta_log_domain_range() {
       const double v = double(numext::polygamma(Scalar(1), q));
       VERIFY(std::abs(v - c.ref) <= denorm_min + tol * c.ref);
     }
-    if (c.x == 2 && c.form == 'R') {
+    if (c.x == 2 && c.form == 'L') {
       const Scalar even = numext::polygamma(Scalar(2), q), odd = numext::polygamma(Scalar(3), q);
       VERIFY_IS_EQUAL(even, Scalar(0));
       VERIFY((std::signbit)(even));

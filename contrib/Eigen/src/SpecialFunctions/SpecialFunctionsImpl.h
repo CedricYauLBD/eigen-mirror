@@ -914,13 +914,15 @@ EIGEN_DEVICE_FUNC static Scalar igamma_log1p_minus_d(Scalar d) {
  * with d = (x - a) / a, psi = d - log1p(d) = eta^2 / 2, sign(eta) = sign(d), z = eta sqrt(a / 2) = sign(d) sqrt(a psi),
  *   c_0(eta) = 1 / d - 1 / eta,   c_1(eta) = 1 / eta^3 - 1 / d^3 - 1 / d^2 - 1 / (12 d).
  * Both cancel for small eta and are evaluated from their Taylor series at eta = 0, c_0 = -1/3 + eta/12 - 2 eta^2 / 135
- * +
- * ..., c_1 = -1/540 - eta/288 + eta^2 / 378 - .... These were obtained by series reversion of eta^2 / 2 = d - log1p(d)
- * in exact rational arithmetic; the leading terms are in DLMF 8.12(ii).
+ * + ..., c_1 = -1/540 - eta/288 + eta^2 / 378 - .... The coefficients were computed with GMP (mpq_class power series):
+ * d = u(eta) from eta^2 / 2 = d - log1p(d) by the fixed-point iteration u = eta / sqrt(h(u)), h(u) = 2 sum_{k >= 2}
+ * (-1)^k u^(k-2) / k, then the series of the closed forms above with d = u(eta). The leading terms of both match DLMF
+ * 8.12(ii).
  *
- * Used for |eta| <= 0.15, where the series have the truncation error 1e-17, and a >= 1e5 (double), 1e4 (float).
- * Outside, a psi > 1125 (112 in float), and P (x < a) or Q (x > a) is <= exp(-a psi) (Chernoff bound) < denorm_min / 2,
- * so it is 0 and the other is 1. The error of the O(a^-2) term is the measured one: Q to 53 epsilon at a = 1e5 and |t|
+ * Used for |eta| <= 0.15, where the truncation after eta^12 (c_0) and eta^8 (c_1) is 9e-20 and 9e-16 absolute (c_1 / a
+ * is below 3e-19 relative to c_0), and a >= 1e5 (double), 1e4 (float). Outside, a psi > 1125 (112 in float), and P (x <
+ * a) or Q (x > a) is <= exp(-a psi) (Chernoff bound) < denorm_min / 2, so it is 0 and the other is 1. The error of the
+ * O(a^-2) term is the measured one: Q to 53 epsilon at a = 1e5 and |t|
  * <= 8, t = (x - a) / sqrt(a), against mpfr_gamma_inc, 0.7 of 2 (log(a) / 2 + t^2 + 2) epsilon. It takes no iterations
  * and is accurate near x = a for every a, where the continued fraction and the series need ~ sqrt(a) of them. */
 template <typename Scalar>
