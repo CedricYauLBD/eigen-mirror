@@ -34,9 +34,8 @@ void check_oversized_allocation() {
   // n * sizeof(int) wraps around to 0 for n = 2^(bits - 2).
   check_throws_bad_alloc<int>(static_cast<size_t>(1) << (std::numeric_limits<size_t>::digits - 2));
   check_throws_bad_alloc<double>(max_size / sizeof(double) + 1);
-  // The byte count is a valid object size but the aligned allocation of it fails. A 32-bit process can have that much
-  // address space free, so the failure is only guaranteed for 64-bit sizes.
-  if (sizeof(size_t) > 4) check_throws_bad_alloc<char>(max_size);
+  // PTRDIFF_MAX bytes leave no room for the alignment padding, so handmade_aligned_malloc rejects them on every target.
+  check_throws_bad_alloc<char>(max_size);
 }
 #endif
 
