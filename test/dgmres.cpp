@@ -348,8 +348,8 @@ void test_dgmres_deflation_small() {
 // See check_sparse_small_rhs: the solvers returned NoConvergence or an inaccurate x for small |b|.
 template <typename = void>
 void test_dgmres_small_rhs() {
-  DGMRES<SparseMatrix<double>, DiagonalPreconditioner<double> > solver_double;
-  DGMRES<SparseMatrix<float>, DiagonalPreconditioner<float> > solver_float;
+  DGMRES<SparseMatrix<double>, DiagonalPreconditioner<double>> solver_double;
+  DGMRES<SparseMatrix<float>, DiagonalPreconditioner<float>> solver_float;
   check_sparse_small_rhs(solver_double);
   check_sparse_small_rhs(solver_float);
 }
@@ -363,7 +363,7 @@ EIGEN_DECLARE_TEST(dgmres) {
   CALL_SUBTEST_6(test_dgmres_iterations_T<std::complex<double> >());
   CALL_SUBTEST_6(test_dgmres_complex_arnoldi<>());
   CALL_SUBTEST_9(test_dgmres_multi_rhs_info<double>());
-  CALL_SUBTEST_9(test_dgmres_multi_rhs_info<std::complex<double> >());
+  CALL_SUBTEST_9(test_dgmres_multi_rhs_info<std::complex<double>>());
   CALL_SUBTEST_7((test_dgmres_deflation<double, IdentityPreconditioner>(0.0)));
   CALL_SUBTEST_7((test_dgmres_deflation<double, DiagonalPreconditioner<double> >(0.0)));
   CALL_SUBTEST_7(test_dgmres_deflation_conjugate_pair<>());

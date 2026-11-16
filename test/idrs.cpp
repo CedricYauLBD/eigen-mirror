@@ -146,8 +146,8 @@ void test_idrs_default_tolerance() {
 // See check_sparse_small_rhs: the solvers returned NoConvergence or an inaccurate x for small |b|.
 template <typename = void>
 void test_idrs_small_rhs() {
-  IDRS<SparseMatrix<double>, DiagonalPreconditioner<double> > solver_double;
-  IDRS<SparseMatrix<float>, DiagonalPreconditioner<float> > solver_float;
+  IDRS<SparseMatrix<double>, DiagonalPreconditioner<double>> solver_double;
+  IDRS<SparseMatrix<float>, DiagonalPreconditioner<float>> solver_float;
   check_sparse_small_rhs(solver_double);
   check_sparse_small_rhs(solver_float);
 }
@@ -160,7 +160,7 @@ void test_idrs_default_accuracy() {
   using SpMat = SparseMatrix<float>;
   const float eps = NumTraits<float>::epsilon();
   for (Index n : {40, 10000}) {
-    std::vector<Triplet<float> > triplets;
+    std::vector<Triplet<float>> triplets;
     for (Index i = 0; i < n; ++i) {
       triplets.emplace_back(i, i, 4.0f);
       if (i + 1 < n) {
@@ -172,7 +172,7 @@ void test_idrs_default_accuracy() {
     A.setFromTriplets(triplets.begin(), triplets.end());
     const VectorXf ones = VectorXf::Ones(n);
     const VectorXf b = A * ones;
-    IDRS<SpMat, DiagonalPreconditioner<float> > solver(A);
+    IDRS<SpMat, DiagonalPreconditioner<float>> solver(A);
     VERIFY_IS_EQUAL(solver.tolerance(), eps);
     const VectorXf x = solver.solve(b);
     VERIFY_IS_EQUAL(solver.info(), Success);
@@ -190,7 +190,7 @@ void test_idrs_final_residual() {
   const Index n = 120;
   VectorXd d(n);
   for (Index i = 0; i < n; ++i) d(i) = std::pow(1e4, double((i * 7) % 9) / 8.0 - 0.5);
-  std::vector<Triplet<double> > triplets;
+  std::vector<Triplet<double>> triplets;
   for (Index i = 0; i < n; ++i) {
     triplets.emplace_back(i, i, d(i) * d(i) * 4);
     if (i + 1 < n) {
@@ -217,7 +217,7 @@ void test_idrs_final_residual() {
 // The 5-point Laplacian on an m x m grid.
 template <typename SpMat>
 SpMat idrs_poisson2d(Index m) {
-  std::vector<Triplet<double> > triplets;
+  std::vector<Triplet<double>> triplets;
   for (Index i = 0; i < m; ++i) {
     for (Index j = 0; j < m; ++j) {
       const Index k = i * m + j;
@@ -245,7 +245,7 @@ void test_idrs_stagnation() {
     const SpMat A = idrs_poisson2d<SpMat>(m);
     const Index n = A.rows();
     const VectorXd b = VectorXd::Random(n);
-    IDRS<SpMat, DiagonalPreconditioner<double> > solver(A);
+    IDRS<SpMat, DiagonalPreconditioner<double>> solver(A);
     solver.setTolerance(eps);
     const VectorXd x = solver.solve(b);
     VERIFY(x.allFinite());
@@ -267,7 +267,7 @@ void test_idrs_stagnation() {
   bool relaxed = false;
   for (int trial = 0; trial < 4; ++trial) {
     const VectorXd b = VectorXd::Random(n);
-    IDRS<SpMat, DiagonalPreconditioner<double> > solver(A);
+    IDRS<SpMat, DiagonalPreconditioner<double>> solver(A);
     const VectorXd x = solver.solve(b);
     VERIFY_IS_EQUAL(solver.tolerance(), eps);
     VERIFY_IS_EQUAL(solver.info(), Success);

@@ -273,8 +273,8 @@ void test_lsmr_max_iterations() {
 // See check_sparse_small_rhs: the solvers returned NoConvergence or an inaccurate x for small |b|.
 template <typename = void>
 void test_lsmr_small_rhs() {
-  LSMR<SparseMatrix<double> > solver_double;
-  LSMR<SparseMatrix<float> > solver_float;
+  LSMR<SparseMatrix<double>> solver_double;
+  LSMR<SparseMatrix<float>> solver_float;
   check_sparse_small_rhs(solver_double);
   check_sparse_small_rhs(solver_float);
 }
@@ -292,7 +292,7 @@ EIGEN_DECLARE_TEST(lsmr) {
   CALL_SUBTEST_10(test_lsmr_guess<double>());
   CALL_SUBTEST_11(test_lsmr_tolerances<double>());
   CALL_SUBTEST_12(test_lsmr_max_iterations<double>());
-  CALL_SUBTEST_12(test_lsmr_max_iterations<std::complex<double> >());
+  CALL_SUBTEST_12(test_lsmr_max_iterations<std::complex<double>>());
   CALL_SUBTEST_12(test_lsmr_small_rhs<>());
   CALL_SUBTEST_12((check_matrix_free_accessors<LSMR<MatrixFreeOperator, IdentityPreconditioner>>()));
 }

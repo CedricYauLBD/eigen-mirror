@@ -119,8 +119,8 @@ void test_zero_rhs() {
 // See check_sparse_small_rhs: the solvers returned NoConvergence or an inaccurate x for small |b|.
 template <typename = void>
 void test_bicgstab_small_rhs() {
-  BiCGSTAB<SparseMatrix<double>, DiagonalPreconditioner<double> > solver_double;
-  BiCGSTAB<SparseMatrix<float>, DiagonalPreconditioner<float> > solver_float;
+  BiCGSTAB<SparseMatrix<double>, DiagonalPreconditioner<double>> solver_double;
+  BiCGSTAB<SparseMatrix<float>, DiagonalPreconditioner<float>> solver_float;
   check_sparse_small_rhs(solver_double);
   check_sparse_small_rhs(solver_float);
 }

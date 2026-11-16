@@ -77,7 +77,7 @@ void test_minres_true_residual() {
     // D T D for the tridiagonal T = tridiag(-1, 4, -1) and a diagonal D with entries in [spread^-1/2, spread^1/2].
     VectorXd d(n);
     for (Index i = 0; i < n; ++i) d(i) = std::pow(spread, double((i * 7) % 9) / 8.0 - 0.5);
-    std::vector<Triplet<double> > triplets;
+    std::vector<Triplet<double>> triplets;
     for (Index i = 0; i < n; ++i) {
       triplets.emplace_back(i, i, d(i) * d(i) * 4);
       if (i + 1 < n) {
@@ -90,7 +90,7 @@ void test_minres_true_residual() {
     const MatrixXd Aabs = A.toDense().cwiseAbs();
     for (int trial = 0; trial < 5; ++trial) {
       const VectorXd b = VectorXd::Random(n);
-      MINRES<SpMat, Lower | Upper, DiagonalPreconditioner<double> > solver;
+      MINRES<SpMat, Lower | Upper, DiagonalPreconditioner<double>> solver;
       solver.setTolerance(tol);
       solver.setMaxIterations(2000);
       solver.compute(A);
@@ -110,7 +110,7 @@ void test_minres_true_residual() {
 // The 5-point Laplacian on an m x m grid, for which the CG and MINRES iteration counts are about 4.5 m.
 template <typename SpMat>
 SpMat minres_poisson2d(Index m) {
-  std::vector<Triplet<double> > triplets;
+  std::vector<Triplet<double>> triplets;
   for (Index i = 0; i < m; ++i) {
     for (Index j = 0; j < m; ++j) {
       const Index k = i * m + j;
@@ -186,7 +186,7 @@ void test_minres_default_accuracy() {
   using SpMat = SparseMatrix<float>;
   const float eps = NumTraits<float>::epsilon();
   for (Index n : {40, 10000}) {
-    std::vector<Triplet<float> > triplets;
+    std::vector<Triplet<float>> triplets;
     for (Index i = 0; i < n; ++i) {
       triplets.emplace_back(i, i, 4.0f);
       if (i + 1 < n) {
@@ -209,8 +209,8 @@ void test_minres_default_accuracy() {
 // See check_sparse_small_rhs: the solvers returned NoConvergence or an inaccurate x for small |b|.
 template <typename = void>
 void test_minres_small_rhs() {
-  MINRES<SparseMatrix<double>, Lower | Upper, DiagonalPreconditioner<double> > solver_double;
-  MINRES<SparseMatrix<float>, Lower | Upper, DiagonalPreconditioner<float> > solver_float;
+  MINRES<SparseMatrix<double>, Lower | Upper, DiagonalPreconditioner<double>> solver_double;
+  MINRES<SparseMatrix<float>, Lower | Upper, DiagonalPreconditioner<float>> solver_float;
   check_sparse_small_rhs(solver_double);
   check_sparse_small_rhs(solver_float);
 }
@@ -220,7 +220,7 @@ EIGEN_DECLARE_TEST(minres) {
   CALL_SUBTEST_3(test_minres_extreme_rhs());
   CALL_SUBTEST_4(test_minres_true_residual<>());
   CALL_SUBTEST_4(test_minres_poisson<IdentityPreconditioner>());
-  CALL_SUBTEST_4(test_minres_poisson<DiagonalPreconditioner<double> >());
+  CALL_SUBTEST_4(test_minres_poisson<DiagonalPreconditioner<double>>());
   CALL_SUBTEST_4(test_minres_small_rhs<>());
   CALL_SUBTEST_4(test_minres_default_accuracy<>());
   CALL_SUBTEST_4((check_matrix_free_accessors<MINRES<MatrixFreeOperator, Lower | Upper, IdentityPreconditioner>>()));

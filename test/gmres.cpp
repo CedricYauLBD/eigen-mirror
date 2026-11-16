@@ -112,7 +112,7 @@ void test_gmres_max_iterations() {
   const VectorXd guess = VectorXd::Constant(n, 0.25);
   for (double tol : {NumTraits<double>::epsilon(), 0.0}) {
     for (Index maxit : {0, 1, 2, 5}) {
-      GMRES<SparseMatrix<double> > solver(A);
+      GMRES<SparseMatrix<double>> solver(A);
       solver.set_restart(10);
       solver.setTolerance(tol);
       solver.setMaxIterations(maxit);
@@ -133,8 +133,8 @@ void test_gmres_max_iterations() {
 // See check_sparse_small_rhs: the solvers returned NoConvergence or an inaccurate x for small |b|.
 template <typename = void>
 void test_gmres_small_rhs() {
-  GMRES<SparseMatrix<double>, DiagonalPreconditioner<double> > solver_double;
-  GMRES<SparseMatrix<float>, DiagonalPreconditioner<float> > solver_float;
+  GMRES<SparseMatrix<double>, DiagonalPreconditioner<double>> solver_double;
+  GMRES<SparseMatrix<float>, DiagonalPreconditioner<float>> solver_float;
   check_sparse_small_rhs(solver_double);
   check_sparse_small_rhs(solver_float);
 }

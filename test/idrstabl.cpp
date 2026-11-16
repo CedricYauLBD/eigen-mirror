@@ -68,8 +68,8 @@ void test_normalization_breakdown() {
 // See check_sparse_small_rhs: the solvers returned NoConvergence or an inaccurate x for small |b|.
 template <typename = void>
 void test_idrstabl_small_rhs() {
-  IDRSTABL<SparseMatrix<double>, DiagonalPreconditioner<double> > solver_double;
-  IDRSTABL<SparseMatrix<float>, DiagonalPreconditioner<float> > solver_float;
+  IDRSTABL<SparseMatrix<double>, DiagonalPreconditioner<double>> solver_double;
+  IDRSTABL<SparseMatrix<float>, DiagonalPreconditioner<float>> solver_float;
   check_sparse_small_rhs(solver_double);
   check_sparse_small_rhs(solver_float);
 }

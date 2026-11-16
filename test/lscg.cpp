@@ -118,7 +118,7 @@ void test_lscg_rounding_floor() {
   b(2) = -0.31680664972850403;
   b(6) = 5.1520653518359332;
   b(8) = 0.57896647511858745;
-  check_lscg_rounding_floor<LeastSquareDiagonalPreconditioner<double> >(A, b);
+  check_lscg_rounding_floor<LeastSquareDiagonalPreconditioner<double>>(A, b);
   check_lscg_rounding_floor<IdentityPreconditioner>(A, b);
 
   // A zero column.
@@ -126,7 +126,7 @@ void test_lscg_rounding_floor() {
   Z << -2, 0, 3, 0, -2, 0, -2, 0, 3, 0, -2, 0, 0, 0, 3, 0, 1, 0;
   VectorXd bz(9);
   bz << 2, -2, -3, 3, 3, 4, 2, 4, -2;
-  check_lscg_rounding_floor<LeastSquareDiagonalPreconditioner<double> >(Z, bz);
+  check_lscg_rounding_floor<LeastSquareDiagonalPreconditioner<double>>(Z, bz);
   check_lscg_rounding_floor<IdentityPreconditioner>(Z, bz);
 
   // Two identical columns, so that A'A is singular.
@@ -134,7 +134,7 @@ void test_lscg_rounding_floor() {
   D << -3, -3, -3, -3, -1, -1, -2, -2, 0, 0;
   VectorXd bd(5);
   bd << 3, -2, -4, 3, 1;
-  check_lscg_rounding_floor<LeastSquareDiagonalPreconditioner<double> >(D, bd);
+  check_lscg_rounding_floor<LeastSquareDiagonalPreconditioner<double>>(D, bd);
   check_lscg_rounding_floor<IdentityPreconditioner>(D, bd);
 }
 
@@ -176,8 +176,8 @@ void test_lscg_truthful_info() {
 // See check_sparse_small_rhs: the solvers returned NoConvergence or an inaccurate x for small |b|.
 template <typename = void>
 void test_lscg_small_rhs() {
-  LeastSquaresConjugateGradient<SparseMatrix<double> > solver_double;
-  LeastSquaresConjugateGradient<SparseMatrix<float> > solver_float;
+  LeastSquaresConjugateGradient<SparseMatrix<double>> solver_double;
+  LeastSquaresConjugateGradient<SparseMatrix<float>> solver_float;
   check_sparse_small_rhs(solver_double);
   check_sparse_small_rhs(solver_float);
 }
@@ -211,7 +211,7 @@ void check_lscg_sparse_tall(const SparseMatrix<double>& A, const VectorXd& b) {
 template <typename = void>
 void test_lscg_sparse_tall() {
   const Index m = 5000, n = 50;
-  std::vector<Triplet<double> > triplets;
+  std::vector<Triplet<double>> triplets;
   for (Index j = 0; j < n; ++j) {
     for (Index k = 0; k < 4; ++k)
       triplets.emplace_back((j * 997 + k * 1543 + 17) % m, j, 1.0 + double((7 * j + 3 * k) % 11) / 11.0);
@@ -222,7 +222,7 @@ void test_lscg_sparse_tall() {
   VectorXd b(m);
   for (Index i = 0; i < m; ++i)
     b(i) = numext::sin(0.37 * double(i)) + 0.5 * numext::cos(1.3 * double(i));  // inconsistent
-  check_lscg_sparse_tall<LeastSquareDiagonalPreconditioner<double> >(A, b);
+  check_lscg_sparse_tall<LeastSquareDiagonalPreconditioner<double>>(A, b);
   check_lscg_sparse_tall<IdentityPreconditioner>(A, b);
 }
 
@@ -259,13 +259,13 @@ void test_lscg_extreme_matrix() {
   for (double a : {1e200, 1e150, 1e-150, 1e-200}) {
     check_lscg_extreme_matrix<IdentityPreconditioner>(a, 1e-100);
     // The diagonal preconditioner forms the squared column norms, which overflow for a = 1e200.
-    if (a != 1e200) check_lscg_extreme_matrix<LeastSquareDiagonalPreconditioner<double> >(a, 1e-100);
+    if (a != 1e200) check_lscg_extreme_matrix<LeastSquareDiagonalPreconditioner<double>>(a, 1e-100);
   }
   // |A p|^2 subnormal: it has lost most of its precision, and the step was off by 4e-9 (a, b).
   for (const std::pair<double, double>& ab :
        {std::make_pair(1e-80, 1.0), std::make_pair(1e-30, 1e-100), std::make_pair(1e-130, 1e100)}) {
     check_lscg_extreme_matrix<IdentityPreconditioner>(ab.first, ab.second);
-    check_lscg_extreme_matrix<LeastSquareDiagonalPreconditioner<double> >(ab.first, ab.second);
+    check_lscg_extreme_matrix<LeastSquareDiagonalPreconditioner<double>>(ab.first, ab.second);
   }
   // |A' b| subnormal or underflowed to 0: the normal rhs has lost its precision, and the solver returned Success with a
   // relative error of 1e-4, or x = 0.
@@ -341,7 +341,7 @@ void test_lscg_underflowing_normal_rhs() {
     B << b.first, b.second;
     ref << b.first;
     ok &= check_lscg_case<IdentityPreconditioner>("exact b(0)", col, B, ref, 4 * eps);
-    ok &= check_lscg_case<LeastSquareDiagonalPreconditioner<double> >("exact b(0), diagonal", col, B, ref, 4 * eps);
+    ok &= check_lscg_case<LeastSquareDiagonalPreconditioner<double>>("exact b(0), diagonal", col, B, ref, 4 * eps);
   }
   {  // The same in float.
     SparseMatrix<float> colf(2, 1);
@@ -369,7 +369,7 @@ void test_lscg_underflowing_normal_rhs() {
     Mat B(2, 1), ref(2, 1);
     B << 1e-150, 1e-150;
     ref << 1e50, 0.5e50;
-    ok &= check_lscg_case<LeastSquareDiagonalPreconditioner<double> >("diagonal preconditioner", D, B, ref, 100 * eps);
+    ok &= check_lscg_case<LeastSquareDiagonalPreconditioner<double>>("diagonal preconditioner", D, B, ref, 100 * eps);
   }
   {  // Two right-hand sides, of which only the first needs rescaling.
     Mat B(2, 2), ref(2, 2);
@@ -386,7 +386,7 @@ void test_lscg_underflowing_normal_rhs() {
     SparseMatrix<double> A = (1e-200 * A0).sparseView();
     const Mat B = 1e-150 * b0, ref = 1e50 * x0;
     ok &= check_lscg_case<IdentityPreconditioner>("overdetermined", A, B, ref, 100 * eps);
-    ok &= check_lscg_case<LeastSquareDiagonalPreconditioner<double> >("overdetermined, diagonal", A, B, ref, 100 * eps);
+    ok &= check_lscg_case<LeastSquareDiagonalPreconditioner<double>>("overdetermined, diagonal", A, B, ref, 100 * eps);
   }
   {  // Complex, with |A| |b| below the smallest normal number.
     using C = std::complex<double>;

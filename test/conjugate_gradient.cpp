@@ -87,8 +87,8 @@ void test_solve_with_guess_in_place() {
 // See check_sparse_small_rhs: the solvers returned NoConvergence or an inaccurate x for small |b|.
 template <typename = void>
 void test_conjugate_gradient_small_rhs() {
-  ConjugateGradient<SparseMatrix<double>, Lower | Upper, DiagonalPreconditioner<double> > solver_double;
-  ConjugateGradient<SparseMatrix<float>, Lower | Upper, DiagonalPreconditioner<float> > solver_float;
+  ConjugateGradient<SparseMatrix<double>, Lower | Upper, DiagonalPreconditioner<double>> solver_double;
+  ConjugateGradient<SparseMatrix<float>, Lower | Upper, DiagonalPreconditioner<float>> solver_float;
   check_sparse_small_rhs(solver_double);
   check_sparse_small_rhs(solver_float);
 }
