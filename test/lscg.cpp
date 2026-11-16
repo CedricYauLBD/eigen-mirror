@@ -180,6 +180,7 @@ void test_lscg_small_rhs() {
   LeastSquaresConjugateGradient<SparseMatrix<float>> solver_float;
   check_sparse_small_rhs(solver_double);
   check_sparse_small_rhs(solver_float);
+  check_sparse_tiny_rhs(solver_float);
 }
 
 // For a sparse matrix the gradient A'(b - A x) is computed from dot products of the few nonzeros of a column, so its

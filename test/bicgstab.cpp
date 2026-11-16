@@ -123,6 +123,7 @@ void test_bicgstab_small_rhs() {
   BiCGSTAB<SparseMatrix<float>, DiagonalPreconditioner<float>> solver_float;
   check_sparse_small_rhs(solver_double);
   check_sparse_small_rhs(solver_float);
+  check_sparse_tiny_rhs(solver_float);
 }
 
 EIGEN_DECLARE_TEST(bicgstab) {

@@ -150,6 +150,7 @@ void test_idrs_small_rhs() {
   IDRS<SparseMatrix<float>, DiagonalPreconditioner<float>> solver_float;
   check_sparse_small_rhs(solver_double);
   check_sparse_small_rhs(solver_float);
+  check_sparse_tiny_rhs(solver_float);
 }
 
 // The default tolerance is eps, so that a well-conditioned system is solved to the accuracy of the arithmetic: for

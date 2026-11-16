@@ -1047,4 +1047,49 @@ void check_sparse_small_rhs(const Solver&) {
   }
 }
 
+// Solves A x = b for b = s A xt with |b| of order 10 sqrt(min) (1e-18 in float), for A = tridiag(-1, 4, -1), n = 400
+// and tridiag(-1, 2, -1), n = 200, which are well and moderately conditioned. The residual squares of a Krylov method
+// are of the order of |b|^2 eps^2 there, far below the smallest normal number: CG and BiCGSTAB returned NaN, LSCG
+// NoConvergence and IDRS NumericalIssue (or NaN) in float before the problem was solved for b / s, or the residual
+// scaled, as the small-rhs tests do on ARMv7, where NEON flushes subnormals. When the solver succeeds for s = 1, it
+// must succeed with a finite x and a forward error within a factor 30 of that of the s = 1 solve (the scaled problem
+// rounds differently, and the errors of the second matrix are of order cond eps).
+template <typename Solver>
+void check_sparse_tiny_rhs(const Solver&) {
+  using Mat = typename Solver::MatrixType;
+  using Scalar = typename Mat::Scalar;
+  using RealScalar = typename NumTraits<Scalar>::Real;
+  using DenseVector = Matrix<Scalar, Dynamic, 1>;
+
+  const RealScalar eps = NumTraits<RealScalar>::epsilon();
+  const RealScalar tiny = RealScalar(10) * numext::sqrt((std::numeric_limits<RealScalar>::min)());
+  for (int c = 0; c < 2; ++c) {
+    const Index n = c == 0 ? 400 : 200;
+    const int diagonal = c == 0 ? 4 : 2;
+    std::vector<Triplet<Scalar>> triplets;
+    for (Index i = 0; i < n; ++i) {
+      triplets.emplace_back(i, i, Scalar(diagonal));
+      if (i + 1 < n) {
+        triplets.emplace_back(i, i + 1, Scalar(-1));
+        triplets.emplace_back(i + 1, i, Scalar(-1));
+      }
+    }
+    Mat A(n, n);
+    A.setFromTriplets(triplets.begin(), triplets.end());
+    const DenseVector xt = DenseVector::Random(n);
+    const DenseVector b0 = A * xt;
+
+    Solver reference(A);
+    const DenseVector xr = reference.solve(b0);
+    if (reference.info() != Success) continue;  // LSCG squares the condition number of the second matrix
+    const RealScalar errorReference = (xr - xt).stableNorm() / xt.stableNorm();
+
+    Solver solver(A);
+    const DenseVector x = solver.solve(tiny * b0);
+    VERIFY(x.allFinite());
+    VERIFY_IS_EQUAL(solver.info(), Success);
+    VERIFY_LE((x / tiny - xt).stableNorm() / xt.stableNorm(), RealScalar(30) * numext::maxi(errorReference, eps));
+  }
+}
+
 #endif  // EIGEN_TEST_SPARSE_SOLVER_H
