@@ -55,9 +55,9 @@ typename Vector::Scalar omega(const Vector& t, const Vector& s, RealScalar angle
 }
 
 template <typename MatrixType, typename Rhs, typename Dest, typename Preconditioner>
-bool idrs(const MatrixType& A, const Rhs& b, Dest& x, const Preconditioner& precond, Index& iter,
-          typename Dest::RealScalar& relres, Index S, bool smoothing, typename Dest::RealScalar angle,
-          bool replacement) {
+bool idrs_unscaled(const MatrixType& A, const Rhs& b, Dest& x, const Preconditioner& precond, Index& iter,
+                   typename Dest::RealScalar& relres, Index S, bool smoothing, typename Dest::RealScalar angle,
+                   bool replacement) {
   using RealScalar = typename Dest::RealScalar;
   using Scalar = typename Dest::Scalar;
   using VectorType = Matrix<Scalar, Dynamic, 1>;
@@ -303,6 +303,16 @@ bool idrs(const MatrixType& A, const Rhs& b, Dest& x, const Preconditioner& prec
   }
   relres = normr / normb;
   return true;
+}
+
+template <typename MatrixType, typename Rhs, typename Dest, typename Preconditioner>
+bool idrs(const MatrixType& A, const Rhs& b, Dest& x, const Preconditioner& precond, Index& iter,
+          typename Dest::RealScalar& relres, Index S, bool smoothing, typename Dest::RealScalar angle,
+          bool replacement) {
+  // The products of omega() are of the order of the residual squared, see iterative_solver_on_scaled_problem().
+  return iterative_solver_on_scaled_problem(b, x, [&](const auto& scaledRhs, auto& scaledGuess) {
+    return idrs_unscaled(A, scaledRhs, scaledGuess, precond, iter, relres, S, smoothing, angle, replacement);
+  });
 }
 
 }  // namespace internal

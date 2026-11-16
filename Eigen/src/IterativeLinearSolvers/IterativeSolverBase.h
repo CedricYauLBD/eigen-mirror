@@ -52,6 +52,32 @@ EIGEN_DEVICE_FUNC RealScalar iterative_solver_scaling_factor(RealScalar norm) {
   return norm < sqrtMin / NumTraits<RealScalar>::epsilon() || norm > sqrtMax ? norm : RealScalar(1);
 }
 
+/** \internal Calls \a solve(b, x) on the problem scaled to a right-hand side of unit norm, \a solve(b / s, x / s), and
+ * scales x back, when iterative_solver_scaling_factor() of |b| is not 1: for a small |b| the products and squares of
+ * residual-sized quantities that a Krylov method forms (inner products, squared norms) are subnormal, which loses
+ * precision, and are flushed to 0 by float NEON on ARMv7. A x = b is equivalent to A (x / s) = b / s, and the
+ * tolerances of the solvers are relative. The problem is left unscaled when b is zero or not finite, or when the scaled
+ * guess is not finite. \a solve must accept a dense vector for b and x, and returns the result of the solver. */
+template <typename Rhs, typename Dest, typename Solve>
+auto iterative_solver_on_scaled_problem(const Rhs& b, Dest& x, Solve solve) -> decltype(solve(b, x)) {
+  using RealScalar = typename Dest::RealScalar;
+  using VectorType = Matrix<typename Dest::Scalar, Dynamic, 1>;
+  const RealScalar normb = b.stableNorm();
+  if (normb > RealScalar(0) && (numext::isfinite)(normb)) {
+    const RealScalar scale = iterative_solver_scaling_factor(normb);
+    if (scale != RealScalar(1)) {
+      VectorType scaledGuess = x / scale;
+      if (scaledGuess.allFinite()) {
+        const VectorType scaledRhs = b / scale;
+        const auto ret = solve(scaledRhs, scaledGuess);
+        x = scaledGuess * scale;
+        return ret;
+      }
+    }
+  }
+  return solve(b, x);
+}
+
 // The least residual norm that a stopping rule can ask for. Recurrences that form squares of residual norms underflow
 // below it, so a tolerance of 0 ("iterate until the residual vanishes") must stop here, not at the first denormal.
 template <typename RealScalar>

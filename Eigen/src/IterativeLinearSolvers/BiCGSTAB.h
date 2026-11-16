@@ -30,8 +30,8 @@ namespace internal {
  * \return false in the case of numerical issue, for example a break down of BiCGSTAB.
  */
 template <typename MatrixType, typename Rhs, typename Dest, typename Preconditioner>
-bool bicgstab(const MatrixType& mat, const Rhs& rhs, Dest& x, const Preconditioner& precond, Index& iters,
-              typename Dest::RealScalar& tol_error) {
+bool bicgstab_unscaled(const MatrixType& mat, const Rhs& rhs, Dest& x, const Preconditioner& precond, Index& iters,
+                       typename Dest::RealScalar& tol_error) {
   using RealScalar = typename Dest::RealScalar;
   using Scalar = typename Dest::Scalar;
   using VectorType = Matrix<Scalar, Dynamic, 1>;
@@ -121,6 +121,16 @@ bool bicgstab(const MatrixType& mat, const Rhs& rhs, Dest& x, const Precondition
   tol_error = r_norm / rhs_norm;
   iters = i;
   return true;
+}
+
+template <typename MatrixType, typename Rhs, typename Dest, typename Preconditioner>
+bool bicgstab(const MatrixType& mat, const Rhs& rhs, Dest& x, const Preconditioner& precond, Index& iters,
+              typename Dest::RealScalar& tol_error) {
+  // The inner products and squared norms are of the order of the residual squared, see
+  // iterative_solver_on_scaled_problem().
+  return iterative_solver_on_scaled_problem(rhs, x, [&](const auto& scaledRhs, auto& scaledGuess) {
+    return bicgstab_unscaled(mat, scaledRhs, scaledGuess, precond, iters, tol_error);
+  });
 }
 
 }  // namespace internal
