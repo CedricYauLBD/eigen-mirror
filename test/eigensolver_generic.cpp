@@ -308,7 +308,7 @@ void eigensolver_tiny_imaginary_pair() {
       (A.template cast<Complex>() * V - V * eig.eigenvalues().asDiagonal()).cwiseAbs().maxCoeff() /
       V.cwiseAbs().maxCoeff();
   VERIFY(residual <= RealScalar(100) * eps);
-  const MatrixType U = eig.pseudoEigenvectors();
+  const MatrixType& U = eig.pseudoEigenvectors();
   VERIFY((A * U - U * eig.pseudoEigenvalueMatrix()).cwiseAbs().maxCoeff() <= RealScalar(100) * eps);
 }
 
