@@ -1378,49 +1378,56 @@ class sparse_transposed_copy_source<Src, true> {
         m_outer(src.outerIndexPtr()),
         m_innerNonZeros(src.innerNonZeroPtr()),
         m_inner(src.innerIndexPtr()),
-        m_values(src.valuePtr()) {
-    if (m_outer == nullptr) {
-      m_vectorOuter[1] = convert_index<SrcIndex>(src.nonZeros());
-      m_outer = m_vectorOuter;
-    }
-  }
-  // m_outer may point at m_vectorOuter.
-  sparse_transposed_copy_source(const sparse_transposed_copy_source&) = delete;
+        m_values(src.valuePtr()),
+        m_vectorNonZeros(m_outer == nullptr ? src.nonZeros() : 0) {}
 
   template <typename DstIndex>
   void count(DstIndex* outer) const {
-    if (m_innerNonZeros == nullptr) {
-      Index end = m_outer[m_outerSize];
-      for (Index p = m_outer[0]; p < end; ++p) ++outer[m_inner[p] + 1];
+    if (m_outer == nullptr) {
+      count(outer, 0, m_vectorNonZeros);
+    } else if (m_innerNonZeros == nullptr) {
+      count(outer, m_outer[0], m_outer[m_outerSize]);
     } else {
-      for (Index j = 0; j < m_outerSize; ++j) {
-        Index end = m_outer[j] + m_innerNonZeros[j];
-        for (Index p = m_outer[j]; p < end; ++p) ++outer[m_inner[p] + 1];
-      }
+      for (Index j = 0; j < m_outerSize; ++j) count(outer, m_outer[j], m_outer[j] + m_innerNonZeros[j]);
     }
   }
 
   template <typename DstIndex, typename Scalar>
   void scatter(DstIndex* cursor, DstIndex* indices, Scalar* values) const {
+    if (m_outer == nullptr) {
+      scatter(0, 0, m_vectorNonZeros, cursor, indices, values);
+      return;
+    }
     for (Index j = 0; j < m_outerSize; ++j) {
       Index end = m_innerNonZeros == nullptr ? m_outer[j + 1] : m_outer[j] + m_innerNonZeros[j];
-      for (Index p = m_outer[j]; p < end; ++p) {
-        DstIndex pos = cursor[m_inner[p]]++;
-        // Converted per entry: an empty source vector may have an index beyond DstIndex.
-        indices[pos] = convert_index<DstIndex>(j);
-        values[pos] = m_values[p];
-      }
+      scatter(j, m_outer[j], end, cursor, indices, values);
     }
   }
 
  private:
+  template <typename DstIndex>
+  void count(DstIndex* outer, Index begin, Index end) const {
+    for (Index p = begin; p < end; ++p) ++outer[m_inner[p] + 1];
+  }
+
+  // Appends entries [begin, end) of source vector j.
+  template <typename DstIndex, typename Scalar>
+  void scatter(Index j, Index begin, Index end, DstIndex* cursor, DstIndex* indices, Scalar* values) const {
+    // Converted per entry: an empty source vector may have an index beyond DstIndex.
+    for (Index p = begin; p < end; ++p) {
+      DstIndex pos = cursor[m_inner[p]]++;
+      indices[pos] = convert_index<DstIndex>(j);
+      values[pos] = m_values[p];
+    }
+  }
+
   using SrcIndex = typename Src::StorageIndex;
-  SrcIndex m_vectorOuter[2] = {0, 0};
   Index m_outerSize;
   const SrcIndex* m_outer;
   const SrcIndex* m_innerNonZeros;
   const SrcIndex* m_inner;
   const typename Src::Scalar* m_values;
+  Index m_vectorNonZeros;
 };
 
 }  // namespace internal
