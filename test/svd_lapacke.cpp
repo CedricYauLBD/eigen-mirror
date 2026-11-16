@@ -12,6 +12,8 @@ int svd_calls = 0;
 bool args_match = false;
 // When nonempty, the probes succeed and report these singular values, in this order, instead of failing.
 std::vector<double> mock_singular_values;
+// What the probes return when they fail: positive for no convergence, negative for a rejected argument.
+lapack_int mock_failure_info = 1;
 
 // Columns of U, or rows of V^T, that a LAPACK job references; 0 when it references none.
 lapack_int job_extent(char job, lapack_int full, lapack_int thin) { return job == 'A' ? full : job == 'S' ? thin : 0; }
@@ -52,7 +54,7 @@ lapack_int svd_probe(int layout, char jobu, char jobvt, lapack_int m, lapack_int
   ++svd_calls;
   args_match = expected_a != nullptr && matches_expected(layout, jobu, jobvt, m, n, a, lda, ldu, ldvt);
   std::fill_n(s, numext::mini(m, n), RealScalar(0));
-  if (mock_singular_values.empty()) return 1;
+  if (mock_singular_values.empty()) return mock_failure_info;
   for (lapack_int i = 0; i < numext::mini(m, n); ++i) s[i] = RealScalar(mock_singular_values[i]);
   return 0;
 }
@@ -151,6 +153,34 @@ void svd_lapacke_nonzero_count() {
   }
 }
 
+// Invalid input reports no singular values, as on the native paths, also on an object that held a valid decomposition.
+// LAPACKE rejects a NaN argument with a negative info; with its NaN check compiled out, the values come back
+// non-finite.
+template <typename SVD>
+void svd_lapacke_invalid_input() {
+  using MatrixType = typename SVD::MatrixType;
+  const MatrixType m = MatrixType::Random(6, 4);
+  SVD svd;
+  for (const bool rejected : {false, true}) {
+    mock_singular_values = {3, 2, 1, 0.5};
+    svd.compute(m);
+    VERIFY_IS_EQUAL(svd.info(), Success);
+    VERIFY_IS_EQUAL(svd.nonzeroSingularValues(), 4);
+    if (rejected) {
+      mock_singular_values.clear();
+      mock_failure_info = -4;
+    } else {
+      mock_singular_values = {3, std::numeric_limits<double>::quiet_NaN(), 1, 0.5};
+    }
+    svd.compute(m);
+    mock_singular_values.clear();
+    mock_failure_info = 1;
+    VERIFY_IS_EQUAL(svd.info(), InvalidInput);
+    VERIFY_IS_EQUAL(svd.nonzeroSingularValues(), 0);
+    VERIFY((svd.singularValues().array() == 0).all());
+  }
+}
+
 template <typename Scalar, int Options>
 void svd_lapacke_options() {
   using ColMatrix = Matrix<Scalar, Dynamic, Dynamic>;
@@ -163,6 +193,10 @@ void svd_lapacke_options() {
   svd_lapacke_nonzero_count<JacobiSVD<RowMatrix, Options>>();
   svd_lapacke_nonzero_count<BDCSVD<ColMatrix, Options>>();
   svd_lapacke_nonzero_count<BDCSVD<RowMatrix, Options>>();
+  svd_lapacke_invalid_input<JacobiSVD<ColMatrix, Options>>();
+  svd_lapacke_invalid_input<JacobiSVD<RowMatrix, Options>>();
+  svd_lapacke_invalid_input<BDCSVD<ColMatrix, Options>>();
+  svd_lapacke_invalid_input<BDCSVD<RowMatrix, Options>>();
 }
 
 // ThinU | FullV is the case where the BDCSVD binding computes U in a local buffer.

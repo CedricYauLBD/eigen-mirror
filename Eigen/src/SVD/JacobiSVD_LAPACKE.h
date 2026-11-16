@@ -99,6 +99,8 @@ namespace Eigen {
     /* Check the result of the LAPACK call */                                                                       \
     if (info < 0 || !m_singularValues.allFinite()) {                                                                \
       m_info = InvalidInput;                                                                                        \
+      m_nonzeroSingularValues = 0;                                                                                  \
+      m_singularValues.setZero();                                                                                   \
     } else if (info > 0) {                                                                                          \
       m_info = NoConvergence;                                                                                       \
     } else {                                                                                                        \
