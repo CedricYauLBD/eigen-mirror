@@ -392,7 +392,9 @@ void test_parallelize_gemm_concurrent_callers() {
   for (int c = 0; c < callers; ++c) VERIFY_IS_EQUAL(wrong[c], 0);
 }
 
-// A product issued from a task on the pool runs on that worker, also while another caller's product holds the pool.
+// A product issued from a task on the pool runs on that worker, whether or not another caller's product holds the
+// pool. The rule is older than the session flag and does not depend on it, so this is a smoke test of the two
+// together, not a regression test for the flag.
 template <typename = void>
 void test_parallelize_gemm_from_pool_task() {
   constexpr int n = 192;
@@ -410,6 +412,39 @@ void test_parallelize_gemm_from_pool_task() {
   barrier.Wait();
   VERIFY_IS_EQUAL(from_task(3, 4), 2.f * n);
   VERIFY_IS_EQUAL(from_caller(3, 4), 2.f * n);
+}
+
+// A product that finds the session taken runs on its calling thread and does not wait for it. The session is held by
+// the test thread, so the overlap does not depend on timing. The same thread asks for it again, as a scalar type
+// whose multiplication is a matrix product does from inside a session: the request reports the session busy, and
+// giving it up leaves the session with its holder.
+template <typename = void>
+void test_parallelize_gemm_session_busy() {
+  constexpr int n = 192;
+  static ThreadPool pool(3);
+  Eigen::setGemmThreadPool(&pool);
+  Eigen::setNbThreads(0);
+  const MatrixXf a = MatrixXf::Constant(n, n, 1.f), b = MatrixXf::Constant(n, n, 2.f);
+  MatrixXf from_holder(n, n), from_other(n, n), after(n, n);
+  {
+    const internal::gemm_session_guard held;
+    VERIFY(held.owns());
+    for (int k = 0; k < 2; ++k) {
+      const internal::gemm_session_guard nested;
+      VERIFY(!nested.owns());
+    }
+    from_holder.noalias() = a * b;
+    std::thread other([&] { from_other.noalias() = a * b; });
+    other.join();
+  }
+  {
+    const internal::gemm_session_guard released;
+    VERIFY(released.owns());
+  }
+  after.noalias() = a * b;
+  VERIFY((from_holder.array() == 2.f * n).all());
+  VERIFY((from_other.array() == 2.f * n).all());
+  VERIFY((after.array() == 2.f * n).all());
 }
 
 // nbThreads() is a count of threads: 1 until a pool is registered or setNbThreads is called, never the -1 of "unset".
@@ -453,6 +488,7 @@ EIGEN_DECLARE_TEST(product_threaded) {
   }
   CALL_SUBTEST_11(test_parallelize_gemm_concurrent_callers<>());
   CALL_SUBTEST_11(test_parallelize_gemm_from_pool_task<>());
+  CALL_SUBTEST_11(test_parallelize_gemm_session_busy<>());
   CALL_SUBTEST_3(test_balanced_gemm_range<>());
   CALL_SUBTEST_5(test_parallelize_gemm_require_initialization<>());
 }

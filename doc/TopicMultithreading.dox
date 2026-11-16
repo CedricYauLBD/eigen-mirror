@@ -45,12 +45,12 @@ A product runs on the calling thread alone, without using the pool, when
    time: the threads of a product wait for each other's packed panels, so if two products shared the workers, each
    could hold some of them while its remaining threads waited in the queue, and neither would finish (four threads
    issuing products on a pool of three threads did exactly that). A caller that finds the pool in use runs its
-   product itself and does not wait. The test is a try-lock on one process-wide mutex, made for every product that
+   product itself and does not wait. The check is a test-and-set of one process-wide flag, made for every product that
    would otherwise use two or more threads, however many threads that is.
 
 To keep products parallel, issue them from one thread at a time. There is a single registered pool and a single
 \c Eigen::nbThreads() for the process, so concurrent callers cannot be given pools of their own. Lowering
-\c Eigen::nbThreads() below the number of threads in the pool does not avoid the third case, because the try-lock is
+\c Eigen::nbThreads() below the number of threads in the pool does not avoid the third case, because the check is
 made whatever the count is, as long as it is at least 2. If the callers themselves are the unit of parallelism, call
 \c Eigen::setNbThreads(1) before starting them: every product then runs on its calling thread, and the pool is not
 used. \c Eigen::setNbThreads() is process-wide, and must not be called while a product runs on another thread.

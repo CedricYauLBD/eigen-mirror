@@ -153,7 +153,7 @@ inline void setNbSmeUnits(int v) {
  *  - another thread is running a parallel product on the pool. The pool serves one parallel product at a time,
  *    because the threads of a product wait for each other's packed panels, and the workers could otherwise be
  *    divided among several products with none of them able to finish. A caller that finds the pool in use does not
- *    wait for it. This is decided per product by a try-lock on one process-wide mutex, whatever nbThreads() is, so
+ *    wait for it. This is decided per product by a test-and-set of one process-wide flag, whatever nbThreads() is, so
  *    lowering nbThreads() below the number of threads of the pool does not avoid it.
  *
  * Products issued by one thread at a time never meet the third case. Concurrent callers share the one pool, and cannot
@@ -294,10 +294,27 @@ inline void manage_multi_threading(Action action, int* v) {
 // The parts of one shared parallel session wait for each other's packed panels. Sessions of different products on one
 // pool could each occupy some workers while their other parts wait in the queue, so only one session at a time uses
 // the pool. A product that finds it busy runs on its calling thread.
-inline std::mutex& gemm_session_mutex() {
-  static std::mutex mutex;
-  return mutex;
-}
+//
+// The flag is an atomic rather than a std::mutex because the thread that holds the session can issue another product
+// from inside it, when the scalar's own multiplication is a matrix product. std::mutex::try_lock is undefined for the
+// owning thread; the exchange reports the session as busy.
+class gemm_session_guard {
+ public:
+  gemm_session_guard() : m_owns(!busy().exchange(true, std::memory_order_acquire)) {}
+  ~gemm_session_guard() {
+    if (m_owns) busy().store(false, std::memory_order_release);
+  }
+  gemm_session_guard(const gemm_session_guard&) = delete;
+  gemm_session_guard& operator=(const gemm_session_guard&) = delete;
+  bool owns() const { return m_owns; }
+
+ private:
+  static std::atomic<bool>& busy() {
+    static std::atomic<bool> flag(false);
+    return flag;
+  }
+  const bool m_owns;
+};
 #endif
 
 template <bool Condition, typename Functor, typename Index>
@@ -424,8 +441,8 @@ EIGEN_STRONG_INLINE void parallelize_gemm(const Functor& func, Index rows, Index
 #endif
 
 #if defined(EIGEN_GEMM_THREADPOOL)
-  std::unique_lock<std::mutex> session_lock(gemm_session_mutex(), std::try_to_lock);
-  if (!session_lock.owns_lock()) return func(0, rows, 0, cols);
+  const gemm_session_guard session;
+  if (!session.owns()) return func(0, rows, 0, cols);
 #endif
 
   func.initParallelSession(threads);
