@@ -222,17 +222,25 @@ struct general_product_to_triangular_selector<MatrixType, ProductType, UpLo, tru
     using LhsBlasTraits = internal::blas_traits<Lhs>;
     using ActualLhs = typename LhsBlasTraits::DirectLinearAccessType;
     using ActualLhs_ = internal::remove_all_t<ActualLhs>;
-    internal::add_const_on_value_type_t<ActualLhs> actualLhs = LhsBlasTraits::extract(prod.lhs());
 
     using Rhs = internal::remove_all_t<typename ProductType::RhsNested>;
     using RhsBlasTraits = internal::blas_traits<Rhs>;
     using ActualRhs = typename RhsBlasTraits::DirectLinearAccessType;
     using ActualRhs_ = internal::remove_all_t<ActualRhs>;
+
+    const auto lhsFactor = LhsBlasTraits::extractScalarFactor(prod.lhs().derived());
+    const auto rhsFactor = RhsBlasTraits::extractScalarFactor(prod.rhs().derived());
+    Scalar actualAlpha = alpha * lhsFactor * rhsFactor;
+
+    // The strided fallback materializes scaled vectors; do not replace it with an underflowed factor product.
+    if (LhsBlasTraits::hasZeroScalarFactor(prod.lhs()) || RhsBlasTraits::hasZeroScalarFactor(prod.rhs()) ||
+        ((MatrixType::InnerStrideAtCompileTime == 1 || mat.innerStride() == 1) &&
+         internal::is_identically_zero(actualAlpha))) {
+      if (!beta) mat.template triangularView<UpLo>().setZero();
+      return;
+    }
+    internal::add_const_on_value_type_t<ActualLhs> actualLhs = LhsBlasTraits::extract(prod.lhs());
     internal::add_const_on_value_type_t<ActualRhs> actualRhs = RhsBlasTraits::extract(prod.rhs());
-
-    Scalar actualAlpha = alpha * LhsBlasTraits::extractScalarFactor(prod.lhs().derived()) *
-                         RhsBlasTraits::extractScalarFactor(prod.rhs().derived());
-
     if (!beta) mat.template triangularView<UpLo>().setZero();
 
     // The rank-1 kernel below addresses mat with a unit inner stride.
@@ -286,17 +294,21 @@ struct general_product_to_triangular_selector<MatrixType, ProductType, UpLo, fal
     using LhsBlasTraits = internal::blas_traits<Lhs>;
     using ActualLhs = typename LhsBlasTraits::DirectLinearAccessType;
     using ActualLhs_ = internal::remove_all_t<ActualLhs>;
-    internal::add_const_on_value_type_t<ActualLhs> actualLhs = LhsBlasTraits::extract(prod.lhs());
 
     using Rhs = internal::remove_all_t<typename ProductType::RhsNested>;
     using RhsBlasTraits = internal::blas_traits<Rhs>;
     using ActualRhs = typename RhsBlasTraits::DirectLinearAccessType;
     using ActualRhs_ = internal::remove_all_t<ActualRhs>;
-    internal::add_const_on_value_type_t<ActualRhs> actualRhs = RhsBlasTraits::extract(prod.rhs());
 
     typename ProductType::Scalar actualAlpha = alpha * LhsBlasTraits::extractScalarFactor(prod.lhs().derived()) *
                                                RhsBlasTraits::extractScalarFactor(prod.rhs().derived());
 
+    if (internal::is_identically_zero(actualAlpha)) {
+      if (!beta) mat.template triangularView<UpLo>().setZero();
+      return;
+    }
+    internal::add_const_on_value_type_t<ActualLhs> actualLhs = LhsBlasTraits::extract(prod.lhs());
+    internal::add_const_on_value_type_t<ActualRhs> actualRhs = RhsBlasTraits::extract(prod.rhs());
     if (!beta) mat.template triangularView<UpLo>().setZero();
 
     enum {
@@ -344,6 +356,11 @@ TriangularViewImpl<MatrixType_, Mode_, Dense>::_assignProduct(
     const ProductType& prod, const typename TriangularViewImpl<MatrixType_, Mode_, Dense>::Scalar& alpha, bool beta) {
   EIGEN_STATIC_ASSERT((Mode_ & UnitDiag) == 0, WRITING_TO_TRIANGULAR_PART_WITH_UNIT_DIAGONAL_IS_NOT_SUPPORTED);
   EIGEN_INTERNAL_ASSERT_SAME_SHAPE(derived(), prod);
+
+  if (internal::is_identically_zero(alpha)) {
+    if (!beta) derived().setZero();
+    return derived();
+  }
 
   // The rank-k and rank-1 kernels below update a square triangle.
   if (derived().rows() != derived().cols()) {
