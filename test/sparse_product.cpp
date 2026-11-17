@@ -682,6 +682,89 @@ void test_pruned_product_cancelled_vector() {
   VERIFY_IS_EQUAL((MatrixXd(C) - MatrixXd(A) * MatrixXd(B)).norm(), 0.0);
 }
 
+// The product summed entry by entry, so that a repeated inner index of an operand vector counts every time.
+template <typename Dense, typename Lhs, typename Rhs>
+Dense sparse_product_reference(const Lhs& lhs, const Rhs& rhs) {
+  Dense l = Dense::Zero(lhs.rows(), lhs.cols()), r = Dense::Zero(rhs.rows(), rhs.cols());
+  for (Index k = 0; k < lhs.outerSize(); ++k)
+    for (typename Lhs::InnerIterator it(lhs, k); it; ++it) l(it.row(), it.col()) += it.value();
+  for (Index k = 0; k < rhs.outerSize(); ++k)
+    for (typename Rhs::InnerIterator it(rhs, k); it; ++it) r(it.row(), it.col()) += it.value();
+  return l * r;
+}
+
+// Result vectors of two to four terms with at most 8 entries in all are sorted and summed by the network of
+// bucket_sorter, which takes terms in any order and with repeated indices; longer ones take the other paths. Terms
+// interleave and share indices; one vector is unsorted and one repeats an index. Integer values make sums exact.
+template <typename Scalar, int Order>
+void test_sparse_product_small_vectors() {
+  using SpMat = SparseMatrix<Scalar, Order>;
+  using ColMat = SparseMatrix<Scalar, ColMajor>;
+  using Dense = Matrix<Scalar, Dynamic, Dynamic>;
+  const Index rows = 60, mid = 12, cols = 50;
+  // Vector k has k % 4 + 1 entries, every (k % 3 + 2)-th row from k; vector mid - 1 is empty.
+  ColMat a(rows, mid), b(mid, cols);
+  a.reserve(VectorXi::Constant(mid, 4));
+  for (Index k = 0; k + 1 < mid; ++k)
+    for (Index q = 0; q <= k % 4; ++q) a.insert(k + q * (k % 3 + 2), k) = Scalar(double(1 + (q + k) % 4));
+  a.makeCompressed();
+  // Vector 3 is reversed and vector 7 repeats its first index.
+  std::reverse(a.innerIndexPtr() + a.outerIndexPtr()[3], a.innerIndexPtr() + a.outerIndexPtr()[4]);
+  a.innerIndexPtr()[a.outerIndexPtr()[7] + 1] = a.innerIndexPtr()[a.outerIndexPtr()[7]];
+  // Column j of b sums j % 4 + 1 vectors of a from (5 j) % mid, so sums have 1 to 16 entries.
+  for (Index j = 0; j < cols; ++j)
+    for (Index t = 0; t <= j % 4; ++t) b.insert((5 * j + 3 * t) % mid, j) = Scalar(double(t % 2 ? -1 : 2));
+  b.makeCompressed();
+  // Row-major, the terms of a result row are rows of the right operand: multiply the transposes, b^T a^T.
+  const bool rowMajor = Order == RowMajor;
+  Dense ref = sparse_product_reference<Dense>(a, b);
+  if (rowMajor) ref = Dense(ref.transpose());
+  for (bool compressed : {true, false}) {
+    // a, or a^T row-major, from the arrays of a: a conversion would reject the reversed and the repeated indices.
+    SpMat terms(rowMajor ? mid : rows, rowMajor ? rows : mid);
+    terms.resizeNonZeros(a.nonZeros());
+    std::copy(a.outerIndexPtr(), a.outerIndexPtr() + mid + 1, terms.outerIndexPtr());
+    std::copy(a.innerIndexPtr(), a.innerIndexPtr() + a.nonZeros(), terms.innerIndexPtr());
+    std::copy(a.valuePtr(), a.valuePtr() + a.nonZeros(), terms.valuePtr());
+    SpMat weights = rowMajor ? SpMat(b.transpose()) : SpMat(b);
+    if (!compressed) terms.uncompress();
+    SpMat c = rowMajor ? SpMat(weights * terms) : SpMat(terms * weights);
+    VERIFY_IS_EQUAL(c.innerIndicesAreSorted(), c.outerSize());
+    VERIFY_IS_EQUAL(Dense(c), ref);
+    SpMat p = rowMajor ? SpMat((weights * terms).pruned()) : SpMat((terms * weights).pruned());
+    VERIFY_IS_EQUAL(p.innerIndicesAreSorted(), p.outerSize());
+    VERIFY_IS_EQUAL(Dense(p), ref);
+    VERIFY(p.nonZeros() <= c.nonZeros());
+  }
+}
+
+// Indices of 2^61 or more do not fit the keys of bucket_sorter: a small sum of them must take another path.
+template <typename = void>
+void test_sparse_product_small_vectors_huge_indices() {
+  using StorageIndex = long long;
+  using SpMat = SparseMatrix<double, ColMajor, StorageIndex>;
+  if (sizeof(Index) < 8) return;
+  const Index rows = Index(1) << 62;
+  const StorageIndex top = StorageIndex(rows - 1), half = StorageIndex(Index(1) << 61);
+  SpMat a(rows, 2), b(2, 1);
+  a.insert(half - 1, 0) = 1.0;
+  a.insert(top - 2, 0) = 2.0;
+  a.insert(half, 1) = 3.0;
+  a.insert(top - 2, 1) = 4.0;
+  a.insert(top, 1) = 5.0;
+  b.insert(0, 0) = 2.0;
+  b.insert(1, 0) = -1.0;
+  SpMat c = a * b;
+  VERIFY_IS_EQUAL(c.innerIndicesAreSorted(), c.outerSize());
+  VERIFY_IS_EQUAL(c.nonZeros(), Index(4));
+  const StorageIndex expectedIndices[] = {half - 1, half, top - 2, top};
+  const double expectedValues[] = {2.0, -3.0, 0.0, -5.0};
+  for (Index p = 0; p < 4; ++p) {
+    VERIFY_IS_EQUAL(c.innerIndexPtr()[p], expectedIndices[p]);
+    VERIFY_IS_EQUAL(c.valuePtr()[p], expectedValues[p]);
+  }
+}
+
 // Result vectors of one or two operand vectors are merged, which needs sorted operand vectors without a repeated
 // index. An operand that breaks this must take the general path and give the same product.
 template <typename = void>
@@ -1548,6 +1631,10 @@ EIGEN_DECLARE_TEST(sparse_product) {
     CALL_SUBTEST_6((test_pruned_product_front_insertion<>()));
     CALL_SUBTEST_6((test_pruned_product_cancelled_vector<>()));
     CALL_SUBTEST_6((test_sparse_product_few_terms_unsorted<>()));
+    CALL_SUBTEST_6((test_sparse_product_small_vectors<double, ColMajor>()));
+    CALL_SUBTEST_6((test_sparse_product_small_vectors<double, RowMajor>()));
+    CALL_SUBTEST_6((test_sparse_product_small_vectors<std::complex<double>, ColMajor>()));
+    CALL_SUBTEST_6((test_sparse_product_small_vectors_huge_indices<>()));
     CALL_SUBTEST_6((test_sparse_product_huge_inner_dimension<>()));
   }
   CALL_SUBTEST_3((sparse_product_long_vectors_all_orders<double, int>()));

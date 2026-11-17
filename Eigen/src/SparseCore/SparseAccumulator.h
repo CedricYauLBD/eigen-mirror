@@ -504,13 +504,15 @@ Index prune_inner_vector(StorageIndex* indices, Scalar* values, Index n, const K
 // doubling and is not shrunk.
 //
 // Terms describes one sum, Term iterates over the entries of one term:
-//   Terms: Index count(), Index maxEntries(), void range(StorageIndex& lo, StorageIndex& hi), Term term(Index t) for
-//          t < 2, void forEachTerm(const F& f) calling f(Term) in order
+//   Terms: Index count(), Index maxEntries() at least the entries of the terms, void range(StorageIndex& lo,
+//          StorageIndex& hi), Term term(Index t) for t < 2, void forEachTerm(const F& f) calling f(Term) in order
 //   Term:  explicit operator bool(), operator++(), StorageIndex index(), void assignTo(Scalar&), void addTo(Scalar&)
 //
-// A sum of one or two terms with strictly increasing indices is merged: one term needs no accumulator and two merge
-// in order. After the direct referencing of Parger et al., "spECK", PPoPP 2020, doi:10.1145/3332466.3374521, and the
-// row merging of Gremse et al., SIAM J. Sci. Comput. 37(1), 2015, doi:10.1137/130948811. Any other sum is
+// A sum of two or more terms with at most bucket_sorter::kCapacity entries goes through its branch-free network; a
+// merge or an insertion sort mispredicts at most entries of so short a vector. Any other sum of one or two terms with
+// strictly increasing indices is merged: one term needs no accumulator and two merge in order. After the direct
+// referencing of Parger et al., "spECK", PPoPP 2020, doi:10.1145/3332466.3374521, and the row merging of Gremse et
+// al., SIAM J. Sci. Comput. 37(1), 2015, doi:10.1137/130948811. Any other sum is
 // - marked: a marker of the inner dimension locates each index in the vector, so an entry costs one lookup however
 //   many terms it sums, and the distinct entries are sorted afterwards. For short vectors and repeated indices.
 // - direct: a direct_accumulator sums the entries. For long vectors that are dense in their range.
@@ -525,6 +527,7 @@ template <typename Scalar, typename StorageIndex>
 class sparse_accumulator {
   using Storage = CompressedStorage<Scalar, StorageIndex>;
   using Workspace = inner_sort_workspace<Scalar, StorageIndex>;
+  using Sorter = bucket_sorter<Scalar, StorageIndex>;
   // A vector with fewer distinct indices than this is marked; setting up the other two ways costs more.
   static constexpr Index kUnmarkedMin = 48;
   // A direct vector of a keep that rejects zero uses a table of values alone, sumDirectValues, if its range has at most
@@ -550,7 +553,11 @@ class sparse_accumulator {
   void append(const Terms& terms, const Keep& keep) {
     Index maxKeys = terms.maxEntries();
     if (maxKeys == 0) return;
-    Index keys = terms.count() <= 2 ? merge(terms, maxKeys, keep) : Index(-1);
+    Index keys = -1;
+    if (terms.count() >= 2 && maxKeys <= Sorter::kCapacity)
+      keys = sumSmall(terms, maxKeys, keep);
+    else if (terms.count() <= 2)
+      keys = merge(terms, maxKeys, keep);
     if (keys < 0) {
       StorageIndex lo = NumTraits<StorageIndex>::highest(), hi = 0;
       bool direct = false;
@@ -586,8 +593,36 @@ class sparse_accumulator {
     m_size += prune_inner_vector(m_data.indexPtr() + m_size, m_data.valuePtr() + m_size, keys, keep);
   }
 
-  // Each of the following writes one vector and returns its number of distinct indices before pruning. merge()
-  // returns -1 and writes none if the output is not strictly increasing: a term is unsorted or repeats an index.
+  // Each of the following writes one vector and returns its number of distinct indices before pruning, or -1 and
+  // writes none if it cannot take the vector.
+  //
+  // sumSmall() takes at most Sorter::kCapacity entries in the order of the terms, and the network of bucket_sorter
+  // orders them and sums those of equal index, in that order. It returns -1 if an index does not fit the keys.
+  template <typename Terms, typename Keep>
+  Index sumSmall(const Terms& terms, Index maxKeys, const Keep& keep) {
+    StorageIndex srcIndices[Sorter::kCapacity];
+    Scalar srcValues[Sorter::kCapacity];
+    Index n = 0;
+    StorageIndex hi = 0;
+    terms.forEachTerm([&](typename Terms::Term term) {
+      for (; term; ++term, ++n) {
+        eigen_internal_assert(n < Sorter::kCapacity && "maxEntries() is below the entries of the terms");
+        srcIndices[n] = term.index();
+        hi = numext::maxi(hi, srcIndices[n]);
+        term.assignTo(srcValues[n]);
+      }
+    });
+    if (!Sorter::fits(hi)) return -1;
+    reserve(maxKeys);
+    Sorter sorter;
+    sorter.pack(srcIndices, n);
+    sorter.sort();
+    Index keys = sorter.merge(srcValues, m_data.indexPtr() + m_size, m_data.valuePtr() + m_size, 0);
+    close(keys, keep);
+    return keys;
+  }
+
+  // merge() returns -1 if the output is not strictly increasing: a term is unsorted or repeats an index.
   template <typename Terms, typename Keep>
   Index merge(const Terms& terms, Index maxKeys, const Keep& keep) {
     reserve(maxKeys);
