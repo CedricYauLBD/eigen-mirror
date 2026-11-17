@@ -630,9 +630,10 @@ class sparse_accumulator {
     Scalar* values = m_data.valuePtr() + m_size;
     Index n = 0;
     bool increasing = true;
-    StorageIndex last = 0;
+    EIGEN_STATIC_ASSERT(NumTraits<StorageIndex>::IsSigned, THE_INDEX_TYPE_MUST_BE_A_SIGNED_TYPE)
+    StorageIndex last = -1;  // Below every index, which is nonnegative.
     auto push = [&](StorageIndex i) {
-      increasing &= n == 0 || last < i;
+      increasing &= last < i;
       last = i;
       indices[n++] = i;
     };
