@@ -298,27 +298,56 @@ void ComplexEigenSolver<MatrixType>::doComputeEigenvectors() {
   // Taken from the scaled T, which keeps it finite and makes the guard on a zero divisor relative to the same scale.
   const RealScalar matrixnorm = matX.norm();
 
+  // Divide a component of a column by 2^exponent, exactly and without disturbing subnormals.
+  const auto scaledBy = [](const ComplexScalar& value, int exponent) {
+    return ComplexScalar(internal::ldexp_preserving_subnormals(numext::real(value), -exponent),
+                         internal::ldexp_preserving_subnormals(numext::imag(value), -exponent));
+  };
+
   // Compute X such that T = X D X^(-1), where D is the diagonal of T.
-  // The matrix X is unit triangular. It overwrites T column by column from the last one: X(i,k) reads T(i,k) before
-  // replacing it, T(i,i+1..k-1) and T(i,i), T(k,k), which lie in columns not yet overwritten, and X(i+1..k-1,k),
-  // already computed.
+  // The matrix X is unit triangular, up to the factor of the column described below. It overwrites T column by column
+  // from the last one: X(i,k) reads T(i,k) before replacing it, T(i,i+1..k-1) and T(i,i), T(k,k), which lie in columns
+  // not yet overwritten, and X(i+1..k-1,k), already computed.
   matX.template triangularView<StrictlyLower>().setZero();
   for (Index k = n - 1; k >= 0; k--) {
-    // Compute X(i,k) using the (i,k) entry of the equation X T = D X
+    // The diagonal entry T(k,k) is an eigenvalue, and it is overwritten by the k-th entry of X below.
+    const ComplexScalar tkk = matX.coeff(k, k);
+    matX.coeffRef(k, k) = ComplexScalar(1.0, 0.0);
+    // The components of a column of X are ratios of entries of T, so they can exceed highest() by many orders of
+    // magnitude before the normalization at the end, e.g. X(0,2) = X(1,2)^2 / 2 for X(1,2) = highest()/4. The computed
+    // part of the column is therefore kept divided by a power of two, chosen so that its largest component stays near
+    // one, and the entries of T enter the recurrence divided by the same power of two: the equation is linear in those
+    // entries, so this only divides the column by the factor, which the normalization below removes. Both divisions are
+    // exact.
+    int columnExponent = 0;
     for (Index i = k - 1; i >= 0; i--) {
-      matX.coeffRef(i, k) = -matX.coeff(i, k);
+      // Compute X(i,k) using the (i,k) entry of the equation X T = D X
+      ComplexScalar numerator = scaledBy(-matX.coeff(i, k), columnExponent);
       if (k - i - 1 > 0)
-        matX.coeffRef(i, k) -= (matX.row(i).segment(i + 1, k - i - 1) * matX.col(k).segment(i + 1, k - i - 1)).value();
-      ComplexScalar z = matX.coeff(i, i) - matX.coeff(k, k);
+        numerator -= (matX.row(i).segment(i + 1, k - i - 1) * matX.col(k).segment(i + 1, k - i - 1)).value();
+      ComplexScalar z = matX.coeff(i, i) - tkk;
       if (z == ComplexScalar(0)) {
         // If the i-th and k-th eigenvalue are equal, then z equals 0.
         // Use a small value instead, to prevent division by zero.
         numext::real_ref(z) = numext::maxi(std::numeric_limits<RealScalar>::epsilon() * matrixnorm,
                                            (std::numeric_limits<RealScalar>::min)());
       }
-      matX.coeffRef(i, k) /= z;
+      if (numerator != ComplexScalar(0)) {
+        // The entry computed here is of the order of numerator / z, which can leave the range even after the scaling of
+        // the column taken so far: rescale the column first, so that the division stays in range.
+        const int exponent = internal::frexp_exponent_preserving_subnormals(numext::abs(numerator)) -
+                             internal::frexp_exponent_preserving_subnormals(numext::abs(z)) + 1;
+        if (exponent > columnExponent) {
+          // Cap the shift: a larger power of two than this would be flushed to zero, and the remainder is picked up by
+          // the rescaling of the next row.
+          const int shift = numext::mini(exponent - columnExponent, std::numeric_limits<RealScalar>::max_exponent - 2);
+          matX.col(k).segment(i + 1, k - i) *= internal::ldexp_preserving_subnormals(RealScalar(1), -shift);
+          columnExponent += shift;
+          numerator = scaledBy(numerator, shift);
+        }
+      }
+      matX.coeffRef(i, k) = numerator / z;
     }
-    matX.coeffRef(k, k) = ComplexScalar(1.0, 0.0);
   }
 
   // Compute V as V = U X; now A = U T U^* = U X D X^(-1) U^* = V D V^(-1)
