@@ -250,7 +250,7 @@ class ComplexEigenSolver {
 
  private:
   ComplexEigenSolver& computeFromSchur(bool computeEigenvectors);
-  void doComputeEigenvectors(RealScalar matrixnorm);
+  void doComputeEigenvectors();
   void sortEigenvalues(bool computeEigenvectors);
 };
 
@@ -273,7 +273,7 @@ template <typename MatrixType>
 ComplexEigenSolver<MatrixType>& ComplexEigenSolver<MatrixType>::computeFromSchur(bool computeEigenvectors) {
   if (m_schur.info() == Success) {
     m_eivalues = m_schur.matrixT().diagonal();
-    if (computeEigenvectors) doComputeEigenvectors(m_schur.matrixT().norm());
+    if (computeEigenvectors) doComputeEigenvectors();
     sortEigenvalues(computeEigenvectors);
   }
 
@@ -283,14 +283,25 @@ ComplexEigenSolver<MatrixType>& ComplexEigenSolver<MatrixType>::computeFromSchur
 }
 
 template <typename MatrixType>
-void ComplexEigenSolver<MatrixType>::doComputeEigenvectors(RealScalar matrixnorm) {
+void ComplexEigenSolver<MatrixType>::doComputeEigenvectors() {
   const Index n = m_eivalues.size();
+  typename ComplexSchur<MatrixType>::MatrixTType& matX = m_schur.m_matT;
+
+  // X is homogeneous of degree zero in T: scaling T also scales its diagonal, and X T = D X holds for the scaled pair,
+  // so the back substitution below gives the same X. Do it on T scaled by a power of two, because the products
+  // T(i, i+1..k-1) X(i+1..k-1, k) overflow for coefficients of T near highest(), and the eigenvector then comes back
+  // NaN although the decomposition is fine. T is overwritten by X below, so there is nothing to unscale. Scaling by a
+  // power of two is exact and leaves the eigenvalues, taken from the diagonal before this call, untouched.
+  using Scaling = internal::safe_scaling<RealScalar>;
+  const RealScalar maxCoeff = Scaling::max_abs_component(matX);
+  Scaling::scale_in_place(matX, maxCoeff);
+  // Taken from the scaled T, which keeps it finite and makes the guard on a zero divisor relative to the same scale.
+  const RealScalar matrixnorm = matX.norm();
 
   // Compute X such that T = X D X^(-1), where D is the diagonal of T.
   // The matrix X is unit triangular. It overwrites T column by column from the last one: X(i,k) reads T(i,k) before
   // replacing it, T(i,i+1..k-1) and T(i,i), T(k,k), which lie in columns not yet overwritten, and X(i+1..k-1,k),
   // already computed.
-  typename ComplexSchur<MatrixType>::MatrixTType& matX = m_schur.m_matT;
   matX.template triangularView<StrictlyLower>().setZero();
   for (Index k = n - 1; k >= 0; k--) {
     // Compute X(i,k) using the (i,k) entry of the equation X T = D X

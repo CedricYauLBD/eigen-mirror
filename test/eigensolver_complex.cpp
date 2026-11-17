@@ -165,6 +165,36 @@ void custom_complex_stable_normalization() {
   VERIFY_IS_EQUAL(input(1), Scalar(0.0, 0.0));
 }
 
+// The back substitution multiplies coefficients of T, so with coefficients near highest() the products overflowed and
+// the eigenvector came back NaN although info() was Success (#3230). X is homogeneous of degree zero in T, so the
+// recurrence now runs on T scaled by a power of two.
+template <typename MatrixType>
+void eigensolver_large_coefficients() {
+  using Scalar = typename MatrixType::Scalar;
+  using RealScalar = typename MatrixType::RealScalar;
+  const RealScalar highest = NumTraits<RealScalar>::highest();
+  // A fixed sequence, so that the matrix is the same on every run. The coefficients stay near highest() / 1024, where
+  // it is the products that leave the range and not the eigenvectors of T themselves.
+  unsigned state = 12345u + 7919u * 182u;
+  const auto next = [&state]() {
+    state = state * 1103515245u + 12345u;
+    return RealScalar(int((state >> 16) & 0x7fff) - 16384) / RealScalar(16384);
+  };
+  MatrixType a(8, 8);
+  for (Index i = 0; i < 8; ++i)
+    for (Index j = 0; j < 8; ++j) a(i, j) = Scalar(next(), next()) * (highest / RealScalar(1024));
+  a(3, 5) = Scalar(RealScalar(0.45) * highest, RealScalar(0.45) * highest);
+
+  ComplexEigenSolver<MatrixType> solver(a);
+  VERIFY_IS_EQUAL(solver.info(), Success);
+  VERIFY(solver.eigenvalues().allFinite());
+  VERIFY(solver.eigenvectors().allFinite());
+  for (Index k = 0; k < a.cols(); ++k) {
+    const RealScalar norm = solver.eigenvectors().col(k).stableNorm();
+    VERIFY(norm > RealScalar(0.5) && norm < RealScalar(2));
+  }
+}
+
 EIGEN_DECLARE_TEST(eigensolver_complex) {
   int s = 0;
   for (int i = 0; i < g_repeat; i++) {
@@ -196,6 +226,7 @@ EIGEN_DECLARE_TEST(eigensolver_complex) {
   // Test custom complex scalar type.
   CALL_SUBTEST_6(eigensolver(Matrix<CustomComplex<double>, 5, 5>()));
   CALL_SUBTEST_6(custom_complex_stable_normalization());
+  CALL_SUBTEST_2(eigensolver_large_coefficients<MatrixXcd>());
 
   TEST_SET_BUT_UNUSED_VARIABLE(s);
 }
