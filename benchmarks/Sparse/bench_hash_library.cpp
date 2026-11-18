@@ -17,7 +17,7 @@ using SpMat = SparseMatrix<double, ColMajor, I>;
 using SpMatR = SparseMatrix<double, RowMajor, I>;
 using Trip = Triplet<double, I>;
 
-static SpMat fromT(Index r, Index c, std::vector<Trip>& t) {
+static SpMat fromTriplets(Index r, Index c, std::vector<Trip>& t) {
   SpMat m(r, c);
   m.setFromTriplets(t.begin(), t.end());
   return m;
@@ -33,7 +33,7 @@ static SpMat lap2d(I k) {
       if (b) t.emplace_back(n, n - 1, -1.0);
       if (b + 1 < k) t.emplace_back(n, n + 1, -1.0);
     }
-  return fromT(k * k, k * k, t);
+  return fromTriplets(k * k, k * k, t);
 }
 static SpMat randmat(I rows, I cols, int perCol, unsigned seed) {
   std::mt19937 g(seed);
@@ -41,13 +41,13 @@ static SpMat randmat(I rows, I cols, int perCol, unsigned seed) {
   std::vector<Trip> t;
   for (I j = 0; j < cols; ++j)
     for (int q = 0; q < perCol; ++q) t.emplace_back(d(g), j, 1.0);
-  return fromT(rows, cols, t);
+  return fromTriplets(rows, cols, t);
 }
 static SpMat banded(I n, I bw) {
   std::vector<Trip> t;
   for (I j = 0; j < n; ++j)
     for (I i = std::max<I>(0, j - bw); i <= std::min<I>(n - 1, j + bw); ++i) t.emplace_back(i, j, 1.0);
-  return fromT(n, n, t);
+  return fromTriplets(n, n, t);
 }
 // Trilinear hexahedra on a k^3 node grid, 3 dof per node: 81 entries per interior column, in 9 clusters.
 static SpMat fehex(I k) {
@@ -64,7 +64,7 @@ static SpMat fehex(I k) {
         for (I r : dof)
           for (I w : dof) t.emplace_back(r, w, 1.0);
       }
-  return fromT(3 * k * k * k, 3 * k * k * k, t);
+  return fromTriplets(3 * k * k * k, 3 * k * k * k, t);
 }
 // Each column is one contiguous run of len entries starting at a random row.
 static SpMat runs(I rows, I cols, I len, unsigned seed) {
@@ -75,7 +75,7 @@ static SpMat runs(I rows, I cols, I len, unsigned seed) {
     I first = d(g);
     for (I q = 0; q < len; ++q) t.emplace_back(first + q, j, 1.0);
   }
-  return fromT(rows, cols, t);
+  return fromTriplets(rows, cols, t);
 }
 // Columns are contiguous runs of len entries; the columns j, j + groups, j + 2 groups share one run.
 static SpMat grouped_runs(I rows, I groups, I len, unsigned seed) {
@@ -86,7 +86,7 @@ static SpMat grouped_runs(I rows, I groups, I len, unsigned seed) {
   std::vector<Trip> t;
   for (I j = 0; j < 3 * groups; ++j)
     for (I q = 0; q < len; ++q) t.emplace_back(first[j % groups] + q, j, 1.0);
-  return fromT(rows, 3 * groups, t);
+  return fromTriplets(rows, 3 * groups, t);
 }
 // Each column takes picks random groups and has an entry for each of the three columns of a group.
 static SpMat group_picks(I groups, I cols, int picks, unsigned seed) {
@@ -98,7 +98,7 @@ static SpMat group_picks(I groups, I cols, int picks, unsigned seed) {
       I k = d(g);
       for (I r = 0; r < 3; ++r) t.emplace_back(k + r * groups, j, 1.0);
     }
-  return fromT(3 * groups, cols, t);
+  return fromTriplets(3 * groups, cols, t);
 }
 // Renumbers rows and columns by one random permutation, as an unstructured mesh would be numbered.
 static SpMat renumber(const SpMat& m, unsigned seed) {
@@ -109,7 +109,7 @@ static SpMat renumber(const SpMat& m, unsigned seed) {
   std::vector<Trip> t;
   for (Index j = 0; j < m.outerSize(); ++j)
     for (SpMat::InnerIterator it(m, j); it; ++it) t.emplace_back(p[it.index()], p[j], it.value());
-  return fromT(m.rows(), m.cols(), t);
+  return fromTriplets(m.rows(), m.cols(), t);
 }
 struct PCase {
   const char* name;
@@ -159,16 +159,16 @@ static std::vector<PCase>& pcases() {
     // A sparse column with one entry: the product must not cost a pass over the whole left operand.
     {
       std::vector<Trip> one{Trip(7, 0, 2.0)};
-      c.push_back({"rand20k_200_x_col1", randmat(20000, 20000, 200, 24), fromT(20000, 1, one)});
+      c.push_back({"rand20k_200_x_col1", randmat(20000, 20000, 200, 24), fromTriplets(20000, 1, one)});
     }
     // Right operands with one entry per vector, so each result vector is one scaled vector of the left operand: a
     // sparse diagonal scaling, and a selection of every second column of a matrix too tall for a cached marker.
     {
       std::vector<Trip> d, e;
       for (I k = 0; k < L.cols(); ++k) d.emplace_back(k, k, 1.0 + (k % 3));
-      c.push_back({"lap2d500_x_diag", L, fromT(L.cols(), L.cols(), d)});
+      c.push_back({"lap2d500_x_diag", L, fromTriplets(L.cols(), L.cols(), d)});
       for (I k = 0; k < W.cols() / 2; ++k) e.emplace_back(2 * k, k, 2.0);
-      c.push_back({"rand2M_8_x_select", W, fromT(W.cols(), W.cols() / 2, e)});
+      c.push_back({"rand2M_8_x_select", W, fromTriplets(W.cols(), W.cols() / 2, e)});
     }
   }
   return c;
