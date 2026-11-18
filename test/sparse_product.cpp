@@ -745,7 +745,7 @@ void test_sparse_product_small_vectors_huge_indices() {
   using SpMat = SparseMatrix<double, ColMajor, StorageIndex>;
   if (sizeof(Index) < 8) return;
   const Index rows = Index(1) << 62;
-  const StorageIndex top = StorageIndex(rows - 1), half = StorageIndex(Index(1) << 61);
+  const StorageIndex top = StorageIndex(rows - 1), half = StorageIndex(1) << 61;
   SpMat a(rows, 2), b(2, 1);
   a.insert(half - 1, 0) = 1.0;
   a.insert(top - 2, 0) = 2.0;
@@ -1375,8 +1375,8 @@ void sparse_product_large() {
     SparseMatrix<double, ResOrder> ref(shape.rows, shape.cols);
     ref.setFromTriplets(triplets.begin(), triplets.end());
 
-    SparseMatrix<double, LhsOrder> lhs = a;
-    SparseMatrix<double, RhsOrder> rhs = b;
+    SparseMatrix<double, LhsOrder> lhs = std::move(a);
+    SparseMatrix<double, RhsOrder> rhs = std::move(b);
     SparseMatrix<double, ResOrder> res = lhs * rhs;
     VERIFY(res.isCompressed());
     VERIFY_IS_EQUAL(res.innerIndicesAreSorted(), res.outerSize());
