@@ -225,6 +225,15 @@ class bucket_sorter {
     return sizeof(StorageIndex) < sizeof(Key) || (Key(hi) >> (64 - kPositionBits)) == 0;
   }
 
+  // Appends one entry of the given index, at most kCapacity in all. Its key is meaningless unless fits(i). Forming
+  // the key as the entries are gathered, rather than packing a copy of their indices, leaves no copy loop for the
+  // compiler to turn into a call to memcpy per term.
+  EIGEN_ALWAYS_INLINE void add(StorageIndex i) {
+    m_key[m_size] = (Key(i) << kPositionBits) | Key(m_size);
+    ++m_size;
+  }
+  EIGEN_ALWAYS_INLINE Index size() const { return m_size; }
+
   // Takes the n <= kCapacity entries with the given indices.
   EIGEN_ALWAYS_INLINE void pack(const StorageIndex* indices, Index n) {
     m_size = n;
@@ -600,22 +609,20 @@ class sparse_accumulator {
   // orders them and sums those of equal index, in that order. It returns -1 if an index does not fit the keys.
   template <typename Terms, typename Keep>
   Index sumSmall(const Terms& terms, Index maxKeys, const Keep& keep) {
-    StorageIndex srcIndices[Sorter::kCapacity];
     Scalar srcValues[Sorter::kCapacity];
-    Index n = 0;
+    Sorter sorter;
     StorageIndex hi = 0;
     terms.forEachTerm([&](typename Terms::Term term) {
-      for (; term; ++term, ++n) {
-        eigen_internal_assert(n < Sorter::kCapacity && "maxEntries() is below the entries of the terms");
-        srcIndices[n] = term.index();
-        hi = numext::maxi(hi, srcIndices[n]);
-        term.assignTo(srcValues[n]);
+      for (; term; ++term) {
+        eigen_internal_assert(sorter.size() < Sorter::kCapacity && "maxEntries() is below the entries of the terms");
+        StorageIndex i = term.index();
+        hi = numext::maxi(hi, i);
+        term.assignTo(srcValues[sorter.size()]);
+        sorter.add(i);
       }
     });
     if (!Sorter::fits(hi)) return -1;
     reserve(maxKeys);
-    Sorter sorter;
-    sorter.pack(srcIndices, n);
     sorter.sort();
     Index keys = sorter.merge(srcValues, m_data.indexPtr() + m_size, m_data.valuePtr() + m_size, 0);
     close(keys, keep);
