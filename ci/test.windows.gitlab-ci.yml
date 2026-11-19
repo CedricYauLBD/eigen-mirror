@@ -131,7 +131,7 @@ test:windows:cross:x86-64:msvc-14.44:smoketest:
     EIGEN_CI_CTEST_LABEL: smoketest
   before_script:
     - . ci/scripts/common.windows.before_script.ps1
-    # The build tree was configured on Linux; repoint its CTest files here.
+    # Compares the build's MSVC toolset with this runner's runtime.
     - ./ci/scripts/test.windows-cross.before_script.ps1
   script:
     - ./ci/scripts/test.windows.script.ps1

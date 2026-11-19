@@ -1,30 +1,14 @@
-# Repoints a Linux-configured build tree at its Windows location.
+# Reports the MSVC toolset the cross-compiled tests were built with.
 # SPDX-FileCopyrightText: The Eigen Authors
 # SPDX-License-Identifier: MPL-2.0
 #
-# The build tree was configured on a Linux runner, so the absolute paths CMake
-# baked into it refer to the Linux build directory.  Rewrite them to the current
-# one: CTestTestfile.cmake so ctest can find the test executables, and
-# DartConfiguration.tcl so `ctest -T test` can initialize the dashboard and
-# write Testing/, which the JUnit conversion in the after script needs.
+# test.windows.script.ps1 relocates the Linux paths CMake baked into the build
+# tree, as it does for a tree built in another runner's checkout.
 
 # Write-Information is preferred over Write-Host, but the information stream is
 # discarded unless this is set: $InformationPreference defaults to
 # SilentlyContinue, so the messages below would never reach the job log.
 $InformationPreference = 'Continue'
-
-$builddir = (Get-Item ${EIGEN_CI_BUILDDIR}).FullName -replace '\\','/'
-$stamp = Join-Path ${EIGEN_CI_BUILDDIR} '.eigen_ci_builddir'
-$origdir = (Get-Content $stamp -First 1).Trim()
-
-Write-Information "Repointing CTest files: ${origdir} -> ${builddir}"
-
-Get-ChildItem -Path ${EIGEN_CI_BUILDDIR} -Recurse -File |
-  Where-Object { $_.Name -in 'CTestTestfile.cmake', 'DartConfiguration.tcl' } |
-  ForEach-Object {
-    (Get-Content $_.FullName -Raw).Replace($origdir, $builddir) |
-      Set-Content $_.FullName -NoNewline
-  }
 
 # The binaries link the MSVC runtime dynamically, and that runtime has to be at
 # least as new as the toolset they were built with.  Report both, so a run that
