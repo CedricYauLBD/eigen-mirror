@@ -165,6 +165,62 @@ void custom_complex_stable_normalization() {
   VERIFY_IS_EQUAL(input(1), Scalar(0.0, 0.0));
 }
 
+// Two ways for the back substitution to leave the range, both of which used to return NaN eigenvectors together with
+// info() == Success (#3230): it multiplies coefficients of T, so their products overflow for coefficients near
+// highest(), and a component of the eigenvector of T can itself exceed highest(). X is homogeneous of degree zero in T,
+// so the recurrence runs on T scaled by a power of two, and keeps the column it builds divided by another.
+template <typename MatrixType>
+void eigensolver_large_coefficients() {
+  using Scalar = typename MatrixType::Scalar;
+  using RealScalar = typename MatrixType::RealScalar;
+  const RealScalar highest = NumTraits<RealScalar>::highest();
+  // A fixed sequence, so that the matrix is the same on every run. The coefficients stay near highest() / 1024, where
+  // it is the products that leave the range and not the eigenvectors of T themselves.
+  unsigned state = 12345u + 7919u * 182u;
+  const auto next = [&state]() {
+    state = state * 1103515245u + 12345u;
+    return RealScalar(int((state >> 16) & 0x7fff) - 16384) / RealScalar(16384);
+  };
+  MatrixType a(8, 8);
+  for (Index i = 0; i < 8; ++i)
+    for (Index j = 0; j < 8; ++j) a(i, j) = Scalar(next(), next()) * (highest / RealScalar(1024));
+  a(3, 5) = Scalar(RealScalar(0.45) * highest, RealScalar(0.45) * highest);
+
+  ComplexEigenSolver<MatrixType> solver(a);
+  VERIFY_IS_EQUAL(solver.info(), Success);
+  VERIFY(solver.eigenvalues().allFinite());
+  VERIFY(solver.eigenvectors().allFinite());
+  for (Index k = 0; k < a.cols(); ++k) {
+    const RealScalar norm = solver.eigenvectors().col(k).stableNorm();
+    VERIFY(norm > RealScalar(0.5) && norm < RealScalar(2));
+  }
+}
+
+// Here the eigenvector of the eigenvalue 3 is (1, highest() / 4, highest()^2 / 32) up to normalization, so one of its
+// components is of order highest()^2: dividing by a power of two is the only thing that keeps it representable, and the
+// eigenvectors must still agree with those of the same matrix scaled down to an ordinary range.
+template <typename MatrixType>
+void eigensolver_overflowing_eigenvector() {
+  using Scalar = typename MatrixType::Scalar;
+  using RealScalar = typename MatrixType::RealScalar;
+  const RealScalar highest = NumTraits<RealScalar>::highest();
+  MatrixType a = MatrixType::Zero(3, 3);
+  for (Index i = 0; i < 3; ++i) a(i, i) = Scalar(RealScalar(i) + RealScalar(1));
+  a(0, 1) = a(1, 2) = Scalar(highest / RealScalar(4), highest / RealScalar(4));
+
+  ComplexEigenSolver<MatrixType> solver(a);
+  ComplexEigenSolver<MatrixType> reference(a / highest);
+  VERIFY_IS_EQUAL(solver.info(), Success);
+  VERIFY_IS_EQUAL(reference.info(), Success);
+  VERIFY(solver.eigenvalues().allFinite());
+  VERIFY(solver.eigenvectors().allFinite());
+  for (Index k = 0; k < 3; ++k) {
+    VERIFY_IS_APPROX(solver.eigenvectors().col(k).stableNorm(), RealScalar(1));
+    VERIFY((solver.eigenvectors().col(k) - reference.eigenvectors().col(k)).stableNorm() <
+           RealScalar(64) * NumTraits<RealScalar>::epsilon());
+  }
+}
+
 EIGEN_DECLARE_TEST(eigensolver_complex) {
   int s = 0;
   for (int i = 0; i < g_repeat; i++) {
@@ -196,6 +252,9 @@ EIGEN_DECLARE_TEST(eigensolver_complex) {
   // Test custom complex scalar type.
   CALL_SUBTEST_6(eigensolver(Matrix<CustomComplex<double>, 5, 5>()));
   CALL_SUBTEST_6(custom_complex_stable_normalization());
+  CALL_SUBTEST_2(eigensolver_large_coefficients<MatrixXcd>());
+  CALL_SUBTEST_2(eigensolver_overflowing_eigenvector<Matrix3cd>());
+  CALL_SUBTEST_2(eigensolver_overflowing_eigenvector<Matrix3cf>());
 
   TEST_SET_BUT_UNUSED_VARIABLE(s);
 }
