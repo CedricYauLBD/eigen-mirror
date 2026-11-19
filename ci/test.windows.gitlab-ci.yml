@@ -124,7 +124,7 @@ test:windows:x86-64:msvc-14.29:default:affected:
 # and the toolchain lives on the Linux builder.
 
 test:windows:cross:x86-64:msvc-14.44:smoketest:
-  extends: .common:windows
+  extends: [ .common:windows, .artifacts:test:results ]
   stage: test
   needs: [ build:windows:cross:x86-64:msvc-14.44:smoketest ]
   variables:
