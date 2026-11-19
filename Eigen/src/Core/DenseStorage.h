@@ -89,11 +89,10 @@ EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE constexpr void swap_plain_array(plain_arra
 
 /** \internal Copies \a size elements into the buffer \a dst obtained from conditional_aligned_new_auto. If an element
  * assignment throws, the buffer is destroyed and freed before the exception propagates, because the storage object that
- * owns \a dst is not yet constructed and its destructor will not run. A trivially copyable T is copied bytewise and
- * cannot throw. */
+ * owns \a dst is not yet constructed and its destructor will not run. */
 template <typename T, bool Align>
 EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE void copy_to_new_buffer(const T* src, Index size, T* dst) {
-  EIGEN_IF_CONSTEXPR (!std::is_trivially_copyable<T>::value) {
+  EIGEN_IF_CONSTEXPR (!std::is_nothrow_copy_assignable<T>::value) {
     EIGEN_TRY { smart_copy(src, src + size, dst); }
     EIGEN_CATCH(...) {
       conditional_aligned_delete_auto<T, Align>(dst, size);
