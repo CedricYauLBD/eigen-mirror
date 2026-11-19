@@ -101,6 +101,9 @@ drops superseded clear-cache generations (`--stale-index-below`). Its unit tests
 The `affected-tests` and `all-tests` labels each turn off the smoke jobs (`.rules:libeigen:smoketest`). Both tiers test
 more deeply than the fixed smoke list, on the same native runners, so the smoke jobs would add cost but no coverage. The
 smoke jobs are turned off only in the `libeigen` namespace, because the affected and full tiers have no jobs in a fork.
+The MSVC jobs cross-compiled on Linux use `.rules:libeigen:smoketest:msvc-cross` instead. The affected tier has a
+native Windows job only under `windows-tests` or `all-platforms`, so that set keeps the pair under `affected-tests`
+alone.
 In merge request pipelines, `.rules:libeigen:nvhpc` runs the NVHPC build and test pair only when the `nvhpc-tests`
 label is set; [`ci.md`](ci.md#test-tiers-on-merge-requests) gives the cost that moved the pair out of `all-tests`.
 

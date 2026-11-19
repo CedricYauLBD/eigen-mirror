@@ -154,7 +154,7 @@ build:windows:x86-64:msvc-14.29:default:affected:
 # occupying the Windows runners; the resulting binaries are run by the matching
 # job in test.windows.gitlab-ci.yml.
 #
-# Note that this is a different MSVC than the nightly Windows jobs use: it
+# Note that this is a different MSVC than the native Windows jobs use: it
 # matches the hosted Windows runner the tests run on, not EIGEN_CI_MSVC_VER.
 
 .build:windows:cross:
