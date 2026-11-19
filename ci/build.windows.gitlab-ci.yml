@@ -184,5 +184,4 @@ build:windows:cross:x86-64:msvc-14.44:smoketest:
   extends: .build:windows:cross
   variables:
     EIGEN_CI_BUILD_TARGET: buildsmoketests
-  rules:
-    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+  rules: !reference [.rules:libeigen:smoketest:msvc-cross, rules]

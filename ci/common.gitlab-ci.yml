@@ -34,6 +34,19 @@
       when: never
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
 
+.rules:libeigen:smoketest:msvc-cross:
+  # The smoke tier for the MSVC jobs cross-compiled on Linux, turned off only
+  # where a native Windows job already covers MSVC: `all-tests`, or
+  # `affected-tests` with a label that adds Windows
+  # (.rules:libeigen:affected-tests:windows).  `affected-tests` alone keeps
+  # them, since that tier has no other MSVC job.
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event" && $CI_PROJECT_NAMESPACE == "libeigen" && $CI_MERGE_REQUEST_LABELS =~ "/all-tests/"
+      when: never
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event" && $CI_PROJECT_NAMESPACE == "libeigen" && $CI_MERGE_REQUEST_LABELS =~ "/affected-tests/" && $CI_MERGE_REQUEST_LABELS =~ "/all-platforms|windows-tests/"
+      when: never
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+
 # Keeps a GPU-scoped schedule (EIGEN_CI_SCHEDULE_SCOPE=gpu, see .gitlab-ci.yml)
 # from running anything but the GPU jobs.  Every rule set that fires on
 # "schedule" except .rules:libeigen:gpu opens with it: the job-level lists in

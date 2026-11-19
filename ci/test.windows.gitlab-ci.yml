@@ -139,8 +139,7 @@ test:windows:cross:x86-64:msvc-14.44:smoketest:
     - ./ci/scripts/test.windows.after_script.ps1
   tags:
     - saas-windows-medium-amd64
-  rules:
-    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+  rules: !reference [.rules:libeigen:smoketest:msvc-cross, rules]
   # Hosted Windows runners are in beta: the fleet goes away for maintenance and
   # provisioning is slow, neither of which should block a merge request. The
   # build job above is the part that has to stay green.
