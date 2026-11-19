@@ -910,7 +910,7 @@ EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE Index scaled_prod_blocks(const Evaluator& 
   using RealScalar = typename NumTraits<Scalar>::Real;
   const RealScalar upper = numext::ldexp(RealScalar(1), std::numeric_limits<RealScalar>::max_exponent / 10);
   const RealScalar lower = RealScalar(1) / upper;
-  Index end = size - size % kScaledProdBlock;
+  Index end = numext::round_down(size, kScaledProdBlock);
   for (Index i = 0; i < end; i += kScaledProdBlock) {
     Scalar chains[4] = {Scalar(1), Scalar(1), Scalar(1), Scalar(1)};
     RealScalar smallest = upper, largest = lower;
