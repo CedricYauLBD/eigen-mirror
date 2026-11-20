@@ -24,7 +24,7 @@ namespace internal {
  * product below the least positive number rounds to 0, which does not exceed v and is rejected: nothing is taken from
  * an underflowed value. Only comparison and multiplication of RealScalar are used. */
 template <typename RealScalar>
-RealScalar least_square_power_of_two_at_most(const RealScalar& v) {
+constexpr RealScalar least_square_power_of_two_at_most(const RealScalar& v) {
   // 2^-2^k for k < 32, which covers the exponents up to 2^32 - 1. For a scalar with a wider range the result is the
   // power of two 2^-2^32 if that is above v: still an exact scale of b, but it raises b by less than s <= v < 2 s does.
   RealScalar factors[32];
@@ -41,12 +41,12 @@ RealScalar least_square_power_of_two_at_most(const RealScalar& v) {
 /** \internal The number of terms of a dot product of A' r: the average number of nonzeros per column of A when A
  * exposes nonZeros() (for a dense matrix that is its number of rows), and else the number of rows. */
 template <typename RealScalar, typename MatrixType>
-auto least_square_dot_length(const MatrixType& mat, int) -> decltype(RealScalar(mat.nonZeros())) {
+constexpr auto least_square_dot_length(const MatrixType& mat, int) -> decltype(RealScalar(mat.nonZeros())) {
   return numext::maxi(RealScalar(1),
                       RealScalar(RealScalar(mat.nonZeros()) / RealScalar(numext::maxi(mat.cols(), Index(1)))));
 }
 template <typename RealScalar, typename MatrixType>
-RealScalar least_square_dot_length(const MatrixType& mat, long) {
+constexpr RealScalar least_square_dot_length(const MatrixType& mat, long) {
   return RealScalar(mat.rows());
 }
 
@@ -63,9 +63,9 @@ RealScalar least_square_dot_length(const MatrixType& mat, long) {
  *         cannot be resolved.
  */
 template <typename MatrixType, typename Rhs, typename Dest, typename Preconditioner>
-EIGEN_DONT_INLINE bool least_square_conjugate_gradient(const MatrixType& mat, const Rhs& rhs, Dest& x,
-                                                       const Preconditioner& precond, Index& iters,
-                                                       typename Dest::RealScalar& tol_error) {
+EIGEN_DONT_INLINE constexpr bool least_square_conjugate_gradient(const MatrixType& mat, const Rhs& rhs, Dest& x,
+                                                                 const Preconditioner& precond, Index& iters,
+                                                                 typename Dest::RealScalar& tol_error) {
   using RealScalar = typename Dest::RealScalar;
   using Scalar = typename Dest::Scalar;
   using VectorType = Matrix<Scalar, Dynamic, 1>;
@@ -280,7 +280,7 @@ class LeastSquaresConjugateGradient
 
  public:
   /** Default constructor. */
-  LeastSquaresConjugateGradient() : Base() {}
+  EIGEN_CONSTEXPR20 LeastSquaresConjugateGradient() : Base() {}
 
   /** Initialize the solver with matrix \a A for further \c Ax=b solving.
    *
@@ -293,11 +293,11 @@ class LeastSquaresConjugateGradient
    * matrix A, or modify a copy of A.
    */
   template <typename MatrixDerived>
-  explicit LeastSquaresConjugateGradient(const EigenBase<MatrixDerived>& A) : Base(A.derived()) {}
+  constexpr explicit LeastSquaresConjugateGradient(const EigenBase<MatrixDerived>& A) : Base(A.derived()) {}
 
   /** \internal */
   template <typename Rhs, typename Dest>
-  void _solve_vector_with_guess_impl(const Rhs& b, Dest& x) const {
+  constexpr void _solve_vector_with_guess_impl(const Rhs& b, Dest& x) const {
     m_iterations = Base::maxIterations();
     m_error = Base::m_tolerance;
 

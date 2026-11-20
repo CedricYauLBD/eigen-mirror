@@ -78,8 +78,13 @@ struct eigen_fill_impl<Xpr, /*use_fill*/ true> : eigen_fill_impl<Xpr, /*use_fill
 template <typename Xpr>
 struct eigen_fill_impl<Xpr, /*use_fill*/ true> {
   using Scalar = typename Xpr::Scalar;
-  static EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE void run(Xpr& dst, const Scalar& val) {
+  static EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE constexpr void run(Xpr& dst, const Scalar& val) {
     const Scalar val_copy = val;
+    // std::fill_n is constexpr only from C++20.
+    if (is_constant_evaluated()) {
+      for (Index i = 0; i < dst.size(); ++i) dst.data()[i] = val_copy;
+      return;
+    }
 #if EIGEN_GCC15_SLP_BUG
     // GCC 15.1/15.2 SLP-vectorize the stores of fill_n into wrong code when val is a complex product computed in the
     // same function and the size is visible, e.g. Vector2cd::Constant(a * b); see EIGEN_GCC15_SLP_BUG. Copying val as
@@ -97,7 +102,7 @@ struct eigen_fill_impl<Xpr, /*use_fill*/ true> {
     fill_n(dst.data(), dst.size(), val_copy);
   }
   template <typename SrcXpr>
-  static EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE void run(Xpr& dst, const SrcXpr& src) {
+  static EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE constexpr void run(Xpr& dst, const SrcXpr& src) {
     resize_if_allowed(dst, src, assign_op<Scalar, Scalar>());
     const Scalar& val = src.functor()();
     run(dst, val);
@@ -131,7 +136,7 @@ struct eigen_zero_impl<Xpr, /*use_memset*/ false> {
 template <typename Xpr>
 struct eigen_zero_impl<Xpr, /*use_memset*/ true> {
   using Scalar = typename Xpr::Scalar;
-  static EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE void run(Xpr& dst) {
+  static EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE constexpr void run(Xpr& dst) {
     Index size = dst.size();
     if (size <= 0) return;
     EIGEN_IF_CONSTEXPR (Xpr::MaxSizeAtCompileTime != Dynamic) {
@@ -146,10 +151,16 @@ struct eigen_zero_impl<Xpr, /*use_memset*/ true> {
     eigen_assert((dst_ptr != nullptr) && "null pointer dereference error!");
 #endif
     EIGEN_USING_STD(memset);
-    memset(dst_ptr, 0, num_bytes);
+    if (!internal::is_constant_evaluated()) {
+      memset(dst_ptr, 0, num_bytes);
+    } else {
+      // std::fill_n is constexpr only from C++20, and a host function under CUDA.
+      Scalar* data = dst.data();
+      for (Index i = 0; i < size; ++i) data[i] = Scalar{};
+    }
   }
   template <typename SrcXpr>
-  static EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE void run(Xpr& dst, const SrcXpr& src) {
+  static EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE constexpr void run(Xpr& dst, const SrcXpr& src) {
     resize_if_allowed(dst, src, assign_op<Scalar, Scalar>());
     run(dst);
   }

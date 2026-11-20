@@ -19,31 +19,65 @@ namespace Eigen {
 namespace internal {
 
 template <typename T>
-auto is_ref_compatible_test(T& matrix) -> decltype(Ref<const T>(matrix), std::true_type());
-std::false_type is_ref_compatible_test(...);
+constexpr auto is_ref_compatible_test(T& matrix) -> decltype(Ref<const T>(matrix), std::true_type());
+constexpr std::false_type is_ref_compatible_test(...);
 
 template <typename MatrixType>
 using is_ref_compatible = decltype(is_ref_compatible_test(std::declval<remove_all_t<MatrixType>&>()));
+
+// Entry (i, j) of a fixed pseudo-random matrix: the SplitMix64 finalizer of a key formed from (i, j), mapped to
+// [-1, 1). Constant evaluation cannot draw from the runtime generator, and shadow spaces only need vectors in general
+// position.
+template <typename RealScalar>
+constexpr RealScalar hashed_unit_interval(uint64_t z) {
+  z += 0x9e3779b97f4a7c15ULL;
+  z = (z ^ (z >> 30)) * 0xbf58476d1ce4e5b9ULL;
+  z = (z ^ (z >> 27)) * 0x94d049bb133111ebULL;
+  z ^= z >> 31;
+  // In double, where z >> 11 < 2^53 is exact; a narrow RealScalar such as half cannot represent 2^52.
+  return RealScalar(double(int64_t(z >> 11)) / double(int64_t(1) << 52) - 1.0);
+}
+
+// A rows x cols matrix with independent entries uniform in [-1, 1) (both parts for complex scalars), as
+// MatrixType::Random; constant evaluation substitutes the fixed entries of hashed_unit_interval().
+template <typename MatrixType>
+constexpr MatrixType shadow_space_random(Index rows, Index cols) {
+  if (!is_constant_evaluated()) return MatrixType::Random(rows, cols);
+  using Scalar = typename MatrixType::Scalar;
+  using RealScalar = typename NumTraits<Scalar>::Real;
+  MatrixType m(rows, cols);
+  for (Index j = 0; j < cols; ++j) {
+    for (Index i = 0; i < rows; ++i) {
+      const uint64_t key = 2 * ((uint64_t(j) << 32) ^ uint64_t(i));
+      EIGEN_IF_CONSTEXPR (NumTraits<Scalar>::IsComplex) {
+        m(i, j) = Scalar(hashed_unit_interval<RealScalar>(key), hashed_unit_interval<RealScalar>(key + 1));
+      } else {
+        m(i, j) = Scalar(hashed_unit_interval<RealScalar>(key));
+      }
+    }
+  }
+  return m;
+}
 
 // Returns a \a rows x \a cols matrix whose columns are an orthonormal basis of a random subspace,
 // obtained by QR-orthonormalizing a random matrix. The IDR(s)-type solvers use this to build the
 // shadow space; the basis only has to be (almost surely) non-degenerate, so any random seed is fine.
 template <typename MatrixType>
-MatrixType random_orthonormal_basis(Index rows, Index cols) {
-  HouseholderQR<MatrixType> qr(MatrixType::Random(rows, cols));
+constexpr MatrixType random_orthonormal_basis(Index rows, Index cols) {
+  HouseholderQR<MatrixType> qr(shadow_space_random<MatrixType>(rows, cols));
   return qr.householderQ() * MatrixType::Identity(rows, cols);
 }
 
 // The more severe of two solver statuses: NumericalIssue, then NoConvergence, then Success. The enumerators are not
 // ordered by severity.
-inline ComputationInfo most_severe_info(ComputationInfo a, ComputationInfo b) {
+constexpr ComputationInfo most_severe_info(ComputationInfo a, ComputationInfo b) {
   if (a == NumericalIssue || b == NumericalIssue) return NumericalIssue;
   if (a == NoConvergence || b == NoConvergence) return NoConvergence;
   return a == Success ? b : a;
 }
 
 template <typename RealScalar>
-EIGEN_DEVICE_FUNC RealScalar iterative_solver_scaling_factor(RealScalar norm) {
+EIGEN_DEVICE_FUNC constexpr RealScalar iterative_solver_scaling_factor(RealScalar norm) {
   // Scale only when forming a quadratic recurrence term from norm, or from the eps norm that a solver can reduce it
   // to, may underflow or overflow. A square below the smallest normal number is subnormal, which loses precision, and
   // is flushed to 0 where subnormals are not supported (float NEON on ARMv7).
@@ -59,7 +93,7 @@ EIGEN_DEVICE_FUNC RealScalar iterative_solver_scaling_factor(RealScalar norm) {
  * tolerances of the solvers are relative. The problem is left unscaled when b is zero or not finite, or when the scaled
  * guess is not finite. \a solve must accept a dense vector for b and x, and returns the result of the solver. */
 template <typename Rhs, typename Dest, typename Solve>
-auto iterative_solver_on_scaled_problem(const Rhs& b, Dest& x, Solve solve) -> decltype(solve(b, x)) {
+constexpr auto iterative_solver_on_scaled_problem(const Rhs& b, Dest& x, Solve solve) -> decltype(solve(b, x)) {
   using RealScalar = typename Dest::RealScalar;
   using VectorType = Matrix<typename Dest::Scalar, Dynamic, 1>;
   const RealScalar normb = b.stableNorm();
@@ -81,7 +115,7 @@ auto iterative_solver_on_scaled_problem(const Rhs& b, Dest& x, Solve solve) -> d
 // The least residual norm that a stopping rule can ask for. Recurrences that form squares of residual norms underflow
 // below it, so a tolerance of 0 ("iterate until the residual vanishes") must stop here, not at the first denormal.
 template <typename RealScalar>
-EIGEN_DEVICE_FUNC RealScalar iterative_solver_residual_floor() {
+EIGEN_DEVICE_FUNC constexpr RealScalar iterative_solver_residual_floor() {
   return numext::sqrt((std::numeric_limits<RealScalar>::min)());
 }
 
@@ -91,7 +125,7 @@ EIGEN_DEVICE_FUNC RealScalar iterative_solver_residual_floor() {
 // whatever the size of b, where an absolute floor would exceed tol |b| for small |b| (|b| < 1e-12 in float at the
 // default tolerance).
 template <typename RealScalar>
-EIGEN_DEVICE_FUNC RealScalar iterative_solver_threshold(RealScalar tol, RealScalar norm, RealScalar floor) {
+EIGEN_DEVICE_FUNC constexpr RealScalar iterative_solver_threshold(RealScalar tol, RealScalar norm, RealScalar floor) {
   return numext::maxi(RealScalar(tol * norm), numext::mini(floor, RealScalar(NumTraits<RealScalar>::epsilon() * norm)));
 }
 
@@ -111,22 +145,22 @@ class generic_matrix_wrapper<MatrixType, false> {
   enum { MatrixFree = false };
 
   // Default-construct: passing (0,0) trips the size assertion for fixed-size MatrixType (#1704).
-  generic_matrix_wrapper() : m_dummy(), m_matrix(m_dummy) {}
+  constexpr generic_matrix_wrapper() : m_dummy(), m_matrix(m_dummy) {}
 
   template <typename InputType>
-  generic_matrix_wrapper(const InputType& mat) : m_matrix(mat) {}
+  constexpr generic_matrix_wrapper(const InputType& mat) : m_matrix(mat) {}
 
-  const ActualMatrixType& matrix() const { return m_matrix; }
+  constexpr const ActualMatrixType& matrix() const { return m_matrix; }
 
-  bool hasMatrix() const { return true; }
+  constexpr bool hasMatrix() const { return true; }
 
   template <typename MatrixDerived>
-  void grab(const EigenBase<MatrixDerived>& mat) {
+  constexpr void grab(const EigenBase<MatrixDerived>& mat) {
     internal::destroy_at(&m_matrix);
     internal::construct_at(&m_matrix, mat.derived());
   }
 
-  void grab(const Ref<const MatrixType>& mat) {
+  constexpr void grab(const Ref<const MatrixType>& mat) {
     if (&(mat.derived()) != &m_matrix) {
       internal::destroy_at(&m_matrix);
       internal::construct_at(&m_matrix, mat);
@@ -150,16 +184,16 @@ class generic_matrix_wrapper<MatrixType, true> {
 
   enum { MatrixFree = true };
 
-  generic_matrix_wrapper() = default;
+  constexpr generic_matrix_wrapper() = default;
 
-  generic_matrix_wrapper(const MatrixType& mat) : mp_matrix(&mat) {}
+  constexpr generic_matrix_wrapper(const MatrixType& mat) : mp_matrix(&mat) {}
 
-  const ActualMatrixType& matrix() const { return *mp_matrix; }
+  constexpr const ActualMatrixType& matrix() const { return *mp_matrix; }
 
   // False until compute(): a matrix-free operator has nothing to dereference before it is attached.
-  bool hasMatrix() const { return mp_matrix != nullptr; }
+  constexpr bool hasMatrix() const { return mp_matrix != nullptr; }
 
-  void grab(const MatrixType& mat) { mp_matrix = &mat; }
+  constexpr void grab(const MatrixType& mat) { mp_matrix = &mat; }
 
  protected:
   const ActualMatrixType* mp_matrix = nullptr;
@@ -191,7 +225,7 @@ class IterativeSolverBase : public SparseSolverBase<Derived> {
   using Base::derived;
 
   /** Default constructor. */
-  IterativeSolverBase() { init(); }
+  constexpr IterativeSolverBase() { init(); }
 
   /** Initialize the solver with matrix \a A for further \c Ax=b solving.
    *
@@ -204,12 +238,12 @@ class IterativeSolverBase : public SparseSolverBase<Derived> {
    * matrix A, or modify a copy of A.
    */
   template <typename MatrixDerived>
-  explicit IterativeSolverBase(const EigenBase<MatrixDerived>& A) : m_matrixWrapper(A.derived()) {
+  constexpr explicit IterativeSolverBase(const EigenBase<MatrixDerived>& A) : m_matrixWrapper(A.derived()) {
     init();
     compute(matrix());
   }
 
-  IterativeSolverBase(IterativeSolverBase&&) = default;
+  constexpr IterativeSolverBase(IterativeSolverBase&&) = default;
 
   /** Initializes the iterative solver for the sparsity pattern of the matrix \a A for further solving \c Ax=b problems.
    *
@@ -217,7 +251,7 @@ class IterativeSolverBase : public SparseSolverBase<Derived> {
    * we might, for instance, implement column reordering for faster matrix vector products.
    */
   template <typename MatrixDerived>
-  Derived& analyzePattern(const EigenBase<MatrixDerived>& A) {
+  constexpr Derived& analyzePattern(const EigenBase<MatrixDerived>& A) {
     grab(A.derived());
     m_preconditioner.analyzePattern(matrix());
     m_isInitialized = true;
@@ -237,7 +271,7 @@ class IterativeSolverBase : public SparseSolverBase<Derived> {
    * matrix A, or modify a copy of A.
    */
   template <typename MatrixDerived>
-  Derived& factorize(const EigenBase<MatrixDerived>& A) {
+  constexpr Derived& factorize(const EigenBase<MatrixDerived>& A) {
     eigen_assert(m_analysisIsOk && "You must first call analyzePattern()");
     grab(A.derived());
     m_preconditioner.factorize(matrix());
@@ -257,7 +291,7 @@ class IterativeSolverBase : public SparseSolverBase<Derived> {
    * matrix A, or modify a copy of A.
    */
   template <typename MatrixDerived>
-  Derived& compute(const EigenBase<MatrixDerived>& A) {
+  constexpr Derived& compute(const EigenBase<MatrixDerived>& A) {
     grab(A.derived());
     m_preconditioner.compute(matrix());
     m_isInitialized = true;
@@ -276,7 +310,7 @@ class IterativeSolverBase : public SparseSolverBase<Derived> {
   /** \returns the tolerance threshold used by the stopping criteria.
    * \sa setTolerance()
    */
-  RealScalar tolerance() const { return m_tolerance; }
+  constexpr RealScalar tolerance() const { return m_tolerance; }
 
   /** Sets the tolerance threshold used by the stopping criteria.
    *
@@ -289,33 +323,33 @@ class IterativeSolverBase : public SparseSolverBase<Derived> {
    * A tolerance of 0 asks for iterating until the residual vanishes or maxIterations() is reached. The solvers stop
    * earlier when it underflows or the Krylov space is exhausted, and return a finite solution.
    */
-  Derived& setTolerance(const RealScalar& tolerance) {
+  constexpr Derived& setTolerance(const RealScalar& tolerance) {
     m_tolerance = tolerance;
     return derived();
   }
 
   /** \returns a read-write reference to the preconditioner for custom configuration. */
-  Preconditioner& preconditioner() { return m_preconditioner; }
+  constexpr Preconditioner& preconditioner() { return m_preconditioner; }
 
   /** \returns a read-only reference to the preconditioner. */
-  const Preconditioner& preconditioner() const { return m_preconditioner; }
+  constexpr const Preconditioner& preconditioner() const { return m_preconditioner; }
 
   /** \returns the max number of iterations.
    * It is either the value set by setMaxIterations or, by default,
    * twice the number of columns of the matrix, which is 0 for a matrix-free operator not yet attached by compute().
    */
-  Index maxIterations() const { return (m_maxIterations < 0) ? 2 * attachedCols() : m_maxIterations; }
+  constexpr Index maxIterations() const { return (m_maxIterations < 0) ? 2 * attachedCols() : m_maxIterations; }
 
   /** Sets the max number of iterations.
    * Default is twice the number of columns of the matrix.
    */
-  Derived& setMaxIterations(Index maxIters) {
+  constexpr Derived& setMaxIterations(Index maxIters) {
     m_maxIterations = maxIters;
     return derived();
   }
 
   /** \returns the number of iterations performed during the last solve */
-  Index iterations() const {
+  constexpr Index iterations() const {
     eigen_assert(m_isInitialized && "IterativeSolverBase is not initialized.");
     return m_iterations;
   }
@@ -325,7 +359,7 @@ class IterativeSolverBase : public SparseSolverBase<Derived> {
    * different measure: LeastSquaresConjugateGradient reports the normal-equation residual |A'(Ax-b)|/|A'b|, and
    * LSMR reports the normal-equation residual estimate |A'(Ax-b)|/(|A| |Ax-b|).
    */
-  RealScalar error() const {
+  constexpr RealScalar error() const {
     eigen_assert(m_isInitialized && "IterativeSolverBase is not initialized.");
     return m_error;
   }
@@ -336,7 +370,7 @@ class IterativeSolverBase : public SparseSolverBase<Derived> {
    * \sa solve(), compute()
    */
   template <typename Rhs, typename Guess>
-  inline const SolveWithGuess<Derived, Rhs, Guess> solveWithGuess(const MatrixBase<Rhs>& b, const Guess& x0) const {
+  constexpr const SolveWithGuess<Derived, Rhs, Guess> solveWithGuess(const MatrixBase<Rhs>& b, const Guess& x0) const {
     eigen_assert(m_isInitialized && "Solver is not initialized.");
     EIGEN_INTERNAL_ASSERT_SOLVER_RHS_MSG(derived(), b, false,
                                          "solve(): invalid number of rows of the right hand side matrix b");
@@ -354,7 +388,7 @@ class IterativeSolverBase : public SparseSolverBase<Derived> {
    * \sa solve(), solveWithGuess()
    */
   template <typename Rhs, typename Dest>
-  void solveWithGuessInPlace(const Rhs& b, Dest& x) const {
+  constexpr void solveWithGuessInPlace(const Rhs& b, Dest& x) const {
     eigen_assert(m_isInitialized && "Solver is not initialized.");
     EIGEN_INTERNAL_ASSERT_SOLVER_RHS_MSG(derived(), b, false,
                                          "solveWithGuessInPlace(): invalid number of rows of the right hand side b");
@@ -365,14 +399,14 @@ class IterativeSolverBase : public SparseSolverBase<Derived> {
    * otherwise. With several right-hand sides, it is the most severe status over the columns: NumericalIssue if any
    * column broke down, else NoConvergence if any did not converge, else Success. iterations() and error() then
    * describe the last column. */
-  ComputationInfo info() const {
+  constexpr ComputationInfo info() const {
     eigen_assert(m_isInitialized && "IterativeSolverBase is not initialized.");
     return m_info;
   }
 
   /** \internal */
   template <typename Rhs, typename DestDerived>
-  void _solve_with_guess_impl(const Rhs& b, SparseMatrixBase<DestDerived>& aDest) const {
+  constexpr void _solve_with_guess_impl(const Rhs& b, SparseMatrixBase<DestDerived>& aDest) const {
     EIGEN_INTERNAL_ASSERT_SOLVER_RHS(derived(), b, false);
 
     Index rhsCols = b.cols();
@@ -400,7 +434,7 @@ class IterativeSolverBase : public SparseSolverBase<Derived> {
   }
 
   template <typename Rhs, typename DestDerived>
-  std::enable_if_t<Rhs::ColsAtCompileTime != 1 && DestDerived::ColsAtCompileTime != 1> _solve_with_guess_impl(
+  constexpr std::enable_if_t<Rhs::ColsAtCompileTime != 1 && DestDerived::ColsAtCompileTime != 1> _solve_with_guess_impl(
       const Rhs& b, MatrixBase<DestDerived>& aDest) const {
     EIGEN_INTERNAL_ASSERT_SOLVER_RHS(derived(), b, false);
 
@@ -419,20 +453,20 @@ class IterativeSolverBase : public SparseSolverBase<Derived> {
   }
 
   template <typename Rhs, typename DestDerived>
-  std::enable_if_t<Rhs::ColsAtCompileTime == 1 || DestDerived::ColsAtCompileTime == 1> _solve_with_guess_impl(
+  constexpr std::enable_if_t<Rhs::ColsAtCompileTime == 1 || DestDerived::ColsAtCompileTime == 1> _solve_with_guess_impl(
       const Rhs& b, MatrixBase<DestDerived>& dest) const {
     derived()._solve_vector_with_guess_impl(b, dest.derived());
   }
 
   /** \internal default initial guess = 0 */
   template <typename Rhs, typename Dest>
-  void _solve_impl(const Rhs& b, Dest& x) const {
+  constexpr void _solve_impl(const Rhs& b, Dest& x) const {
     x.setZero();
     derived()._solve_with_guess_impl(b, x);
   }
 
  protected:
-  void init() {
+  constexpr void init() {
     m_isInitialized = false;
     m_analysisIsOk = false;
     m_factorizationIsOk = false;
@@ -443,21 +477,21 @@ class IterativeSolverBase : public SparseSolverBase<Derived> {
   using MatrixWrapper = internal::generic_matrix_wrapper<MatrixType>;
   using ActualMatrixType = typename MatrixWrapper::ActualMatrixType;
 
-  const ActualMatrixType& matrix() const { return m_matrixWrapper.matrix(); }
+  constexpr const ActualMatrixType& matrix() const { return m_matrixWrapper.matrix(); }
 
   /** \internal The number of columns of the matrix, or 0 while a matrix-free operator is not attached yet. */
-  Index attachedCols() const { return m_matrixWrapper.hasMatrix() ? matrix().cols() : Index(0); }
+  constexpr Index attachedCols() const { return m_matrixWrapper.hasMatrix() ? matrix().cols() : Index(0); }
 
   /** \internal 8 sqrt(max(n, 1)) eps with n = attachedCols(): the residual up to which IDRS and MINRES report Success
    * at their default tolerance. */
-  RealScalar sizeScaledTolerance() const {
+  constexpr RealScalar sizeScaledTolerance() const {
     return RealScalar(8) * numext::sqrt(RealScalar(numext::maxi(attachedCols(), Index(1)))) *
            NumTraits<RealScalar>::epsilon();
   }
 
   /** \internal The tolerance of a solver whose default is selected by a negative stored tolerance: the stored one, or
    * eps by default. The solver sets m_tolerance = -1 in its constructors. */
-  RealScalar toleranceOrEps() const {
+  constexpr RealScalar toleranceOrEps() const {
     return m_tolerance >= RealScalar(0) ? m_tolerance : NumTraits<RealScalar>::epsilon();
   }
 
@@ -465,13 +499,13 @@ class IterativeSolverBase : public SparseSolverBase<Derived> {
    * of toleranceOrEps(). The residual of the computed x stagnates above eps by an amount that depends on the matrix,
    * so at the default tolerance only, Success also covers sizeScaledTolerance(). A tolerance set by setTolerance() is
    * never relaxed. \a error must be the computed |b - A x| / |b|. */
-  ComputationInfo infoAtDefaultOrSetTolerance(RealScalar error, RealScalar tol) const {
+  constexpr ComputationInfo infoAtDefaultOrSetTolerance(RealScalar error, RealScalar tol) const {
     const bool confirmed = error <= tol || (m_tolerance < RealScalar(0) && error <= sizeScaledTolerance());
     return confirmed ? Success : NoConvergence;
   }
 
   template <typename InputType>
-  void grab(const InputType& A) {
+  constexpr void grab(const InputType& A) {
     m_matrixWrapper.grab(A);
   }
 
