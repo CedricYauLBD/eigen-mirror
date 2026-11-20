@@ -60,7 +60,7 @@ class RankRevealingBase {
   using Scalar = typename internal::traits<Derived>::Scalar;
   using RealScalar = typename NumTraits<Scalar>::Real;
 
-  RankRevealingBase()
+  EIGEN_DEVICE_FUNC RankRevealingBase()
       : m_usePrescribedThreshold(false),
         m_prescribedThreshold(RealScalar(0)),
         m_maxpivot(RealScalar(0)),
@@ -107,7 +107,7 @@ class RankRevealingBase {
    * setThreshold(const RealScalar&), or by default \f$ 4 \, \min(rows, cols) \, \epsilon \f$ with
    * \f$ \epsilon \f$ = \c NumTraits<Scalar>::epsilon(). It is relative to the biggest pivot.
    */
-  RealScalar threshold() const {
+  EIGEN_DEVICE_FUNC RealScalar threshold() const {
     eigen_assert(self().m_isInitialized || m_usePrescribedThreshold);
     // Higham's backward error bound: ||ΔA||₂ ≤ c·min(m,n)·u·||A||₂.
     // The factor of 4 covers the constant c.
@@ -122,7 +122,7 @@ class RankRevealingBase {
    *       For that, it uses the threshold value that you can control by calling
    *       setThreshold(const RealScalar&).
    */
-  inline Index rank() const {
+  EIGEN_DEVICE_FUNC inline Index rank() const {
     eigen_assert(self().m_isInitialized && "Decomposition is not initialized.");
     RealScalar premultiplied_threshold = numext::abs(m_maxpivot) * threshold();
     Index result = 0;
@@ -200,8 +200,8 @@ class RankRevealingBase {
   Index m_nonzero_pivots;
 
  private:
-  Derived& self() { return static_cast<Derived&>(*this); }
-  const Derived& self() const { return static_cast<const Derived&>(*this); }
+  EIGEN_DEVICE_FUNC Derived& self() { return static_cast<Derived&>(*this); }
+  EIGEN_DEVICE_FUNC const Derived& self() const { return static_cast<const Derived&>(*this); }
 };
 
 }  // end namespace Eigen
