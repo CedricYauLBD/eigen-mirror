@@ -227,7 +227,7 @@ struct matrix_exp_computeUV<MatrixType, float> {
       matrix_exp_pade5(arg, U, V);
     } else {
       const float maxnorm = 3.925724783138660f;
-      frexp(l1norm / maxnorm, &squarings);
+      (void)frexp(l1norm / maxnorm, &squarings);
       if (squarings < 0) squarings = 0;
       MatrixType A = matrix_exp_scale<MatrixType>(arg, squarings);
       matrix_exp_pade7(A, U, V);
@@ -253,7 +253,7 @@ struct matrix_exp_computeUV<MatrixType, double> {
       matrix_exp_pade9(arg, U, V);
     } else {
       const double maxnorm = 5.371920351148152;
-      frexp(l1norm / maxnorm, &squarings);
+      (void)frexp(l1norm / maxnorm, &squarings);
       if (squarings < 0) squarings = 0;
       MatrixType A = matrix_exp_scale<MatrixType>(arg, squarings);
       matrix_exp_pade13(A, U, V);
@@ -287,7 +287,7 @@ struct matrix_exp_computeUV<MatrixType, long double> {
       matrix_exp_pade9(arg, U, V);
     } else {
       const long double maxnorm = 4.0246098906697353063L;
-      frexp(l1norm / maxnorm, &squarings);
+      (void)frexp(l1norm / maxnorm, &squarings);
       if (squarings < 0) squarings = 0;
       MatrixType A = matrix_exp_scale<MatrixType>(arg, squarings);
       matrix_exp_pade13(A, U, V);
@@ -307,7 +307,7 @@ struct matrix_exp_computeUV<MatrixType, long double> {
       matrix_exp_pade13(arg, U, V);
     } else {
       const long double maxnorm = 3.2579440895405400856599663723517L;
-      frexp(l1norm / maxnorm, &squarings);
+      (void)frexp(l1norm / maxnorm, &squarings);
       if (squarings < 0) squarings = 0;
       MatrixType A = matrix_exp_scale<MatrixType>(arg, squarings);
       matrix_exp_pade17(A, U, V);
@@ -327,7 +327,7 @@ struct matrix_exp_computeUV<MatrixType, long double> {
       matrix_exp_pade13(arg, U, V);
     } else {
       const long double maxnorm = 2.884233277829519311757165057717815L;
-      frexp(l1norm / maxnorm, &squarings);
+      (void)frexp(l1norm / maxnorm, &squarings);
       if (squarings < 0) squarings = 0;
       MatrixType A = matrix_exp_scale<MatrixType>(arg, squarings);
       matrix_exp_pade17(A, U, V);

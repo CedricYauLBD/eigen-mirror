@@ -360,7 +360,7 @@ template <typename Scalar>
 EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE int frexp_exponent_preserving_subnormals_impl(const Scalar& value, false_type) {
   int exponent = 0;
   EIGEN_USING_STD(frexp);
-  frexp(value, &exponent);
+  (void)frexp(value, &exponent);
   return exponent;
 }
 template <typename Scalar>
@@ -677,7 +677,7 @@ struct safe_scaling<long double, true> : safe_scaling_operations<long double, tr
   static EIGEN_STRONG_INLINE safe_scaling_factors<long double> compute_floor_factors(const long double& value) {
     EIGEN_USING_STD(frexp);
     int exponent = 0;
-    frexp(value, &exponent);
+    (void)frexp(value, &exponent);
     return compute_factors_from_exponent(exponent - 1);
   }
 
