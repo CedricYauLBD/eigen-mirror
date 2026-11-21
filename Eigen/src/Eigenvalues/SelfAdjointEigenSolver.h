@@ -621,8 +621,12 @@ EIGEN_DEVICE_FUNC ComputationInfo computeFromTridiagonal_impl(DiagType& diag, Su
   // Guide). A floor of min() lets a block that is graded over more than ~1/sqrt(min) make one rotation per
   // iteration, as the underflowing bulge entries never deflate: NoConvergence. The limit, as in LAPACK: eigenvalues
   // below about sqrt(min) |block| inside a coupled graded chain are not accurate relative to themselves.
-  const RealScalar considerAsZero = numext::sqrt((std::numeric_limits<RealScalar>::min)());
+  // The floor is capped at eps^2, and at min() from below: in Eigen::half sqrt(min) = 8 eps would deflate a coupling of
+  // a few eps, while eps^2 < min() leaves min(). The other types keep sqrt(min).
+  const RealScalar safmin = (std::numeric_limits<RealScalar>::min)();
   const RealScalar precision = NumTraits<RealScalar>::epsilon();
+  const RealScalar considerAsZero =
+      numext::maxi<RealScalar>(safmin, numext::mini<RealScalar>(numext::sqrt(safmin), precision * precision));
 
   // Helper lambda for the deflation test.
   auto deflate = [&](Index lo, Index hi) {

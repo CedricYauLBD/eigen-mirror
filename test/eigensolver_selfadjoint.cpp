@@ -1811,6 +1811,24 @@ void direct_selfadjoint_low_precision_boundary() {
     VERIFY((vectors.transpose() * vectors - WideMatrix::Identity()).norm() <= tolerance);
   }
 }
+
+// A coupling of a few eps between unit diagonal entries is significant. The deflation floor must stay below it also
+// where sqrt(min) is a multiple of eps, as in Eigen::half; dropping the coupling leaves a residual of 4 eps.
+template <typename Scalar>
+void selfadjoint_iterative_low_precision_coupling() {
+  using MatrixType = Matrix<Scalar, 3, 3>;
+  const double eps = double(NumTraits<Scalar>::epsilon());
+  MatrixType input = MatrixType::Identity();
+  const Scalar coupling = Scalar(5 * eps);
+  input(0, 1) = input(1, 0) = input(1, 2) = input(2, 1) = coupling;
+  SelfAdjointEigenSolver<MatrixType> solver(input);
+  VERIFY_IS_EQUAL(solver.info(), Success);
+  const Matrix<double, 3, 3> vectors = solver.eigenvectors().template cast<double>();
+  const Matrix<double, 3, 1> values = solver.eigenvalues().template cast<double>();
+  const double residual = (input.template cast<double>() * vectors - vectors * values.asDiagonal()).norm() /
+                          input.template cast<double>().norm();
+  VERIFY(residual <= 2 * eps);
+}
 #endif
 
 EIGEN_DECLARE_TEST(eigensolver_selfadjoint) {
@@ -1845,6 +1863,9 @@ EIGEN_DECLARE_TEST(eigensolver_selfadjoint) {
   CALL_SUBTEST_21((direct_selfadjoint_low_precision_boundary<half, 3>()));
   CALL_SUBTEST_21((direct_selfadjoint_low_precision_boundary<bfloat16, 2>()));
   CALL_SUBTEST_21((direct_selfadjoint_low_precision_boundary<bfloat16, 3>()));
+  CALL_SUBTEST_21((selfadjoint_iterative_low_precision_coupling<half>()));
+  CALL_SUBTEST_21((selfadjoint_iterative_low_precision_coupling<bfloat16>()));
+  CALL_SUBTEST_21((selfadjoint_iterative_low_precision_coupling<float>()));
   int s = 0;
   CALL_SUBTEST_4(generalizedselfadjointeigensolver_no_malloc<MatrixXd>());
   // An empty matrix took the maximum of no coefficients.
