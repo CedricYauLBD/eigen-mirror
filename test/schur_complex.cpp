@@ -10,7 +10,9 @@
 
 #include "main.h"
 #include "fp_control.h"
+#include <algorithm>
 #include <limits>
+#include <vector>
 #include <Eigen/Eigenvalues>
 
 template <typename MatrixType>
@@ -305,6 +307,120 @@ void schur_shift_scaling() {
   }
 }
 
+// Reordering must keep A = U T U^*, leave T triangular, move the selected eigenvalues to the leading diagonal positions
+// in their previous relative order, and make the leading columns of U a basis of their invariant subspace. The selected
+// set is chosen as the half of the spectrum of largest modulus, split at a gap wider than the perturbation the
+// rotations introduce, so that the expected order is unambiguous.
+template <typename MatrixType>
+void schur_reorder(Index size) {
+  using ComplexScalar = typename ComplexSchur<MatrixType>::ComplexScalar;
+  using ComplexMatrixType = typename ComplexSchur<MatrixType>::ComplexMatrixType;
+  using RealScalar = typename MatrixType::RealScalar;
+
+  const RealScalar eps = NumTraits<RealScalar>::epsilon();
+  // n^2 rotations, each contributing a rounding of order eps ||A|| with a small constant.
+  const RealScalar tolerance = RealScalar(64) * size * size * eps;
+
+  for (int counter = 0; counter < g_repeat; ++counter) {
+    const MatrixType A = MatrixType::Random(size, size);
+    ComplexSchur<MatrixType> schur(A);
+    VERIFY_IS_EQUAL(schur.info(), Success);
+    const ComplexMatrixType T0 = schur.matrixT();
+    const ComplexMatrixType U0 = schur.matrixU();
+
+    const Index wanted = (size + 1) / 2;
+    if (wanted >= size) continue;
+    std::vector<RealScalar> moduli(size);
+    for (Index i = 0; i < size; ++i) moduli[i] = numext::abs(T0.coeff(i, i));
+    std::sort(moduli.begin(), moduli.end());
+    const RealScalar largestUnselected = moduli[size - wanted - 1];
+    const RealScalar smallestSelected = moduli[size - wanted];
+    if (!(smallestSelected - largestUnselected > RealScalar(1024) * size * eps * (T0.stableNorm() + 1))) continue;
+    const RealScalar threshold = (smallestSelected + largestUnselected) / RealScalar(2);
+    const auto select = [threshold](const ComplexScalar& lambda) { return numext::abs(lambda) > threshold; };
+
+    const Index selected = schur.reorder(select);
+    VERIFY_IS_EQUAL(selected, wanted);
+    const ComplexMatrixType& U = schur.matrixU();
+    const ComplexMatrixType& T = schur.matrixT();
+
+    const RealScalar scale = T0.stableNorm() + RealScalar(1);
+    VERIFY((A.template cast<ComplexScalar>() - U * T * U.adjoint()).norm() <= tolerance * A.norm());
+    VERIFY((U * U.adjoint() - ComplexMatrixType::Identity(size, size)).norm() <= tolerance);
+    VERIFY(T.template triangularView<StrictlyLower>().toDenseMatrix().isZero(0));
+
+    // The leading eigenvalues are the selected ones of the unreordered form, in the same relative order.
+    Index next = 0;
+    for (Index i = 0; i < size; ++i) {
+      if (!select(T0.coeff(i, i))) continue;
+      VERIFY(next < selected);
+      VERIFY(numext::abs(T.coeff(next, next) - T0.coeff(i, i)) <= tolerance * scale);
+      ++next;
+    }
+    VERIFY_IS_EQUAL(next, selected);
+    for (Index i = selected; i < size; ++i) VERIFY(!select(T.coeff(i, i)));
+
+    // The leading columns span the invariant subspace of the selected eigenvalues: A U1 = U1 T11.
+    if (selected > 0) {
+      VERIFY((A.template cast<ComplexScalar>() * U.leftCols(selected) -
+              U.leftCols(selected) * T.topLeftCorner(selected, selected))
+                 .norm() <= tolerance * A.norm());
+    }
+
+    // Reordering an already reordered form performs no rotation, so it neither moves nor perturbs anything.
+    const ComplexMatrixType Tbefore = T;
+    const ComplexMatrixType Ubefore = U;
+    VERIFY_IS_EQUAL(schur.reorder(select), selected);
+    VERIFY_IS_EQUAL(schur.matrixT(), Tbefore);
+    VERIFY_IS_EQUAL(schur.matrixU(), Ubefore);
+
+    // Without U the same rotations are applied to T alone.
+    ComplexSchur<MatrixType> withoutU(A, false);
+    VERIFY_IS_EQUAL(withoutU.reorder(select), selected);
+    VERIFY_IS_EQUAL(withoutU.matrixT(), Tbefore);
+
+    // Selecting nothing and selecting everything are both admissible and leave the form unchanged.
+    ComplexSchur<MatrixType> none(A);
+    VERIFY_IS_EQUAL(none.reorder([](const ComplexScalar&) { return false; }), Index(0));
+    VERIFY_IS_EQUAL(none.matrixT(), T0);
+    VERIFY_IS_EQUAL(none.matrixU(), U0);
+    ComplexSchur<MatrixType> everything(A);
+    VERIFY_IS_EQUAL(everything.reorder([](const ComplexScalar&) { return true; }), size);
+    VERIFY_IS_EQUAL(everything.matrixT(), T0);
+    VERIFY_IS_EQUAL(everything.matrixU(), U0);
+  }
+}
+
+// Repeated eigenvalues make the selected set indistinguishable by value, and the rotation that swaps them is
+// degenerate: the reordering must still leave a valid decomposition behind.
+template <typename ComplexScalar>
+void schur_reorder_repeated() {
+  using MatrixType = Matrix<ComplexScalar, 3, 3>;
+  using ComplexMatrixType = typename ComplexSchur<MatrixType>::ComplexMatrixType;
+  using RealScalar = typename MatrixType::RealScalar;
+
+  MatrixType jordan = MatrixType::Zero();
+  jordan.diagonal().setOnes();
+  jordan(0, 1) = jordan(1, 2) = 1;
+  const MatrixType identity = MatrixType::Identity();
+  const MatrixType* inputs[] = {&jordan, &identity};
+  const auto selectAll = [](const ComplexScalar&) { return true; };
+  const auto selectNone = [](const ComplexScalar&) { return false; };
+  for (const MatrixType* input : inputs) {
+    for (int selectNothing = 0; selectNothing < 2; ++selectNothing) {
+      ComplexSchur<MatrixType> schur(*input);
+      VERIFY_IS_EQUAL(schur.info(), Success);
+      const Index selected = selectNothing ? schur.reorder(selectNone) : schur.reorder(selectAll);
+      VERIFY_IS_EQUAL(selected, selectNothing ? Index(0) : Index(3));
+      const ComplexMatrixType& U = schur.matrixU();
+      const ComplexMatrixType& T = schur.matrixT();
+      const RealScalar tolerance = RealScalar(64) * NumTraits<RealScalar>::epsilon();
+      VERIFY((*input).template cast<ComplexScalar>().isApprox(ComplexMatrixType(U * T * U.adjoint()), tolerance));
+      VERIFY(T.template triangularView<StrictlyLower>().toDenseMatrix().isZero(0));
+    }
+  }
+}
+
 EIGEN_DECLARE_TEST(schur_complex) {
   CALL_SUBTEST_1((schur<Matrix4cd>()));
   CALL_SUBTEST_2((schur<MatrixXcf>(internal::random<int>(1, EIGEN_TEST_MAX_SIZE / 4))));
@@ -351,4 +467,11 @@ EIGEN_DECLARE_TEST(schur_complex) {
   CALL_SUBTEST_10((schur_zero<MatrixXf>(8)));
   CALL_SUBTEST_10(schur_shift_scaling<float>());
   CALL_SUBTEST_10(schur_shift_scaling<double>());
+
+  CALL_SUBTEST_12((schur_reorder<Matrix4cd>(4)));
+  CALL_SUBTEST_12((schur_reorder<MatrixXcd>(internal::random<int>(2, EIGEN_TEST_MAX_SIZE / 4))));
+  CALL_SUBTEST_12((schur_reorder<MatrixXcf>(internal::random<int>(2, EIGEN_TEST_MAX_SIZE / 4))));
+  CALL_SUBTEST_12((schur_reorder<Matrix<std::complex<float>, 3, 3, Eigen::RowMajor>>(3)));
+  CALL_SUBTEST_13(schur_reorder_repeated<std::complex<double>>());
+  CALL_SUBTEST_13(schur_reorder_repeated<std::complex<float>>());
 }
