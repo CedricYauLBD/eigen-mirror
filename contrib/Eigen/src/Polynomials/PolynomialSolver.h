@@ -460,7 +460,10 @@ class PolynomialSolver : public PolynomialSolverBase<Scalar_, Deg_> {
     }
     // Keep improvements, but never return an estimate whose residual is larger than that of its eigenvalue.
     for (Index i = 0; i < n; ++i) {
-      if (!stepped[i]) continue;
+      if (!stepped[i]) {
+        m_roots[i] = m_eigenSolver.eigenvalues()[i];  // drops the synthetic perturbation
+        continue;
+      }
       RootType initialValue;
       evaluate(poly, m_roots[i], value, derivative, false);
       evaluate(poly, m_eigenSolver.eigenvalues()[i], initialValue, derivative, false);
