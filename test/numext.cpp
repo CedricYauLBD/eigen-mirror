@@ -1240,6 +1240,33 @@ void check_complex_divide_exceptions() {
   }
 }
 
+// The exceptions numext::sign(z) raises, or -1 where the environment cannot be held.
+template <typename T>
+EIGEN_DONT_INLINE int complex_sign_exceptions(const std::complex<T>& z) {
+  const T operands[2] = {z.real(), z.imag()};
+  T result[2];
+  return fp_exceptions_raised_by_staged<2, 2>(FE_OVERFLOW | FE_UNDERFLOW | FE_INVALID | FE_DIVBYZERO, operands, result,
+                                              [](const T* in, T* out) {
+                                                const std::complex<T> s = numext::sign(std::complex<T>(in[0], in[1]));
+                                                out[0] = s.real();
+                                                out[1] = s.imag();
+                                              });
+}
+
+// |z| is not formed where it overflows (z = (max, max), whose sign is finite), and a NaN component raises nothing
+// (the rescaling for m = 0 would divide 0 by 0).
+template <typename T>
+void check_complex_sign_exceptions() {
+  using Complex = std::complex<T>;
+  const T highest = (std::numeric_limits<T>::max)(), nan = NumTraits<T>::quiet_NaN(), zero(0), one(1);
+  for (const Complex z : {Complex(highest, highest), Complex(-highest, highest), Complex(highest, zero),
+                          Complex(T(0.6) * highest, T(0.6) * highest), Complex(one, one), Complex(zero, nan),
+                          Complex(nan, zero), Complex(nan, nan), Complex(one, nan), Complex(zero, zero)}) {
+    const int exceptions = complex_sign_exceptions(z);
+    if (exceptions >= 0) VERIFY_IS_EQUAL(exceptions, 0);
+  }
+}
+
 // numext::fma(a, b, c) for half or bfloat16, and whether it raised FE_INVALID (-1 where the environment cannot be
 // held).
 template <typename T>
@@ -2100,6 +2127,8 @@ EIGEN_DECLARE_TEST(numext) {
     CALL_SUBTEST_1(check_complex_divide_ties_and_zero_signs<double>());
     CALL_SUBTEST_1(check_complex_divide_exceptions<float>());
     CALL_SUBTEST_1(check_complex_divide_exceptions<double>());
+    CALL_SUBTEST_1(check_complex_sign_exceptions<float>());
+    CALL_SUBTEST_1(check_complex_sign_exceptions<double>());
     CALL_SUBTEST_1(check_narrow_fma_nonfinite<half>());
     CALL_SUBTEST_1(check_narrow_fma_nonfinite<bfloat16>());
 

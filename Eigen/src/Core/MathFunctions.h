@@ -938,20 +938,20 @@ struct sign_impl<Scalar, true, IsInteger> {
     using real_type = typename NumTraits<Scalar>::Real;
     EIGEN_USING_STD(abs);
     EIGEN_USING_STD(sqrt);
-    real_type aa = abs(a);
-    if (aa == real_type(0)) return Scalar(0);
     const real_type re = numext::real(a);
     const real_type im = numext::imag(a);
+    if (numext::is_exactly_zero(re) && numext::is_exactly_zero(im)) return Scalar(0);
     // |z| lies in [m, sqrt(2) m] for m = max(|re|, |im|): it overflows only for m > max / sqrt(2) and is rounded to the
     // subnormal grid for m < min. Then u = z / m, with max(|Re u|, |Im u|) = 1, gives sign(z) = u / sqrt(|u|^2). The
     // trigger is on the components, as in psign_impl. Non-finite z keeps z / |z|. Under -ffast-math only m > max / 2
-    // is known to give a unit result (tested from 0.6 max).
-    const real_type abs_re = abs(re);
-    const real_type abs_im = abs(im);
-    const real_type m = abs_re < abs_im ? abs_im : abs_re;
-    const real_type half_highest = NumTraits<real_type>::highest() / real_type(2);
-    if (EIGEN_PREDICT_FALSE(m < (numext::numeric_limits<real_type>::min)() || m > half_highest)) {
-      if (m <= NumTraits<real_type>::highest()) {
+    // is known to give a unit result (tested from 0.6 max). |z| is formed only after the rescaling branch: for large m
+    // it would raise a spurious overflow, and a NaN component must not reach the 0 / 0 of the rescaling.
+    if ((isfinite_impl<real_type>)(re) && (isfinite_impl<real_type>)(im)) {
+      const real_type abs_re = abs(re);
+      const real_type abs_im = abs(im);
+      const real_type m = abs_re < abs_im ? abs_im : abs_re;
+      const real_type half_highest = NumTraits<real_type>::highest() / real_type(2);
+      if (EIGEN_PREDICT_FALSE(m < (numext::numeric_limits<real_type>::min)() || m > half_highest)) {
         // For large m, z / m is formed as (z / 4) / (m / 4): -ffast-math rewrites z / m as z * (1 / m), and 1 / m is
         // subnormal for m near max and flushed. The barrier keeps m / 4 from being folded back into the quotient.
         const real_type scale = m > half_highest ? real_type(0.25) : real_type(1);
@@ -963,6 +963,7 @@ struct sign_impl<Scalar, true, IsInteger> {
         return Scalar(u_re / norm, u_im / norm);
       }
     }
+    const real_type aa = abs(a);
     // Divide rather than multiply by 1/aa: the reciprocal overflows for subnormal aa and is itself
     // subnormal, hence inexact, for aa near the top of the range.
     return Scalar(re / aa, im / aa);
