@@ -47,15 +47,20 @@ bool matches_expected(int layout, char jobu, char jobvt, lapack_int m, lapack_in
   return true;
 }
 
-// Probes return a failure code, so Eigen reads no output but the singular values, which it checks for finiteness.
+// Probes return a failure code, so Eigen reads no output but the singular values, which it checks for finiteness. A
+// probe that succeeds zero-fills the U and VT arrays its jobs reference, because the bindings go on to copy them.
 template <typename Scalar, typename RealScalar>
 lapack_int svd_probe(int layout, char jobu, char jobvt, lapack_int m, lapack_int n, const Scalar* a, lapack_int lda,
-                     RealScalar* s, lapack_int ldu, lapack_int ldvt) {
+                     RealScalar* s, Scalar* u, lapack_int ldu, Scalar* vt, lapack_int ldvt) {
   ++svd_calls;
   args_match = expected_a != nullptr && matches_expected(layout, jobu, jobvt, m, n, a, lda, ldu, ldvt);
-  std::fill_n(s, numext::mini(m, n), RealScalar(0));
+  const lapack_int k = numext::mini(m, n);
+  std::fill_n(s, k, RealScalar(0));
   if (mock_singular_values.empty()) return mock_failure_info;
-  for (lapack_int i = 0; i < numext::mini(m, n); ++i) s[i] = RealScalar(mock_singular_values[i]);
+  for (lapack_int i = 0; i < k; ++i) s[i] = RealScalar(mock_singular_values[i]);
+  const bool col_major = layout == LAPACK_COL_MAJOR;
+  if (jobu != 'N') std::fill_n(u, ldu * (col_major ? job_extent(jobu, m, k) : m), Scalar{});
+  if (jobvt != 'N') std::fill_n(vt, ldvt * (col_major ? n : job_extent(jobvt, n, k)), Scalar{});
   return 0;
 }
 }  // namespace
@@ -63,16 +68,16 @@ lapack_int svd_probe(int layout, char jobu, char jobvt, lapack_int m, lapack_int
 // The bindings take the address of every scalar type's routine, so an unoptimized build needs all of them.
 // TYPE and RTYPE form declarations, not expressions.
 // NOLINTBEGIN(bugprone-macro-parentheses)
-#define EIGEN_SVD_PROBES(PREFIX, TYPE, RTYPE)                                                                    \
-  extern "C" lapack_int LAPACKE_##PREFIX##gesvd(int layout, char jobu, char jobvt, lapack_int m, lapack_int n,   \
-                                                TYPE* a, lapack_int lda, RTYPE* s, TYPE*, lapack_int ldu, TYPE*, \
-                                                lapack_int ldvt, RTYPE*) {                                       \
-    return svd_probe(layout, jobu, jobvt, m, n, a, lda, s, ldu, ldvt);                                           \
-  }                                                                                                              \
-  extern "C" lapack_int LAPACKE_##PREFIX##gesdd(int layout, char jobz, lapack_int m, lapack_int n, TYPE* a,      \
-                                                lapack_int lda, RTYPE* s, TYPE*, lapack_int ldu, TYPE*,          \
-                                                lapack_int ldvt) {                                               \
-    return svd_probe(layout, jobz, jobz, m, n, a, lda, s, ldu, ldvt);                                            \
+#define EIGEN_SVD_PROBES(PREFIX, TYPE, RTYPE)                                                                         \
+  extern "C" lapack_int LAPACKE_##PREFIX##gesvd(int layout, char jobu, char jobvt, lapack_int m, lapack_int n,        \
+                                                TYPE* a, lapack_int lda, RTYPE* s, TYPE* u, lapack_int ldu, TYPE* vt, \
+                                                lapack_int ldvt, RTYPE*) {                                            \
+    return svd_probe(layout, jobu, jobvt, m, n, a, lda, s, u, ldu, vt, ldvt);                                         \
+  }                                                                                                                   \
+  extern "C" lapack_int LAPACKE_##PREFIX##gesdd(int layout, char jobz, lapack_int m, lapack_int n, TYPE* a,           \
+                                                lapack_int lda, RTYPE* s, TYPE* u, lapack_int ldu, TYPE* vt,          \
+                                                lapack_int ldvt) {                                                    \
+    return svd_probe(layout, jobz, jobz, m, n, a, lda, s, u, ldu, vt, ldvt);                                          \
   }
 // NOLINTEND(bugprone-macro-parentheses)
 EIGEN_SVD_PROBES(s, float, float)
