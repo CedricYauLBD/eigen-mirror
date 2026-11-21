@@ -306,7 +306,9 @@ struct SPQR_QProduct : ReturnByValue<SPQR_QProduct<SPQRType, Derived> > {
     cholmod_common* cc = m_spqr.cholmodCommon();
     // CHOLMOD needs column-major storage with unit inner stride; Ref copies the argument when it has neither,
     // and evaluates an expression without direct access.
-    Ref<const Matrix<typename OtherDerived::Scalar, Dynamic, Dynamic, ColMajor> > other(otherExpr.derived());
+    // The scalar type must match Q's: it selects the CHOLMOD xtype that SuiteSparseQR_qmult<Scalar> requires.
+    EIGEN_STATIC_ASSERT((std::is_same<Scalar, typename OtherDerived::Scalar>::value), YOU_MIXED_DIFFERENT_NUMERIC_TYPES)
+    Ref<const Matrix<Scalar, Dynamic, Dynamic, ColMajor> > other(otherExpr.derived());
     y_cd = viewAsCholmod(other);
     x_cd = SuiteSparseQR_qmult<Scalar>(method, m_spqr.m_H, m_spqr.m_HTau, m_spqr.m_HPinv, &y_cd, cc);
     res = Matrix<Scalar, ResType::RowsAtCompileTime, ResType::ColsAtCompileTime>::Map(
