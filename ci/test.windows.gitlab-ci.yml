@@ -117,3 +117,30 @@ test:windows:x86-64:msvc-14.29:default:affected:
     # applies no -R filter and would otherwise run it alone.
     EIGEN_CI_CTEST_EXCLUDE: "^buildsystem_|^buildfailtests$|_(ok|ko)$"
   rules: !reference [.rules:libeigen:affected-tests:windows, rules]
+
+##### MSVC cross-compiled on Linux #############################################
+# Runs the binaries cross-compiled by build:windows:cross:... on a hosted
+# Windows runner.  Test-only: hosted Windows runners have no Docker executor,
+# and the toolchain lives on the Linux builder.
+
+test:windows:cross:x86-64:msvc-14.44:smoketest:
+  extends: [ .common:windows, .artifacts:test:results ]
+  stage: test
+  needs: [ build:windows:cross:x86-64:msvc-14.44:smoketest ]
+  variables:
+    EIGEN_CI_CTEST_LABEL: smoketest
+  before_script:
+    - . ci/scripts/common.windows.before_script.ps1
+    # Compares the build's MSVC toolset with this runner's runtime.
+    - ./ci/scripts/test.windows-cross.before_script.ps1
+  script:
+    - ./ci/scripts/test.windows.script.ps1
+  after_script:
+    - ./ci/scripts/test.windows.after_script.ps1
+  tags:
+    - saas-windows-medium-amd64
+  rules: !reference [.rules:libeigen:smoketest:msvc-cross, rules]
+  # Hosted Windows runners are in beta: the fleet goes away for maintenance and
+  # provisioning is slow, neither of which should block a merge request. The
+  # build job above is the part that has to stay green.
+  allow_failure: true

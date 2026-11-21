@@ -37,7 +37,7 @@ Three tiers, in increasing cost:
 
 | Tier | Trigger | What runs |
 |---|---|---|
-| smoke | every merge request with neither label below | the fixed list in [`cmake/EigenSmokeTestList.cmake`](../cmake/EigenSmokeTestList.cmake), usually one part per test, at baseline ISA on x86-64, aarch64 and riscv64, under gcc and clang |
+| smoke | every merge request with neither label below | the fixed list in [`cmake/EigenSmokeTestList.cmake`](../cmake/EigenSmokeTestList.cmake), usually one part per test, at baseline ISA on x86-64, aarch64 and riscv64, under gcc and clang, plus MSVC 14.44 x64 cross-compiled on Linux |
 | affected | `affected-tests` label | every test the diff can reach, all parts, on x86-64 (gcc AVX2, clang baseline) and aarch64 (gcc, clang), plus any platform the diff or a `*-tests` label selects |
 | full | `all-tests` label (needs the user's explicit permission; rule 8 in [`AGENTS.md`](../AGENTS.md#non-negotiable-rules)) | the whole suite across the entire compiler and ISA matrix, minus the NVHPC pair below |
 
@@ -80,7 +80,8 @@ for depth, then choose platform labels for the compilers and backends the change
 change needing broad platform coverage, recommend `affected-tests` with `all-platforms`. The affected tier already
 expands to the full suite when needed.
 
-The tiers do not stack: `affected-tests` and `all-tests` each turn off the smoke jobs. The affected tier's four
+The tiers do not stack: `affected-tests` and `all-tests` each turn off the smoke jobs. The MSVC smoke pair is the
+exception: it stays in the affected tier unless `windows-tests` or `all-platforms` adds the native Windows jobs. The affected tier's four
 unconditional jobs use the smoke compilers, gcc-10 and clang-14, on x86-64 and aarch64. Two smoke configurations run in
 the affected tier only with a label: riscv64 (`rvv-tests` or `all-platforms`), and x86-64 gcc at baseline ISA
 (`sse-tests` or `all-platforms`), because the unconditional gcc job builds for AVX2.
@@ -141,8 +142,9 @@ Rows worth knowing before relying on them:
   Without that test, such a mismatch would compute wrong answers while the suite passes.
 - Windows has no `changes:` trigger. The problems MSVC catches, such as template instantiation limits,
   `EIGEN_STRONG_INLINE` behavior, and optimizer heap exhaustion, can come from anywhere in the library. A label
-  (`windows-tests` or `all-platforms`) is therefore the only way to add Windows, and only MSVC x64 at baseline ISA is
-  wired up. The 32-bit, AVX2 and AVX-512DQ Windows configurations remain in `all-tests`.
+  (`windows-tests` or `all-platforms`) is therefore the only way to run the affected tests on Windows, and only MSVC
+  x64 at baseline ISA is wired up. Without such a label, Windows coverage is the smoke list, built by the MSVC
+  cross-compiled smoke pair. The 32-bit, AVX2 and AVX-512DQ Windows configurations remain in `all-tests`.
 - No affected-tier configuration enables CUDA, HIP or SYCL. A diff confined to GPU test sources would therefore select
   targets that no host build defines, and the pipeline would pass without running anything. Changes to those paths add
   the existing CUDA jobs instead. These build `buildtests_gpu` and run every test with the `gpu` CTest label, so they
