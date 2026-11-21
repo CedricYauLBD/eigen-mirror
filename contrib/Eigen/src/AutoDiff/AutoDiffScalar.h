@@ -308,16 +308,21 @@ class AutoDiffScalar
     // inexact, zero or infinite, so use d(a/b) = (da - (a/b) db) / b instead: its terms are bounded by the result when
     // |b| < 1.
     const Scalar& b = other.value();
-    Scalar scale_der = b, scale_other = m_value, scale = Scalar(1) / (b * b);
+    const Scalar q = m_value / b;
     const Real square = numext::abs2(b);
+    Scalar scale_der, scale_other, scale;
     if (square < Real((numext::numeric_limits<Real>::min)()) || square > Real((numext::numeric_limits<Real>::max)())) {
       scale_der = Scalar(1);
-      scale_other = m_value / b;
+      scale_other = q;
       scale = Scalar(1) / b;
+    } else {
+      scale_der = b;
+      scale_other = m_value;
+      scale = Scalar(1) / (b * b);
     }
-    return MakeAutoDiffScalar(m_value / b, internal::MakeCoherentCwiseBinaryOp<internal::scalar_difference_op<Scalar>>(
-                                               m_derivatives * scale_der, other.derivatives() * scale_other) *
-                                               scale);
+    return MakeAutoDiffScalar(q, internal::MakeCoherentCwiseBinaryOp<internal::scalar_difference_op<Scalar>>(
+                                     m_derivatives * scale_der, other.derivatives() * scale_other) *
+                                     scale);
   }
 
   template <typename OtherDerType>

@@ -161,6 +161,20 @@ void check_division_by_tiny_divisor() {
     VERIFY(numext::abs(q.derivatives()[0] * b + Scalar(1)) <= 4 * eps);
     VERIFY(numext::abs(q.derivatives()[1] * b + Scalar(1)) <= 4 * eps);
   }
+  // The quotient is finite, so no division by zero is raised even though b*b underflows to zero (b < sqrt of the
+  // smallest subnormal).
+  {
+    volatile Scalar volatile_b = numext::sqrt(std::numeric_limits<Scalar>::denorm_min()) / Scalar(16);
+    Derivatives da = Derivatives::Zero(2), db = Derivatives::Zero(2);
+    da[0] = Scalar(1);
+    db[1] = Scalar(1);
+    const int raised = fp_exceptions_raised_by(FE_DIVBYZERO, [&] {
+      const AD q = AD(Scalar(1), da) / AD(Scalar(volatile_b), db);
+      volatile Scalar sink = q.derivatives()[0];
+      (void)sink;
+    });
+    if (raised >= 0) VERIFY_IS_EQUAL(raised, 0);
+  }
   // An ordinary divisor keeps the quotient rule (da b - a db) / b^2.
   const Derivatives seed_a = (Derivatives(2) << Scalar(0.5), Scalar(-2)).finished();
   const Derivatives seed_b = (Derivatives(2) << Scalar(3), Scalar(0.25)).finished();
