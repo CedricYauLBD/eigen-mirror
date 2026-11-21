@@ -302,7 +302,8 @@ void ComplexEigenSolver<MatrixType>::doComputeEigenvectors(RealScalar matrixnorm
   RealScalar bigThreshold = numext::sqrt(NumTraits<RealScalar>::highest());
   // Divide in this order: 4 n |T|_F overflows for |T|_F > max / (4 n), and the bound would become 0.
   if (matrixnorm > RealScalar(0))
-    bigThreshold = numext::mini(bigThreshold, NumTraits<RealScalar>::highest() / matrixnorm / RealScalar(4 * n));
+    bigThreshold =
+        numext::mini<RealScalar>(bigThreshold, NumTraits<RealScalar>::highest() / matrixnorm / RealScalar(4 * n));
   for (Index k = n - 1; k >= 0; k--) {
     RealScalar diagonalScale(1);  // X(k,k) after the rescalings of column k
     // Compute X(i,k) using the (i,k) entry of the equation X T = D X
