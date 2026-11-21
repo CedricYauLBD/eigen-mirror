@@ -347,10 +347,9 @@ void jacobisvd_check_backward_error_all(const std::vector<MatrixType>& matrices)
   forEachFlushToZeroMode([&](FlushToZeroMode) {
     for (const MatrixType& m : matrices) {
       jacobisvd_check_backward_error<MatrixType, NoQRPreconditioner>(m);
-      jacobisvd_check_backward_error<MatrixType, ColPivHouseholderQRPreconditioner>(m);
-      jacobisvd_check_backward_error<MatrixType, HouseholderQRPreconditioner>(m);
-      jacobisvd_check_backward_error<MatrixType, FullPivHouseholderQRPreconditioner>(m);
       jacobisvd_check_backward_error<MatrixType, ColPivHouseholderQRPreconditioner | PreconditionSquareMatrix>(m);
+      jacobisvd_check_backward_error<MatrixType, HouseholderQRPreconditioner | PreconditionSquareMatrix>(m);
+      jacobisvd_check_backward_error<MatrixType, FullPivHouseholderQRPreconditioner | PreconditionSquareMatrix>(m);
     }
   });
 }
