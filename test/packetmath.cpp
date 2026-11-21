@@ -846,24 +846,70 @@ void packetmath_madd_variants_fusion() {
   VERIFY(test::areEqual(expected, actual, PacketSize) && "pnmsub");
 }
 
-// pnmsub is -(a * b + c) in every backend. A fused -(a * b) - c differs on an exact cancellation: a * b + c is +0
-// there, so pnmsub returns -0, and -(a * b) - c returns +0.
+// Each multiply-add variant returns its documented expression bit for bit, including the sign of a zero. Operands
+// are +-0 and +-1, so products are exact and fusion does not matter. The reference takes one operation per call, so
+// that the compiler cannot contract it into another form.
+template <typename Scalar>
+EIGEN_DONT_INLINE Scalar madd_ref_mul(const Scalar& x, const Scalar& y) {
+  return x * y;
+}
+template <typename Scalar>
+EIGEN_DONT_INLINE Scalar madd_ref_add(const Scalar& x, const Scalar& y) {
+  return x + y;
+}
+template <typename Scalar>
+EIGEN_DONT_INLINE Scalar madd_ref_sub(const Scalar& x, const Scalar& y) {
+  return x - y;
+}
+template <typename Scalar>
+EIGEN_DONT_INLINE Scalar madd_ref_negate(const Scalar& x) {
+  return -x;
+}
+
 template <typename Scalar, typename Packet,
           std::enable_if_t<NumTraits<Scalar>::IsInteger || NumTraits<Scalar>::IsComplex, int> = 0>
-void packetmath_nmsub_zero_sign() {}
+void packetmath_madd_variants_zero_sign() {}
 
 template <typename Scalar, typename Packet,
           std::enable_if_t<!NumTraits<Scalar>::IsInteger && !NumTraits<Scalar>::IsComplex, int> = 0>
-void packetmath_nmsub_zero_sign() {
+void packetmath_madd_variants_zero_sign() {
   constexpr int PacketSize = internal::unpacket_traits<Packet>::size;
-  const Packet one = internal::pset1<Packet>(Scalar(1));
-  const Packet minus_one = internal::pnegate(one);
+  const Scalar constants[] = {Scalar(0), -Scalar(0), Scalar(1), -Scalar(1)};
+  // Read through a volatile pointer, so that the operations run instead of being folded at compile time.
+  const Scalar* volatile opaque = constants;
+  const Scalar* values = opaque;
   Scalar expected[PacketSize], actual[PacketSize];
-  std::fill_n(expected, PacketSize, -Scalar(0));
-  internal::pstoreu(actual, internal::pnmsub(one, one, minus_one));
-  VERIFY(test::areEqualBits(expected, actual, PacketSize) && "pnmsub(1, 1, -1) is -0");
-  internal::pstoreu(actual, internal::pnmsub(minus_one, one, one));
-  VERIFY(test::areEqualBits(expected, actual, PacketSize) && "pnmsub(-1, 1, 1) is -0");
+  for (int i = 0; i < 4; ++i) {
+    for (int j = 0; j < 4; ++j) {
+      for (int k = 0; k < 4; ++k) {
+        const Scalar a = values[i], b = values[j], c = values[k];
+        const Packet pa = internal::pset1<Packet>(a), pb = internal::pset1<Packet>(b), pc = internal::pset1<Packet>(c);
+        const Scalar ab = madd_ref_mul(a, b);
+        const Scalar madd = madd_ref_add(ab, c), msub = madd_ref_sub(ab, c);
+        const Scalar nmadd = madd_ref_add(madd_ref_negate(ab), c), nmsub = madd_ref_sub(madd_ref_negate(ab), c);
+
+        std::fill_n(expected, PacketSize, madd);
+        internal::pstoreu(actual, internal::pmadd(pa, pb, pc));
+        VERIFY(test::areEqualBits(expected, actual, PacketSize) && "pmadd");
+        VERIFY(test::biteq(internal::pmadd(a, b, c), madd) && "scalar pmadd");
+
+        std::fill_n(expected, PacketSize, msub);
+        internal::pstoreu(actual, internal::pmsub(pa, pb, pc));
+        VERIFY(test::areEqualBits(expected, actual, PacketSize) && "pmsub");
+        VERIFY(test::biteq(internal::pmsub(a, b, c), msub) && "scalar pmsub");
+
+        std::fill_n(expected, PacketSize, nmadd);
+        internal::pstoreu(actual, internal::pnmadd(pa, pb, pc));
+        VERIFY(test::areEqualBits(expected, actual, PacketSize) && "pnmadd");
+        VERIFY(test::biteq(internal::pnmadd(a, b, c), nmadd) && "scalar pnmadd");
+
+        std::fill_n(expected, PacketSize, nmsub);
+        internal::pstoreu(actual, internal::pnmsub(pa, pb, pc));
+        VERIFY(test::areEqualBits(expected, actual, PacketSize) && "pnmsub");
+        VERIFY(test::biteq(internal::pnmsub(a, b, c), nmsub) && "scalar pnmsub");
+      }
+    }
+  }
 }
 
 template <typename Scalar, typename Packet, std::enable_if_t<!internal::is_fused_madd<Packet>::value, int> = 0>
@@ -1123,7 +1169,9 @@ void packetmath() {
 
   packetmath_fused_madd<Scalar, Packet>();
   packetmath_madd_variants_fusion<Scalar, Packet>();
-  packetmath_nmsub_zero_sign<Scalar, Packet>();
+#if !defined(__FAST_MATH__)  // -fno-signed-zeros leaves the sign of a zero unspecified
+  packetmath_madd_variants_zero_sign<Scalar, Packet>();
+#endif
   CHECK_CWISE3_IF(PacketTraits::HasMul && PacketTraits::HasAdd, REF_MADD, internal::pmadd);
   if (!std::is_same<Scalar, bool>::value && NumTraits<Scalar>::IsSigned) {
     nmsub_test<Scalar, Packet>(data1, data2, ref, PacketSize);

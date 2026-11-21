@@ -979,6 +979,16 @@ EIGEN_STRONG_INLINE Packet4d pnmadd(const Packet4d& a, const Packet4d& b, const 
   return _mm256_fnmadd_pd(a, b, c);
 }
 
+template <>
+EIGEN_STRONG_INLINE Packet8f pnmsub(const Packet8f& a, const Packet8f& b, const Packet8f& c) {
+  return _mm256_fnmsub_ps(a, b, c);
+}
+
+template <>
+EIGEN_STRONG_INLINE Packet4d pnmsub(const Packet4d& a, const Packet4d& b, const Packet4d& c) {
+  return _mm256_fnmsub_pd(a, b, c);
+}
+
 #endif
 
 template <>

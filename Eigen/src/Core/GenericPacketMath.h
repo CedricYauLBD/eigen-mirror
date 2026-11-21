@@ -1667,6 +1667,8 @@ EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE bool predux_all(const Packet& a) {
 
 template <typename Packet>
 EIGEN_DEVICE_FUNC inline Packet pmadd(const Packet& a, const Packet& b, const Packet& c);
+template <typename Packet>
+EIGEN_DEVICE_FUNC inline Packet pnmadd(const Packet& a, const Packet& b, const Packet& c);
 
 // pmadd<Packet> does not round a*b to the packet's scalar type before adding c.
 // Neither an architecture-wide FMA flag nor a custom pmadd overload proves this property.
@@ -1676,7 +1678,7 @@ struct is_fused_madd : false_type {};
 template <typename Packet, typename EnableIf = void>
 struct pmadd_impl {
   // Separate pmsub/pnmadd paths require pmul and psub; derived paths require pmadd and pnegate.
-  // pnmsub requires pmadd and pnegate. Opting into fusion also requires pnegate for derived subtract variants.
+  // pnmsub requires pnmadd and pnegate. Opting into fusion also requires pnegate for derived subtract variants.
   static constexpr bool Fused = is_fused_madd<Packet>::value;
   static EIGEN_DEVICE_FUNC EIGEN_ALWAYS_INLINE Packet pmadd(const Packet& a, const Packet& b, const Packet& c) {
     return padd(pmul(a, b), c);
@@ -1698,7 +1700,7 @@ struct pmadd_impl {
     return internal::pmadd<Packet>(pnegate(a), b, c);
   }
   static EIGEN_DEVICE_FUNC EIGEN_ALWAYS_INLINE Packet pnmsub(const Packet& a, const Packet& b, const Packet& c) {
-    return pnegate(internal::pmadd<Packet>(a, b, c));
+    return internal::pnmadd<Packet>(a, b, pnegate(c));
   }
 };
 
@@ -1716,7 +1718,7 @@ struct pmadd_impl<Scalar, std::enable_if_t<std::is_same<Scalar, float>::value ||
     return numext::fma(Scalar(-a), b, c);
   }
   static EIGEN_DEVICE_FUNC EIGEN_ALWAYS_INLINE Scalar pnmsub(const Scalar& a, const Scalar& b, const Scalar& c) {
-    return -Scalar(numext::fma(a, b, c));
+    return numext::fma(Scalar(-a), b, Scalar(-c));
   }
 };
 
@@ -1738,11 +1740,13 @@ struct pmadd_impl<Scalar, std::enable_if_t<is_scalar<Scalar>::value && NumTraits
     return numext::madd<Scalar>(Scalar(-a), b, c);
   }
   static EIGEN_DEVICE_FUNC EIGEN_ALWAYS_INLINE Scalar pnmsub(const Scalar& a, const Scalar& b, const Scalar& c) {
-    return -Scalar(numext::madd<Scalar>(a, b, c));
+    return numext::madd<Scalar>(Scalar(-a), b, Scalar(-c));
   }
 };
 
-// Multiply-add instructions.
+// Multiply-add instructions: pmsub = pmadd(a, b, -c), pnmadd = pmadd(-a, b, c) and pnmsub = pmadd(-a, b, -c) bit for
+// bit, including the sign of a zero, with a * b unrounded where is_fused_madd holds. Negating the result instead,
+// -(a * b - c) or -(a * b + c) (Power and LoongArch nmsub and nmadd), returns the other zero on an exact cancellation.
 /** \internal \returns a * b + c (coeff-wise) */
 template <typename Packet>
 EIGEN_DEVICE_FUNC inline Packet pmadd(const Packet& a, const Packet& b, const Packet& c) {
@@ -1761,8 +1765,7 @@ EIGEN_DEVICE_FUNC inline Packet pnmadd(const Packet& a, const Packet& b, const P
   return pmadd_impl<Packet>::pnmadd(a, b, c);
 }
 
-/** \internal \returns -(a * b + c) (coeff-wise). This is not -(a * b) - c, the result of some fused instructions: on
- * an exact cancellation the sum is +0 and the result -0, where -(a * b) - c gives +0. */
+/** \internal \returns -(a * b) - c (coeff-wise) */
 template <typename Packet>
 EIGEN_DEVICE_FUNC inline Packet pnmsub(const Packet& a, const Packet& b, const Packet& c) {
   return pmadd_impl<Packet>::pnmsub(a, b, c);

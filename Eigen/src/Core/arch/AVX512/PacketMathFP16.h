@@ -888,6 +888,23 @@ EIGEN_STRONG_INLINE Packet8h pnmadd(const Packet8h& a, const Packet8h& b, const 
   return _mm_fnmadd_ph(a, b, c);
 }
 
+// pnmsub
+
+template <>
+EIGEN_STRONG_INLINE Packet32h pnmsub(const Packet32h& a, const Packet32h& b, const Packet32h& c) {
+  return _mm512_fnmsub_ph(a, b, c);
+}
+
+template <>
+EIGEN_STRONG_INLINE Packet16h pnmsub(const Packet16h& a, const Packet16h& b, const Packet16h& c) {
+  return _mm256_fnmsub_ph(a, b, c);
+}
+
+template <>
+EIGEN_STRONG_INLINE Packet8h pnmsub(const Packet8h& a, const Packet8h& b, const Packet8h& c) {
+  return _mm_fnmsub_ph(a, b, c);
+}
+
 #endif
 
 // pnegate
