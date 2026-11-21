@@ -1761,7 +1761,8 @@ EIGEN_DEVICE_FUNC inline Packet pnmadd(const Packet& a, const Packet& b, const P
   return pmadd_impl<Packet>::pnmadd(a, b, c);
 }
 
-/** \internal \returns -(a * b + c) (coeff-wise) */
+/** \internal \returns -(a * b + c) (coeff-wise). This is not -(a * b) - c, the result of some fused instructions: on
+ * an exact cancellation the sum is +0 and the result -0, where -(a * b) - c gives +0. */
 template <typename Packet>
 EIGEN_DEVICE_FUNC inline Packet pnmsub(const Packet& a, const Packet& b, const Packet& c) {
   return pmadd_impl<Packet>::pnmsub(a, b, c);

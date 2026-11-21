@@ -701,15 +701,6 @@ template <>
 EIGEN_STRONG_INLINE Packet2d pnmadd(const Packet2d& a, const Packet2d& b, const Packet2d& c) {
   return _mm_fnmadd_pd(a, b, c);
 }
-template <>
-EIGEN_STRONG_INLINE Packet4f pnmsub(const Packet4f& a, const Packet4f& b, const Packet4f& c) {
-  return _mm_fnmsub_ps(a, b, c);
-}
-template <>
-EIGEN_STRONG_INLINE Packet2d pnmsub(const Packet2d& a, const Packet2d& b, const Packet2d& c) {
-  return _mm_fnmsub_pd(a, b, c);
-}
-
 template <typename Packet>
 EIGEN_STRONG_INLINE Packet pmadds(const Packet& a, const Packet& b, const Packet& c);
 template <>
@@ -1949,14 +1940,6 @@ EIGEN_STRONG_INLINE float pnmadd(const float& a, const float& b, const float& c)
 template <>
 EIGEN_STRONG_INLINE double pnmadd(const double& a, const double& b, const double& c) {
   return numext::fma(-a, b, c);
-}
-template <>
-EIGEN_STRONG_INLINE float pnmsub(const float& a, const float& b, const float& c) {
-  return numext::fma(-a, b, -c);
-}
-template <>
-EIGEN_STRONG_INLINE double pnmsub(const double& a, const double& b, const double& c) {
-  return numext::fma(-a, b, -c);
 }
 #endif
 

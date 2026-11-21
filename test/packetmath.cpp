@@ -846,6 +846,26 @@ void packetmath_madd_variants_fusion() {
   VERIFY(test::areEqual(expected, actual, PacketSize) && "pnmsub");
 }
 
+// pnmsub is -(a * b + c) in every backend. A fused -(a * b) - c differs on an exact cancellation: a * b + c is +0
+// there, so pnmsub returns -0, and -(a * b) - c returns +0.
+template <typename Scalar, typename Packet,
+          std::enable_if_t<NumTraits<Scalar>::IsInteger || NumTraits<Scalar>::IsComplex, int> = 0>
+void packetmath_nmsub_zero_sign() {}
+
+template <typename Scalar, typename Packet,
+          std::enable_if_t<!NumTraits<Scalar>::IsInteger && !NumTraits<Scalar>::IsComplex, int> = 0>
+void packetmath_nmsub_zero_sign() {
+  constexpr int PacketSize = internal::unpacket_traits<Packet>::size;
+  const Packet one = internal::pset1<Packet>(Scalar(1));
+  const Packet minus_one = internal::pnegate(one);
+  Scalar expected[PacketSize], actual[PacketSize];
+  std::fill_n(expected, PacketSize, -Scalar(0));
+  internal::pstoreu(actual, internal::pnmsub(one, one, minus_one));
+  VERIFY(test::areEqualBits(expected, actual, PacketSize) && "pnmsub(1, 1, -1) is -0");
+  internal::pstoreu(actual, internal::pnmsub(minus_one, one, one));
+  VERIFY(test::areEqualBits(expected, actual, PacketSize) && "pnmsub(-1, 1, 1) is -0");
+}
+
 template <typename Scalar, typename Packet, std::enable_if_t<!internal::is_fused_madd<Packet>::value, int> = 0>
 void packetmath_fused_madd() {}
 
@@ -1103,6 +1123,7 @@ void packetmath() {
 
   packetmath_fused_madd<Scalar, Packet>();
   packetmath_madd_variants_fusion<Scalar, Packet>();
+  packetmath_nmsub_zero_sign<Scalar, Packet>();
   CHECK_CWISE3_IF(PacketTraits::HasMul && PacketTraits::HasAdd, REF_MADD, internal::pmadd);
   if (!std::is_same<Scalar, bool>::value && NumTraits<Scalar>::IsSigned) {
     nmsub_test<Scalar, Packet>(data1, data2, ref, PacketSize);

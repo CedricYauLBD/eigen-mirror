@@ -390,11 +390,6 @@ EIGEN_STRONG_INLINE Packet4Xf pnmadd(const Packet4Xf& a, const Packet4Xf& b, con
 }
 
 template <>
-EIGEN_STRONG_INLINE Packet4Xf pnmsub(const Packet4Xf& a, const Packet4Xf& b, const Packet4Xf& c) {
-  return __riscv_vfnmadd_vv_f32m4(a, b, c, unpacket_traits<Packet4Xf>::size);
-}
-
-template <>
 struct pminmax_propagates_nan<Packet4Xf> : bool_constant<true> {};
 
 template <>
@@ -1048,11 +1043,6 @@ EIGEN_STRONG_INLINE Packet4Xd pmsub(const Packet4Xd& a, const Packet4Xd& b, cons
 template <>
 EIGEN_STRONG_INLINE Packet4Xd pnmadd(const Packet4Xd& a, const Packet4Xd& b, const Packet4Xd& c) {
   return __riscv_vfnmsub_vv_f64m4(a, b, c, unpacket_traits<Packet4Xd>::size);
-}
-
-template <>
-EIGEN_STRONG_INLINE Packet4Xd pnmsub(const Packet4Xd& a, const Packet4Xd& b, const Packet4Xd& c) {
-  return __riscv_vfnmadd_vv_f64m4(a, b, c, unpacket_traits<Packet4Xd>::size);
 }
 
 template <>

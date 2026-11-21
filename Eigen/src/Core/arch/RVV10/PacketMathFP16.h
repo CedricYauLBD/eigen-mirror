@@ -183,11 +183,6 @@ EIGEN_STRONG_INLINE Packet1Xh pnmadd(const Packet1Xh& a, const Packet1Xh& b, con
 }
 
 template <>
-EIGEN_STRONG_INLINE Packet1Xh pnmsub(const Packet1Xh& a, const Packet1Xh& b, const Packet1Xh& c) {
-  return __riscv_vfnmadd_vv_f16m1(a, b, c, unpacket_traits<Packet1Xh>::size);
-}
-
-template <>
 struct pminmax_propagates_nan<Packet1Xh> : bool_constant<true> {};
 
 template <>
@@ -563,11 +558,6 @@ EIGEN_STRONG_INLINE Packet2Xh pmsub(const Packet2Xh& a, const Packet2Xh& b, cons
 template <>
 EIGEN_STRONG_INLINE Packet2Xh pnmadd(const Packet2Xh& a, const Packet2Xh& b, const Packet2Xh& c) {
   return __riscv_vfnmsub_vv_f16m2(a, b, c, unpacket_traits<Packet2Xh>::size);
-}
-
-template <>
-EIGEN_STRONG_INLINE Packet2Xh pnmsub(const Packet2Xh& a, const Packet2Xh& b, const Packet2Xh& c) {
-  return __riscv_vfnmadd_vv_f16m2(a, b, c, unpacket_traits<Packet2Xh>::size);
 }
 
 template <>

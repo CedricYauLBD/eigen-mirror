@@ -571,14 +571,6 @@ EIGEN_STRONG_INLINE Packet8d pnmadd(const Packet8d& a, const Packet8d& b, const 
   return _mm512_fnmadd_pd(a, b, c);
 }
 
-template <>
-EIGEN_STRONG_INLINE Packet16f pnmsub(const Packet16f& a, const Packet16f& b, const Packet16f& c) {
-  return _mm512_fnmsub_ps(a, b, c);
-}
-template <>
-EIGEN_STRONG_INLINE Packet8d pnmsub(const Packet8d& a, const Packet8d& b, const Packet8d& c) {
-  return _mm512_fnmsub_pd(a, b, c);
-}
 #endif
 
 template <>
