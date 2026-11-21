@@ -288,12 +288,13 @@ dm2 = sm1.selfadjointView<Lower|Upper>() * dm1;  // if all coefficients of sm1 a
 dm2 = sm1.selfadjointView<Upper>() * dm1;        // if only the upper part of sm1 is stored
 dm2 = sm1.selfadjointView<Lower>() * dm1;        // if only the lower part of sm1 is stored
     \endcode
-  - \b sparse-sparse. For sparse-sparse products, two different algorithms are available. The default one is conservative and preserve the explicit zeros that might appear:
+  - \b sparse-sparse. Sparse-sparse products come in two forms. The default one is conservative and preserves the explicit zeros that might appear:
     \code
 sm3 = sm1 * sm2;
 sm3 = 4 * sm1.adjoint() * sm2;
     \endcode
-    The second algorithm prunes on the fly the explicit zeros, or the values smaller than a given threshold. It is enabled and controlled through the `prune()` functions:
+    The result is compressed and its inner indices are sorted. Its storage is grown while the product is computed and is not shrunk afterwards, so `sm3` can hold more capacity than `sm3.nonZeros()` entries. A copy of `sm3` holds exactly its entries.
+    The second form drops the explicit zeros, or the values smaller than a given threshold, as each row or column of the result is completed, so they never take storage. It is enabled and controlled through the `pruned()` function:
     \code
 sm3 = (sm1 * sm2).pruned();                  // removes numerical zeros
 sm3 = (sm1 * sm2).pruned(ref);               // removes elements much smaller than ref

@@ -127,8 +127,8 @@ void triangular_solve_over_reach(const StorageIndex* outerIndexPtr, const Storag
       offEnd = hasDiag ? e - 1 : e;  // drop the diagonal slot from the update iff it is stored
       EIGEN_IF_CONSTEXPR (!UnitDiag) {
         eigen_assert(hasDiag && "sparse triangular solve: missing diagonal");
-        // Missing diagonal is out of contract; match the old AmbiVector path -- divide by 0
-        // for a deterministic inf/NaN, rather than reading valuePtr[e-1] out of bounds.
+        // Missing diagonal is out of contract; divide by 0 for a deterministic inf/NaN,
+        // rather than reading valuePtr[e-1] out of bounds.
         x[j] /= hasDiag ? valuePtr[e - 1] : LhsScalar(0);
       }
     } else {

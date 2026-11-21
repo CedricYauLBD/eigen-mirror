@@ -1172,55 +1172,6 @@ void sparse_sub_assign_eigenbase() {
   VERIFY_IS_APPROX(MatrixXd(A), refA);
 }
 
-// Regression test: AmbiVector::coeff() must return the correct linked-list element.
-template <int>
-void ambivector_coeff() {
-  using namespace Eigen::internal;
-  const Index size = 20;
-  AmbiVector<double, int> vec(size);
-  vec.setBounds(0, size);
-
-  // Test in sparse (linked-list) mode
-  vec.init(IsSparse);
-  vec.restart();
-  // Insert elements out of order to stress linked-list traversal:
-  // Insert at indices 2, 5, 10, 15 with distinct values
-  vec.coeffRef(2) = 2.0;
-  vec.coeffRef(5) = 5.0;
-  vec.coeffRef(10) = 10.0;
-  vec.coeffRef(15) = 15.0;
-
-  // coeff() should return the correct value for each inserted element
-  VERIFY_IS_APPROX(vec.coeff(2), 2.0);
-  VERIFY_IS_APPROX(vec.coeff(5), 5.0);
-  VERIFY_IS_APPROX(vec.coeff(10), 10.0);
-  VERIFY_IS_APPROX(vec.coeff(15), 15.0);
-
-  // coeff() should return zero for non-inserted elements
-  VERIFY_IS_EQUAL(vec.coeff(0), 0.0);
-  VERIFY_IS_EQUAL(vec.coeff(3), 0.0);
-  VERIFY_IS_EQUAL(vec.coeff(7), 0.0);
-  VERIFY_IS_EQUAL(vec.coeff(18), 0.0);
-
-  // Verify coeff() still works after coeffRef() advances m_llCurrent.
-  // This is the specific scenario that triggered the bug: coeffRef(15)
-  // leaves m_llCurrent pointing at element 15, then coeff(2) should
-  // still return 2.0, not 15.0.
-  vec.restart();
-  vec.coeffRef(15) += 0.0;  // advances m_llCurrent to element at index 15
-  VERIFY_IS_APPROX(vec.coeff(2), 2.0);
-  VERIFY_IS_APPROX(vec.coeff(5), 5.0);
-
-  // Test in dense mode as well (simpler, but for completeness)
-  vec.init(IsDense);
-  vec.setZero();
-  vec.coeffRef(3) = 3.0;
-  vec.coeffRef(7) = 7.0;
-  VERIFY_IS_APPROX(vec.coeff(3), 3.0);
-  VERIFY_IS_APPROX(vec.coeff(7), 7.0);
-  VERIFY_IS_EQUAL(vec.coeff(0), 0.0);
-}
-
 template <typename Pattern, typename SparseMatrixType>
 void verify_sparsity_pattern_ref_matches(const Pattern& pattern, const SparseMatrixType& expected) {
   VERIFY_IS_EQUAL(pattern.outerSize, expected.cols());
@@ -1892,7 +1843,6 @@ EIGEN_DECLARE_TEST(sparse_basic) {
   CALL_SUBTEST_1((sparse_isapprox_extreme_scales<double, RowMajor>()));
   CALL_SUBTEST_1((sparse_isapprox_extreme_scales<std::complex<double>, ColMajor>()));
   CALL_SUBTEST_1(sparse_sub_assign_eigenbase<0>());
-  CALL_SUBTEST_1(ambivector_coeff<0>());
   CALL_SUBTEST_1(sparsity_pattern_ref_sparse_expressions<0>());
   CALL_SUBTEST_1(materialize_at_plus_a_pattern_basic<0>());
   for (int i = 0; i < g_repeat; ++i) {

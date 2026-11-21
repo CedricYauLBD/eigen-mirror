@@ -366,8 +366,8 @@ enum Sequential_t { Sequential };
 enum Default_t { Default };
 
 /** \internal \ingroup enums
- * Used in AmbiVector. */
-enum AmbiVectorMode { IsDense = 0, IsSparse };
+ * Deprecated and unused by Eigen. Kept so that code naming these values still compiles. */
+enum EIGEN_DEPRECATED_WITH_REASON("unused by Eigen") AmbiVectorMode { IsDense = 0, IsSparse };
 
 /** \ingroup enums
  * Used as template parameter in DenseCoeffBase and MapBase to indicate

@@ -157,10 +157,10 @@ struct unary_evaluator<SparseView<Product<Lhs, Rhs, Options> >, IteratorBased>
     LhsNested lhsNested(xpr.nestedExpression().lhs());
     RhsNested rhsNested(xpr.nestedExpression().rhs());
 
-    internal::sparse_sparse_product_with_pruning_selector<remove_all_t<LhsNested>, remove_all_t<RhsNested>,
-                                                          PlainObject>::run(lhsNested, rhsNested, m_result,
-                                                                            numext::abs(xpr.reference()) *
-                                                                                xpr.epsilon());
+    using RealScalar = typename PlainObject::RealScalar;
+    sparse_product_keep_above<RealScalar> keep{numext::abs(xpr.reference()) * xpr.epsilon()};
+    internal::conservative_sparse_sparse_product_selector<remove_all_t<LhsNested>, remove_all_t<RhsNested>,
+                                                          PlainObject>::run(lhsNested, rhsNested, m_result, keep);
   }
 
  protected:
