@@ -1,12 +1,14 @@
 // SPDX-FileCopyrightText: The Eigen Authors
 // SPDX-License-Identifier: MPL-2.0
 
-// pmadd, pmsub, pnmadd and pnmsub on the default packet of float and double, over arrays that stay in L1.
+// pmadd, pmsub, pnmadd and pnmsub on the default packet of float, double and their complex types, over arrays that
+// stay in L1.
 // Throughput: out[i] = op(a[i], b[i], c[i]), independent iterations.
 // Chain: acc = op(a[i], b[i], acc), each result feeds the next operation, so the latency of op bounds it.
 
 #include <benchmark/benchmark.h>
 #include <Eigen/Core>
+#include <complex>
 #include <vector>
 
 namespace {
@@ -29,6 +31,19 @@ Scalar reference(Scalar a, Scalar b, Scalar c) {
   return (Variant == kMsub || Variant == kNmsub) ? ab - c : ab + c;
 }
 
+// re / 8 for a real Scalar, (re + i * im) / 8 for a complex one.
+template <typename Scalar, bool IsComplex = Eigen::NumTraits<Scalar>::IsComplex>
+struct Eighths {
+  static Scalar value(Eigen::Index re, Eigen::Index /*im*/) { return Scalar(re) / Scalar(8); }
+};
+template <typename Scalar>
+struct Eighths<Scalar, true> {
+  static Scalar value(Eigen::Index re, Eigen::Index im) {
+    using Real = typename Eigen::NumTraits<Scalar>::Real;
+    return Scalar(Real(re) / Real(8), Real(im) / Real(8));
+  }
+};
+
 template <typename Scalar>
 struct Operands {
   // 4 KiB per array.
@@ -36,9 +51,9 @@ struct Operands {
   std::vector<Scalar> a, b, c, out;
   Operands() : a(kCount), b(kCount), c(kCount), out(kCount) {
     for (Eigen::Index i = 0; i < kCount; ++i) {
-      a[i] = Scalar(i % 7 + 1) / Scalar(8);
-      b[i] = Scalar(i % 5) / Scalar(4) - Scalar(0.5);
-      c[i] = Scalar(i % 3) / Scalar(2) - Scalar(0.25);
+      a[i] = Eighths<Scalar>::value(i % 7 + 1, i % 3 - 1);
+      b[i] = Eighths<Scalar>::value(2 * (i % 5) - 4, i % 4 - 2);
+      c[i] = Eighths<Scalar>::value(4 * (i % 3) - 2, i % 5 - 2);
     }
   }
 };
@@ -55,7 +70,7 @@ void BM_Throughput(benchmark::State& state) {
                                                ploadu<Packet>(x.c.data() + i)));
   };
   evaluate();
-  // The operands are multiples of 1/8, 1/4 and 1/4, so the reference is exact with or without fusion.
+  // The operands are multiples of 1/8, so the reference is exact with or without fusion.
   for (Eigen::Index i = 0; i < count; ++i) {
     if (x.out[i] != reference<Variant>(x.a[i], x.b[i], x.c[i])) {
       state.SkipWithError("incorrect multiply-add variant");
@@ -99,3 +114,5 @@ void BM_Chain(benchmark::State& state) {
 
 BENCH_MADD_VARIANTS(float);
 BENCH_MADD_VARIANTS(double);
+BENCH_MADD_VARIANTS(std::complex<float>);
+BENCH_MADD_VARIANTS(std::complex<double>);

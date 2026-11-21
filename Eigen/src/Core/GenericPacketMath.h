@@ -1747,6 +1747,7 @@ struct pmadd_impl<Scalar, std::enable_if_t<is_scalar<Scalar>::value && NumTraits
 // Multiply-add instructions: pmsub = pmadd(a, b, -c), pnmadd = pmadd(-a, b, c) and pnmsub = pmadd(-a, b, -c) bit for
 // bit, including the sign of a zero, with a * b unrounded where is_fused_madd holds. Negating the result instead,
 // -(a * b - c) or -(a * b + c) (Power and LoongArch nmsub and nmadd), returns the other zero on an exact cancellation.
+// For complex packets the sign of a zero also depends on the order in which the backend sums the partial products.
 /** \internal \returns a * b + c (coeff-wise) */
 template <typename Packet>
 EIGEN_DEVICE_FUNC inline Packet pmadd(const Packet& a, const Packet& b, const Packet& c) {

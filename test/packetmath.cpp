@@ -866,9 +866,49 @@ EIGEN_DONT_INLINE Scalar madd_ref_negate(const Scalar& x) {
   return -x;
 }
 
-template <typename Scalar, typename Packet,
-          std::enable_if_t<NumTraits<Scalar>::IsInteger || NumTraits<Scalar>::IsComplex, int> = 0>
+template <typename Scalar, typename Packet, std::enable_if_t<NumTraits<Scalar>::IsInteger, int> = 0>
 void packetmath_madd_variants_zero_sign() {}
+
+// Complex operands with imaginary part +0 return the real definition in their real parts. With a and b = +-1 no
+// partial product cancels, so every order of summing them gives the same real part. The sign of a zero imaginary
+// part depends on that order and is not checked.
+template <typename Scalar, typename Packet, std::enable_if_t<NumTraits<Scalar>::IsComplex, int> = 0>
+void packetmath_madd_variants_zero_sign() {
+  using RealScalar = typename NumTraits<Scalar>::Real;
+  constexpr int PacketSize = internal::unpacket_traits<Packet>::size;
+  const RealScalar constants[] = {RealScalar(1), -RealScalar(1), RealScalar(0), -RealScalar(0)};
+  const RealScalar* volatile opaque = constants;
+  const RealScalar* values = opaque;
+  const auto real_parts_are = [](const Packet& p, RealScalar expected) {
+    Scalar actual[PacketSize];
+    internal::pstoreu(actual, p);
+    for (int i = 0; i < PacketSize; ++i) {
+      if (!test::biteq(numext::real(actual[i]), expected)) return false;
+    }
+    return true;
+  };
+  for (int i = 0; i < 2; ++i) {
+    for (int j = 0; j < 2; ++j) {
+      for (int k = 0; k < 4; ++k) {
+        const RealScalar ar = values[i], br = values[j], cr = values[k];
+        const Scalar a(ar, RealScalar(0)), b(br, RealScalar(0)), c(cr, RealScalar(0));
+        const Packet pa = internal::pset1<Packet>(a), pb = internal::pset1<Packet>(b), pc = internal::pset1<Packet>(c);
+        const RealScalar ab = madd_ref_mul(ar, br);
+        const RealScalar madd = madd_ref_add(ab, cr), msub = madd_ref_sub(ab, cr);
+        const RealScalar nmadd = madd_ref_add(madd_ref_negate(ab), cr), nmsub = madd_ref_sub(madd_ref_negate(ab), cr);
+
+        VERIFY(real_parts_are(internal::pmadd(pa, pb, pc), madd) && "complex pmadd");
+        VERIFY(test::biteq(numext::real(internal::pmadd(a, b, c)), madd) && "complex scalar pmadd");
+        VERIFY(real_parts_are(internal::pmsub(pa, pb, pc), msub) && "complex pmsub");
+        VERIFY(test::biteq(numext::real(internal::pmsub(a, b, c)), msub) && "complex scalar pmsub");
+        VERIFY(real_parts_are(internal::pnmadd(pa, pb, pc), nmadd) && "complex pnmadd");
+        VERIFY(test::biteq(numext::real(internal::pnmadd(a, b, c)), nmadd) && "complex scalar pnmadd");
+        VERIFY(real_parts_are(internal::pnmsub(pa, pb, pc), nmsub) && "complex pnmsub");
+        VERIFY(test::biteq(numext::real(internal::pnmsub(a, b, c)), nmsub) && "complex scalar pnmsub");
+      }
+    }
+  }
+}
 
 template <typename Scalar, typename Packet,
           std::enable_if_t<!NumTraits<Scalar>::IsInteger && !NumTraits<Scalar>::IsComplex, int> = 0>
