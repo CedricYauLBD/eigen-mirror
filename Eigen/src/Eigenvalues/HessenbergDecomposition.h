@@ -318,15 +318,18 @@ void hessenberg_decomposition_inplace(MatrixType& matA, CoeffVectorType& hCoeffs
     // latter can erase small eigenvalues through cancellation even though the reflector itself is accurate.
     // Negligible means |tail|_inf <= sqrt(tol) * m and |Im head| <= sqrt(tol) * m, for the largest component m of the
     // entries the reflector touches, A(i+1:n, i:n) and A(:, i+1:n); for callers that scale A to O(1) (RealSchur,
-    // ComplexSchur) and a matrix without separated blocks that is the absolute test |tail|^2 <= tol. The test on
-    // tailSqNorm against the largest component of A is a cheap prefilter; it underflows for entries below sqrt(tol).
+    // ComplexSchur) and a matrix without separated blocks that is the absolute test |tail|^2 <= tol. The tests on
+    // tailSqNorm and |Im head| against the largest component of A are a cheap prefilter, as the local scale is at most
+    // that; it saves the two scans for the local scale on an input that is already Hessenberg with a complex
+    // subdiagonal. The tailSqNorm test underflows for entries below sqrt(tol).
     bool negligibleTail = false;
-    if (tailSqNorm <= tol * matrixScale * matrixScale && (numext::isfinite)(matrixScale)) {
+    const RealScalar headImag = numext::abs(numext::imag(householder.coeff(0)));
+    if (tailSqNorm <= tol * matrixScale * matrixScale && headImag <= numext::sqrt(tol) * matrixScale &&
+        (numext::isfinite)(matrixScale)) {
       const RealScalar tailMax =
           remainingSize == 1
               ? RealScalar(0)
               : RealScalar(householder.tail(remainingSize - 1).unwind().realView().cwiseAbs().maxCoeff());
-      const RealScalar headImag = numext::abs(numext::imag(householder.coeff(0)));
       if (numext::is_exactly_zero(tailMax) && numext::is_exactly_zero(headImag)) {
         negligibleTail = true;  // the reflector would be the identity
       } else {
