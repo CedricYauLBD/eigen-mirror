@@ -875,11 +875,13 @@ void packetmath_madd_variants_zero_sign() {}
 template <typename Scalar, typename Packet, std::enable_if_t<NumTraits<Scalar>::IsComplex, int> = 0>
 void packetmath_madd_variants_zero_sign() {
   using RealScalar = typename NumTraits<Scalar>::Real;
-  constexpr int PacketSize = internal::unpacket_traits<Packet>::size;
   const RealScalar constants[] = {RealScalar(1), -RealScalar(1), RealScalar(0), -RealScalar(0)};
   const RealScalar* volatile opaque = constants;
   const RealScalar* values = opaque;
   const auto real_parts_are = [](const Packet& p, RealScalar expected) {
+    // Declared in the lambda: MSVC 14.29 rejects a captureless lambda that names a constexpr local of the enclosing
+    // function template.
+    constexpr int PacketSize = internal::unpacket_traits<Packet>::size;
     Scalar actual[PacketSize];
     internal::pstoreu(actual, p);
     for (int i = 0; i < PacketSize; ++i) {
