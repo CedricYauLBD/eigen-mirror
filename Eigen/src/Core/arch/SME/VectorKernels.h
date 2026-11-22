@@ -149,6 +149,72 @@ __arm_new("za") __arm_locally_streaming
   }
 }
 
+// Accumulates dot(row + k * stride, x) for k < block <= 8 into ZA groups 2k and 2k + 1.
+template <bool Full, typename Scalar, typename Index>
+EIGEN_ALWAYS_INLINE void sme_gemv_rowmajor_block(Index block, Index cols, const Scalar* row, Index stride,
+                                                 const Scalar* x) __arm_streaming __arm_inout("za") {
+  using Traits = sme_packet_traits<Scalar>;
+  const Index lanes = Traits::size();
+  // As in sme_gemv: the bounded increment avoids signed overflow, and an inactive chunk accesses no memory.
+  for (Index i = 0; i < cols; i += cols - i < 8 * lanes ? cols - i : 8 * lanes) {
+    const auto p0 = Traits::whilelt_c4(i, cols), p1 = Traits::whilelt_c4(i + std::int64_t(4) * lanes, cols);
+    const Index o1 = cols - i > 4 * lanes ? 4 * lanes : 0;
+    const auto x0 = ploadu_x4(p0, x + i), x1 = ploadu_x4(p1, x + i + o1);
+    const unsigned int count = Full ? 8u : static_cast<unsigned int>(block);
+    for (unsigned int k = 0; k < count; ++k) {
+      const Scalar* chunk = row + k * stride + i;
+      sme_madd_za_vg1x4(2 * k, ploadu_x4(p0, chunk), x0);
+      sme_madd_za_vg1x4(2 * k + 1, ploadu_x4(p1, chunk + o1), x1);
+    }
+  }
+}
+
+// Sum of the eight vectors of ZA groups 2k and 2k + 1.
+template <typename Scalar>
+EIGEN_ALWAYS_INLINE typename sme_packet_traits<Scalar>::type sme_gemv_rowmajor_sum(
+    unsigned int k) __arm_streaming __arm_in("za") {
+  const auto pg = sme_packet_traits<Scalar>::ptrue();
+  const auto u = sme_read_za_vg1x4<Scalar>(2 * k), v = sme_read_za_vg1x4<Scalar>(2 * k + 1);
+  return padd(pg, padd(pg, padd(pg, pget<0>(u), pget<1>(u)), padd(pg, pget<2>(u), pget<3>(u))),
+              padd(pg, padd(pg, pget<0>(v), pget<1>(v)), padd(pg, pget<2>(v), pget<3>(v))));
+}
+
+// Row-major GEMV, y[j] += alpha * dot(a + j * stride, x); needs SVL >= 512 bits: 16 vgx4 groups, 8 rows in tile 0.
+template <typename Scalar, typename Index>
+__arm_new("za") __arm_locally_streaming
+    EIGEN_DONT_INLINE void sme_gemv_rowmajor(Index rows, Index cols, const Scalar* a, Index stride, const Scalar* x,
+                                             Scalar* y, Scalar alpha) {
+  using Traits = sme_packet_traits<Scalar>;
+  using Vec = typename Traits::type;
+  const Index lanes = Traits::size();
+  const auto pg = Traits::ptrue();
+  const auto scale = pset1<Vec>(alpha);
+  for (Index j = 0; j < rows;) {
+    const Index block = rows - j < 8 ? rows - j : 8;
+    svzero_za();
+    if (block == 8)
+      sme_gemv_rowmajor_block<true>(block, cols, a + j * stride, stride, x);
+    else
+      sme_gemv_rowmajor_block<false>(block, cols, a + j * stride, stride, x);
+    const auto s0 = sme_gemv_rowmajor_sum<Scalar>(0), s1 = sme_gemv_rowmajor_sum<Scalar>(1),
+               s2 = sme_gemv_rowmajor_sum<Scalar>(2), s3 = sme_gemv_rowmajor_sum<Scalar>(3),
+               s4 = sme_gemv_rowmajor_sum<Scalar>(4), s5 = sme_gemv_rowmajor_sum<Scalar>(5),
+               s6 = sme_gemv_rowmajor_sum<Scalar>(6), s7 = sme_gemv_rowmajor_sum<Scalar>(7);
+    // Transpose through tile 0: row k holds sk, so lane k of the sum of all vertical slices is dot k.
+    svzero_za();
+    sme_write_hor_za_vg4<0>(0, s0, s1, s2, s3);
+    sme_write_hor_za_vg4<0>(4, s4, s5, s6, s7);
+    auto dots = pset1<Vec>(Scalar(0));
+    for (unsigned int p = 0; p < static_cast<unsigned int>(lanes); p += 4) {
+      const auto v = sme_read_ver_za_vg4<0, Scalar>(p);
+      dots = padd(pg, dots, padd(pg, padd(pg, pget<0>(v), pget<1>(v)), padd(pg, pget<2>(v), pget<3>(v))));
+    }
+    const auto active = Traits::whilelt(0, block);
+    pstoreu(active, y + j, pmadd(active, dots, scale, ploadu(active, y + j)));
+    j += block;
+  }
+}
+
 #undef EIGEN_SME_VECTOR_UNROLL4
 
 template <typename Scalar>
@@ -177,6 +243,8 @@ static constexpr Index kSmeGemvMinCols = 4;
 // A GEMV whose RHS reaches kSmeGemvWideRhsBytes needs only kSmeGemvWideMinBytes of matrix, not Core's L1 estimate.
 static constexpr std::size_t kSmeGemvWideRhsBytes = 128;
 static constexpr std::size_t kSmeGemvWideMinBytes = 32768;
+// Row-major GEMV: shorter dots, in streaming vectors, lose to NEON as the reduction per output outweighs the loop.
+static constexpr Index kSmeGemvRowMajorMinDotVectors = 24;
 
 // Keep cache queries out of callers so the small vector fallback can inline.
 // Per operand, the L1 estimate (divided by L1Divisor) is the lower crossover and the L2 estimate the upper one.
@@ -286,10 +354,42 @@ EIGEN_STRONG_INLINE bool sme_gemv_size_suitable(Index rows, Index cols) {
       }                                                                                                          \
     }                                                                                                            \
   };
+// rows outputs, each a dot of length cols.
+template <typename Scalar, typename Index>
+EIGEN_STRONG_INLINE bool sme_gemv_rowmajor_suitable(Index rows, Index cols) {
+  const Index svl_bytes = Index(svcntsb());
+  return svl_bytes >= 64 && cols >= kSmeGemvRowMajorMinDotVectors * (svl_bytes / Index(sizeof(Scalar))) &&
+         sme_gemv_size_suitable<Scalar>(cols, rows);
+}
+
+#define EIGEN_SME_GEMV_ROWMAJOR_SPECIALIZATION(Scalar)                                                           \
+  template <typename Index, bool ConjugateLhs, bool ConjugateRhs>                                                \
+  struct general_matrix_vector_product<Index, Scalar, const_blas_data_mapper<Scalar, Index, RowMajor>, RowMajor, \
+                                       ConjugateLhs, Scalar, const_blas_data_mapper<Scalar, Index, ColMajor>,    \
+                                       ConjugateRhs, Specialized> {                                              \
+    static EIGEN_STRONG_INLINE void run(Index rows, Index cols,                                                  \
+                                        const const_blas_data_mapper<Scalar, Index, RowMajor>& lhs,              \
+                                        const const_blas_data_mapper<Scalar, Index, ColMajor>& rhs, Scalar* res, \
+                                        Index resIncr, Scalar alpha) {                                           \
+      if (sme_gemv_rowmajor_suitable<Scalar>(rows, cols) && rhs.stride() == 1 && resIncr == 1) {                 \
+        /* BLAS contract: alpha == 0 leaves the result unchanged. */                                             \
+        if (alpha == Scalar(0)) return;                                                                          \
+        sme_fpsr_guard status;                                                                                   \
+        sme_gemv_rowmajor(rows, cols, lhs.data(), lhs.stride(), rhs.data(), res, alpha);                         \
+      } else {                                                                                                   \
+        general_matrix_vector_product<Index, Scalar, const_blas_data_mapper<Scalar, Index, RowMajor>, RowMajor,  \
+                                      ConjugateLhs, Scalar, const_blas_data_mapper<Scalar, Index, ColMajor>,     \
+                                      ConjugateRhs, BuiltIn>::run(rows, cols, lhs, rhs, res, resIncr, alpha);    \
+      }                                                                                                          \
+    }                                                                                                            \
+  };
 EIGEN_SME_GEMV_SPECIALIZATION(float)
+EIGEN_SME_GEMV_ROWMAJOR_SPECIALIZATION(float)
 #ifdef EIGEN_VECTORIZE_SME_F64F64
 EIGEN_SME_GEMV_SPECIALIZATION(double)
+EIGEN_SME_GEMV_ROWMAJOR_SPECIALIZATION(double)
 #endif
+#undef EIGEN_SME_GEMV_ROWMAJOR_SPECIALIZATION
 #undef EIGEN_SME_GEMV_SPECIALIZATION
 #endif
 

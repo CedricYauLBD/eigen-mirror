@@ -306,6 +306,84 @@ void sme_gemv_panels() {
   setCpuCacheSizes(l1, l2, l3);
 }
 
+// y += alpha * A^T x and y += alpha * B x for column-major A and row-major B, the row-major GEMV, on exact integers.
+template <typename Scalar>
+void sme_gemv_rowmajor_products() {
+  using Vec = Vector<Scalar, Dynamic>;
+  using Mat = Matrix<Scalar, Dynamic, Dynamic, ColMajor>;
+  using RowMat = Matrix<Scalar, Dynamic, Dynamic, RowMajor>;
+  const Index lanes = internal::sme_packet_traits<Scalar>::size();
+  const Index min_dot = internal::kSmeGemvRowMajorMinDotVectors * lanes;
+#ifndef EIGEN_USE_BLAS
+  // The kernel needs SVL >= 512 bits; other SVLs keep the generic kernel and the checks below.
+  const bool svl_suitable = svcntsb() >= 64;
+  VERIFY_IS_EQUAL(internal::sme_gemv_rowmajor_suitable<Scalar>(Index(64), min_dot), svl_suitable);
+  VERIFY(!internal::sme_gemv_rowmajor_suitable<Scalar>(Index(64), min_dot - 1));
+#endif
+  const Index padding = 64 / sizeof(Scalar);
+  for (Index dot : {min_dot, min_dot + 1, min_dot + 4 * lanes - 1, min_dot + 4 * lanes, min_dot + 8 * lanes + 5,
+                    Index(1031), Index(8197)}) {
+    std::vector<Index> outputs = {64, 65, 66, 67, 68, 69, 70, 71};
+    if (dot == 8197) outputs.insert(outputs.end(), {4, 7, 9});
+    for (Index n : outputs) {
+#ifndef EIGEN_USE_BLAS
+      VERIFY_IS_EQUAL(internal::sme_gemv_rowmajor_suitable<Scalar>(n, dot), svl_suitable && dot >= min_dot);
+#endif
+      for (Index lda_padding : {0, 3}) {
+        const Mat storage = (Scalar(4) * Mat::Random(dot + lda_padding, n)).array().round().matrix();
+        const auto a = storage.topRows(dot);
+        const RowMat b = a.transpose();
+        const Vec x = (Scalar(4) * Vec::Random(dot)).array().round().matrix();
+        Vec reference(n);
+        for (Index j = 0; j < n; ++j) {
+          Scalar sum(0);
+          for (Index i = 0; i < dot; ++i) sum += a(i, j) * x[i];
+          reference[j] = sum;
+        }
+        for (Index offset : {Index(0), Index(1), padding - 1}) {
+          for (Scalar alpha : {Scalar(0.75), Scalar(-2), Scalar(0)}) {
+            for (int side = 0; side < 2; ++side) {
+              Vec y_storage = (Scalar(4) * Vec::Random(n + 2 * padding)).array().round().matrix();
+              const Vec before = y_storage;
+              auto y = y_storage.segment(offset, n);
+              if (side == 0)
+                y.noalias() += alpha * a.transpose() * x;
+              else
+                y.noalias() += alpha * b * x;
+              for (Index j = 0; j < n; ++j) VERIFY_IS_EQUAL(y[j], before[offset + j] + alpha * reference[j]);
+              VERIFY(y_storage.head(offset) == before.head(offset));
+              VERIFY(y_storage.tail(2 * padding - offset) == before.tail(2 * padding - offset));
+            }
+          }
+        }
+        // A strided result takes the generic kernel.
+        Mat result = Mat::Ones(3, n);
+        result.row(1).noalias() += x.transpose() * a;
+        VERIFY(result.row(1).transpose() == (reference.array() + Scalar(1)).matrix());
+        VERIFY((result.row(0).array() == Scalar(1)).all() && (result.row(2).array() == Scalar(1)).all());
+      }
+    }
+  }
+  // One non-finite output must not reach its neighbours through the reduction.
+  const Scalar inf = NumTraits<Scalar>::infinity(), nan = NumTraits<Scalar>::quiet_NaN();
+  for (Index special_output : {0, 5, 7, 8, 66}) {
+    for (Scalar special : {inf, nan}) {
+      Mat a = Mat::Ones(min_dot + 3, 67);
+      a(min_dot + 2, special_output) = special;
+      Vec y = Vec::Zero(67);
+      y.noalias() += a.transpose() * Vec::Ones(min_dot + 3);
+      for (Index j = 0; j < y.size(); ++j) {
+        if (j != special_output)
+          VERIFY_IS_EQUAL(y[j], Scalar(min_dot + 3));
+        else if ((numext::isnan)(special))
+          VERIFY((numext::isnan)(y[j]));
+        else
+          VERIFY_IS_EQUAL(y[j], inf);
+      }
+    }
+  }
+}
+
 template <typename Scalar>
 void sme_vector_special_values() {
   using Vec = Vector<Scalar, Dynamic>;
@@ -529,6 +607,7 @@ EIGEN_DECLARE_TEST(vector_sme) {
   CALL_SUBTEST_1(sme_vector_alignment<float>());
   CALL_SUBTEST_1(sme_gemv_tails<float>());
   CALL_SUBTEST_1(sme_gemv_panels<float>());
+  CALL_SUBTEST_3(sme_gemv_rowmajor_products<float>());
   CALL_SUBTEST_1(sme_vector_special_values<float>());
   CALL_SUBTEST_3(sme_gemv_scaled_range<float>());
   CALL_SUBTEST_3(sme_dot_signed_zero<float>());
@@ -542,6 +621,7 @@ EIGEN_DECLARE_TEST(vector_sme) {
   CALL_SUBTEST_2(sme_vector_alignment<double>());
   CALL_SUBTEST_2(sme_gemv_tails<double>());
   CALL_SUBTEST_2(sme_gemv_panels<double>());
+  CALL_SUBTEST_4(sme_gemv_rowmajor_products<double>());
   CALL_SUBTEST_2(sme_vector_special_values<double>());
   CALL_SUBTEST_4(sme_gemv_scaled_range<double>());
   CALL_SUBTEST_4(sme_dot_signed_zero<double>());
