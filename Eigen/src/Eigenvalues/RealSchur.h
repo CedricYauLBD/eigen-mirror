@@ -259,14 +259,17 @@ class RealSchur {
    * Each selected block is moved up by adjacent transpositions. A transposition of neighbouring blocks of sizes
    * \f$ p \f$ and \f$ q \f$ is one small Sylvester solve for the invariant subspace of the trailing block, followed by
    * two Householder reflectors applied to a row and a column range of \f$ T \f$, so a transposition costs
-   * \f$ O(n) \f$ work and the whole reordering \f$ O(n^2) \f$. The cost of the decomposition itself is unchanged.
+   * \f$ O(n) \f$ work. There can be \f$ O(n^2) \f$ transpositions, so the whole reordering is \f$ O(n^2) \f$ when
+   * few blocks move and \f$ O(n^3) \f$ in the worst case, the same order as LAPACK's \c xTRSEN. The cost of the
+   * decomposition itself is unchanged.
    *
    * Two adjacent blocks whose eigenvalues agree to working precision cannot be separated in floating point. Such a
    * pair keeps the order the decomposition gave it, and the returned count then covers only the blocks that could be
    * moved; the leading block still holds selected eigenvalues, just not all of them.
    *
    * Only #matrixT() is reordered when the decomposition was computed with \c computeU = \c false. This method
-   * requires that #compute() or the constructor has been called, but not that \c computeU was set.
+   * requires that #compute() or the constructor has completed successfully, that is #info() must be \c Success, but
+   * not that \c computeU was set.
    *
    * \code
    * RealSchur<MatrixXd> schur(A);
@@ -456,6 +459,7 @@ template <typename MatrixType>
 template <typename SelectType>
 Index RealSchur<MatrixType>::reorder(const SelectType& select) {
   eigen_assert(m_isInitialized && "RealSchur is not initialized.");
+  eigen_assert(m_info == Success && "RealSchur::reorder requires a successful decomposition.");
   const Index n = m_matT.rows();
   // Invariant at the top of each iteration: the blocks below position k are untouched, so the block at k is still the
   // one the decomposition gave, and the first `leading` rows hold the selected blocks already moved up.
@@ -499,12 +503,22 @@ Index RealSchur<MatrixType>::diagonalBlockSize(Index k) const {
 template <typename MatrixType>
 typename RealSchur<MatrixType>::ComplexScalar RealSchur<MatrixType>::blockEigenvalue(Index k) const {
   if (diagonalBlockSize(k) == 1) return ComplexScalar(m_matT.coeff(k, k), Scalar(0));
-  const Scalar halfTrace = (m_matT.coeff(k, k) + m_matT.coeff(k + 1, k + 1)) / 2;
-  const Scalar halfDifference = (m_matT.coeff(k, k) - m_matT.coeff(k + 1, k + 1)) / 2;
+  // Scale before squaring, as EigenSolver does: the discriminant of a finite block can overflow to infinity or
+  // underflow to zero, and then select sees a wrong eigenvalue (or none at all).
+  const Scalar a = m_matT.coeff(k, k);
+  const Scalar b = m_matT.coeff(k, k + 1);
+  const Scalar c = m_matT.coeff(k + 1, k);
+  const Scalar d = m_matT.coeff(k + 1, k + 1);
+  const Scalar scale = numext::maxi(numext::maxi(numext::abs(a), numext::abs(d)),
+                                   numext::maxi(numext::abs(b), numext::abs(c)));
+  if (numext::is_exactly_zero(scale)) return ComplexScalar(Scalar(0), Scalar(0));
+  const Scalar half = scale / 2;
+  const Scalar halfTrace = (a / scale + d / scale) * half;
+  const Scalar halfDifference = (a / scale - d / scale) * half;
   // The decomposition and the block swaps keep the discriminant of a 2x2 block negative; clamp against rounding so
   // that a pair on the verge of being real still yields a finite eigenvalue.
-  const Scalar discriminant = halfDifference * halfDifference + m_matT.coeff(k, k + 1) * m_matT.coeff(k + 1, k);
-  return ComplexScalar(halfTrace, numext::sqrt(discriminant < Scalar(0) ? -discriminant : Scalar(0)));
+  const Scalar discriminant = halfDifference / scale * (halfDifference / scale) + (b / scale) * (c / scale);
+  return ComplexScalar(halfTrace, scale * numext::sqrt(discriminant < Scalar(0) ? -discriminant : Scalar(0)));
 }
 
 /** \internal Solves \f$ A X - X B = -C \f$ for the p-by-q matrix X, given \p block holding [[A, C], [0, B]].
@@ -612,12 +626,39 @@ bool RealSchur<MatrixType>::swapAdjacentBlocks(Index k) {
   block.topLeftCorner(m, m) = m_matT.block(k, k, m, m);
   const Scalar scale = block.cwiseAbs().maxCoeff();
 
+  // Two 1x1 blocks need no Sylvester solve: a Givens rotation built from the coupling and the eigenvalue difference
+  // exchanges them. The halves avoid overflowing the difference when both entries are near the largest scalar.
+  if (p == 1 && q == 1) {
+    const Scalar first = block(0, 0);
+    const Scalar second = block(1, 1);
+    const Scalar difference = second / 2 - first / 2;
+    if (numext::abs(difference) <=
+        NumTraits<Scalar>::epsilon() * numext::maxi(numext::abs(first), numext::abs(second)))
+      return false;
+    JacobiRotation<Scalar> rotation;
+    rotation.makeGivens(block(0, 1) / 2, difference);
+    block.applyOnTheLeft(0, 1, rotation.adjoint());
+    block.applyOnTheRight(0, 1, rotation);
+    if (!(numext::abs(block(1, 0)) <= numext::sqrt(NumTraits<Scalar>::epsilon()) * scale)) return false;
+    m_matT.block(k, k, 2, m_matT.cols() - k).applyOnTheLeft(0, 1, rotation.adjoint());
+    m_matT.block(0, k, k + 2, 2).applyOnTheRight(0, 1, rotation);
+    m_matT.coeffRef(k + 1, k) = Scalar(0);
+    if (m_matUisUptodate) m_matU.applyOnTheRight(k, k + 1, rotation);
+    return true;
+  }
+
   Matrix<Scalar, 4, 2> solution = Matrix<Scalar, 4, 2>::Zero();
   if (!solveSylvesterForSwap(block, p, q, solution)) return false;
 
   Matrix<Scalar, 4, 2> spanning = Matrix<Scalar, 4, 2>::Zero();
   spanning.topLeftCorner(p, q) = solution.topLeftCorner(p, q);
   spanning.block(p, 0, q, q).setIdentity();
+
+  // The solution can be enormous when the blocks are nearly inseparable, and squaring it in the reflector would then
+  // overflow. Scaling the whole subspace leaves it unchanged and keeps the reflectors finite.
+  const Scalar largest = spanning.cwiseAbs().maxCoeff();
+  if (!(largest <= NumTraits<Scalar>::highest())) return false;
+  if (largest > Scalar(1)) spanning /= largest;
 
   // Two reflectors turn the spanning vectors into the leading columns of an orthogonal matrix.
   Matrix<Scalar, 4, 1> firstReflector = Matrix<Scalar, 4, 1>::Zero();
@@ -646,7 +687,8 @@ bool RealSchur<MatrixType>::swapAdjacentBlocks(Index k) {
   if (q == 2) applyReflectorOnTheLeft(block, 0, m, secondReflector);
   applyReflectorOnTheRight(block, 0, m, firstReflector);
   if (q == 2) applyReflectorOnTheRight(block, 0, m, secondReflector);
-  if (block.block(q, 0, p, q).cwiseAbs().maxCoeff() > numext::sqrt(NumTraits<Scalar>::epsilon()) * scale) return false;
+  if (!(block.block(q, 0, p, q).cwiseAbs().maxCoeff() <= numext::sqrt(NumTraits<Scalar>::epsilon()) * scale))
+    return false;
 
   applyReflectorOnTheLeft(m_matT, k, m, firstReflector);
   if (q == 2) applyReflectorOnTheLeft(m_matT, k, m, secondReflector);

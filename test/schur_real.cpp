@@ -422,10 +422,10 @@ void schur_reorder_repeated() {
     const Index selected = schur.reorder(negativeRealPart);
     const MatrixType& t = schur.matrixT();
     verifyIsQuasiTriangular(t);
-    // The similarity keeps the trace and the size of the reordered block. Two of the three negative eigenvalues are
-    // equal, so the count is allowed to stop short of all of them.
+    // The similarity keeps the trace and the size of the reordered block. The two equal -1 entries never have to
+    // pass each other, so all three negative eigenvalues can lead.
     VERIFY(numext::abs(t.diagonal().sum() - traceBefore) <= bound);
-    VERIFY(selected >= 1);
+    VERIFY_IS_EQUAL(selected, 3);
     if (selected > 0) {
       const EigenSolver<MatrixType> leading(t.topLeftCorner(selected, selected));
       for (Index i = 0; i < selected; ++i) VERIFY(leading.eigenvalues()(i).real() < bound);
@@ -440,6 +440,81 @@ void schur_reorder_repeated() {
     } else {
       VERIFY_RAISES_ASSERT(schur.matrixU());
     }
+  }
+}
+
+// A swap whose blocks cannot be separated must be rejected, and the count must stop short of the blocks that did not
+// move. Two identical 2x2 blocks with a selector that accepts only the later one is the smallest such case.
+template <typename Scalar>
+void schur_reorder_rejected() {
+  using MatrixType = Matrix<Scalar, 4, 4>;
+  using ComplexScalar = std::complex<Scalar>;
+  MatrixType a = MatrixType::Zero();
+  for (int block = 0; block < 2; ++block) {
+    a(2 * block, 2 * block) = Scalar(1);
+    a(2 * block, 2 * block + 1) = Scalar(2);
+    a(2 * block + 1, 2 * block) = Scalar(-2);
+    a(2 * block + 1, 2 * block + 1) = Scalar(1);
+  }
+
+  RealSchur<MatrixType> schur;
+  schur.computeFromHessenberg(a, MatrixType::Identity(), true);
+  VERIFY_IS_EQUAL(schur.info(), Success);
+  int calls = 0;
+  const Index selected = schur.reorder([&calls](const ComplexScalar&) { return ++calls == 2; });
+  VERIFY_IS_EQUAL(selected, 0);
+  VERIFY_IS_EQUAL((schur.matrixT() - a).cwiseAbs().maxCoeff(), Scalar(0));
+}
+
+// Finite input near the scalar limits must not turn the decomposition into NaN.
+template <typename Scalar>
+void schur_reorder_overflow() {
+  using MatrixType = Matrix<Scalar, 2, 2>;
+  using ComplexScalar = std::complex<Scalar>;
+  const Scalar highest = NumTraits<Scalar>::highest();
+
+  {
+    // The via-Sylvester solution is highest/4, whose squared norm overflows.
+    MatrixType a;
+    a << Scalar(1), highest / 4, Scalar(0), Scalar(2);
+    RealSchur<MatrixType> schur;
+    schur.computeFromHessenberg(a, MatrixType::Identity(), true);
+    const Index selected = schur.reorder([](const ComplexScalar& lambda) { return lambda.real() > Scalar(1.5); });
+    VERIFY_IS_EQUAL(selected, 1);
+    VERIFY(schur.matrixT().allFinite());
+    VERIFY(schur.matrixU().allFinite());
+    VERIFY_IS_APPROX(schur.matrixT()(0, 0), Scalar(2));
+    VERIFY_IS_APPROX(schur.matrixT()(1, 1), Scalar(1));
+  }
+
+  {
+    // The eigenvalue difference overflows, so the uncoupled pair must take the Givens path.
+    MatrixType a = MatrixType::Zero();
+    a(0, 0) = highest;
+    a(1, 1) = -highest;
+    RealSchur<MatrixType> schur;
+    schur.computeFromHessenberg(a, MatrixType::Identity(), true);
+    const Index selected = schur.reorder([](const ComplexScalar& lambda) { return lambda.real() < Scalar(0); });
+    VERIFY_IS_EQUAL(selected, 1);
+    VERIFY(schur.matrixT().allFinite());
+    VERIFY_IS_APPROX(schur.matrixT()(0, 0), -highest);
+    VERIFY_IS_APPROX(schur.matrixT()(1, 1), highest);
+  }
+
+  // The discriminant must be formed without squaring the off-diagonal entries: highest/4 squares to infinity, and
+  // the selector must still see the finite 10^154-sized eigenvalue rather than (0, inf).
+  const Scalar magnitude = highest / Scalar(4);
+  {
+    MatrixType a = MatrixType::Zero();
+    a(0, 1) = -magnitude;
+    a(1, 0) = magnitude;
+    RealSchur<MatrixType> schur;
+    schur.computeFromHessenberg(a, MatrixType::Identity(), true);
+    const Index selected = schur.reorder([magnitude](const ComplexScalar& lambda) {
+      return lambda.imag() > Scalar(0) && lambda.imag() <= magnitude;
+    });
+    VERIFY_IS_EQUAL(selected, 2);
+    VERIFY(schur.matrixT().allFinite());
   }
 }
 
@@ -484,4 +559,8 @@ EIGEN_DECLARE_TEST(schur_real) {
   CALL_SUBTEST_17(schur_reorder_complex_pairs<double>());
   CALL_SUBTEST_18(schur_reorder_repeated<float>());
   CALL_SUBTEST_18(schur_reorder_repeated<double>());
+  CALL_SUBTEST_19(schur_reorder_rejected<float>());
+  CALL_SUBTEST_19(schur_reorder_rejected<double>());
+  CALL_SUBTEST_20(schur_reorder_overflow<float>());
+  CALL_SUBTEST_20(schur_reorder_overflow<double>());
 }
