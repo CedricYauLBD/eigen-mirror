@@ -265,6 +265,47 @@ void sme_gemv_tails() {
   }
 }
 
+// Integer-valued operands keep every partial sum exact, so any batching or panel order must match the reference.
+template <typename Scalar>
+void sme_gemv_panels() {
+  using Vec = Vector<Scalar, Dynamic>;
+  using Mat = Matrix<Scalar, Dynamic, Dynamic, ColMajor>;
+  const std::ptrdiff_t l1 = l1CacheSize(), l2 = l2CacheSize(), l3 = l3CacheSize();
+  const Index padding = 64 / sizeof(Scalar);
+  // A 256-byte L1 estimate selects 4-column batches; the 128 KiB one 16-column batches.
+  for (std::ptrdiff_t cache : {l1, std::ptrdiff_t(256)}) {
+    setCpuCacheSizes(cache, l2, l3);
+    for (Index rows : {128, 130, 257, 600}) {
+      for (Index cols : {127, 128, 129, 255, 256, 257, 383, 400}) {
+        for (Index lda_padding : {0, 3}) {
+#ifndef EIGEN_USE_BLAS
+          VERIFY(internal::sme_gemv_size_suitable<Scalar>(rows, cols));
+#endif
+          const Mat storage = (Scalar(4) * Mat::Random(rows + lda_padding, cols)).array().round().matrix();
+          const auto a = storage.topRows(rows);
+          const Vec x = (Scalar(4) * Vec::Random(cols)).array().round().matrix();
+          for (Index offset = 0; offset < padding; ++offset) {
+            for (Scalar alpha : {Scalar(0.75), Scalar(-2), Scalar(0)}) {
+              Vec y_storage = (Scalar(4) * Vec::Random(rows + 2 * padding)).array().round().matrix();
+              const Vec before = y_storage;
+              auto y = y_storage.segment(offset, rows);
+              y.noalias() += alpha * a * x;
+              for (Index i = 0; i < rows; ++i) {
+                Scalar sum(0);
+                for (Index j = 0; j < cols; ++j) sum += a(i, j) * x[j];
+                VERIFY_IS_EQUAL(y[i], before[offset + i] + alpha * sum);
+              }
+              VERIFY(y_storage.head(offset) == before.head(offset));
+              VERIFY(y_storage.tail(2 * padding - offset) == before.tail(2 * padding - offset));
+            }
+          }
+        }
+      }
+    }
+  }
+  setCpuCacheSizes(l1, l2, l3);
+}
+
 template <typename Scalar>
 void sme_vector_special_values() {
   using Vec = Vector<Scalar, Dynamic>;
@@ -415,6 +456,12 @@ void sme_vector_exception_state() {
   std::fenv_t saved;
   std::fegetenv(&saved);
   const Scalar inf = NumTraits<Scalar>::infinity(), largest = (std::numeric_limits<Scalar>::max)();
+#ifndef EIGEN_USE_BLAS
+  // Below SVL 256 the matrix-vector product runs the generic kernel, which raises the flags.
+  const bool gemv_keeps_flags = internal::sme_gemv_svl_suitable();
+#else
+  const bool gemv_keeps_flags = true;
+#endif
   // The kernels leave the caller's flags as they were, whether or not an SVE tail or row remainder follows the
   // ZA loop: exact inputs, then inf * 0 (invalid), then max * 2 (overflow).
   for (Index n : {32768, 32769}) {
@@ -444,7 +491,11 @@ void sme_vector_exception_state() {
             actual = result[result.size() - 1];
           }
           const int flags = std::fetestexcept(FE_ALL_EXCEPT);
-          VERIFY_IS_EQUAL(flags, prior);
+          if (operation != 2 || gemv_keeps_flags) {
+            VERIFY_IS_EQUAL(flags, prior);
+          } else {
+            VERIFY_IS_EQUAL(flags & prior, prior);
+          }
           if (input == 1) {
             VERIFY((numext::isnan)(actual));
           } else if (input == 2) {
@@ -477,6 +528,7 @@ EIGEN_DECLARE_TEST(vector_sme) {
   CALL_SUBTEST_1(sme_matrix_vectors<float>());
   CALL_SUBTEST_1(sme_vector_alignment<float>());
   CALL_SUBTEST_1(sme_gemv_tails<float>());
+  CALL_SUBTEST_1(sme_gemv_panels<float>());
   CALL_SUBTEST_1(sme_vector_special_values<float>());
   CALL_SUBTEST_3(sme_gemv_scaled_range<float>());
   CALL_SUBTEST_3(sme_dot_signed_zero<float>());
@@ -489,6 +541,7 @@ EIGEN_DECLARE_TEST(vector_sme) {
   CALL_SUBTEST_2(sme_matrix_vectors<double>());
   CALL_SUBTEST_2(sme_vector_alignment<double>());
   CALL_SUBTEST_2(sme_gemv_tails<double>());
+  CALL_SUBTEST_2(sme_gemv_panels<double>());
   CALL_SUBTEST_2(sme_vector_special_values<double>());
   CALL_SUBTEST_4(sme_gemv_scaled_range<double>());
   CALL_SUBTEST_4(sme_dot_signed_zero<double>());
