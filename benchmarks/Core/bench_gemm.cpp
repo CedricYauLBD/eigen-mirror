@@ -153,22 +153,20 @@ BENCHMARK(BM_EigenGemmRowMajorRhs)
 
 // The reference below calls sgemm_/dgemm_ directly, so it is real-only.
 #if defined(HAVE_BLAS) && !defined(EIGEN_BENCH_COMPLEX_SCALAR)
-extern "C" {
 #include <Eigen/src/Core/util/blas.h>
-}
 
 // c += a * b, matching gemm() above.
 static void blas_gemm(EIGEN_BLAS_INT m, EIGEN_BLAS_INT n, EIGEN_BLAS_INT p, const float* a, const float* b, float* c) {
   const char notrans = 'N';
   const float one = 1;
-  EIGEN_BLAS_SYM(sgemm)(&notrans, &notrans, &m, &n, &p, &one, a, &m, b, &p, &one, c, &m);
+  Eigen::internal::EIGEN_BLAS_SYM(sgemm)(&notrans, &notrans, &m, &n, &p, &one, a, &m, b, &p, &one, c, &m);
 }
 
 static void blas_gemm(EIGEN_BLAS_INT m, EIGEN_BLAS_INT n, EIGEN_BLAS_INT p, const double* a, const double* b,
                       double* c) {
   const char notrans = 'N';
   const double one = 1;
-  EIGEN_BLAS_SYM(dgemm)(&notrans, &notrans, &m, &n, &p, &one, a, &m, b, &p, &one, c, &m);
+  Eigen::internal::EIGEN_BLAS_SYM(dgemm)(&notrans, &notrans, &m, &n, &p, &one, a, &m, b, &p, &one, c, &m);
 }
 
 static void BM_BlasGemm(benchmark::State& state) {

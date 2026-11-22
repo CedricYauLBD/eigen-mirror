@@ -141,6 +141,12 @@ In the examples, m1 and m2 are dense matrices and v1 and v2 are dense vectors.
 
 Unless \c EIGEN_USE_MKL or \c EIGEN_LAPACKE_SYSTEM is defined, \c EIGEN_USE_LAPACKE makes %Eigen include a bundled header that declares only the Lapacke routines %Eigen itself calls (for example \c LAPACKE_dgetrf and \c LAPACKE_dgees). To call any other Lapacke routine from your own code, include the system's \c lapacke.h, either before or after the %Eigen headers; the bundled header does not conflict with it, and it is skipped when the system header comes first. Alternatively, define \c EIGEN_LAPACKE_SYSTEM before including any %Eigen header, so that %Eigen itself includes the system's \c lapacke.h and no bundled declarations are used.
 
+\section TopicUsingBlasLapack_BlasDeclarations BLAS declarations
+
+Unless \c EIGEN_USE_MKL is defined, \c EIGEN_USE_BLAS makes %Eigen declare the Fortran BLAS routines it calls (for example \c dgemm_) itself. With GCC, Clang and compatible compilers these declarations are private to %Eigen and bound to the external symbols by asm label, so a vendor header that declares the same routines with other types, such as \c Accelerate/Accelerate.h (with or without \c ACCELERATE_NEW_LAPACK and \c ACCELERATE_LAPACK_ILP64) or OpenBLAS's \c f77blas.h, may be included before or after the %Eigen headers. They do not declare \c ::dgemm_ and the other routines; to call BLAS from your own code, include your vendor's header. With MSVC they remain \c extern \c "C" declarations, which conflict with any differently typed vendor declaration.
+
+%Eigen always calls the undecorated symbols (\c dgemm_, or \c dgemm_64_ with \c EIGEN_BLAS_SYMBOL_SUFFIX=_64), whatever the vendor header selects for your own calls. Accelerate exports those only with 32-bit integers; its ILP64 routines carry other symbol names. Do not define \c EIGEN_64BIT_BLAS when %Eigen's BLAS calls resolve to Accelerate.
+
 \section TopicUsingBlasLapack_ILP64 The 64-bit integer (ILP64) interface
 
 By default %Eigen calls the 32-bit integer ("LP64") BLAS interface, which limits matrix dimensions and strides to
