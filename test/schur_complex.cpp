@@ -320,6 +320,8 @@ void schur_reorder(Index size) {
   const RealScalar eps = NumTraits<RealScalar>::epsilon();
   // n^2 rotations, each contributing a rounding of order eps ||A|| with a small constant.
   const RealScalar tolerance = RealScalar(64) * size * size * eps;
+  // Orthogonality loses only the rounding of the n^2 plane rotations themselves, which is linear in n per entry.
+  const RealScalar orthogonalityTolerance = RealScalar(64) * size * eps;
 
   for (int counter = 0; counter < g_repeat; ++counter) {
     const MatrixType A = MatrixType::Random(size, size);
@@ -344,17 +346,16 @@ void schur_reorder(Index size) {
     const ComplexMatrixType& U = schur.matrixU();
     const ComplexMatrixType& T = schur.matrixT();
 
-    const RealScalar scale = T0.stableNorm() + RealScalar(1);
     VERIFY((A.template cast<ComplexScalar>() - U * T * U.adjoint()).norm() <= tolerance * A.norm());
-    VERIFY((U * U.adjoint() - ComplexMatrixType::Identity(size, size)).norm() <= tolerance);
+    VERIFY((U * U.adjoint() - ComplexMatrixType::Identity(size, size)).norm() <= orthogonalityTolerance);
     VERIFY(T.template triangularView<StrictlyLower>().toDenseMatrix().isZero(0));
 
-    // The leading eigenvalues are the selected ones of the unreordered form, in the same relative order.
+    // The leading eigenvalues are the selected ones of the unreordered form, exactly, in the same relative order.
     Index next = 0;
     for (Index i = 0; i < size; ++i) {
       if (!select(T0.coeff(i, i))) continue;
       VERIFY(next < selected);
-      VERIFY(numext::abs(T.coeff(next, next) - T0.coeff(i, i)) <= tolerance * scale);
+      VERIFY_IS_EQUAL(T.coeff(next, next), T0.coeff(i, i));
       ++next;
     }
     VERIFY_IS_EQUAL(next, selected);
@@ -392,7 +393,8 @@ void schur_reorder(Index size) {
 }
 
 // Repeated eigenvalues make the selected set indistinguishable by value, and the rotation that swaps them is
-// degenerate: the reordering must still leave a valid decomposition behind.
+// degenerate: selecting one diagonal position must still perform the real swaps and leave a valid decomposition
+// behind. The diagonal must be an exact permutation of the diagonal before the call.
 template <typename ComplexScalar>
 void schur_reorder_repeated() {
   using MatrixType = Matrix<ComplexScalar, 3, 3>;
@@ -403,22 +405,56 @@ void schur_reorder_repeated() {
   jordan.diagonal().setOnes();
   jordan(0, 1) = jordan(1, 2) = 1;
   const MatrixType identity = MatrixType::Identity();
-  const MatrixType* inputs[] = {&jordan, &identity};
-  const auto selectAll = [](const ComplexScalar&) { return true; };
-  const auto selectNone = [](const ComplexScalar&) { return false; };
+  MatrixType diagonal = MatrixType::Zero();
+  diagonal.diagonal() << ComplexScalar(1), ComplexScalar(2), ComplexScalar(3);
+  const MatrixType* inputs[] = {&jordan, &identity, &diagonal};
   for (const MatrixType* input : inputs) {
-    for (int selectNothing = 0; selectNothing < 2; ++selectNothing) {
+    for (Index target = 0; target < 3; ++target) {
       ComplexSchur<MatrixType> schur(*input);
       VERIFY_IS_EQUAL(schur.info(), Success);
-      const Index selected = selectNothing ? schur.reorder(selectNone) : schur.reorder(selectAll);
-      VERIFY_IS_EQUAL(selected, selectNothing ? Index(0) : Index(3));
+      int calls = 0;
+      const Index selected =
+          schur.reorder([&calls, target](const ComplexScalar&) { return ++calls == target + 1; });
+      VERIFY_IS_EQUAL(selected, Index(1));
       const ComplexMatrixType& U = schur.matrixU();
       const ComplexMatrixType& T = schur.matrixT();
       const RealScalar tolerance = RealScalar(64) * NumTraits<RealScalar>::epsilon();
       VERIFY((*input).template cast<ComplexScalar>().isApprox(ComplexMatrixType(U * T * U.adjoint()), tolerance));
+      VERIFY((U * U.adjoint() - ComplexMatrixType::Identity()).norm() <= RealScalar(64) * tolerance);
       VERIFY(T.template triangularView<StrictlyLower>().toDenseMatrix().isZero(0));
+      // The selected diagonal entry leads, and the rest keep their relative order.
+      Index next = 1;
+      for (Index i = 0; i < 3; ++i) {
+        if (i == target) continue;
+        VERIFY_IS_EQUAL(T.coeff(next, next), input->coeff(i, i));
+        ++next;
+      }
+      VERIFY_IS_EQUAL(T.coeff(0, 0), input->coeff(target, target));
     }
   }
+}
+
+// A finite triangular matrix whose diagonal difference overflows must still swap without producing NaN.
+template <typename Scalar>
+void schur_reorder_overflow() {
+  using ComplexScalar = std::complex<Scalar>;
+  using MatrixType = Matrix<ComplexScalar, 2, 2>;
+  const Scalar highest = NumTraits<Scalar>::highest();
+  MatrixType a = MatrixType::Zero();
+  a(0, 0) = ComplexScalar(-Scalar(0.9) * highest, 0);
+  a(0, 1) = ComplexScalar(1, 0);
+  a(1, 1) = ComplexScalar(Scalar(0.9) * highest, 0);
+
+  ComplexSchur<MatrixType> schur;
+  schur.computeFromHessenberg(a, MatrixType::Identity(), true);
+  VERIFY_IS_EQUAL(schur.info(), Success);
+  int calls = 0;
+  const Index selected = schur.reorder([&calls](const ComplexScalar&) { return ++calls == 2; });
+  VERIFY_IS_EQUAL(selected, Index(1));
+  VERIFY(schur.matrixT().allFinite());
+  VERIFY(schur.matrixU().allFinite());
+  VERIFY_IS_EQUAL(schur.matrixT()(0, 0), a(1, 1));
+  VERIFY_IS_EQUAL(schur.matrixT()(1, 1), a(0, 0));
 }
 
 EIGEN_DECLARE_TEST(schur_complex) {
@@ -470,8 +506,11 @@ EIGEN_DECLARE_TEST(schur_complex) {
 
   CALL_SUBTEST_12((schur_reorder<Matrix4cd>(4)));
   CALL_SUBTEST_12((schur_reorder<MatrixXcd>(internal::random<int>(2, EIGEN_TEST_MAX_SIZE / 4))));
-  CALL_SUBTEST_12((schur_reorder<MatrixXcf>(internal::random<int>(2, EIGEN_TEST_MAX_SIZE / 4))));
+  CALL_SUBTEST_12((schur_reorder<MatrixXcf>(8)));
+  CALL_SUBTEST_12((schur_reorder<MatrixXd>(7)));
   CALL_SUBTEST_12((schur_reorder<Matrix<std::complex<float>, 3, 3, Eigen::RowMajor>>(3)));
   CALL_SUBTEST_13(schur_reorder_repeated<std::complex<double>>());
   CALL_SUBTEST_13(schur_reorder_repeated<std::complex<float>>());
+  CALL_SUBTEST_14(schur_reorder_overflow<double>());
+  CALL_SUBTEST_14(schur_reorder_overflow<float>());
 }
