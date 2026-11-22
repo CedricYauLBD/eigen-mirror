@@ -6,15 +6,16 @@
 // This Source Code Form is subject to the terms of the Mozilla
 // Public License v. 2.0. If a copy of the MPL was not distributed
 // with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
+// SPDX-License-Identifier: MPL-2.0
 
 #include "main.h"
 
 template <typename Scalar>
 void smallVectors() {
-  typedef Matrix<Scalar, 1, 2> V2;
-  typedef Matrix<Scalar, 3, 1> V3;
-  typedef Matrix<Scalar, 1, 4> V4;
-  typedef Matrix<Scalar, Dynamic, 1> VX;
+  using V2 = Matrix<Scalar, 1, 2>;
+  using V3 = Matrix<Scalar, 3, 1>;
+  using V4 = Matrix<Scalar, 1, 4>;
+  using VX = Matrix<Scalar, Dynamic, 1>;
   Scalar x1 = internal::random<Scalar>(), x2 = internal::random<Scalar>(), x3 = internal::random<Scalar>(),
          x4 = internal::random<Scalar>();
   V2 v2(x1, x2);

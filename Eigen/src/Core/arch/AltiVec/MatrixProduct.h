@@ -7,6 +7,7 @@
 // This Source Code Form is subject to the terms of the Mozilla
 // Public License v. 2.0. If a copy of the MPL was not distributed
 // with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
+// SPDX-License-Identifier: MPL-2.0
 
 #ifndef EIGEN_MATRIX_PRODUCT_ALTIVEC_H
 #define EIGEN_MATRIX_PRODUCT_ALTIVEC_H
@@ -61,30 +62,30 @@ namespace internal {
  **************************/
 template <typename Scalar>
 struct quad_traits {
-  typedef typename packet_traits<Scalar>::type vectortype;
-  typedef PacketBlock<vectortype, 4> type;
-  typedef vectortype rhstype;
+  using vectortype = typename packet_traits<Scalar>::type;
+  using type = PacketBlock<vectortype, 4>;
+  using rhstype = vectortype;
   enum { vectorsize = packet_traits<Scalar>::size, size = 4, rows = 4 };
 };
 
 template <>
 struct quad_traits<double> {
-  typedef Packet2d vectortype;
-  typedef PacketBlock<vectortype, 4> type;
-  typedef PacketBlock<Packet2d, 2> rhstype;
+  using vectortype = Packet2d;
+  using type = PacketBlock<vectortype, 4>;
+  using rhstype = PacketBlock<Packet2d, 2>;
   enum { vectorsize = packet_traits<double>::size, size = 2, rows = 4 };
 };
 
 template <>
 struct quad_traits<bfloat16> {
-  typedef Packet8bf vectortype;
-  typedef PacketBlock<vectortype, 4> type;
-  typedef vectortype rhstype;
+  using vectortype = Packet8bf;
+  using type = PacketBlock<vectortype, 4>;
+  using rhstype = vectortype;
   enum { vectorsize = packet_traits<bfloat16>::size, size = 8, rows = 4 };
 };
 
 // MatrixProduct decomposes real/imaginary vectors into a real vector and an imaginary vector, this turned out
-// to be faster than Eigen's usual approach of having real/imaginary pairs on a single vector. This constants then
+// to be faster than Eigen's usual approach of having real/imaginary pairs on a single vector. These constants then
 // are responsible to extract from convert between Eigen's and MatrixProduct approach.
 
 const static Packet16uc p16uc_GETREAL32 = {0, 1, 2, 3, 8, 9, 10, 11, 16, 17, 18, 19, 24, 25, 26, 27};
@@ -367,10 +368,10 @@ EIGEN_ALWAYS_INLINE void storeBlock(Scalar* to, PacketBlock<Packet, N>& block) {
   const Index size = 16 / sizeof(Scalar);
   pstore<Scalar>(to + (0 * size), block.packet[0]);
   pstore<Scalar>(to + (1 * size), block.packet[1]);
-  if (N > 2) {
+  EIGEN_IF_CONSTEXPR (N > 2) {
     pstore<Scalar>(to + (2 * size), block.packet[2]);
   }
-  if (N > 3) {
+  EIGEN_IF_CONSTEXPR (N > 3) {
     pstore<Scalar>(to + (3 * size), block.packet[3]);
   }
 }
@@ -379,9 +380,10 @@ EIGEN_ALWAYS_INLINE void storeBlock(Scalar* to, PacketBlock<Packet, N>& block) {
 template <typename Scalar, typename DataMapper, typename Packet, typename PacketC, int StorageOrder, bool Conjugate,
           bool PanelMode, bool UseLhs>
 struct dhs_cpack {
+  using Index = mapper_index_t<DataMapper>;
   template <bool transpose>
   EIGEN_ALWAYS_INLINE void dhs_cblock(PacketBlock<PacketC, 8>& cblock, PacketBlock<Packet, 4>& block,
-                                      Packet16uc permute) {
+                                      const Packet16uc& permute) {
     if (transpose) {
       block.packet[0] = vec_perm(cblock.packet[0].v, cblock.packet[1].v, permute);
       block.packet[1] = vec_perm(cblock.packet[2].v, cblock.packet[3].v, permute);
@@ -423,13 +425,13 @@ struct dhs_cpack {
     PacketBlock<PacketC, 8> cblock;
 
     for (; i + vectorSize <= depth; i += vectorSize) {
-      if (UseLhs) {
+      EIGEN_IF_CONSTEXPR (UseLhs) {
         bload<DataMapper, PacketC, 2, StorageOrder, true, 4>(cblock, lhs2, 0, i);
       } else {
         bload<DataMapper, PacketC, 2, StorageOrder, true, 4>(cblock, lhs2, i, 0);
       }
 
-      if (((StorageOrder == RowMajor) && UseLhs) || (((StorageOrder == ColMajor) && !UseLhs))) {
+      EIGEN_IF_CONSTEXPR (((StorageOrder == RowMajor) && UseLhs) || (((StorageOrder == ColMajor) && !UseLhs))) {
         dhs_cblock<true>(cblock, blockr, p16uc_GETREAL32b);
         dhs_cblock<true>(cblock, blocki, p16uc_GETIMAG32b);
       } else {
@@ -437,7 +439,7 @@ struct dhs_cpack {
         dhs_cblock<false>(cblock, blocki, p16uc_GETIMAG32);
       }
 
-      if (Conjugate) {
+      EIGEN_IF_CONSTEXPR (Conjugate) {
         blocki.packet[0] = -blocki.packet[0];
         blocki.packet[1] = -blocki.packet[1];
         blocki.packet[2] = -blocki.packet[2];
@@ -472,8 +474,8 @@ struct dhs_cpack {
         PacketBlock<Packet, 1> blockr, blocki;
         PacketBlock<PacketC, 2> cblock;
 
-        if (((StorageOrder == ColMajor) && UseLhs) || (((StorageOrder == RowMajor) && !UseLhs))) {
-          if (UseLhs) {
+        EIGEN_IF_CONSTEXPR (((StorageOrder == ColMajor) && UseLhs) || (((StorageOrder == RowMajor) && !UseLhs))) {
+          EIGEN_IF_CONSTEXPR (UseLhs) {
             cblock.packet[0] = lhs2.template loadPacket<PacketC>(0, i);
             cblock.packet[1] = lhs2.template loadPacket<PacketC>(2, i);
           } else {
@@ -481,7 +483,7 @@ struct dhs_cpack {
             cblock.packet[1] = lhs2.template loadPacket<PacketC>(i, 2);
           }
         } else {
-          if (UseLhs) {
+          EIGEN_IF_CONSTEXPR (UseLhs) {
             cblock.packet[0] = pload2(lhs2(0, i), lhs2(1, i));
             cblock.packet[1] = pload2(lhs2(2, i), lhs2(3, i));
           } else {
@@ -493,7 +495,7 @@ struct dhs_cpack {
         blockr.packet[0] = vec_perm(cblock.packet[0].v, cblock.packet[1].v, p16uc_GETREAL32);
         blocki.packet[0] = vec_perm(cblock.packet[0].v, cblock.packet[1].v, p16uc_GETIMAG32);
 
-        if (Conjugate) {
+        EIGEN_IF_CONSTEXPR (Conjugate) {
           blocki.packet[0] = -blocki.packet[0];
         }
 
@@ -507,8 +509,8 @@ struct dhs_cpack {
       rir += ((PanelMode) ? (vectorSize * (2 * stride - depth)) : vectorDelta);
     }
 
-    if (!UseLhs) {
-      if (PanelMode) rir -= (offset * (vectorSize - 1));
+    EIGEN_IF_CONSTEXPR (!UseLhs) {
+      EIGEN_IF_CONSTEXPR (PanelMode) rir -= (offset * (vectorSize - 1));
 
       for (; j < rows; j++) {
         const DataMapper lhs2 = lhs.getSubMapper(0, j);
@@ -517,7 +519,7 @@ struct dhs_cpack {
         for (Index i = 0; i < depth; i++) {
           blockAt[rir] = lhs2(i, 0).real();
 
-          if (Conjugate)
+          EIGEN_IF_CONSTEXPR (Conjugate)
             blockAt[rii] = -lhs2(i, 0).imag();
           else
             blockAt[rii] = lhs2(i, 0).imag();
@@ -530,7 +532,7 @@ struct dhs_cpack {
       }
     } else {
       if (j < rows) {
-        if (PanelMode) rir += (offset * (rows - j - vectorSize));
+        EIGEN_IF_CONSTEXPR (PanelMode) rir += (offset * (rows - j - vectorSize));
         rii = rir + (((PanelMode) ? stride : depth) * (rows - j));
 
         for (Index i = 0; i < depth; i++) {
@@ -538,7 +540,7 @@ struct dhs_cpack {
           for (; k < rows; k++) {
             blockAt[rir] = lhs(k, i).real();
 
-            if (Conjugate)
+            EIGEN_IF_CONSTEXPR (Conjugate)
               blockAt[rii] = -lhs(k, i).imag();
             else
               blockAt[rii] = lhs(k, i).imag();
@@ -555,6 +557,7 @@ struct dhs_cpack {
 // General template for lhs & rhs packing.
 template <typename Scalar, typename DataMapper, typename Packet, int StorageOrder, bool PanelMode, bool UseLhs>
 struct dhs_pack {
+  using Index = mapper_index_t<DataMapper>;
   template <Index n>
   EIGEN_ALWAYS_INLINE void dhs_copy(Scalar* blockA, const DataMapper& lhs2, Index& i, Index& ri, Index depth,
                                     const Index vectorSize) {
@@ -562,14 +565,14 @@ struct dhs_pack {
 
     for (; i + n * vectorSize <= depth; i += n * vectorSize) {
       for (Index k = 0; k < n; k++) {
-        if (UseLhs) {
+        EIGEN_IF_CONSTEXPR (UseLhs) {
           bload<DataMapper, Packet, 4, StorageOrder, false, 4>(block[k], lhs2, 0, i + k * vectorSize);
         } else {
           bload<DataMapper, Packet, 4, StorageOrder, false, 4>(block[k], lhs2, i + k * vectorSize, 0);
         }
       }
 
-      if (((StorageOrder == RowMajor) && UseLhs) || ((StorageOrder == ColMajor) && !UseLhs)) {
+      EIGEN_IF_CONSTEXPR (((StorageOrder == RowMajor) && UseLhs) || ((StorageOrder == ColMajor) && !UseLhs)) {
         for (Index k = 0; k < n; k++) {
           ptranspose(block[k]);
         }
@@ -592,15 +595,15 @@ struct dhs_pack {
       const DataMapper lhs2 = UseLhs ? lhs.getSubMapper(j, 0) : lhs.getSubMapper(0, j);
       Index i = 0;
 
-      if (PanelMode) ri += vectorSize * offset;
+      EIGEN_IF_CONSTEXPR (PanelMode) ri += vectorSize * offset;
 
       dhs_copy<4>(blockA, lhs2, i, ri, depth, vectorSize);
       dhs_copy<2>(blockA, lhs2, i, ri, depth, vectorSize);
       dhs_copy<1>(blockA, lhs2, i, ri, depth, vectorSize);
 
       for (; i < depth; i++) {
-        if (((StorageOrder == RowMajor) && UseLhs) || ((StorageOrder == ColMajor) && !UseLhs)) {
-          if (UseLhs) {
+        EIGEN_IF_CONSTEXPR (((StorageOrder == RowMajor) && UseLhs) || ((StorageOrder == ColMajor) && !UseLhs)) {
+          EIGEN_IF_CONSTEXPR (UseLhs) {
             blockA[ri + 0] = lhs2(0, i);
             blockA[ri + 1] = lhs2(1, i);
             blockA[ri + 2] = lhs2(2, i);
@@ -613,7 +616,7 @@ struct dhs_pack {
           }
         } else {
           Packet lhsV;
-          if (UseLhs) {
+          EIGEN_IF_CONSTEXPR (UseLhs) {
             lhsV = lhs2.template loadPacket<Packet>(0, i);
           } else {
             lhsV = lhs2.template loadPacket<Packet>(i, 0);
@@ -624,11 +627,11 @@ struct dhs_pack {
         ri += vectorSize;
       }
 
-      if (PanelMode) ri += vectorSize * (stride - offset - depth);
+      EIGEN_IF_CONSTEXPR (PanelMode) ri += vectorSize * (stride - offset - depth);
     }
 
-    if (!UseLhs) {
-      if (PanelMode) ri += offset;
+    EIGEN_IF_CONSTEXPR (!UseLhs) {
+      EIGEN_IF_CONSTEXPR (PanelMode) ri += offset;
 
       for (; j < rows; j++) {
         const DataMapper lhs2 = lhs.getSubMapper(0, j);
@@ -637,11 +640,11 @@ struct dhs_pack {
           ri += 1;
         }
 
-        if (PanelMode) ri += stride - depth;
+        EIGEN_IF_CONSTEXPR (PanelMode) ri += stride - depth;
       }
     } else {
       if (j < rows) {
-        if (PanelMode) ri += offset * (rows - j);
+        EIGEN_IF_CONSTEXPR (PanelMode) ri += offset * (rows - j);
 
         for (Index i = 0; i < depth; i++) {
           Index k = j;
@@ -658,6 +661,7 @@ struct dhs_pack {
 // General template for lhs packing, float64 specialization.
 template <typename DataMapper, int StorageOrder, bool PanelMode>
 struct dhs_pack<double, DataMapper, Packet2d, StorageOrder, PanelMode, true> {
+  using Index = mapper_index_t<DataMapper>;
   template <Index n>
   EIGEN_ALWAYS_INLINE void dhs_copy(double* blockA, const DataMapper& lhs2, Index& i, Index& ri, Index depth,
                                     const Index vectorSize) {
@@ -665,7 +669,7 @@ struct dhs_pack<double, DataMapper, Packet2d, StorageOrder, PanelMode, true> {
 
     for (; i + n * vectorSize <= depth; i += n * vectorSize) {
       for (Index k = 0; k < n; k++) {
-        if (StorageOrder == RowMajor) {
+        EIGEN_IF_CONSTEXPR (StorageOrder == RowMajor) {
           block[k].packet[0] = lhs2.template loadPacket<Packet2d>(0, i + k * vectorSize);
           block[k].packet[1] = lhs2.template loadPacket<Packet2d>(1, i + k * vectorSize);
         } else {
@@ -674,7 +678,7 @@ struct dhs_pack<double, DataMapper, Packet2d, StorageOrder, PanelMode, true> {
         }
       }
 
-      if (StorageOrder == RowMajor) {
+      EIGEN_IF_CONSTEXPR (StorageOrder == RowMajor) {
         for (Index k = 0; k < n; k++) {
           ptranspose(block[k]);
         }
@@ -697,14 +701,14 @@ struct dhs_pack<double, DataMapper, Packet2d, StorageOrder, PanelMode, true> {
       const DataMapper lhs2 = lhs.getSubMapper(j, 0);
       Index i = 0;
 
-      if (PanelMode) ri += vectorSize * offset;
+      EIGEN_IF_CONSTEXPR (PanelMode) ri += vectorSize * offset;
 
       dhs_copy<4>(blockA, lhs2, i, ri, depth, vectorSize);
       dhs_copy<2>(blockA, lhs2, i, ri, depth, vectorSize);
       dhs_copy<1>(blockA, lhs2, i, ri, depth, vectorSize);
 
       for (; i < depth; i++) {
-        if (StorageOrder == RowMajor) {
+        EIGEN_IF_CONSTEXPR (StorageOrder == RowMajor) {
           blockA[ri + 0] = lhs2(0, i);
           blockA[ri + 1] = lhs2(1, i);
         } else {
@@ -715,11 +719,11 @@ struct dhs_pack<double, DataMapper, Packet2d, StorageOrder, PanelMode, true> {
         ri += vectorSize;
       }
 
-      if (PanelMode) ri += vectorSize * (stride - offset - depth);
+      EIGEN_IF_CONSTEXPR (PanelMode) ri += vectorSize * (stride - offset - depth);
     }
 
     if (j < rows) {
-      if (PanelMode) ri += offset * (rows - j);
+      EIGEN_IF_CONSTEXPR (PanelMode) ri += offset * (rows - j);
 
       for (Index i = 0; i < depth; i++) {
         Index k = j;
@@ -735,6 +739,7 @@ struct dhs_pack<double, DataMapper, Packet2d, StorageOrder, PanelMode, true> {
 // General template for rhs packing, float64 specialization.
 template <typename DataMapper, int StorageOrder, bool PanelMode>
 struct dhs_pack<double, DataMapper, Packet2d, StorageOrder, PanelMode, false> {
+  using Index = mapper_index_t<DataMapper>;
   template <Index n>
   EIGEN_ALWAYS_INLINE void dhs_copy(double* blockB, const DataMapper& rhs2, Index& i, Index& ri, Index depth,
                                     const Index vectorSize) {
@@ -743,7 +748,7 @@ struct dhs_pack<double, DataMapper, Packet2d, StorageOrder, PanelMode, false> {
 
     for (; i + n * vectorSize <= depth; i += n * vectorSize) {
       for (Index k = 0; k < n; k++) {
-        if (StorageOrder == ColMajor) {
+        EIGEN_IF_CONSTEXPR (StorageOrder == ColMajor) {
           block1[k].packet[0] = rhs2.template loadPacket<Packet2d>(i + k * vectorSize, 0);
           block1[k].packet[1] = rhs2.template loadPacket<Packet2d>(i + k * vectorSize, 1);
           block2[k].packet[0] = rhs2.template loadPacket<Packet2d>(i + k * vectorSize, 2);
@@ -756,7 +761,7 @@ struct dhs_pack<double, DataMapper, Packet2d, StorageOrder, PanelMode, false> {
         }
       }
 
-      if (StorageOrder == ColMajor) {
+      EIGEN_IF_CONSTEXPR (StorageOrder == ColMajor) {
         for (Index k = 0; k < n; k++) {
           ptranspose(block1[k]);
           ptranspose(block2[k]);
@@ -764,7 +769,7 @@ struct dhs_pack<double, DataMapper, Packet2d, StorageOrder, PanelMode, false> {
       }
 
       for (Index k = 0; k < n; k++) {
-        if (StorageOrder == ColMajor) {
+        EIGEN_IF_CONSTEXPR (StorageOrder == ColMajor) {
           pstore<double>(blockB + ri + k * 4 * vectorSize, block1[k].packet[0]);
           pstore<double>(blockB + ri + k * 4 * vectorSize + 2, block2[k].packet[0]);
           pstore<double>(blockB + ri + k * 4 * vectorSize + 4, block1[k].packet[1]);
@@ -787,14 +792,14 @@ struct dhs_pack<double, DataMapper, Packet2d, StorageOrder, PanelMode, false> {
       const DataMapper rhs2 = rhs.getSubMapper(0, j);
       Index i = 0;
 
-      if (PanelMode) ri += offset * (2 * vectorSize);
+      EIGEN_IF_CONSTEXPR (PanelMode) ri += offset * (2 * vectorSize);
 
       dhs_copy<4>(blockB, rhs2, i, ri, depth, vectorSize);
       dhs_copy<2>(blockB, rhs2, i, ri, depth, vectorSize);
       dhs_copy<1>(blockB, rhs2, i, ri, depth, vectorSize);
 
       for (; i < depth; i++) {
-        if (StorageOrder == ColMajor) {
+        EIGEN_IF_CONSTEXPR (StorageOrder == ColMajor) {
           blockB[ri + 0] = rhs2(i, 0);
           blockB[ri + 1] = rhs2(i, 1);
 
@@ -814,10 +819,10 @@ struct dhs_pack<double, DataMapper, Packet2d, StorageOrder, PanelMode, false> {
         ri += vectorSize;
       }
 
-      if (PanelMode) ri += (2 * vectorSize) * (stride - offset - depth);
+      EIGEN_IF_CONSTEXPR (PanelMode) ri += (2 * vectorSize) * (stride - offset - depth);
     }
 
-    if (PanelMode) ri += offset;
+    EIGEN_IF_CONSTEXPR (PanelMode) ri += offset;
 
     for (; j < cols; j++) {
       const DataMapper rhs2 = rhs.getSubMapper(0, j);
@@ -826,7 +831,7 @@ struct dhs_pack<double, DataMapper, Packet2d, StorageOrder, PanelMode, false> {
         ri += 1;
       }
 
-      if (PanelMode) ri += stride - depth;
+      EIGEN_IF_CONSTEXPR (PanelMode) ri += stride - depth;
     }
   }
 };
@@ -834,6 +839,7 @@ struct dhs_pack<double, DataMapper, Packet2d, StorageOrder, PanelMode, false> {
 // General template for lhs packing, bfloat16 specialization.
 template <typename DataMapper, int StorageOrder, bool PanelMode>
 struct dhs_pack<bfloat16, DataMapper, Packet8bf, StorageOrder, PanelMode, true> {
+  using Index = mapper_index_t<DataMapper>;
   EIGEN_STRONG_INLINE void operator()(bfloat16* blockA, const DataMapper& lhs, Index depth, Index rows, Index stride,
                                       Index offset) {
     const Index vectorSize = quad_traits<bfloat16>::vectorsize;
@@ -843,9 +849,9 @@ struct dhs_pack<bfloat16, DataMapper, Packet8bf, StorageOrder, PanelMode, true> 
       const DataMapper lhs2 = lhs.getSubMapper(j, 0);
       Index i = 0;
 
-      if (PanelMode) ri += 2 * vectorSize * offset;
+      EIGEN_IF_CONSTEXPR (PanelMode) ri += 2 * vectorSize * offset;
 
-      if (StorageOrder == ColMajor) {
+      EIGEN_IF_CONSTEXPR (StorageOrder == ColMajor) {
         for (; i + 2 <= depth; i += 2) {
           PacketBlock<Packet8bf, 4> block;
 
@@ -995,15 +1001,15 @@ struct dhs_pack<bfloat16, DataMapper, Packet8bf, StorageOrder, PanelMode, true> 
         }
       }
 
-      if (PanelMode) ri += 2 * vectorSize * (stride - offset - depth);
+      EIGEN_IF_CONSTEXPR (PanelMode) ri += 2 * vectorSize * (stride - offset - depth);
     }
     for (; j + vectorSize <= rows; j += vectorSize) {
       const DataMapper lhs2 = lhs.getSubMapper(j, 0);
       Index i = 0;
 
-      if (PanelMode) ri += vectorSize * offset;
+      EIGEN_IF_CONSTEXPR (PanelMode) ri += vectorSize * offset;
 
-      if (StorageOrder == ColMajor) {
+      EIGEN_IF_CONSTEXPR (StorageOrder == ColMajor) {
         for (; i + 2 <= depth; i += 2) {
           PacketBlock<Packet8bf, 2> block;
 
@@ -1102,16 +1108,16 @@ struct dhs_pack<bfloat16, DataMapper, Packet8bf, StorageOrder, PanelMode, true> 
         }
       }
 
-      if (PanelMode) ri += vectorSize * (stride - offset - depth);
+      EIGEN_IF_CONSTEXPR (PanelMode) ri += vectorSize * (stride - offset - depth);
     }
     if (j + 4 <= rows) {
       const DataMapper lhs2 = lhs.getSubMapper(j, 0);
       Index i = 0;
 
-      if (PanelMode) ri += 4 * offset;
+      EIGEN_IF_CONSTEXPR (PanelMode) ri += 4 * offset;
 
       for (; i + 2 <= depth; i += 2) {
-        if (StorageOrder == ColMajor) {
+        EIGEN_IF_CONSTEXPR (StorageOrder == ColMajor) {
           PacketBlock<Packet8bf, 2> block;
 
           block.packet[0] = lhs2.template loadPacketPartial<Packet8bf>(0, i + 0, 4);
@@ -1134,7 +1140,7 @@ struct dhs_pack<bfloat16, DataMapper, Packet8bf, StorageOrder, PanelMode, true> 
         ri += 2 * 4;
       }
       if (depth & 1) {
-        if (StorageOrder == ColMajor) {
+        EIGEN_IF_CONSTEXPR (StorageOrder == ColMajor) {
           Packet8bf lhsV = lhs2.template loadPacketPartial<Packet8bf>(0, i + 0, 4);
 
           pstore_partial<bfloat16>(blockA + ri, lhsV, 4);
@@ -1148,12 +1154,12 @@ struct dhs_pack<bfloat16, DataMapper, Packet8bf, StorageOrder, PanelMode, true> 
         ri += 4;
       }
 
-      if (PanelMode) ri += 4 * (stride - offset - depth);
+      EIGEN_IF_CONSTEXPR (PanelMode) ri += 4 * (stride - offset - depth);
       j += 4;
     }
 
     if (j < rows) {
-      if (PanelMode) ri += offset * (rows - j);
+      EIGEN_IF_CONSTEXPR (PanelMode) ri += offset * (rows - j);
 
       Index i = 0;
       for (; i + 2 <= depth; i += 2) {
@@ -1177,6 +1183,7 @@ struct dhs_pack<bfloat16, DataMapper, Packet8bf, StorageOrder, PanelMode, true> 
 // General template for rhs packing, bfloat16 specialization.
 template <typename DataMapper, int StorageOrder, bool PanelMode>
 struct dhs_pack<bfloat16, DataMapper, Packet8bf, StorageOrder, PanelMode, false> {
+  using Index = mapper_index_t<DataMapper>;
   EIGEN_STRONG_INLINE void operator()(bfloat16* blockB, const DataMapper& rhs, Index depth, Index cols, Index stride,
                                       Index offset) {
     const Index vectorSize = quad_traits<bfloat16>::vectorsize;
@@ -1186,10 +1193,10 @@ struct dhs_pack<bfloat16, DataMapper, Packet8bf, StorageOrder, PanelMode, false>
       const DataMapper rhs2 = rhs.getSubMapper(0, j);
       Index i = 0;
 
-      if (PanelMode) ri += 4 * offset;
+      EIGEN_IF_CONSTEXPR (PanelMode) ri += 4 * offset;
 
       for (; i + vectorSize <= depth; i += vectorSize) {
-        if (StorageOrder == ColMajor) {
+        EIGEN_IF_CONSTEXPR (StorageOrder == ColMajor) {
           PacketBlock<Packet8bf, 4> block;
 
           bload<DataMapper, Packet8bf, 4, StorageOrder, false, 4>(block, rhs2, i, 0);
@@ -1244,7 +1251,7 @@ struct dhs_pack<bfloat16, DataMapper, Packet8bf, StorageOrder, PanelMode, false>
         ri += 4 * vectorSize;
       }
       for (; i + 2 <= depth; i += 2) {
-        if (StorageOrder == ColMajor) {
+        EIGEN_IF_CONSTEXPR (StorageOrder == ColMajor) {
           blockB[ri + 0] = rhs2(i + 0, 0);
           blockB[ri + 1] = rhs2(i + 1, 0);
           blockB[ri + 2] = rhs2(i + 0, 1);
@@ -1276,11 +1283,11 @@ struct dhs_pack<bfloat16, DataMapper, Packet8bf, StorageOrder, PanelMode, false>
         ri += 4;
       }
 
-      if (PanelMode) ri += 4 * (stride - offset - depth);
+      EIGEN_IF_CONSTEXPR (PanelMode) ri += 4 * (stride - offset - depth);
     }
 
     if (j < cols) {
-      if (PanelMode) ri += offset * (cols - j);
+      EIGEN_IF_CONSTEXPR (PanelMode) ri += offset * (cols - j);
 
       Index i = 0;
       for (; i + 2 <= depth; i += 2) {
@@ -1304,13 +1311,14 @@ struct dhs_pack<bfloat16, DataMapper, Packet8bf, StorageOrder, PanelMode, false>
 // General template for lhs complex packing, float64 specialization.
 template <typename DataMapper, typename Packet, typename PacketC, int StorageOrder, bool Conjugate, bool PanelMode>
 struct dhs_cpack<double, DataMapper, Packet, PacketC, StorageOrder, Conjugate, PanelMode, true> {
+  using Index = mapper_index_t<DataMapper>;
   EIGEN_ALWAYS_INLINE void dhs_ccopy(double* blockAt, const DataMapper& lhs2, Index& i, Index& rir, Index& rii,
                                      Index depth, const Index vectorSize) {
     PacketBlock<Packet, 2> blockr, blocki;
     PacketBlock<PacketC, 4> cblock;
 
     for (; i + vectorSize <= depth; i += vectorSize) {
-      if (StorageOrder == ColMajor) {
+      EIGEN_IF_CONSTEXPR (StorageOrder == ColMajor) {
         cblock.packet[0] = lhs2.template loadPacket<PacketC>(0, i + 0);  //[a1 a1i]
         cblock.packet[1] = lhs2.template loadPacket<PacketC>(0, i + 1);  //[b1 b1i]
 
@@ -1327,7 +1335,7 @@ struct dhs_cpack<double, DataMapper, Packet, PacketC, StorageOrder, Conjugate, P
         cblock.packet[1] = lhs2.template loadPacket<PacketC>(1, i);  //[a2 a2i]
 
         cblock.packet[2] = lhs2.template loadPacket<PacketC>(0, i + 1);  //[b1 b1i]
-        cblock.packet[3] = lhs2.template loadPacket<PacketC>(1, i + 1);  //[b2 b2i
+        cblock.packet[3] = lhs2.template loadPacket<PacketC>(1, i + 1);  //[b2 b2i]
 
         blockr.packet[0] = vec_mergeh(cblock.packet[0].v, cblock.packet[1].v);  //[a1 a2]
         blockr.packet[1] = vec_mergeh(cblock.packet[2].v, cblock.packet[3].v);  //[b1 b2]
@@ -1336,7 +1344,7 @@ struct dhs_cpack<double, DataMapper, Packet, PacketC, StorageOrder, Conjugate, P
         blocki.packet[1] = vec_mergel(cblock.packet[2].v, cblock.packet[3].v);
       }
 
-      if (Conjugate) {
+      EIGEN_IF_CONSTEXPR (Conjugate) {
         blocki.packet[0] = -blocki.packet[0];
         blocki.packet[1] = -blocki.packet[1];
       }
@@ -1375,7 +1383,7 @@ struct dhs_cpack<double, DataMapper, Packet, PacketC, StorageOrder, Conjugate, P
         blockr.packet[0] = vec_mergeh(cblock.packet[0].v, cblock.packet[1].v);
         blocki.packet[0] = vec_mergel(cblock.packet[0].v, cblock.packet[1].v);
 
-        if (Conjugate) {
+        EIGEN_IF_CONSTEXPR (Conjugate) {
           blocki.packet[0] = -blocki.packet[0];
         }
 
@@ -1390,7 +1398,7 @@ struct dhs_cpack<double, DataMapper, Packet, PacketC, StorageOrder, Conjugate, P
     }
 
     if (j < rows) {
-      if (PanelMode) rir += (offset * (rows - j - vectorSize));
+      EIGEN_IF_CONSTEXPR (PanelMode) rir += (offset * (rows - j - vectorSize));
       rii = rir + (((PanelMode) ? stride : depth) * (rows - j));
 
       for (Index i = 0; i < depth; i++) {
@@ -1398,7 +1406,7 @@ struct dhs_cpack<double, DataMapper, Packet, PacketC, StorageOrder, Conjugate, P
         for (; k < rows; k++) {
           blockAt[rir] = lhs(k, i).real();
 
-          if (Conjugate)
+          EIGEN_IF_CONSTEXPR (Conjugate)
             blockAt[rii] = -lhs(k, i).imag();
           else
             blockAt[rii] = lhs(k, i).imag();
@@ -1414,6 +1422,7 @@ struct dhs_cpack<double, DataMapper, Packet, PacketC, StorageOrder, Conjugate, P
 // General template for rhs complex packing, float64 specialization.
 template <typename DataMapper, typename Packet, typename PacketC, int StorageOrder, bool Conjugate, bool PanelMode>
 struct dhs_cpack<double, DataMapper, Packet, PacketC, StorageOrder, Conjugate, PanelMode, false> {
+  using Index = mapper_index_t<DataMapper>;
   EIGEN_ALWAYS_INLINE void dhs_ccopy(double* blockBt, const DataMapper& rhs2, Index& i, Index& rir, Index& rii,
                                      Index depth, const Index vectorSize) {
     for (; i < depth; i++) {
@@ -1428,7 +1437,7 @@ struct dhs_cpack<double, DataMapper, Packet, PacketC, StorageOrder, Conjugate, P
       blocki.packet[0] = vec_mergel(cblock.packet[0].v, cblock.packet[1].v);
       blocki.packet[1] = vec_mergel(cblock.packet[2].v, cblock.packet[3].v);
 
-      if (Conjugate) {
+      EIGEN_IF_CONSTEXPR (Conjugate) {
         blocki.packet[0] = -blocki.packet[0];
         blocki.packet[1] = -blocki.packet[1];
       }
@@ -1460,7 +1469,7 @@ struct dhs_cpack<double, DataMapper, Packet, PacketC, StorageOrder, Conjugate, P
       rir += ((PanelMode) ? (2 * vectorSize * (2 * stride - depth)) : vectorDelta);
     }
 
-    if (PanelMode) rir -= (offset * (2 * vectorSize - 1));
+    EIGEN_IF_CONSTEXPR (PanelMode) rir -= (offset * (2 * vectorSize - 1));
 
     for (; j < cols; j++) {
       const DataMapper rhs2 = rhs.getSubMapper(0, j);
@@ -1469,7 +1478,7 @@ struct dhs_cpack<double, DataMapper, Packet, PacketC, StorageOrder, Conjugate, P
       for (Index i = 0; i < depth; i++) {
         blockBt[rir] = rhs2(i, 0).real();
 
-        if (Conjugate)
+        EIGEN_IF_CONSTEXPR (Conjugate)
           blockBt[rii] = -rhs2(i, 0).imag();
         else
           blockBt[rii] = rhs2(i, 0).imag();
@@ -1490,7 +1499,7 @@ struct dhs_cpack<double, DataMapper, Packet, PacketC, StorageOrder, Conjugate, P
 // 512-bits rank1-update of acc. It can either positive or negative accumulate (useful for complex gemm).
 template <typename Packet, bool NegativeAccumulate, int N>
 EIGEN_ALWAYS_INLINE void pger_common(PacketBlock<Packet, N>* acc, const Packet& lhsV, const Packet* rhsV) {
-  if (NegativeAccumulate) {
+  EIGEN_IF_CONSTEXPR (NegativeAccumulate) {
     for (int M = 0; M < N; M++) {
       acc->packet[M] = vec_nmsub(lhsV, rhsV[M], acc->packet[M]);
     }
@@ -1501,24 +1510,29 @@ EIGEN_ALWAYS_INLINE void pger_common(PacketBlock<Packet, N>* acc, const Packet& 
   }
 }
 
-template <int N, typename Scalar, typename Packet, bool NegativeAccumulate>
+template <int N, typename Scalar, typename Packet, bool NegativeAccumulate, Index remaining_rows = 0>
 EIGEN_ALWAYS_INLINE void pger(PacketBlock<Packet, N>* acc, const Scalar* lhs, const Packet* rhsV) {
-  Packet lhsV = pload<Packet>(lhs);
+  Packet lhsV;
+  EIGEN_IF_CONSTEXPR (remaining_rows > 0) {
+    lhsV = ploadu_partial<Packet>(lhs, remaining_rows);
+  } else {
+    lhsV = ploadLhs<Packet>(lhs);
+  }
 
   pger_common<Packet, NegativeAccumulate, N>(acc, lhsV, rhsV);
 }
 
-// 512-bits rank1-update of complex acc. It takes decoupled accumulators as entries. It also takes cares of mixed types
+// 512-bits rank1-update of complex acc. It takes decoupled accumulators as entries. It also takes care of mixed types
 // real * complex and complex * real.
 template <int N, typename Packet, bool ConjugateLhs, bool ConjugateRhs, bool LhsIsReal, bool RhsIsReal>
 EIGEN_ALWAYS_INLINE void pgerc_common(PacketBlock<Packet, N>* accReal, PacketBlock<Packet, N>* accImag,
                                       const Packet& lhsV, Packet& lhsVi, const Packet* rhsV, const Packet* rhsVi) {
   pger_common<Packet, false, N>(accReal, lhsV, rhsV);
-  if (LhsIsReal) {
+  EIGEN_IF_CONSTEXPR (LhsIsReal) {
     pger_common<Packet, ConjugateRhs, N>(accImag, lhsV, rhsVi);
     EIGEN_UNUSED_VARIABLE(lhsVi);
   } else {
-    if (!RhsIsReal) {
+    EIGEN_IF_CONSTEXPR (!RhsIsReal) {
       pger_common<Packet, ConjugateLhs == ConjugateRhs, N>(accReal, lhsVi, rhsVi);
       pger_common<Packet, ConjugateRhs, N>(accImag, lhsV, rhsVi);
     } else {
@@ -1528,15 +1542,26 @@ EIGEN_ALWAYS_INLINE void pgerc_common(PacketBlock<Packet, N>* accReal, PacketBlo
   }
 }
 
-template <int N, typename Scalar, typename Packet, bool ConjugateLhs, bool ConjugateRhs, bool LhsIsReal, bool RhsIsReal>
+template <int N, typename Scalar, typename Packet, bool ConjugateLhs, bool ConjugateRhs, bool LhsIsReal, bool RhsIsReal,
+          Index remaining_rows = 0>
 EIGEN_ALWAYS_INLINE void pgerc(PacketBlock<Packet, N>* accReal, PacketBlock<Packet, N>* accImag, const Scalar* lhs_ptr,
                                const Scalar* lhs_ptr_imag, const Packet* rhsV, const Packet* rhsVi) {
-  Packet lhsV = ploadLhs<Packet>(lhs_ptr);
+  Packet lhsV;
+  EIGEN_IF_CONSTEXPR (remaining_rows > 0) {
+    lhsV = ploadu_partial<Packet>(lhs_ptr, remaining_rows);
+  } else {
+    lhsV = ploadLhs<Packet>(lhs_ptr);
+  }
   Packet lhsVi;
-  if (!LhsIsReal)
-    lhsVi = ploadLhs<Packet>(lhs_ptr_imag);
-  else
+  EIGEN_IF_CONSTEXPR (!LhsIsReal) {
+    EIGEN_IF_CONSTEXPR (remaining_rows > 0) {
+      lhsVi = ploadu_partial<Packet>(lhs_ptr_imag, remaining_rows);
+    } else {
+      lhsVi = ploadLhs<Packet>(lhs_ptr_imag);
+    }
+  } else {
     EIGEN_UNUSED_VARIABLE(lhs_ptr_imag);
+  }
 
   pgerc_common<N, Packet, ConjugateLhs, ConjugateRhs, LhsIsReal, RhsIsReal>(accReal, accImag, lhsV, lhsVi, rhsV, rhsVi);
 }
@@ -1574,7 +1599,7 @@ template <typename Packet, int N, bool mask>
 EIGEN_ALWAYS_INLINE void bscalec(PacketBlock<Packet, N>& aReal, PacketBlock<Packet, N>& aImag, const Packet& bReal,
                                  const Packet& bImag, PacketBlock<Packet, N>& cReal, PacketBlock<Packet, N>& cImag,
                                  const Packet& pMask) {
-  if (mask && (sizeof(__UNPACK_TYPE__(Packet)) == sizeof(float))) {
+  EIGEN_IF_CONSTEXPR (mask && (sizeof(__UNPACK_TYPE__(Packet)) == sizeof(float))) {
     band<Packet, N>(aReal, pMask);
     band<Packet, N>(aImag, pMask);
   } else {
@@ -1596,22 +1621,25 @@ EIGEN_ALWAYS_INLINE void bscalec(PacketBlock<Packet, N>& aReal, PacketBlock<Pack
 template <typename DataMapper, typename Packet, const Index accCols, int StorageOrder, bool Complex, int N, bool full>
 EIGEN_ALWAYS_INLINE void bload(PacketBlock<Packet, N*(Complex ? 2 : 1)>& acc, const DataMapper& res, Index row,
                                Index col) {
-  if (StorageOrder == RowMajor) {
+  using MapperIndex = mapper_index_t<DataMapper>;
+  const MapperIndex mapperRow = convert_index<MapperIndex>(row);
+  const MapperIndex mapperCol = convert_index<MapperIndex>(col);
+  EIGEN_IF_CONSTEXPR (StorageOrder == RowMajor) {
     for (int M = 0; M < N; M++) {
-      acc.packet[M] = res.template loadPacket<Packet>(row + M, col);
+      acc.packet[M] = res.template loadPacket<Packet>(mapperRow + M, mapperCol);
     }
-    if (Complex) {
+    EIGEN_IF_CONSTEXPR (Complex) {
       for (int M = 0; M < N; M++) {
-        acc.packet[M + N] = res.template loadPacket<Packet>(row + M, col + accCols);
+        acc.packet[M + N] = res.template loadPacket<Packet>(mapperRow + M, mapperCol + MapperIndex(accCols));
       }
     }
   } else {
     for (int M = 0; M < N; M++) {
-      acc.packet[M] = res.template loadPacket<Packet>(row, col + M);
+      acc.packet[M] = res.template loadPacket<Packet>(mapperRow, mapperCol + M);
     }
-    if (Complex && full) {
+    EIGEN_IF_CONSTEXPR (Complex && full) {
       for (int M = 0; M < N; M++) {
-        acc.packet[M + N] = res.template loadPacket<Packet>(row + accCols, col + M);
+        acc.packet[M + N] = res.template loadPacket<Packet>(mapperRow + MapperIndex(accCols), mapperCol + M);
       }
     }
   }
@@ -1619,32 +1647,39 @@ EIGEN_ALWAYS_INLINE void bload(PacketBlock<Packet, N*(Complex ? 2 : 1)>& acc, co
 
 template <typename DataMapper, typename Packet, int N>
 EIGEN_ALWAYS_INLINE void bstore(PacketBlock<Packet, N>& acc, const DataMapper& res, Index row) {
+  const auto mapperRow = convert_index<mapper_index_t<DataMapper>>(row);
   for (int M = 0; M < N; M++) {
-    res.template storePacket<Packet>(row, M, acc.packet[M]);
+    res.template storePacket<Packet>(mapperRow, M, acc.packet[M]);
   }
 }
 
-#ifdef USE_PARTIAL_PACKETS
+// When Complex && full, the first N packets are full loads and `elements` counts only the second half at row + accCols.
 template <typename DataMapper, typename Packet, const Index accCols, bool Complex, Index N, bool full>
 EIGEN_ALWAYS_INLINE void bload_partial(PacketBlock<Packet, N*(Complex ? 2 : 1)>& acc, const DataMapper& res, Index row,
                                        Index elements) {
-  for (Index M = 0; M < N; M++) {
-    acc.packet[M] = res.template loadPacketPartial<Packet>(row, M, elements);
-  }
-  if (Complex && full) {
-    for (Index M = 0; M < N; M++) {
-      acc.packet[M + N] = res.template loadPacketPartial<Packet>(row + accCols, M, elements);
+  using MapperIndex = mapper_index_t<DataMapper>;
+  const MapperIndex mapperRow = convert_index<MapperIndex>(row);
+  const MapperIndex mapperElements = convert_index<MapperIndex>(elements);
+  EIGEN_IF_CONSTEXPR (Complex && full) {
+    for (int M = 0; M < N; M++) {
+      acc.packet[M] = res.template loadPacket<Packet>(mapperRow, M);
+      acc.packet[M + N] = res.template loadPacketPartial<Packet>(mapperRow + MapperIndex(accCols), M, mapperElements);
+    }
+  } else {
+    for (int M = 0; M < N; M++) {
+      acc.packet[M] = res.template loadPacketPartial<Packet>(mapperRow, M, mapperElements);
     }
   }
 }
 
 template <typename DataMapper, typename Packet, Index N>
 EIGEN_ALWAYS_INLINE void bstore_partial(PacketBlock<Packet, N>& acc, const DataMapper& res, Index row, Index elements) {
-  for (Index M = 0; M < N; M++) {
-    res.template storePacketPartial<Packet>(row, M, acc.packet[M], elements);
+  const auto mapperRow = convert_index<mapper_index_t<DataMapper>>(row);
+  const auto mapperElements = convert_index<mapper_index_t<DataMapper>>(elements);
+  for (int M = 0; M < N; M++) {
+    res.template storePacketPartial<Packet>(mapperRow, M, acc.packet[M], mapperElements);
   }
 }
-#endif
 
 #ifdef _ARCH_PWR10
 #define USE_P10_AND_PVIPR2_0 (EIGEN_COMP_LLVM || (__GNUC__ >= 11))
@@ -1695,7 +1730,7 @@ EIGEN_ALWAYS_INLINE void bscale(PacketBlock<Packet, N>& acc, PacketBlock<Packet,
 template <typename Packet, int N, bool mask>
 EIGEN_ALWAYS_INLINE void bscale(PacketBlock<Packet, N>& acc, PacketBlock<Packet, N>& accZ, const Packet& pAlpha,
                                 const Packet& pMask) {
-  if (mask) {
+  EIGEN_IF_CONSTEXPR (mask) {
     band<Packet, N>(accZ, pMask);
   } else {
     EIGEN_UNUSED_VARIABLE(pMask);
@@ -1709,20 +1744,20 @@ EIGEN_ALWAYS_INLINE void pbroadcastN(const __UNPACK_TYPE__(Packet) * ap0, const 
                                      const __UNPACK_TYPE__(Packet) * ap2, Packet& a0, Packet& a1, Packet& a2,
                                      Packet& a3) {
   a0 = pset1<Packet>(ap0[0]);
-  if (N == 4) {
+  EIGEN_IF_CONSTEXPR (N == 4) {
     a1 = pset1<Packet>(ap0[1]);
     a2 = pset1<Packet>(ap0[2]);
     a3 = pset1<Packet>(ap0[3]);
     EIGEN_UNUSED_VARIABLE(ap1);
     EIGEN_UNUSED_VARIABLE(ap2);
   } else {
-    if (N > 1) {
+    EIGEN_IF_CONSTEXPR (N > 1) {
       a1 = pset1<Packet>(ap1[0]);
     } else {
       EIGEN_UNUSED_VARIABLE(a1);
       EIGEN_UNUSED_VARIABLE(ap1);
     }
-    if (N > 2) {
+    EIGEN_IF_CONSTEXPR (N > 2) {
       a2 = pset1<Packet>(ap2[0]);
     } else {
       EIGEN_UNUSED_VARIABLE(a2);
@@ -1762,7 +1797,7 @@ EIGEN_ALWAYS_INLINE void bcouple_common(PacketBlock<Packet, N>& taccReal, Packet
     acc1.packet[M].v = vec_mergeh(taccReal.packet[M], taccImag.packet[M]);
   }
 
-  if (full) {
+  EIGEN_IF_CONSTEXPR (full) {
     for (int M = 0; M < N; M++) {
       acc2.packet[M].v = vec_mergel(taccReal.packet[M], taccImag.packet[M]);
     }
@@ -1779,7 +1814,7 @@ EIGEN_ALWAYS_INLINE void bcouple(PacketBlock<Packet, N>& taccReal, PacketBlock<P
     acc1.packet[M] = padd<Packetc>(tRes.packet[M], acc1.packet[M]);
   }
 
-  if (full) {
+  EIGEN_IF_CONSTEXPR (full) {
     for (int M = 0; M < N; M++) {
       acc2.packet[M] = padd<Packetc>(tRes.packet[M + N], acc2.packet[M]);
     }
@@ -1798,28 +1833,28 @@ EIGEN_ALWAYS_INLINE void bcouple(PacketBlock<Packet, N>& taccReal, PacketBlock<P
 
 #define MICRO_RHS(ptr, N) rhs_##ptr##N
 
-#define MICRO_ZERO_PEEL(peel)                 \
-  if ((PEEL_ROW > peel) && (peel != 0)) {     \
-    bsetzero<Packet, accRows>(accZero##peel); \
-  } else {                                    \
-    EIGEN_UNUSED_VARIABLE(accZero##peel);     \
+#define MICRO_ZERO_PEEL(peel)                             \
+  EIGEN_IF_CONSTEXPR ((PEEL_ROW > peel) && (peel != 0)) { \
+    bsetzero<Packet, accRows>(accZero##peel);             \
+  } else {                                                \
+    EIGEN_UNUSED_VARIABLE(accZero##peel);                 \
   }
 
-#define MICRO_ADD(ptr, N)               \
-  if (MICRO_NORMAL_ROWS) {              \
-    MICRO_RHS(ptr, 0) += (accRows * N); \
-  } else {                              \
-    MICRO_RHS(ptr, 0) += N;             \
-    MICRO_RHS(ptr, 1) += N;             \
-    if (accRows == 3) {                 \
-      MICRO_RHS(ptr, 2) += N;           \
-    }                                   \
+#define MICRO_ADD(ptr, N)                  \
+  EIGEN_IF_CONSTEXPR (MICRO_NORMAL_ROWS) { \
+    MICRO_RHS(ptr, 0) += (accRows * N);    \
+  } else {                                 \
+    MICRO_RHS(ptr, 0) += N;                \
+    MICRO_RHS(ptr, 1) += N;                \
+    EIGEN_IF_CONSTEXPR (accRows == 3) {    \
+      MICRO_RHS(ptr, 2) += N;              \
+    }                                      \
   }
 
 #define MICRO_ADD_ROWS(N) MICRO_ADD(ptr, N)
 
 #define MICRO_BROADCAST1(peel, ptr, rhsV, real)                                                                      \
-  if (MICRO_NORMAL_ROWS) {                                                                                           \
+  EIGEN_IF_CONSTEXPR (MICRO_NORMAL_ROWS) {                                                                           \
     pbroadcastN<Packet, accRows, real>(MICRO_RHS(ptr, 0) + (accRows * peel), MICRO_RHS(ptr, 0), MICRO_RHS(ptr, 0),   \
                                        rhsV##peel[0], rhsV##peel[1], rhsV##peel[2], rhsV##peel[3]);                  \
   } else {                                                                                                           \
@@ -1839,13 +1874,13 @@ EIGEN_ALWAYS_INLINE void bcouple(PacketBlock<Packet, N>& taccReal, PacketBlock<P
   MICRO_ADD_ROWS(1)
 
 #define MICRO_SRC2(ptr, N, M)                   \
-  if (MICRO_NORMAL_ROWS) {                      \
+  EIGEN_IF_CONSTEXPR (MICRO_NORMAL_ROWS) {      \
     EIGEN_UNUSED_VARIABLE(strideB);             \
     EIGEN_UNUSED_VARIABLE(MICRO_RHS(ptr, 1));   \
     EIGEN_UNUSED_VARIABLE(MICRO_RHS(ptr, 2));   \
   } else {                                      \
     MICRO_RHS(ptr, 1) = rhs_base + N + M;       \
-    if (accRows == 3) {                         \
+    EIGEN_IF_CONSTEXPR (accRows == 3) {         \
       MICRO_RHS(ptr, 2) = rhs_base + N * 2 + M; \
     } else {                                    \
       EIGEN_UNUSED_VARIABLE(MICRO_RHS(ptr, 2)); \
@@ -1857,7 +1892,7 @@ EIGEN_ALWAYS_INLINE void bcouple(PacketBlock<Packet, N>& taccReal, PacketBlock<P
 #define MICRO_ZERO_PEEL_ROW MICRO_UNROLL(MICRO_ZERO_PEEL)
 
 #define MICRO_WORK_PEEL(peel)                                                                            \
-  if (PEEL_ROW > peel) {                                                                                 \
+  EIGEN_IF_CONSTEXPR (PEEL_ROW > peel) {                                                                 \
     MICRO_BROADCAST(peel)                                                                                \
     pger<accRows, Scalar, Packet, false>(&accZero##peel, lhs_ptr + (remaining_rows * peel), rhsV##peel); \
   } else {                                                                                               \
@@ -1871,7 +1906,7 @@ EIGEN_ALWAYS_INLINE void bcouple(PacketBlock<Packet, N>& taccReal, PacketBlock<P
   MICRO_ADD_ROWS(PEEL_ROW)
 
 #define MICRO_ADD_PEEL(peel, sum)                        \
-  if (PEEL_ROW > peel) {                                 \
+  EIGEN_IF_CONSTEXPR (PEEL_ROW > peel) {                 \
     for (Index i = 0; i < accRows; i++) {                \
       accZero##sum.packet[i] += accZero##peel.packet[i]; \
     }                                                    \
@@ -1884,26 +1919,26 @@ EIGEN_ALWAYS_INLINE void bcouple(PacketBlock<Packet, N>& taccReal, PacketBlock<P
 
 #define MICRO_PREFETCHN1(ptr, N)               \
   EIGEN_POWER_PREFETCH(MICRO_RHS(ptr, 0));     \
-  if (N == 2 || N == 3) {                      \
+  EIGEN_IF_CONSTEXPR (N == 2 || N == 3) {      \
     EIGEN_POWER_PREFETCH(MICRO_RHS(ptr, 1));   \
-    if (N == 3) {                              \
+    EIGEN_IF_CONSTEXPR (N == 3) {              \
       EIGEN_POWER_PREFETCH(MICRO_RHS(ptr, 2)); \
     }                                          \
   }
 
 #define MICRO_PREFETCHN(N) MICRO_PREFETCHN1(ptr, N)
 
-#define MICRO_COMPLEX_PREFETCHN(N) \
-  MICRO_PREFETCHN1(ptr_real, N);   \
-  if (!RhsIsReal) {                \
-    MICRO_PREFETCHN1(ptr_imag, N); \
+#define MICRO_COMPLEX_PREFETCHN(N)  \
+  MICRO_PREFETCHN1(ptr_real, N);    \
+  EIGEN_IF_CONSTEXPR (!RhsIsReal) { \
+    MICRO_PREFETCHN1(ptr_imag, N);  \
   }
 
-template <typename Scalar, typename Packet, const Index accRows, const Index remaining_rows>
+template <typename Scalar, typename Packet, const Index accRows, const Index remaining_rows, const Index load_rows = 0>
 EIGEN_ALWAYS_INLINE void MICRO_EXTRA_ROW(const Scalar*& lhs_ptr, const Scalar*& rhs_ptr0, const Scalar*& rhs_ptr1,
                                          const Scalar*& rhs_ptr2, PacketBlock<Packet, accRows>& accZero) {
   MICRO_BROADCAST_EXTRA
-  pger<accRows, Scalar, Packet, false>(&accZero, lhs_ptr, rhsV);
+  pger<accRows, Scalar, Packet, false, load_rows>(&accZero, lhs_ptr, rhsV);
   lhs_ptr += remaining_rows;
 }
 
@@ -1913,65 +1948,54 @@ EIGEN_ALWAYS_INLINE void gemm_unrolled_row_iteration(const DataMapper& res, cons
                                                      const Scalar* rhs_base, Index depth, Index strideA, Index offsetA,
                                                      Index strideB, Index row, Index rows, const Packet& pAlpha,
                                                      const Packet& pMask) {
-  const Scalar *rhs_ptr0 = rhs_base, *rhs_ptr1 = NULL, *rhs_ptr2 = NULL;
+  const Scalar *rhs_ptr0 = rhs_base, *rhs_ptr1 = nullptr, *rhs_ptr2 = nullptr;
   const Scalar* lhs_ptr = lhs_base + row * strideA + remaining_rows * offsetA;
   PacketBlock<Packet, accRows> accZero0, accZero1, accZero2, accZero3, accZero4, accZero5, accZero6, accZero7, acc;
 
   MICRO_SRC2_PTR
   bsetzero<Packet, accRows>(accZero0);
 
-  Index remaining_depth = depth & -quad_traits<Scalar>::rows;
+  const Index peel_depth = depth - (accCols - remaining_rows);
   Index k = 0;
-  if (remaining_depth >= PEEL_ROW) {
+  if (peel_depth >= PEEL_ROW) {
     MICRO_ZERO_PEEL_ROW
     do {
       MICRO_PREFETCHN(accRows)
       EIGEN_POWER_PREFETCH(lhs_ptr);
       MICRO_WORK_PEEL_ROW
-    } while ((k += PEEL_ROW) + PEEL_ROW <= remaining_depth);
+    } while ((k += PEEL_ROW) + PEEL_ROW <= peel_depth);
     MICRO_ADD_PEEL_ROW
   }
-  for (; k < depth; k++) {
+  for (; k < peel_depth; k++) {
     MICRO_EXTRA_ROW<Scalar, Packet, accRows, remaining_rows>(lhs_ptr, rhs_ptr0, rhs_ptr1, rhs_ptr2, accZero0);
   }
+  for (; k < depth; k++) {
+    MICRO_EXTRA_ROW<Scalar, Packet, accRows, remaining_rows, remaining_rows>(lhs_ptr, rhs_ptr0, rhs_ptr1, rhs_ptr2,
+                                                                             accZero0);
+  }
 
-#ifdef USE_PARTIAL_PACKETS
   EIGEN_UNUSED_VARIABLE(rows);
   EIGEN_UNUSED_VARIABLE(pMask);
   bload_partial<DataMapper, Packet, 0, false, accRows>(acc, res, row, remaining_rows);
   bscale<Packet, accRows>(acc, accZero0, pAlpha);
   bstore_partial<DataMapper, Packet, accRows>(acc, res, row, remaining_rows);
-#else
-  bload<DataMapper, Packet, 0, ColMajor, false, accRows>(acc, res, row, 0);
-  if ((accRows == 1) || (rows >= accCols)) {
-    bscale<Packet, accRows, true>(acc, accZero0, pAlpha, pMask);
-    bstore<DataMapper, Packet, accRows>(acc, res, row);
-  } else {
-    bscale<Packet, accRows, false>(acc, accZero0, pAlpha, pMask);
-    for (Index j = 0; j < accRows; j++) {
-      for (Index i = 0; i < remaining_rows; i++) {
-        res(row + i, j) = acc.packet[j][i];
-      }
-    }
-  }
-#endif
 }
 
-#define MICRO_EXTRA(MICRO_EXTRA_UNROLL, value, is_col)   \
-  switch (value) {                                       \
-    default:                                             \
-      MICRO_EXTRA_UNROLL(1)                              \
-      break;                                             \
-    case 2:                                              \
-      if (is_col || (sizeof(Scalar) == sizeof(float))) { \
-        MICRO_EXTRA_UNROLL(2)                            \
-      }                                                  \
-      break;                                             \
-    case 3:                                              \
-      if (is_col || (sizeof(Scalar) == sizeof(float))) { \
-        MICRO_EXTRA_UNROLL(3)                            \
-      }                                                  \
-      break;                                             \
+#define MICRO_EXTRA(MICRO_EXTRA_UNROLL, value, is_col)                   \
+  switch (value) {                                                       \
+    default:                                                             \
+      MICRO_EXTRA_UNROLL(1)                                              \
+      break;                                                             \
+    case 2:                                                              \
+      EIGEN_IF_CONSTEXPR (is_col || (sizeof(Scalar) == sizeof(float))) { \
+        MICRO_EXTRA_UNROLL(2)                                            \
+      }                                                                  \
+      break;                                                             \
+    case 3:                                                              \
+      EIGEN_IF_CONSTEXPR (is_col || (sizeof(Scalar) == sizeof(float))) { \
+        MICRO_EXTRA_UNROLL(3)                                            \
+      }                                                                  \
+      break;                                                             \
   }
 
 #define MICRO_EXTRA_ROWS(N)                                                     \
@@ -1990,12 +2014,12 @@ EIGEN_ALWAYS_INLINE void gemm_extra_row(const DataMapper& res, const Scalar* lhs
   func(0, peel) func(1, peel) func(2, peel) func(3, peel) func(4, peel) func(5, peel) func(6, peel) func(7, peel)
 
 #define MICRO_WORK_ONE(iter, peel)                                               \
-  if (unroll_factor > iter) {                                                    \
+  EIGEN_IF_CONSTEXPR (unroll_factor > iter) {                                    \
     pger_common<Packet, false, accRows>(&accZero##iter, lhsV##iter, rhsV##peel); \
   }
 
 #define MICRO_TYPE_PEEL4(func, func2, peel)                        \
-  if (PEEL > peel) {                                               \
+  EIGEN_IF_CONSTEXPR (PEEL > peel) {                               \
     Packet lhsV0, lhsV1, lhsV2, lhsV3, lhsV4, lhsV5, lhsV6, lhsV7; \
     MICRO_BROADCAST(peel)                                          \
     MICRO_UNROLL_WORK(func, func2, peel)                           \
@@ -2016,12 +2040,18 @@ EIGEN_ALWAYS_INLINE void gemm_extra_row(const DataMapper& res, const Scalar* lhs
   MICRO_TYPE(4, MICRO_TYPE_PEEL4, MICRO_WORK_ONE, MICRO_LOAD_ONE) \
   MICRO_ADD_ROWS(size)
 
+#define MICRO_UNROLL_TYPE_PARTIAL(MICRO_TYPE, size)                       \
+  MICRO_TYPE(4, MICRO_TYPE_PEEL4, MICRO_WORK_ONE, MICRO_LOAD_PARTIAL_ONE) \
+  MICRO_ADD_ROWS(size)
+
 #define MICRO_ONE_PEEL4 MICRO_UNROLL_TYPE(MICRO_UNROLL_TYPE_PEEL, PEEL)
 
 #define MICRO_ONE4 MICRO_UNROLL_TYPE(MICRO_UNROLL_TYPE_ONE, 1)
 
+#define MICRO_ONE4_PARTIAL MICRO_UNROLL_TYPE_PARTIAL(MICRO_UNROLL_TYPE_ONE, 1)
+
 #define MICRO_DST_PTR_ONE(iter)               \
-  if (unroll_factor > iter) {                 \
+  EIGEN_IF_CONSTEXPR (unroll_factor > iter) { \
     bsetzero<Packet, accRows>(accZero##iter); \
   } else {                                    \
     EIGEN_UNUSED_VARIABLE(accZero##iter);     \
@@ -2033,10 +2063,9 @@ EIGEN_ALWAYS_INLINE void gemm_extra_row(const DataMapper& res, const Scalar* lhs
 
 #define MICRO_PREFETCH MICRO_UNROLL(MICRO_PREFETCH_ONE)
 
-#ifdef USE_PARTIAL_PACKETS
 #define MICRO_STORE_ONE(iter)                                                                         \
-  if (unroll_factor > iter) {                                                                         \
-    if (MICRO_NORMAL_PARTIAL(iter)) {                                                                 \
+  EIGEN_IF_CONSTEXPR (unroll_factor > iter) {                                                         \
+    EIGEN_IF_CONSTEXPR (MICRO_NORMAL_PARTIAL(iter)) {                                                 \
       bload<DataMapper, Packet, 0, ColMajor, false, accRows>(acc, res, row + iter * accCols, 0);      \
       bscale<Packet, accRows>(acc, accZero##iter, pAlpha);                                            \
       bstore<DataMapper, Packet, accRows>(acc, res, row + iter * accCols);                            \
@@ -2046,36 +2075,17 @@ EIGEN_ALWAYS_INLINE void gemm_extra_row(const DataMapper& res, const Scalar* lhs
       bstore_partial<DataMapper, Packet, accRows>(acc, res, row + iter * accCols, accCols2);          \
     }                                                                                                 \
   }
-#else
-#define MICRO_STORE_ONE(iter)                                                                  \
-  if (unroll_factor > iter) {                                                                  \
-    bload<DataMapper, Packet, 0, ColMajor, false, accRows>(acc, res, row + iter * accCols, 0); \
-    bscale<Packet, accRows, !(MICRO_NORMAL(iter))>(acc, accZero##iter, pAlpha, pMask);         \
-    bstore<DataMapper, Packet, accRows>(acc, res, row + iter * accCols);                       \
-  }
-#endif
 
 #define MICRO_STORE MICRO_UNROLL(MICRO_STORE_ONE)
 
-#ifdef USE_PARTIAL_PACKETS
 template <int unroll_factor, typename Scalar, typename Packet, typename DataMapper, const Index accRows,
           const Index accCols, bool full>
-#else
-template <int unroll_factor, typename Scalar, typename Packet, typename DataMapper, const Index accRows,
-          const Index accCols, const Index accCols2>
-#endif
 EIGEN_ALWAYS_INLINE void gemm_unrolled_iteration(const DataMapper& res, const Scalar* lhs_base, const Scalar* rhs_base,
                                                  Index depth, Index strideA, Index offsetA, Index strideB, Index& row,
-                                                 const Packet& pAlpha,
-#ifdef USE_PARTIAL_PACKETS
-                                                 Index accCols2
-#else
-                                                 const Packet& pMask
-#endif
-) {
-  const Scalar *rhs_ptr0 = rhs_base, *rhs_ptr1 = NULL, *rhs_ptr2 = NULL;
-  const Scalar *lhs_ptr0 = NULL, *lhs_ptr1 = NULL, *lhs_ptr2 = NULL, *lhs_ptr3 = NULL, *lhs_ptr4 = NULL,
-               *lhs_ptr5 = NULL, *lhs_ptr6 = NULL, *lhs_ptr7 = NULL;
+                                                 const Packet& pAlpha, Index accCols2) {
+  const Scalar *rhs_ptr0 = rhs_base, *rhs_ptr1 = nullptr, *rhs_ptr2 = nullptr;
+  const Scalar *lhs_ptr0 = nullptr, *lhs_ptr1 = nullptr, *lhs_ptr2 = nullptr, *lhs_ptr3 = nullptr, *lhs_ptr4 = nullptr,
+               *lhs_ptr5 = nullptr, *lhs_ptr6 = nullptr, *lhs_ptr7 = nullptr;
   PacketBlock<Packet, accRows> accZero0, accZero1, accZero2, accZero3, accZero4, accZero5, accZero6, accZero7;
   PacketBlock<Packet, accRows> acc;
 
@@ -2083,37 +2093,36 @@ EIGEN_ALWAYS_INLINE void gemm_unrolled_iteration(const DataMapper& res, const Sc
   MICRO_SRC_PTR
   MICRO_DST_PTR
 
+  const Index peel_depth = full ? depth : (depth - (accCols - accCols2));
   Index k = 0;
-  for (; k + PEEL <= depth; k += PEEL) {
+  for (; k + PEEL <= peel_depth; k += PEEL) {
     MICRO_PREFETCHN(accRows)
     MICRO_PREFETCH
     MICRO_ONE_PEEL4
   }
-  for (; k < depth; k++) {
+  for (; k < peel_depth; k++) {
     MICRO_ONE4
+  }
+  EIGEN_IF_CONSTEXPR (!full) {
+    for (; k < depth; k++) {
+      MICRO_ONE4_PARTIAL
+    }
   }
   MICRO_STORE
 
   MICRO_UPDATE
 }
 
-#ifdef USE_PARTIAL_PACKETS
 #define MICRO_UNROLL_ITER2(N, M)                                                                              \
   gemm_unrolled_iteration<N + ((M) ? 1 : 0), Scalar, Packet, DataMapper, accRows, accCols, !M>(               \
       res3, lhs_base, rhs_base, depth, strideA, offsetA, strideB, row, pAlpha, M ? remaining_rows : accCols); \
   if (M) return;
-#else
-#define MICRO_UNROLL_ITER2(N, M)                                                                             \
-  gemm_unrolled_iteration<N + ((M) ? 1 : 0), Scalar, Packet, DataMapper, accRows, accCols, M ? M : accCols>( \
-      res3, lhs_base, rhs_base, depth, strideA, offsetA, strideB, row, pAlpha, pMask);                       \
-  if (M) return;
-#endif
 
 template <typename Scalar, typename Packet, typename DataMapper, const Index accRows, const Index accCols>
 EIGEN_ALWAYS_INLINE void gemm_cols(const DataMapper& res, const Scalar* blockA, const Scalar* blockB, Index depth,
                                    Index strideA, Index offsetA, Index strideB, Index offsetB, Index col, Index rows,
                                    Index remaining_rows, const Packet& pAlpha, const Packet& pMask) {
-  const DataMapper res3 = res.getSubMapper(0, col);
+  const DataMapper res3 = res.getSubMapper(0, convert_index<mapper_index_t<DataMapper>>(col));
 
   const Scalar* rhs_base = blockB + col * strideB + MICRO_NEW_ROWS * offsetB;
   const Scalar* lhs_base = blockA + accCols * offsetA;
@@ -2220,18 +2229,18 @@ EIGEN_STRONG_INLINE void gemm(const DataMapper& res, const Scalar* blockA, const
 
 #define MICRO_COMPLEX_UNROLL(func) func(0) func(1) func(2) func(3)
 
-#define MICRO_COMPLEX_ZERO_PEEL(peel)             \
-  if ((PEEL_COMPLEX_ROW > peel) && (peel != 0)) { \
-    bsetzero<Packet, accRows>(accReal##peel);     \
-    bsetzero<Packet, accRows>(accImag##peel);     \
-  } else {                                        \
-    EIGEN_UNUSED_VARIABLE(accReal##peel);         \
-    EIGEN_UNUSED_VARIABLE(accImag##peel);         \
+#define MICRO_COMPLEX_ZERO_PEEL(peel)                             \
+  EIGEN_IF_CONSTEXPR ((PEEL_COMPLEX_ROW > peel) && (peel != 0)) { \
+    bsetzero<Packet, accRows>(accReal##peel);                     \
+    bsetzero<Packet, accRows>(accImag##peel);                     \
+  } else {                                                        \
+    EIGEN_UNUSED_VARIABLE(accReal##peel);                         \
+    EIGEN_UNUSED_VARIABLE(accImag##peel);                         \
   }
 
 #define MICRO_COMPLEX_ADD_ROWS(N, used)            \
   MICRO_ADD(ptr_real, N)                           \
-  if (!RhsIsReal) {                                \
+  EIGEN_IF_CONSTEXPR (!RhsIsReal) {                \
     MICRO_ADD(ptr_imag, N)                         \
   } else if (used) {                               \
     EIGEN_UNUSED_VARIABLE(MICRO_RHS(ptr_imag, 0)); \
@@ -2241,7 +2250,7 @@ EIGEN_STRONG_INLINE void gemm(const DataMapper& res, const Scalar* blockA, const
 
 #define MICRO_COMPLEX_BROADCAST(peel)              \
   MICRO_BROADCAST1(peel, ptr_real, rhsV, false)    \
-  if (!RhsIsReal) {                                \
+  EIGEN_IF_CONSTEXPR (!RhsIsReal) {                \
     MICRO_BROADCAST1(peel, ptr_imag, rhsVi, false) \
   } else {                                         \
     EIGEN_UNUSED_VARIABLE(rhsVi##peel);            \
@@ -2250,7 +2259,7 @@ EIGEN_STRONG_INLINE void gemm(const DataMapper& res, const Scalar* blockA, const
 #define MICRO_COMPLEX_BROADCAST_EXTRA              \
   Packet rhsV[4], rhsVi[4];                        \
   MICRO_BROADCAST_EXTRA1(ptr_real, rhsV, false)    \
-  if (!RhsIsReal) {                                \
+  EIGEN_IF_CONSTEXPR (!RhsIsReal) {                \
     MICRO_BROADCAST_EXTRA1(ptr_imag, rhsVi, false) \
   } else {                                         \
     EIGEN_UNUSED_VARIABLE(rhsVi);                  \
@@ -2259,7 +2268,7 @@ EIGEN_STRONG_INLINE void gemm(const DataMapper& res, const Scalar* blockA, const
 
 #define MICRO_COMPLEX_SRC2_PTR                                    \
   MICRO_SRC2(ptr_real, strideB* advanceCols, 0)                   \
-  if (!RhsIsReal) {                                               \
+  EIGEN_IF_CONSTEXPR (!RhsIsReal) {                               \
     MICRO_RHS(ptr_imag, 0) = rhs_base + MICRO_NEW_ROWS * strideB; \
     MICRO_SRC2(ptr_imag, strideB* advanceCols, strideB)           \
   } else {                                                        \
@@ -2271,7 +2280,7 @@ EIGEN_STRONG_INLINE void gemm(const DataMapper& res, const Scalar* blockA, const
 #define MICRO_COMPLEX_ZERO_PEEL_ROW MICRO_COMPLEX_UNROLL(MICRO_COMPLEX_ZERO_PEEL)
 
 #define MICRO_COMPLEX_WORK_PEEL(peel)                                                 \
-  if (PEEL_COMPLEX_ROW > peel) {                                                      \
+  EIGEN_IF_CONSTEXPR (PEEL_COMPLEX_ROW > peel) {                                      \
     MICRO_COMPLEX_BROADCAST(peel)                                                     \
     pgerc<accRows, Scalar, Packet, ConjugateLhs, ConjugateRhs, LhsIsReal, RhsIsReal>( \
         &accReal##peel, &accImag##peel, lhs_ptr_real + (remaining_rows * peel),       \
@@ -2283,7 +2292,7 @@ EIGEN_STRONG_INLINE void gemm(const DataMapper& res, const Scalar* blockA, const
 
 #define MICRO_COMPLEX_ADD_COLS(size)         \
   lhs_ptr_real += (remaining_rows * size);   \
-  if (!LhsIsReal)                            \
+  EIGEN_IF_CONSTEXPR (!LhsIsReal)            \
     lhs_ptr_imag += (remaining_rows * size); \
   else                                       \
     EIGEN_UNUSED_VARIABLE(lhs_ptr_imag);
@@ -2296,7 +2305,7 @@ EIGEN_STRONG_INLINE void gemm(const DataMapper& res, const Scalar* blockA, const
   MICRO_COMPLEX_ADD_ROWS(PEEL_COMPLEX_ROW, false)
 
 #define MICRO_COMPLEX_ADD_PEEL(peel, sum)                \
-  if (PEEL_COMPLEX_ROW > peel) {                         \
+  EIGEN_IF_CONSTEXPR (PEEL_COMPLEX_ROW > peel) {         \
     for (Index i = 0; i < accRows; i++) {                \
       accReal##sum.packet[i] += accReal##peel.packet[i]; \
       accImag##sum.packet[i] += accImag##peel.packet[i]; \
@@ -2307,7 +2316,7 @@ EIGEN_STRONG_INLINE void gemm(const DataMapper& res, const Scalar* blockA, const
   MICRO_COMPLEX_ADD_PEEL(2, 0) MICRO_COMPLEX_ADD_PEEL(3, 1) MICRO_COMPLEX_ADD_PEEL(1, 0)
 
 template <typename Scalar, typename Packet, const Index accRows, bool ConjugateLhs, bool ConjugateRhs, bool LhsIsReal,
-          bool RhsIsReal, const Index remaining_rows>
+          bool RhsIsReal, const Index remaining_rows, const Index load_rows = 0>
 EIGEN_ALWAYS_INLINE void MICRO_COMPLEX_EXTRA_ROW(const Scalar*& lhs_ptr_real, const Scalar*& lhs_ptr_imag,
                                                  const Scalar*& rhs_ptr_real0, const Scalar*& rhs_ptr_real1,
                                                  const Scalar*& rhs_ptr_real2, const Scalar*& rhs_ptr_imag0,
@@ -2315,8 +2324,8 @@ EIGEN_ALWAYS_INLINE void MICRO_COMPLEX_EXTRA_ROW(const Scalar*& lhs_ptr_real, co
                                                  PacketBlock<Packet, accRows>& accReal,
                                                  PacketBlock<Packet, accRows>& accImag) {
   MICRO_COMPLEX_BROADCAST_EXTRA
-  pgerc<accRows, Scalar, Packet, ConjugateLhs, ConjugateRhs, LhsIsReal, RhsIsReal>(&accReal, &accImag, lhs_ptr_real,
-                                                                                   lhs_ptr_imag, rhsV, rhsVi);
+  pgerc<accRows, Scalar, Packet, ConjugateLhs, ConjugateRhs, LhsIsReal, RhsIsReal, load_rows>(
+      &accReal, &accImag, lhs_ptr_real, lhs_ptr_imag, rhsV, rhsVi);
   MICRO_COMPLEX_ADD_COLS(1)
 }
 
@@ -2328,11 +2337,11 @@ EIGEN_ALWAYS_INLINE void gemm_unrolled_complex_row_iteration(const DataMapper& r
                                                              Index offsetA, Index strideB, Index row, Index rows,
                                                              const Packet& pAlphaReal, const Packet& pAlphaImag,
                                                              const Packet& pMask) {
-  const Scalar *rhs_ptr_real0 = rhs_base, *rhs_ptr_real1 = NULL, *rhs_ptr_real2 = NULL;
-  const Scalar *rhs_ptr_imag0 = NULL, *rhs_ptr_imag1 = NULL, *rhs_ptr_imag2 = NULL;
+  const Scalar *rhs_ptr_real0 = rhs_base, *rhs_ptr_real1 = nullptr, *rhs_ptr_real2 = nullptr;
+  const Scalar *rhs_ptr_imag0 = nullptr, *rhs_ptr_imag1 = nullptr, *rhs_ptr_imag2 = nullptr;
   const Scalar* lhs_ptr_real = lhs_base + advanceRows * row * strideA + remaining_rows * offsetA;
-  const Scalar* lhs_ptr_imag = NULL;
-  if (!LhsIsReal)
+  const Scalar* lhs_ptr_imag = nullptr;
+  EIGEN_IF_CONSTEXPR (!LhsIsReal)
     lhs_ptr_imag = lhs_ptr_real + remaining_rows * strideA;
   else
     EIGEN_UNUSED_VARIABLE(lhs_ptr_imag);
@@ -2346,50 +2355,51 @@ EIGEN_ALWAYS_INLINE void gemm_unrolled_complex_row_iteration(const DataMapper& r
   bsetzero<Packet, accRows>(accReal0);
   bsetzero<Packet, accRows>(accImag0);
 
-  Index remaining_depth = depth & -quad_traits<Scalar>::rows;
+  const Index peel_depth = depth - (accCols - remaining_rows);
   Index k = 0;
-  if (remaining_depth >= PEEL_COMPLEX_ROW) {
+  if (peel_depth >= PEEL_COMPLEX_ROW) {
     MICRO_COMPLEX_ZERO_PEEL_ROW
     do {
       MICRO_COMPLEX_PREFETCHN(accRows)
       EIGEN_POWER_PREFETCH(lhs_ptr_real);
-      if (!LhsIsReal) {
+      EIGEN_IF_CONSTEXPR (!LhsIsReal) {
         EIGEN_POWER_PREFETCH(lhs_ptr_imag);
       }
       MICRO_COMPLEX_WORK_PEEL_ROW
-    } while ((k += PEEL_COMPLEX_ROW) + PEEL_COMPLEX_ROW <= remaining_depth);
+    } while ((k += PEEL_COMPLEX_ROW) + PEEL_COMPLEX_ROW <= peel_depth);
     MICRO_COMPLEX_ADD_PEEL_ROW
   }
-  for (; k < depth; k++) {
+  for (; k < peel_depth; k++) {
     MICRO_COMPLEX_EXTRA_ROW<Scalar, Packet, accRows, ConjugateLhs, ConjugateRhs, LhsIsReal, RhsIsReal, remaining_rows>(
         lhs_ptr_real, lhs_ptr_imag, rhs_ptr_real0, rhs_ptr_real1, rhs_ptr_real2, rhs_ptr_imag0, rhs_ptr_imag1,
         rhs_ptr_imag2, accReal0, accImag0);
   }
+  for (; k < depth; k++) {
+    MICRO_COMPLEX_EXTRA_ROW<Scalar, Packet, accRows, ConjugateLhs, ConjugateRhs, LhsIsReal, RhsIsReal, remaining_rows,
+                            remaining_rows>(lhs_ptr_real, lhs_ptr_imag, rhs_ptr_real0, rhs_ptr_real1, rhs_ptr_real2,
+                                            rhs_ptr_imag0, rhs_ptr_imag1, rhs_ptr_imag2, accReal0, accImag0);
+  }
 
+  EIGEN_UNUSED_VARIABLE(rows);
   constexpr bool full = (remaining_rows > accColsC);
-  bload<DataMapper, Packetc, accColsC, ColMajor, true, accRows, full>(tRes, res, row, 0);
-  if ((accRows == 1) || (rows >= accCols)) {
-    bscalec<Packet, accRows, true>(accReal0, accImag0, pAlphaReal, pAlphaImag, taccReal, taccImag, pMask);
-    bcouple<Packet, Packetc, accRows, full>(taccReal, taccImag, tRes, acc0, acc1);
-    bstore<DataMapper, Packetc, accRows>(acc0, res, row + 0);
-    if (full) {
-      bstore<DataMapper, Packetc, accRows>(acc1, res, row + accColsC);
-    }
+  constexpr bool odd = (sizeof(Scalar) == sizeof(float)) && (remaining_rows & 1);
+  EIGEN_IF_CONSTEXPR (odd) {
+    bload_partial<DataMapper, Packetc, accColsC, true, accRows, full>(tRes, res, row, 1);
   } else {
-    bscalec<Packet, accRows, false>(accReal0, accImag0, pAlphaReal, pAlphaImag, taccReal, taccImag, pMask);
-    bcouple<Packet, Packetc, accRows, full>(taccReal, taccImag, tRes, acc0, acc1);
-
-    if ((sizeof(Scalar) == sizeof(float)) && (remaining_rows == 1)) {
-      for (Index j = 0; j < accRows; j++) {
-        res(row + 0, j) = pfirst<Packetc>(acc0.packet[j]);
-      }
+    bload<DataMapper, Packetc, accColsC, ColMajor, true, accRows, full>(tRes, res, row, 0);
+  }
+  bscalec<Packet, accRows, true>(accReal0, accImag0, pAlphaReal, pAlphaImag, taccReal, taccImag, pMask);
+  bcouple<Packet, Packetc, accRows, full>(taccReal, taccImag, tRes, acc0, acc1);
+  EIGEN_IF_CONSTEXPR (odd && !full) {
+    bstore_partial<DataMapper, Packetc, accRows>(acc0, res, row + 0, 1);
+  } else {
+    bstore<DataMapper, Packetc, accRows>(acc0, res, row + 0);
+  }
+  EIGEN_IF_CONSTEXPR (full) {
+    EIGEN_IF_CONSTEXPR (odd) {
+      bstore_partial<DataMapper, Packetc, accRows>(acc1, res, row + accColsC, 1);
     } else {
-      bstore<DataMapper, Packetc, accRows>(acc0, res, row + 0);
-      if (full) {
-        for (Index j = 0; j < accRows; j++) {
-          res(row + accColsC, j) = pfirst<Packetc>(acc1.packet[j]);
-        }
-      }
+      bstore<DataMapper, Packetc, accRows>(acc1, res, row + accColsC);
     }
   }
 }
@@ -2413,13 +2423,13 @@ EIGEN_ALWAYS_INLINE void gemm_complex_extra_row(const DataMapper& res, const Sca
   func(0, peel) func(1, peel) func(2, peel) func(3, peel)
 
 #define MICRO_COMPLEX_WORK_ONE4(iter, peel)                                                \
-  if (unroll_factor > iter) {                                                              \
+  EIGEN_IF_CONSTEXPR (unroll_factor > iter) {                                              \
     pgerc_common<accRows, Packet, ConjugateLhs, ConjugateRhs, LhsIsReal, RhsIsReal>(       \
         &accReal##iter, &accImag##iter, lhsV##iter, lhsVi##iter, rhsV##peel, rhsVi##peel); \
   }
 
 #define MICRO_COMPLEX_TYPE_PEEL4(func, func2, peel) \
-  if (PEEL_COMPLEX > peel) {                        \
+  EIGEN_IF_CONSTEXPR (PEEL_COMPLEX > peel) {        \
     Packet lhsV0, lhsV1, lhsV2, lhsV3;              \
     Packet lhsVi0, lhsVi1, lhsVi2, lhsVi3;          \
     MICRO_COMPLEX_BROADCAST(peel)                   \
@@ -2442,12 +2452,18 @@ EIGEN_ALWAYS_INLINE void gemm_complex_extra_row(const DataMapper& res, const Sca
   MICRO_COMPLEX_TYPE(4, MICRO_COMPLEX_TYPE_PEEL4, MICRO_COMPLEX_WORK_ONE4, MICRO_COMPLEX_LOAD_ONE) \
   MICRO_COMPLEX_ADD_ROWS(size, false)
 
+#define MICRO_COMPLEX_UNROLL_TYPE_PARTIAL(MICRO_COMPLEX_TYPE, size)                                        \
+  MICRO_COMPLEX_TYPE(4, MICRO_COMPLEX_TYPE_PEEL4, MICRO_COMPLEX_WORK_ONE4, MICRO_COMPLEX_LOAD_PARTIAL_ONE) \
+  MICRO_COMPLEX_ADD_ROWS(size, false)
+
 #define MICRO_COMPLEX_ONE_PEEL4 MICRO_COMPLEX_UNROLL_TYPE(MICRO_COMPLEX_UNROLL_TYPE_PEEL, PEEL_COMPLEX)
 
 #define MICRO_COMPLEX_ONE4 MICRO_COMPLEX_UNROLL_TYPE(MICRO_COMPLEX_UNROLL_TYPE_ONE, 1)
 
+#define MICRO_COMPLEX_ONE4_PARTIAL MICRO_COMPLEX_UNROLL_TYPE_PARTIAL(MICRO_COMPLEX_UNROLL_TYPE_ONE, 1)
+
 #define MICRO_COMPLEX_DST_PTR_ONE(iter)       \
-  if (unroll_factor > iter) {                 \
+  EIGEN_IF_CONSTEXPR (unroll_factor > iter) { \
     bsetzero<Packet, accRows>(accReal##iter); \
     bsetzero<Packet, accRows>(accImag##iter); \
   } else {                                    \
@@ -2462,15 +2478,28 @@ EIGEN_ALWAYS_INLINE void gemm_complex_extra_row(const DataMapper& res, const Sca
 #define MICRO_COMPLEX_PREFETCH MICRO_COMPLEX_UNROLL(MICRO_COMPLEX_PREFETCH_ONE)
 
 #define MICRO_COMPLEX_STORE_ONE(iter)                                                                               \
-  if (unroll_factor > iter) {                                                                                       \
+  EIGEN_IF_CONSTEXPR (unroll_factor > iter) {                                                                       \
     constexpr bool full = ((MICRO_NORMAL(iter)) || (accCols2 > accColsC));                                          \
-    bload<DataMapper, Packetc, accColsC, ColMajor, true, accRows, full>(tRes, res, row + iter * accCols, 0);        \
+    constexpr bool odd = !(MICRO_NORMAL(iter)) && (sizeof(Scalar) == sizeof(float)) && (accCols2 & 1);              \
+    EIGEN_IF_CONSTEXPR (odd) {                                                                                      \
+      bload_partial<DataMapper, Packetc, accColsC, true, accRows, full>(tRes, res, row + iter * accCols, 1);        \
+    } else {                                                                                                        \
+      bload<DataMapper, Packetc, accColsC, ColMajor, true, accRows, full>(tRes, res, row + iter * accCols, 0);      \
+    }                                                                                                               \
     bscalec<Packet, accRows, !(MICRO_NORMAL(iter))>(accReal##iter, accImag##iter, pAlphaReal, pAlphaImag, taccReal, \
                                                     taccImag, pMask);                                               \
     bcouple<Packet, Packetc, accRows, full>(taccReal, taccImag, tRes, acc0, acc1);                                  \
-    bstore<DataMapper, Packetc, accRows>(acc0, res, row + iter * accCols + 0);                                      \
-    if (full) {                                                                                                     \
-      bstore<DataMapper, Packetc, accRows>(acc1, res, row + iter * accCols + accColsC);                             \
+    EIGEN_IF_CONSTEXPR (odd && !full) {                                                                             \
+      bstore_partial<DataMapper, Packetc, accRows>(acc0, res, row + iter * accCols + 0, 1);                         \
+    } else {                                                                                                        \
+      bstore<DataMapper, Packetc, accRows>(acc0, res, row + iter * accCols + 0);                                    \
+    }                                                                                                               \
+    EIGEN_IF_CONSTEXPR (full) {                                                                                     \
+      EIGEN_IF_CONSTEXPR (odd) {                                                                                    \
+        bstore_partial<DataMapper, Packetc, accRows>(acc1, res, row + iter * accCols + accColsC, 1);                \
+      } else {                                                                                                      \
+        bstore<DataMapper, Packetc, accRows>(acc1, res, row + iter * accCols + accColsC);                           \
+      }                                                                                                             \
     }                                                                                                               \
   }
 
@@ -2484,12 +2513,12 @@ EIGEN_ALWAYS_INLINE void gemm_complex_unrolled_iteration(const DataMapper& res, 
                                                          Index offsetA, Index strideB, Index& row,
                                                          const Packet& pAlphaReal, const Packet& pAlphaImag,
                                                          const Packet& pMask) {
-  const Scalar *rhs_ptr_real0 = rhs_base, *rhs_ptr_real1 = NULL, *rhs_ptr_real2 = NULL;
-  const Scalar *rhs_ptr_imag0 = NULL, *rhs_ptr_imag1 = NULL, *rhs_ptr_imag2 = NULL;
+  const Scalar *rhs_ptr_real0 = rhs_base, *rhs_ptr_real1 = nullptr, *rhs_ptr_real2 = nullptr;
+  const Scalar *rhs_ptr_imag0 = nullptr, *rhs_ptr_imag1 = nullptr, *rhs_ptr_imag2 = nullptr;
   const Index imag_delta = accCols * strideA;
   const Index imag_delta2 = accCols2 * strideA;
-  const Scalar *lhs_ptr_real0 = NULL, *lhs_ptr_real1 = NULL;
-  const Scalar *lhs_ptr_real2 = NULL, *lhs_ptr_real3 = NULL;
+  const Scalar *lhs_ptr_real0 = nullptr, *lhs_ptr_real1 = nullptr;
+  const Scalar *lhs_ptr_real2 = nullptr, *lhs_ptr_real3 = nullptr;
   PacketBlock<Packet, accRows> accReal0, accImag0, accReal1, accImag1;
   PacketBlock<Packet, accRows> accReal2, accImag2, accReal3, accImag3;
   PacketBlock<Packet, accRows> taccReal, taccImag;
@@ -2500,14 +2529,20 @@ EIGEN_ALWAYS_INLINE void gemm_complex_unrolled_iteration(const DataMapper& res, 
   MICRO_COMPLEX_SRC_PTR
   MICRO_COMPLEX_DST_PTR
 
+  const Index peel_depth = depth - (accCols - accCols2);
   Index k = 0;
-  for (; k + PEEL_COMPLEX <= depth; k += PEEL_COMPLEX) {
+  for (; k + PEEL_COMPLEX <= peel_depth; k += PEEL_COMPLEX) {
     MICRO_COMPLEX_PREFETCHN(accRows)
     MICRO_COMPLEX_PREFETCH
     MICRO_COMPLEX_ONE_PEEL4
   }
-  for (; k < depth; k++) {
+  for (; k < peel_depth; k++) {
     MICRO_COMPLEX_ONE4
+  }
+  EIGEN_IF_CONSTEXPR (accCols != accCols2) {
+    for (; k < depth; k++) {
+      MICRO_COMPLEX_ONE4_PARTIAL
+    }
   }
   MICRO_COMPLEX_STORE
 
@@ -2526,7 +2561,7 @@ EIGEN_ALWAYS_INLINE void gemm_complex_cols(const DataMapper& res, const Scalar* 
                                            Index depth, Index strideA, Index offsetA, Index strideB, Index offsetB,
                                            Index col, Index rows, Index remaining_rows, const Packet& pAlphaReal,
                                            const Packet& pAlphaImag, const Packet& pMask) {
-  const DataMapper res3 = res.getSubMapper(0, col);
+  const DataMapper res3 = res.getSubMapper(0, convert_index<mapper_index_t<DataMapper>>(col));
 
   const Scalar* rhs_base = blockB + advanceCols * col * strideB + MICRO_NEW_ROWS * offsetB;
   const Scalar* lhs_base = blockA + accCols * offsetA;
@@ -2630,14 +2665,14 @@ EIGEN_ALWAYS_INLINE bool supportsMMA() {
 #endif
 }
 
-EIGEN_ALWAYS_INLINE Packet4f loadAndMultiplyF32(Packet4f acc, const Packet4f pAlpha, float* result) {
+EIGEN_ALWAYS_INLINE Packet4f loadAndMultiplyF32(const Packet4f& acc, const Packet4f& pAlpha, float* result) {
   Packet4f result_block = ploadu<Packet4f>(result);
   return pmadd(acc, pAlpha, result_block);
 }
 
 template <bool lhsExtraRows>
-EIGEN_ALWAYS_INLINE void storeF32(float*& result, Packet4f result_block, Index rows, Index extra_rows) {
-  if (lhsExtraRows) {
+EIGEN_ALWAYS_INLINE void storeF32(float*& result, const Packet4f& result_block, Index rows, Index extra_rows) {
+  EIGEN_IF_CONSTEXPR (lhsExtraRows) {
     pstoreu_partial(result, result_block, extra_rows);
   } else {
     pstoreu(result, result_block);
@@ -2646,10 +2681,10 @@ EIGEN_ALWAYS_INLINE void storeF32(float*& result, Packet4f result_block, Index r
 }
 
 template <bool rhsExtraCols, bool lhsExtraRows>
-EIGEN_ALWAYS_INLINE void storeResults(Packet4f (&acc)[4], Index rows, const Packet4f pAlpha, float* result,
+EIGEN_ALWAYS_INLINE void storeResults(Packet4f (&acc)[4], Index rows, const Packet4f& pAlpha, float* result,
                                       Index extra_cols, Index extra_rows) {
   Index x = 0;
-  if (rhsExtraCols) {
+  EIGEN_IF_CONSTEXPR (rhsExtraCols) {
     do {
       Packet4f result_block = loadAndMultiplyF32(acc[x], pAlpha, result);
       storeF32<lhsExtraRows>(result, result_block, rows, extra_rows);
@@ -2668,7 +2703,7 @@ EIGEN_ALWAYS_INLINE void storeResults(Packet4f (&acc)[4], Index rows, const Pack
   }
 }
 
-EIGEN_ALWAYS_INLINE Packet4f oneConvertBF16Hi(Packet8us data) {
+EIGEN_ALWAYS_INLINE Packet4f oneConvertBF16Hi(const Packet8us& data) {
   Packet8us z = pset1<Packet8us>(0);
 #ifdef _BIG_ENDIAN
   return reinterpret_cast<Packet4f>(vec_mergeh(data, z));
@@ -2677,7 +2712,7 @@ EIGEN_ALWAYS_INLINE Packet4f oneConvertBF16Hi(Packet8us data) {
 #endif
 }
 
-EIGEN_ALWAYS_INLINE Packet4f oneConvertBF16Lo(Packet8us data) {
+EIGEN_ALWAYS_INLINE Packet4f oneConvertBF16Lo(const Packet8us& data) {
   Packet8us z = pset1<Packet8us>(0);
 #ifdef _BIG_ENDIAN
   return reinterpret_cast<Packet4f>(vec_mergel(data, z));
@@ -2688,11 +2723,11 @@ EIGEN_ALWAYS_INLINE Packet4f oneConvertBF16Lo(Packet8us data) {
 
 template <Index N, Index M>
 EIGEN_ALWAYS_INLINE void storeConvertTwoBF16(float* to, PacketBlock<Packet8bf, (N + 7) / 8>& block, Index extra = 0) {
-  if (N < 4) {
+  EIGEN_IF_CONSTEXPR (N < 4) {
     pstoreu_partial(to + 0, oneConvertBF16Hi(block.packet[0].m_val), extra);
-  } else if (N >= (M * 8 + 4)) {
+  } else EIGEN_IF_CONSTEXPR (N >= (M * 8 + 4)) {
     pstoreu(to + 0, oneConvertBF16Hi(block.packet[M].m_val));
-    if (N >= 8) {
+    EIGEN_IF_CONSTEXPR (N >= 8) {
       pstoreu(to + 4, oneConvertBF16Lo(block.packet[M].m_val));
     }
   }
@@ -2701,10 +2736,10 @@ EIGEN_ALWAYS_INLINE void storeConvertTwoBF16(float* to, PacketBlock<Packet8bf, (
 template <Index N>
 EIGEN_ALWAYS_INLINE void storeConvertBlockBF16(float* to, PacketBlock<Packet8bf, (N + 7) / 8>& block, Index extra) {
   storeConvertTwoBF16<N, 0>(to + 0, block, extra);
-  if (N >= 16) {
+  EIGEN_IF_CONSTEXPR (N >= 16) {
     storeConvertTwoBF16<N, 1>(to + 8, block);
   }
-  if (N >= 32) {
+  EIGEN_IF_CONSTEXPR (N >= 32) {
     storeConvertTwoBF16<N, 2>(to + 16, block);
     storeConvertTwoBF16<N, 3>(to + 24, block);
   }
@@ -2712,7 +2747,7 @@ EIGEN_ALWAYS_INLINE void storeConvertBlockBF16(float* to, PacketBlock<Packet8bf,
 
 template <bool non_unit_stride, Index delta>
 EIGEN_ALWAYS_INLINE Packet8bf loadBF16fromResult(bfloat16* src, Index resInc) {
-  if (non_unit_stride) {
+  EIGEN_IF_CONSTEXPR (non_unit_stride) {
     return pgather<bfloat16, Packet8bf>(src + delta * resInc, resInc);
   } else {
     return ploadu<Packet8bf>(src + delta);
@@ -2729,7 +2764,7 @@ static Packet16uc p16uc_MERGE16_32_6 = {2, 3, 18, 19, 18, 19, 18, 19, 2, 3, 18, 
 static Packet16uc p16uc_MERGE16_32_7 = {4, 5, 20, 21, 20, 21, 20, 21, 4, 5, 20, 21, 20, 21, 20, 21};
 static Packet16uc p16uc_MERGE16_32_8 = {6, 7, 22, 23, 22, 23, 22, 23, 6, 7, 22, 23, 22, 23, 22, 23};
 
-EIGEN_ALWAYS_INLINE Packet4f oneConvertBF16Perm(Packet8us data, Packet16uc mask) {
+EIGEN_ALWAYS_INLINE Packet4f oneConvertBF16Perm(const Packet8us& data, const Packet16uc& mask) {
   Packet8us z = pset1<Packet8us>(0);
 #ifdef _BIG_ENDIAN
   return reinterpret_cast<Packet4f>(vec_perm(data, z, mask));
@@ -2756,7 +2791,7 @@ EIGEN_ALWAYS_INLINE void convertArrayPointerBF16toF32DupOne(float* result, Index
   }
 
   for (Index j = 0; j < 4 * size; j += 4) {
-    if (lhsExtraRows) {
+    EIGEN_IF_CONSTEXPR (lhsExtraRows) {
       Packet4f z = pset1<Packet4f>(float(0));
       Index i = 0;
       do {
@@ -2791,28 +2826,32 @@ EIGEN_ALWAYS_INLINE void convertArrayPointerBF16toF32Dup(float* result, Index co
 
 template <const Index size, bool non_unit_stride>
 EIGEN_ALWAYS_INLINE void convertPointerBF16toF32(Index& i, float* result, Index rows, bfloat16*& src, Index resInc) {
-  constexpr Index extra = ((size < 4) ? 4 : size);
   while (i + size <= rows) {
+    const Index count = size == 1 ? rows - i : size;
     PacketBlock<Packet8bf, (size + 7) / 8> r32;
-    r32.packet[0] = loadBF16fromResult<non_unit_stride, 0>(src, resInc);
-    if (size >= 16) {
+    EIGEN_IF_CONSTEXPR (size < 8) {
+      r32.packet[0] = pgather_partial<bfloat16, Packet8bf>(src, non_unit_stride ? resInc : 1, count);
+    } else {
+      r32.packet[0] = loadBF16fromResult<non_unit_stride, 0>(src, resInc);
+    }
+    EIGEN_IF_CONSTEXPR (size >= 16) {
       r32.packet[1] = loadBF16fromResult<non_unit_stride, 8>(src, resInc);
     }
-    if (size >= 32) {
+    EIGEN_IF_CONSTEXPR (size >= 32) {
       r32.packet[2] = loadBF16fromResult<non_unit_stride, 16>(src, resInc);
       r32.packet[3] = loadBF16fromResult<non_unit_stride, 24>(src, resInc);
     }
     storeConvertBlockBF16<size>(result + i, r32, rows & 3);
-    i += extra;
-    src += extra * resInc;
-    if (size != 32) break;
+    i += count;
+    if (i < rows) src += count * resInc;
+    EIGEN_IF_CONSTEXPR (size != 32) break;
   }
 }
 
 template <bool non_unit_stride>
 EIGEN_ALWAYS_INLINE void convertArrayPointerBF16toF32(float* result, Index cols, Index rows, bfloat16* src,
                                                       Index resInc) {
-  for (Index col = 0; col < cols; col++, src += (rows * resInc), result += rows) {
+  for (Index col = 0; col < cols; col++, result += rows) {
     Index i = 0;
     bfloat16* src2 = src;
     convertPointerBF16toF32<32, non_unit_stride>(i, result, rows, src2, resInc);
@@ -2820,6 +2859,7 @@ EIGEN_ALWAYS_INLINE void convertArrayPointerBF16toF32(float* result, Index cols,
     convertPointerBF16toF32<8, non_unit_stride>(i, result, rows, src2, resInc);
     convertPointerBF16toF32<4, non_unit_stride>(i, result, rows, src2, resInc);
     convertPointerBF16toF32<1, non_unit_stride>(i, result, rows, src2, resInc);
+    if (col + 1 < cols) src += rows * resInc;
   }
 }
 
@@ -2861,8 +2901,8 @@ EIGEN_ALWAYS_INLINE void addResults(Packet4f (&acc)[num_acc][4]) {
 }
 
 template <Index num_acc, bool rhsExtraCols, bool lhsExtraRows, Index num_rhs>
-EIGEN_ALWAYS_INLINE void outputResultsVSX(Packet4f (&acc)[num_acc][4], Index rows, const Packet4f pAlpha, float* result,
-                                          const Index extra_cols, Index extra_rows) {
+EIGEN_ALWAYS_INLINE void outputResultsVSX(Packet4f (&acc)[num_acc][4], Index rows, const Packet4f& pAlpha,
+                                          float* result, const Index extra_cols, Index extra_rows) {
   tranposeResults<num_acc>(acc);
   addResults<num_acc>(acc);
 
@@ -2871,7 +2911,7 @@ EIGEN_ALWAYS_INLINE void outputResultsVSX(Packet4f (&acc)[num_acc][4], Index row
   for (Index i = 0; i < real_rhs; i++, result += 4 * rows, k++) {
     storeResults<false, lhsExtraRows>(acc[k], rows, pAlpha, result, extra_cols, extra_rows);
   }
-  if (rhsExtraCols) {
+  EIGEN_IF_CONSTEXPR (rhsExtraCols) {
     storeResults<rhsExtraCols, lhsExtraRows>(acc[k], rows, pAlpha, result, extra_cols, extra_rows);
   }
 }
@@ -2879,7 +2919,7 @@ EIGEN_ALWAYS_INLINE void outputResultsVSX(Packet4f (&acc)[num_acc][4], Index row
 template <bool zero>
 EIGEN_ALWAYS_INLINE void loadTwoRhsFloat32(const float* block, Index strideB, Index i, Packet4f& dhs0, Packet4f& dhs1) {
   dhs0 = ploadu<Packet4f>(block + strideB * i + 0);
-  if (zero) {
+  EIGEN_IF_CONSTEXPR (zero) {
     Packet4f dhs2 = pset1<Packet4f>(float(0));
     dhs1 = vec_mergel(dhs0, dhs2);
     dhs0 = vec_mergeh(dhs0, dhs2);
@@ -2898,7 +2938,7 @@ EIGEN_ALWAYS_INLINE void KLoop(const float* indexA, const float* indexB, Packet4
   for (Index i = 0; i < real_rhs; i += 2) {
     loadTwoRhsFloat32<zero>(indexB + k * 4, strideB, i, rhs[i + 0], rhs[i + 1]);
   }
-  if (rhsExtraCols) {
+  EIGEN_IF_CONSTEXPR (rhsExtraCols) {
     loadTwoRhsFloat32<zero>(indexB + k * extra_cols - offsetB, strideB, real_rhs, rhs[real_rhs + 0], rhs[real_rhs + 1]);
   }
 
@@ -2915,7 +2955,7 @@ EIGEN_ALWAYS_INLINE void KLoop(const float* indexA, const float* indexB, Packet4
 }
 
 template <const Index num_acc, bool rhsExtraCols, bool lhsExtraRows>
-EIGEN_ALWAYS_INLINE void colVSXLoopBodyIter(Index depth, Index rows, const Packet4f pAlpha, const float* indexA,
+EIGEN_ALWAYS_INLINE void colVSXLoopBodyIter(Index depth, Index rows, const Packet4f& pAlpha, const float* indexA,
                                             const float* indexB, Index strideB, Index offsetB, float* result,
                                             const Index extra_cols, const Index extra_rows) {
   constexpr Index num_rhs = num_acc;
@@ -2939,7 +2979,7 @@ EIGEN_ALWAYS_INLINE void colVSXLoopBodyIter(Index depth, Index rows, const Packe
 #define MAX_BFLOAT16_ACC_VSX 4
 
 template <const Index num_acc, bool rhsExtraCols, bool lhsExtraRows>
-void colVSXLoopBody(Index& col, Index depth, Index cols, Index rows, const Packet4f pAlpha, const float* indexA,
+void colVSXLoopBody(Index& col, Index depth, Index cols, Index rows, const Packet4f& pAlpha, const float* indexA,
                     const float* indexB, Index strideB, Index offsetB, float* result) {
   constexpr Index step = (num_acc * 4);  // each accumulator has 4 elements
   const Index extra_cols = (rhsExtraCols) ? (cols & 3) : 0;
@@ -2956,17 +2996,17 @@ void colVSXLoopBody(Index& col, Index depth, Index cols, Index rows, const Packe
 }
 
 template <const Index num_acc, bool rhsExtraCols, bool lhsExtraRows>
-EIGEN_ALWAYS_INLINE void colVSXLoopBodyExtraN(Index col, Index depth, Index cols, Index rows, const Packet4f pAlpha,
+EIGEN_ALWAYS_INLINE void colVSXLoopBodyExtraN(Index col, Index depth, Index cols, Index rows, const Packet4f& pAlpha,
                                               const float* indexA, const float* blockB, Index strideB, Index offsetB,
                                               float* result) {
-  if (MAX_BFLOAT16_ACC_VSX > num_acc) {
+  EIGEN_IF_CONSTEXPR (MAX_BFLOAT16_ACC_VSX > num_acc) {
     colVSXLoopBody<num_acc + (rhsExtraCols ? 1 : 0), rhsExtraCols, lhsExtraRows>(col, depth, cols, rows, pAlpha, indexA,
                                                                                  blockB, strideB, offsetB, result);
   }
 }
 
 template <bool rhsExtraCols, bool lhsExtraRows>
-void colVSXLoopBodyExtra(Index col, Index depth, Index cols, Index rows, const Packet4f pAlpha, const float* indexA,
+void colVSXLoopBodyExtra(Index col, Index depth, Index cols, Index rows, const Packet4f& pAlpha, const float* indexA,
                          const float* blockB, Index strideB, Index offsetB, float* result) {
   switch ((cols - col) >> 2) {
     case 3:
@@ -2982,7 +3022,7 @@ void colVSXLoopBodyExtra(Index col, Index depth, Index cols, Index rows, const P
                                                           offsetB, result);
       break;
     default:
-      if (rhsExtraCols) {
+      EIGEN_IF_CONSTEXPR (rhsExtraCols) {
         colVSXLoopBody<1, true, lhsExtraRows>(col, depth, cols, rows, pAlpha, indexA, blockB, strideB, offsetB, result);
       }
       break;
@@ -2990,9 +3030,9 @@ void colVSXLoopBodyExtra(Index col, Index depth, Index cols, Index rows, const P
 }
 
 template <Index size, bool lhsExtraRows = false>
-EIGEN_ALWAYS_INLINE void colVSXLoops(Index depth, Index cols, Index rows, const Packet4f pAlpha, const bfloat16* indexA,
-                                     const float* indexA2, const float* blockB2, Index strideA, Index strideB,
-                                     Index offsetB, float* result2) {
+EIGEN_ALWAYS_INLINE void colVSXLoops(Index depth, Index cols, Index rows, const Packet4f& pAlpha,
+                                     const bfloat16* indexA, const float* indexA2, const float* blockB2, Index strideA,
+                                     Index strideB, Index offsetB, float* result2) {
   Index delta_rows = 2 * (lhsExtraRows ? (rows & 3) : size);
   for (Index row = 0; row < size; row += 4) {
     convertArrayPointerBF16toF32Dup<lhsExtraRows>(const_cast<float*>(indexA2), strideA, delta_rows, indexA, row,
@@ -3019,7 +3059,7 @@ EIGEN_ALWAYS_INLINE void colVSXLoops(Index depth, Index cols, Index rows, const 
 
 template <Index size>
 EIGEN_ALWAYS_INLINE void calcVSXColLoops(const bfloat16*& indexA, const float* indexA2, Index& row, Index depth,
-                                         Index cols, Index rows, const Packet4f pAlpha, const float* indexB,
+                                         Index cols, Index rows, const Packet4f& pAlpha, const float* indexB,
                                          Index strideA, Index strideB, Index offsetA, Index offsetB, Index bigSuffix,
                                          float* result) {
   if ((size == 16) || (rows & size)) {
@@ -3030,36 +3070,38 @@ EIGEN_ALWAYS_INLINE void calcVSXColLoops(const bfloat16*& indexA, const float* i
   }
 }
 
-template <const Index size, typename DataMapper>
+template <const Index size, typename DataMapper, typename MapperIndex>
 EIGEN_ALWAYS_INLINE void convertBF16toF32(Index& i, float* result, Index rows, const DataMapper& src) {
   constexpr Index extra = ((size < 4) ? 4 : size);
   while (i + size <= rows) {
     PacketBlock<Packet8bf, (size + 7) / 8> r32;
-    r32.packet[0] = src.template loadPacket<Packet8bf>(i + 0);
-    if (size >= 16) {
-      r32.packet[1] = src.template loadPacket<Packet8bf>(i + 8);
+    const MapperIndex mapperRow = convert_index<MapperIndex>(i);
+    r32.packet[0] = src.template loadPacket<Packet8bf>(mapperRow);
+    EIGEN_IF_CONSTEXPR (size >= 16) {
+      r32.packet[1] = src.template loadPacket<Packet8bf>(mapperRow + 8);
     }
-    if (size >= 32) {
-      r32.packet[2] = src.template loadPacket<Packet8bf>(i + 16);
-      r32.packet[3] = src.template loadPacket<Packet8bf>(i + 24);
+    EIGEN_IF_CONSTEXPR (size >= 32) {
+      r32.packet[2] = src.template loadPacket<Packet8bf>(mapperRow + 16);
+      r32.packet[3] = src.template loadPacket<Packet8bf>(mapperRow + 24);
     }
     storeConvertBlockBF16<size>(result + i, r32, rows & 3);
     i += extra;
-    if (size != 32) break;
+    EIGEN_IF_CONSTEXPR (size != 32) break;
   }
 }
 
 template <typename DataMapper>
 EIGEN_ALWAYS_INLINE void convertArrayBF16toF32(float* result, Index cols, Index rows, const DataMapper& src) {
-  typedef typename DataMapper::LinearMapper LinearMapper;
+  using LinearMapper = typename DataMapper::LinearMapper;
+  using MapperIndex = mapper_index_t<DataMapper>;
   for (Index j = 0; j < cols; j++, result += rows) {
-    const LinearMapper src2 = src.getLinearMapper(0, j);
+    const LinearMapper src2 = src.getLinearMapper(0, convert_index<MapperIndex>(j));
     Index i = 0;
-    convertBF16toF32<32, LinearMapper>(i, result, rows, src2);
-    convertBF16toF32<16, LinearMapper>(i, result, rows, src2);
-    convertBF16toF32<8, LinearMapper>(i, result, rows, src2);
-    convertBF16toF32<4, LinearMapper>(i, result, rows, src2);
-    convertBF16toF32<1, LinearMapper>(i, result, rows, src2);
+    convertBF16toF32<32, LinearMapper, MapperIndex>(i, result, rows, src2);
+    convertBF16toF32<16, LinearMapper, MapperIndex>(i, result, rows, src2);
+    convertBF16toF32<8, LinearMapper, MapperIndex>(i, result, rows, src2);
+    convertBF16toF32<4, LinearMapper, MapperIndex>(i, result, rows, src2);
+    convertBF16toF32<1, LinearMapper, MapperIndex>(i, result, rows, src2);
   }
 }
 
@@ -3069,7 +3111,7 @@ EIGEN_ALWAYS_INLINE Packet8bf convertF32toBF16VSX(const float* res) {
 
 template <typename DataMapper, const Index size>
 EIGEN_ALWAYS_INLINE void convertArrayF32toBF16ColVSX(float* result, Index col, Index rows, const DataMapper& res) {
-  const DataMapper res2 = res.getSubMapper(0, col);
+  const DataMapper res2 = res.getSubMapper(0, convert_index<mapper_index_t<DataMapper>>(col));
   Index row;
   float* result2 = result + col * rows;
   for (row = 0; row + 8 <= rows; row += 8, result2 += 8) {
@@ -3078,13 +3120,14 @@ EIGEN_ALWAYS_INLINE void convertArrayF32toBF16ColVSX(float* result, Index col, I
     for (Index j = 0; j < size; j++) {
       block.packet[j] = convertF32toBF16VSX(result2 + j * rows);
     }
-    res2.template storePacketBlock<Packet8bf, size>(row, 0, block);
+    res2.template storePacketBlock<Packet8bf, size>(convert_index<mapper_index_t<DataMapper>>(row), 0, block);
   }
   // extra rows
   if (row < rows) {
-    for (Index j = 0; j < size; j++) {
+    for (int j = 0; j < size; j++) {
       Packet8bf fp16 = convertF32toBF16VSX(result2 + j * rows);
-      res2.template storePacketPartial<Packet8bf>(row, j, fp16, rows & 7);
+      res2.template storePacketPartial<Packet8bf>(convert_index<mapper_index_t<DataMapper>>(row), j, fp16,
+                                                  convert_index<mapper_index_t<DataMapper>>(rows & 7));
     }
   }
 }
@@ -3419,8 +3462,8 @@ void gemm_pack_rhs<std::complex<double>, Index, DataMapper, nr, RowMajor, Conjug
 // ********* gebp specializations *********
 template <typename Index, typename DataMapper, int mr, int nr, bool ConjugateLhs, bool ConjugateRhs>
 struct gebp_kernel<float, float, Index, DataMapper, mr, nr, ConjugateLhs, ConjugateRhs> {
-  typedef typename quad_traits<float>::vectortype Packet;
-  typedef typename quad_traits<float>::rhstype RhsPacket;
+  using Packet = typename quad_traits<float>::vectortype;
+  using RhsPacket = typename quad_traits<float>::rhstype;
 
   void operator()(const DataMapper& res, const float* blockA, const float* blockB, Index rows, Index depth, Index cols,
                   float alpha, Index strideA = -1, Index strideB = -1, Index offsetA = 0, Index offsetB = 0);
@@ -3430,10 +3473,12 @@ template <typename Index, typename DataMapper, int mr, int nr, bool ConjugateLhs
 void gebp_kernel<float, float, Index, DataMapper, mr, nr, ConjugateLhs, ConjugateRhs>::operator()(
     const DataMapper& res, const float* blockA, const float* blockB, Index rows, Index depth, Index cols, float alpha,
     Index strideA, Index strideB, Index offsetA, Index offsetB) {
-  const Index accRows = quad_traits<float>::rows;
-  const Index accCols = quad_traits<float>::size;
-  static void (*gemm_function)(const DataMapper&, const float*, const float*, Index, Index, Index, float, Index, Index,
-                               Index, Index) =
+  const Eigen::Index accRows = quad_traits<float>::rows;
+  const Eigen::Index accCols = quad_traits<float>::size;
+  // The kernels below take Eigen::Index, which need not be the Index this kernel is instantiated with: a Tensor
+  // contraction instantiates gebp_kernel with the tensor's StorageIndex.
+  static void (*gemm_function)(const DataMapper&, const float*, const float*, Eigen::Index, Eigen::Index, Eigen::Index,
+                               float, Eigen::Index, Eigen::Index, Eigen::Index, Eigen::Index) =
 #ifdef EIGEN_MATRIX_PRODUCT_MMA_ALTIVEC_H
       (supportsMMA()) ? &Eigen::internal::gemmMMA<float, Packet, RhsPacket, DataMapper, accRows, accCols> :
 #endif
@@ -3443,9 +3488,9 @@ void gebp_kernel<float, float, Index, DataMapper, mr, nr, ConjugateLhs, Conjugat
 
 template <typename Index, typename DataMapper, int mr, int nr, bool ConjugateLhs, bool ConjugateRhs>
 struct gebp_kernel<std::complex<float>, std::complex<float>, Index, DataMapper, mr, nr, ConjugateLhs, ConjugateRhs> {
-  typedef Packet4f Packet;
-  typedef Packet2cf Packetc;
-  typedef Packet4f RhsPacket;
+  using Packet = Packet4f;
+  using Packetc = Packet2cf;
+  using RhsPacket = Packet4f;
 
   void operator()(const DataMapper& res, const std::complex<float>* blockA, const std::complex<float>* blockB,
                   Index rows, Index depth, Index cols, std::complex<float> alpha, Index strideA = -1,
@@ -3458,10 +3503,11 @@ void gebp_kernel<std::complex<float>, std::complex<float>, Index, DataMapper, mr
                                            const std::complex<float>* blockB, Index rows, Index depth, Index cols,
                                            std::complex<float> alpha, Index strideA, Index strideB, Index offsetA,
                                            Index offsetB) {
-  const Index accRows = quad_traits<float>::rows;
-  const Index accCols = quad_traits<float>::size;
-  static void (*gemm_function)(const DataMapper&, const std::complex<float>*, const std::complex<float>*, Index, Index,
-                               Index, std::complex<float>, Index, Index, Index, Index) =
+  const Eigen::Index accRows = quad_traits<float>::rows;
+  const Eigen::Index accCols = quad_traits<float>::size;
+  static void (*gemm_function)(const DataMapper&, const std::complex<float>*, const std::complex<float>*, Eigen::Index,
+                               Eigen::Index, Eigen::Index, std::complex<float>, Eigen::Index, Eigen::Index,
+                               Eigen::Index, Eigen::Index) =
 #ifdef EIGEN_MATRIX_PRODUCT_MMA_ALTIVEC_H
       (supportsMMA()) ? &Eigen::internal::gemm_complexMMA<std::complex<float>, std::complex<float>, std::complex<float>,
                                                           float, Packet, Packetc, RhsPacket, DataMapper, accRows,
@@ -3476,9 +3522,9 @@ void gebp_kernel<std::complex<float>, std::complex<float>, Index, DataMapper, mr
 
 template <typename Index, typename DataMapper, int mr, int nr, bool ConjugateLhs, bool ConjugateRhs>
 struct gebp_kernel<float, std::complex<float>, Index, DataMapper, mr, nr, ConjugateLhs, ConjugateRhs> {
-  typedef Packet4f Packet;
-  typedef Packet2cf Packetc;
-  typedef Packet4f RhsPacket;
+  using Packet = Packet4f;
+  using Packetc = Packet2cf;
+  using RhsPacket = Packet4f;
 
   void operator()(const DataMapper& res, const float* blockA, const std::complex<float>* blockB, Index rows,
                   Index depth, Index cols, std::complex<float> alpha, Index strideA = -1, Index strideB = -1,
@@ -3489,10 +3535,11 @@ template <typename Index, typename DataMapper, int mr, int nr, bool ConjugateLhs
 void gebp_kernel<float, std::complex<float>, Index, DataMapper, mr, nr, ConjugateLhs, ConjugateRhs>::operator()(
     const DataMapper& res, const float* blockA, const std::complex<float>* blockB, Index rows, Index depth, Index cols,
     std::complex<float> alpha, Index strideA, Index strideB, Index offsetA, Index offsetB) {
-  const Index accRows = quad_traits<float>::rows;
-  const Index accCols = quad_traits<float>::size;
-  static void (*gemm_function)(const DataMapper&, const float*, const std::complex<float>*, Index, Index, Index,
-                               std::complex<float>, Index, Index, Index, Index) =
+  const Eigen::Index accRows = quad_traits<float>::rows;
+  const Eigen::Index accCols = quad_traits<float>::size;
+  static void (*gemm_function)(const DataMapper&, const float*, const std::complex<float>*, Eigen::Index, Eigen::Index,
+                               Eigen::Index, std::complex<float>, Eigen::Index, Eigen::Index, Eigen::Index,
+                               Eigen::Index) =
 #ifdef EIGEN_MATRIX_PRODUCT_MMA_ALTIVEC_H
       (supportsMMA()) ? &Eigen::internal::gemm_complexMMA<float, std::complex<float>, std::complex<float>, float,
                                                           Packet, Packetc, RhsPacket, DataMapper, accRows, accCols,
@@ -3507,9 +3554,9 @@ void gebp_kernel<float, std::complex<float>, Index, DataMapper, mr, nr, Conjugat
 
 template <typename Index, typename DataMapper, int mr, int nr, bool ConjugateLhs, bool ConjugateRhs>
 struct gebp_kernel<std::complex<float>, float, Index, DataMapper, mr, nr, ConjugateLhs, ConjugateRhs> {
-  typedef Packet4f Packet;
-  typedef Packet2cf Packetc;
-  typedef Packet4f RhsPacket;
+  using Packet = Packet4f;
+  using Packetc = Packet2cf;
+  using RhsPacket = Packet4f;
 
   void operator()(const DataMapper& res, const std::complex<float>* blockA, const float* blockB, Index rows,
                   Index depth, Index cols, std::complex<float> alpha, Index strideA = -1, Index strideB = -1,
@@ -3520,10 +3567,11 @@ template <typename Index, typename DataMapper, int mr, int nr, bool ConjugateLhs
 void gebp_kernel<std::complex<float>, float, Index, DataMapper, mr, nr, ConjugateLhs, ConjugateRhs>::operator()(
     const DataMapper& res, const std::complex<float>* blockA, const float* blockB, Index rows, Index depth, Index cols,
     std::complex<float> alpha, Index strideA, Index strideB, Index offsetA, Index offsetB) {
-  const Index accRows = quad_traits<float>::rows;
-  const Index accCols = quad_traits<float>::size;
-  static void (*gemm_function)(const DataMapper&, const std::complex<float>*, const float*, Index, Index, Index,
-                               std::complex<float>, Index, Index, Index, Index) =
+  const Eigen::Index accRows = quad_traits<float>::rows;
+  const Eigen::Index accCols = quad_traits<float>::size;
+  static void (*gemm_function)(const DataMapper&, const std::complex<float>*, const float*, Eigen::Index, Eigen::Index,
+                               Eigen::Index, std::complex<float>, Eigen::Index, Eigen::Index, Eigen::Index,
+                               Eigen::Index) =
 #ifdef EIGEN_MATRIX_PRODUCT_MMA_ALTIVEC_H
       (supportsMMA()) ? &Eigen::internal::gemm_complexMMA<std::complex<float>, float, std::complex<float>, float,
                                                           Packet, Packetc, RhsPacket, DataMapper, accRows, accCols,
@@ -3538,8 +3586,8 @@ void gebp_kernel<std::complex<float>, float, Index, DataMapper, mr, nr, Conjugat
 
 template <typename Index, typename DataMapper, int mr, int nr, bool ConjugateLhs, bool ConjugateRhs>
 struct gebp_kernel<double, double, Index, DataMapper, mr, nr, ConjugateLhs, ConjugateRhs> {
-  typedef typename quad_traits<double>::vectortype Packet;
-  typedef typename quad_traits<double>::rhstype RhsPacket;
+  using Packet = typename quad_traits<double>::vectortype;
+  using RhsPacket = typename quad_traits<double>::rhstype;
 
   void operator()(const DataMapper& res, const double* blockA, const double* blockB, Index rows, Index depth,
                   Index cols, double alpha, Index strideA = -1, Index strideB = -1, Index offsetA = 0,
@@ -3550,10 +3598,10 @@ template <typename Index, typename DataMapper, int mr, int nr, bool ConjugateLhs
 void gebp_kernel<double, double, Index, DataMapper, mr, nr, ConjugateLhs, ConjugateRhs>::operator()(
     const DataMapper& res, const double* blockA, const double* blockB, Index rows, Index depth, Index cols,
     double alpha, Index strideA, Index strideB, Index offsetA, Index offsetB) {
-  const Index accRows = quad_traits<double>::rows;
-  const Index accCols = quad_traits<double>::size;
-  static void (*gemm_function)(const DataMapper&, const double*, const double*, Index, Index, Index, double, Index,
-                               Index, Index, Index) =
+  const Eigen::Index accRows = quad_traits<double>::rows;
+  const Eigen::Index accCols = quad_traits<double>::size;
+  static void (*gemm_function)(const DataMapper&, const double*, const double*, Eigen::Index, Eigen::Index,
+                               Eigen::Index, double, Eigen::Index, Eigen::Index, Eigen::Index, Eigen::Index) =
 #ifdef EIGEN_MATRIX_PRODUCT_MMA_ALTIVEC_H
       (supportsMMA()) ? &Eigen::internal::gemmMMA<double, Packet, RhsPacket, DataMapper, accRows, accCols> :
 #endif
@@ -3563,9 +3611,9 @@ void gebp_kernel<double, double, Index, DataMapper, mr, nr, ConjugateLhs, Conjug
 
 template <typename Index, typename DataMapper, int mr, int nr, bool ConjugateLhs, bool ConjugateRhs>
 struct gebp_kernel<std::complex<double>, std::complex<double>, Index, DataMapper, mr, nr, ConjugateLhs, ConjugateRhs> {
-  typedef quad_traits<double>::vectortype Packet;
-  typedef Packet1cd Packetc;
-  typedef quad_traits<double>::rhstype RhsPacket;
+  using Packet = quad_traits<double>::vectortype;
+  using Packetc = Packet1cd;
+  using RhsPacket = quad_traits<double>::rhstype;
 
   void operator()(const DataMapper& res, const std::complex<double>* blockA, const std::complex<double>* blockB,
                   Index rows, Index depth, Index cols, std::complex<double> alpha, Index strideA = -1,
@@ -3578,10 +3626,11 @@ void gebp_kernel<std::complex<double>, std::complex<double>, Index, DataMapper, 
                                            const std::complex<double>* blockB, Index rows, Index depth, Index cols,
                                            std::complex<double> alpha, Index strideA, Index strideB, Index offsetA,
                                            Index offsetB) {
-  const Index accRows = quad_traits<double>::rows;
-  const Index accCols = quad_traits<double>::size;
-  static void (*gemm_function)(const DataMapper&, const std::complex<double>*, const std::complex<double>*, Index,
-                               Index, Index, std::complex<double>, Index, Index, Index, Index) =
+  const Eigen::Index accRows = quad_traits<double>::rows;
+  const Eigen::Index accCols = quad_traits<double>::size;
+  static void (*gemm_function)(const DataMapper&, const std::complex<double>*, const std::complex<double>*,
+                               Eigen::Index, Eigen::Index, Eigen::Index, std::complex<double>, Eigen::Index,
+                               Eigen::Index, Eigen::Index, Eigen::Index) =
 #ifdef EIGEN_MATRIX_PRODUCT_MMA_ALTIVEC_H
       (supportsMMA())
           ? &Eigen::internal::gemm_complexMMA<std::complex<double>, std::complex<double>, std::complex<double>, double,
@@ -3597,9 +3646,9 @@ void gebp_kernel<std::complex<double>, std::complex<double>, Index, DataMapper, 
 
 template <typename Index, typename DataMapper, int mr, int nr, bool ConjugateLhs, bool ConjugateRhs>
 struct gebp_kernel<std::complex<double>, double, Index, DataMapper, mr, nr, ConjugateLhs, ConjugateRhs> {
-  typedef quad_traits<double>::vectortype Packet;
-  typedef Packet1cd Packetc;
-  typedef quad_traits<double>::rhstype RhsPacket;
+  using Packet = quad_traits<double>::vectortype;
+  using Packetc = Packet1cd;
+  using RhsPacket = quad_traits<double>::rhstype;
 
   void operator()(const DataMapper& res, const std::complex<double>* blockA, const double* blockB, Index rows,
                   Index depth, Index cols, std::complex<double> alpha, Index strideA = -1, Index strideB = -1,
@@ -3610,10 +3659,11 @@ template <typename Index, typename DataMapper, int mr, int nr, bool ConjugateLhs
 void gebp_kernel<std::complex<double>, double, Index, DataMapper, mr, nr, ConjugateLhs, ConjugateRhs>::operator()(
     const DataMapper& res, const std::complex<double>* blockA, const double* blockB, Index rows, Index depth,
     Index cols, std::complex<double> alpha, Index strideA, Index strideB, Index offsetA, Index offsetB) {
-  const Index accRows = quad_traits<double>::rows;
-  const Index accCols = quad_traits<double>::size;
-  static void (*gemm_function)(const DataMapper&, const std::complex<double>*, const double*, Index, Index, Index,
-                               std::complex<double>, Index, Index, Index, Index) =
+  const Eigen::Index accRows = quad_traits<double>::rows;
+  const Eigen::Index accCols = quad_traits<double>::size;
+  static void (*gemm_function)(const DataMapper&, const std::complex<double>*, const double*, Eigen::Index,
+                               Eigen::Index, Eigen::Index, std::complex<double>, Eigen::Index, Eigen::Index,
+                               Eigen::Index, Eigen::Index) =
 #ifdef EIGEN_MATRIX_PRODUCT_MMA_ALTIVEC_H
       (supportsMMA()) ? &Eigen::internal::gemm_complexMMA<std::complex<double>, double, std::complex<double>, double,
                                                           Packet, Packetc, RhsPacket, DataMapper, accRows, accCols,
@@ -3628,9 +3678,9 @@ void gebp_kernel<std::complex<double>, double, Index, DataMapper, mr, nr, Conjug
 
 template <typename Index, typename DataMapper, int mr, int nr, bool ConjugateLhs, bool ConjugateRhs>
 struct gebp_kernel<double, std::complex<double>, Index, DataMapper, mr, nr, ConjugateLhs, ConjugateRhs> {
-  typedef quad_traits<double>::vectortype Packet;
-  typedef Packet1cd Packetc;
-  typedef quad_traits<double>::rhstype RhsPacket;
+  using Packet = quad_traits<double>::vectortype;
+  using Packetc = Packet1cd;
+  using RhsPacket = quad_traits<double>::rhstype;
 
   void operator()(const DataMapper& res, const double* blockA, const std::complex<double>* blockB, Index rows,
                   Index depth, Index cols, std::complex<double> alpha, Index strideA = -1, Index strideB = -1,
@@ -3641,10 +3691,11 @@ template <typename Index, typename DataMapper, int mr, int nr, bool ConjugateLhs
 void gebp_kernel<double, std::complex<double>, Index, DataMapper, mr, nr, ConjugateLhs, ConjugateRhs>::operator()(
     const DataMapper& res, const double* blockA, const std::complex<double>* blockB, Index rows, Index depth,
     Index cols, std::complex<double> alpha, Index strideA, Index strideB, Index offsetA, Index offsetB) {
-  const Index accRows = quad_traits<double>::rows;
-  const Index accCols = quad_traits<double>::size;
-  static void (*gemm_function)(const DataMapper&, const double*, const std::complex<double>*, Index, Index, Index,
-                               std::complex<double>, Index, Index, Index, Index) =
+  const Eigen::Index accRows = quad_traits<double>::rows;
+  const Eigen::Index accCols = quad_traits<double>::size;
+  static void (*gemm_function)(const DataMapper&, const double*, const std::complex<double>*, Eigen::Index,
+                               Eigen::Index, Eigen::Index, std::complex<double>, Eigen::Index, Eigen::Index,
+                               Eigen::Index, Eigen::Index) =
 #ifdef EIGEN_MATRIX_PRODUCT_MMA_ALTIVEC_H
       (supportsMMA()) ? &Eigen::internal::gemm_complexMMA<double, std::complex<double>, std::complex<double>, double,
                                                           Packet, Packetc, RhsPacket, DataMapper, accRows, accCols,
@@ -3659,8 +3710,8 @@ void gebp_kernel<double, std::complex<double>, Index, DataMapper, mr, nr, Conjug
 
 template <typename Index, typename DataMapper, int mr, int nr, bool ConjugateLhs, bool ConjugateRhs>
 struct gebp_kernel<bfloat16, bfloat16, Index, DataMapper, mr, nr, ConjugateLhs, ConjugateRhs> {
-  typedef typename quad_traits<bfloat16>::vectortype Packet;
-  typedef typename quad_traits<bfloat16>::rhstype RhsPacket;
+  using Packet = typename quad_traits<bfloat16>::vectortype;
+  using RhsPacket = typename quad_traits<bfloat16>::rhstype;
 
   void operator()(const DataMapper& res, const bfloat16* blockA, const bfloat16* blockB, Index rows, Index depth,
                   Index cols, bfloat16 alpha, Index strideA = -1, Index strideB = -1, Index offsetA = 0,
@@ -3671,8 +3722,8 @@ template <typename Index, typename DataMapper, int mr, int nr, bool ConjugateLhs
 void gebp_kernel<bfloat16, bfloat16, Index, DataMapper, mr, nr, ConjugateLhs, ConjugateRhs>::operator()(
     const DataMapper& res, const bfloat16* blockA, const bfloat16* blockB, Index rows, Index depth, Index cols,
     bfloat16 alpha, Index strideA, Index strideB, Index offsetA, Index offsetB) {
-  static void (*gemm_function)(const DataMapper&, const bfloat16*, const bfloat16*, Index, Index, Index, bfloat16,
-                               Index, Index, Index, Index) =
+  static void (*gemm_function)(const DataMapper&, const bfloat16*, const bfloat16*, Eigen::Index, Eigen::Index,
+                               Eigen::Index, bfloat16, Eigen::Index, Eigen::Index, Eigen::Index, Eigen::Index) =
 #ifdef EIGEN_MATRIX_PRODUCT_MMA_ALTIVEC_H
       (supportsMMA()) ? &Eigen::internal::gemmMMAbfloat16<DataMapper> :
 #endif

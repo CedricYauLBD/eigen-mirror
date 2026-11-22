@@ -7,6 +7,7 @@
 // This Source Code Form is subject to the terms of the Mozilla
 // Public License v. 2.0. If a copy of the MPL was not distributed
 // with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
+// SPDX-License-Identifier: MPL-2.0
 
 #include "main.h"
 #include <Eigen/Geometry>
@@ -25,8 +26,8 @@ T bounded_acos(T v) {
 template <typename QuatType>
 void check_slerp(const QuatType& q0, const QuatType& q1) {
   using std::abs;
-  typedef typename QuatType::Scalar Scalar;
-  typedef AngleAxis<Scalar> AA;
+  using Scalar = typename QuatType::Scalar;
+  using AA = AngleAxis<Scalar>;
 
   Scalar largeEps = test_precision<Scalar>();
 
@@ -37,7 +38,7 @@ void check_slerp(const QuatType& q0, const QuatType& q1) {
     Scalar theta = AA(q * q0.inverse()).angle();
     VERIFY(abs(q.norm() - 1) < largeEps);
     if (theta_tot == 0)
-      VERIFY(theta_tot == 0);
+      VERIFY(theta < largeEps);
     else
       VERIFY(abs(theta - t * theta_tot) < largeEps);
   }
@@ -49,13 +50,15 @@ void quaternion(void) {
      Quaternion.h
   */
   using std::abs;
-  typedef Matrix<Scalar, 3, 1> Vector3;
-  typedef Matrix<Scalar, 3, 3> Matrix3;
-  typedef Quaternion<Scalar, Options> Quaternionx;
-  typedef AngleAxis<Scalar> AngleAxisx;
+  using std::cos;
+  using std::sin;
+  using std::sqrt;
+  using Vector3 = Matrix<Scalar, 3, 1>;
+  using Matrix3 = Matrix<Scalar, 3, 3>;
+  using Quaternionx = Quaternion<Scalar, Options>;
+  using AngleAxisx = AngleAxis<Scalar>;
 
   Scalar largeEps = test_precision<Scalar>();
-  if (internal::is_same<Scalar, float>::value) largeEps = Scalar(1e-3);
 
   Scalar eps = internal::random<Scalar>() * Scalar(1e-2);
 
@@ -105,6 +108,15 @@ void quaternion(void) {
     VERIFY_IS_MUCH_SMALLER_THAN(abs(q1.angularDistance(q2) - refangle), Scalar(1));
   }
 
+  // angular distance with non-unit quaternions (scale-invariance)
+  {
+    Quaternionx qunit(AngleAxisx(Scalar(EIGEN_PI / 2), Vector3::UnitX()));
+    Quaternionx qscaled;
+    qscaled.coeffs() = qunit.coeffs() * Scalar(2);
+    VERIFY_IS_APPROX(qscaled.angularDistance(Quaternionx::Identity()), Scalar(EIGEN_PI / 2));
+    VERIFY_IS_APPROX(Quaternionx::Identity().angularDistance(qscaled), Scalar(EIGEN_PI / 2));
+  }
+
   // Action on vector by the q v q* formula
   VERIFY_IS_APPROX(q1 * v2, (q1 * Quaternionx(Scalar(0), v2) * q1.inverse()).vec());
   VERIFY_IS_APPROX(q1.inverse() * v2, (q1.inverse() * Quaternionx(Scalar(0), v2) * q1).vec());
@@ -139,7 +151,12 @@ void quaternion(void) {
   VERIFY_IS_APPROX(v2.normalized(), (q2.setFromTwoVectors(v1, v2) * v1).normalized());
   VERIFY_IS_APPROX(v1.normalized(), (q2.setFromTwoVectors(v1, v1) * v1).normalized());
   VERIFY_IS_APPROX(-v1.normalized(), (q2.setFromTwoVectors(v1, -v1) * v1).normalized());
-  if (internal::is_same<Scalar, double>::value) {
+  // exactly opposite vectors rotate by pi about v1.unitOrthogonal()
+  VERIFY_IS_APPROX(q2.coeffs(), (Matrix<Scalar, 4, 1>() << v1.normalized().unitOrthogonal(), Scalar(0)).finished());
+  // nearly opposite vectors: the axis must be orthogonal to both
+  v3 = -v1 + v1.unitOrthogonal() * (v1.norm() * Scalar(std::is_same<Scalar, float>::value ? 3e-3 : 1e-6));
+  VERIFY_IS_APPROX(v3.normalized(), (q2.setFromTwoVectors(v1, v3) * v1).normalized());
+  if (std::is_same<Scalar, double>::value) {
     v3 = (v1.array() + eps).matrix();
     VERIFY_IS_APPROX(v3.normalized(), (q2.setFromTwoVectors(v1, v3) * v1).normalized());
     VERIFY_IS_APPROX(-v3.normalized(), (q2.setFromTwoVectors(v1, -v3) * v1).normalized());
@@ -149,7 +166,7 @@ void quaternion(void) {
   VERIFY_IS_APPROX(v2.normalized(), (Quaternionx::FromTwoVectors(v1, v2) * v1).normalized());
   VERIFY_IS_APPROX(v1.normalized(), (Quaternionx::FromTwoVectors(v1, v1) * v1).normalized());
   VERIFY_IS_APPROX(-v1.normalized(), (Quaternionx::FromTwoVectors(v1, -v1) * v1).normalized());
-  if (internal::is_same<Scalar, double>::value) {
+  if (std::is_same<Scalar, double>::value) {
     v3 = (v1.array() + eps).matrix();
     VERIFY_IS_APPROX(v3.normalized(), (Quaternionx::FromTwoVectors(v1, v3) * v1).normalized());
     VERIFY_IS_APPROX(-v3.normalized(), (Quaternionx::FromTwoVectors(v1, -v3) * v1).normalized());
@@ -165,9 +182,132 @@ void quaternion(void) {
   Quaternion<double> q1d = q1.template cast<double>();
   VERIFY_IS_APPROX(q1d.template cast<Scalar>(), q1);
 
+  // test assignment from 4D quaternion vector
+  {
+    Matrix<Scalar, 4, 1> vec4 = q1.coeffs();
+    AngleAxisx aa;
+    aa = vec4;
+    VERIFY_IS_APPROX(Quaternionx(aa), q1);
+  }
+
   // test bug 369 - improper alignment.
   Quaternionx* q = new Quaternionx;
   delete q;
+
+  // ---- setFromScaledAxis / toScaledAxis (SO(3) exp/log) ----
+  // Identity round-trip.
+  VERIFY_IS_APPROX(Quaternionx::FromScaledAxis(Vector3::Zero()).coeffs(), Quaternionx::Identity().coeffs());
+  VERIFY_IS_EQUAL(Quaternionx::Identity().toScaledAxis(), Vector3::Zero());
+
+  // Canonical axis rotations: 90/180/60 degrees.
+  {
+    Vector3 sa = Vector3::UnitX() * Scalar(EIGEN_PI / 2);
+    Scalar c = sqrt(Scalar(2)) * Scalar(0.5);
+    VERIFY_IS_APPROX(Quaternionx::FromScaledAxis(sa), Quaternionx(c, c, Scalar(0), Scalar(0)));
+    VERIFY_IS_APPROX(Quaternionx::FromScaledAxis(sa), Quaternionx(AngleAxisx(Scalar(EIGEN_PI / 2), Vector3::UnitX())));
+  }
+  VERIFY_IS_APPROX(Quaternionx(Scalar(0), Scalar(0), Scalar(1), Scalar(0)).toScaledAxis(),
+                   Vector3(Scalar(0), Scalar(EIGEN_PI), Scalar(0)));
+  VERIFY_IS_APPROX(Quaternionx(sqrt(Scalar(3)) / Scalar(2), Scalar(0), Scalar(0), Scalar(0.5)).toScaledAxis(),
+                   Scalar(EIGEN_PI / 3) * Vector3::UnitZ());
+
+  // Small but normal angle: agrees with the closed-form half-angle quaternion.
+  {
+    Scalar theta = Scalar(1e-2);
+    Vector3 sa = Vector3::UnitX() * theta;
+    VERIFY_IS_APPROX(Quaternionx::FromScaledAxis(sa),
+                     Quaternionx(cos(theta / Scalar(2)), sin(theta / Scalar(2)), Scalar(0), Scalar(0)));
+    VERIFY_IS_APPROX(Quaternionx(AngleAxisx(theta, Vector3::UnitX())).toScaledAxis(), sa);
+  }
+
+  // Tiny angle (sqrt of the smallest normal): the squared-norm formulation would have
+  // flushed to zero here, so this exercises the stableNorm() path. The closed form is
+  // still used (no Taylor expansion) and must agree with the math.
+  {
+    const Scalar theta_base = (numext::numeric_limits<Scalar>::min)();
+    const Scalar theta = sqrt(theta_base);
+    Vector3 sa = Vector3::UnitX() * theta;
+    VERIFY_IS_APPROX(Quaternionx::FromScaledAxis(sa),
+                     Quaternionx(cos(theta / Scalar(2)), sin(theta / Scalar(2)), Scalar(0), Scalar(0)));
+    VERIFY_IS_APPROX(Quaternionx(AngleAxisx(theta, Vector3::UnitX())).toScaledAxis(), sa);
+  }
+
+  // Exact-zero handling: identity quaternion out / zero vector out, no NaN.
+  {
+    Quaternionx qid = Quaternionx::FromScaledAxis(Vector3::Zero());
+    VERIFY_IS_EQUAL(qid.w(), Scalar(1));
+    VERIFY_IS_EQUAL(qid.vec(), Vector3::Zero());
+    VERIFY_IS_EQUAL(Quaternionx::Identity().toScaledAxis(), Vector3::Zero());
+    // -1 quaternion (same rotation as identity) also maps to zero.
+    Quaternionx qneg(Scalar(-1), Scalar(0), Scalar(0), Scalar(0));
+    VERIFY_IS_EQUAL(qneg.toScaledAxis(), Vector3::Zero());
+  }
+
+  // Negative-w quaternion: the canonical magnitude of the rotation vector is in [0, pi].
+  {
+    Vector3 axis = Vector3::UnitX();
+    Quaternionx q_pos(AngleAxisx(Scalar(EIGEN_PI / 3), axis));
+    Quaternionx q_neg(-q_pos.w(), -q_pos.x(), -q_pos.y(), -q_pos.z());
+    Vector3 sa_pos = q_pos.toScaledAxis();
+    Vector3 sa_neg = q_neg.toScaledAxis();
+    VERIFY(sa_pos.norm() <= Scalar(EIGEN_PI) + test_precision<Scalar>());
+    VERIFY(sa_neg.norm() <= Scalar(EIGEN_PI) + test_precision<Scalar>());
+    // Both quaternions represent the same rotation, so re-applying exp gives back q_pos
+    // up to sign.
+    Quaternionx q_round = Quaternionx::FromScaledAxis(sa_neg);
+    VERIFY_IS_APPROX(numext::abs(q_round.dot(q_pos)), Scalar(1));
+  }
+
+  // Near-pi rotations: sin(theta/2) is near 1 and cos(theta/2) is near 0, so the
+  // canonicalisation branch (the abs(w)/(w<0) split) is stress-tested. Stay in [0, pi]:
+  // for theta > pi the canonical answer is (2*pi - theta) * (-axis), which is an
+  // important behaviour but is covered by the "Negative-w quaternion" test.
+  {
+    Vector3 axis = Vector3(Scalar(1), Scalar(2), Scalar(3)).normalized();
+    for (Scalar gap : {Scalar(1e-3), Scalar(1e-6)}) {
+      Scalar theta = Scalar(EIGEN_PI) - gap;
+      Quaternionx near_pi_quat(AngleAxisx(theta, axis));
+      Vector3 sa = near_pi_quat.toScaledAxis();
+      VERIFY_IS_APPROX(sa.stableNorm(), theta);
+      VERIFY_IS_APPROX(Quaternionx::FromScaledAxis(sa), near_pi_quat);
+    }
+  }
+
+  // w == -0.0 corner case (and its +0.0 counterpart).
+  {
+    // (w=+0, x=0, y=0, z=1) and (w=-0, ...) both represent rotation by pi about z.
+    Quaternionx qp(Scalar(0), Scalar(0), Scalar(0), Scalar(1));
+    Quaternionx qn(-Scalar(0), Scalar(0), Scalar(0), Scalar(1));
+    Vector3 sap = qp.toScaledAxis();
+    Vector3 san = qn.toScaledAxis();
+    VERIFY_IS_APPROX(sap.stableNorm(), Scalar(EIGEN_PI));
+    VERIFY_IS_APPROX(san.stableNorm(), Scalar(EIGEN_PI));
+    VERIFY_IS_APPROX(Quaternionx::FromScaledAxis(sap), qp);
+    // qp and qn represent the same rotation, so the recovered quaternions must agree up
+    // to sign.
+    VERIFY_IS_APPROX(numext::abs(Quaternionx::FromScaledAxis(san).dot(qp)), Scalar(1));
+  }
+
+  // Round-trip across the full canonical range. Includes near-pi by construction.
+  {
+    static const int kNumOctants = 8;
+    const Scalar angle_base = internal::random<Scalar>(Scalar(0), Scalar(EIGEN_PI));
+    for (int octant = 0; octant < kNumOctants; ++octant) {
+      // Sweep through magnitude as well, including the antipodal boundary at pi.
+      Scalar angle =
+          angle_base * Scalar(octant) / Scalar(kNumOctants - 1);  // 0 .. angle_base, hits pi when angle_base = pi
+      Scalar theta = -Scalar(EIGEN_PI) + Scalar(2 * EIGEN_PI) * Scalar(octant) / Scalar(kNumOctants);
+      Scalar phi = Scalar(EIGEN_PI) * Scalar(octant + 1) / Scalar(kNumOctants + 1);
+      Vector3 sa(angle * sin(phi) * cos(theta), angle * sin(phi) * sin(theta), angle * cos(phi));
+      Quaternionx roundtrip_quat = Quaternionx::FromScaledAxis(sa);
+      VERIFY_IS_APPROX(roundtrip_quat.norm(), Scalar(1));
+      Vector3 sa_rt = roundtrip_quat.toScaledAxis();
+      VERIFY_IS_APPROX(sa_rt, sa);
+      // And the other direction (quaternion -> sa -> quaternion).
+      Quaternionx roundtrip_quat2 = Quaternionx::FromScaledAxis(sa_rt);
+      VERIFY_IS_APPROX(roundtrip_quat2, roundtrip_quat);
+    }
+  }
 
   q1 = Quaternionx::UnitRandom();
   q2 = Quaternionx::UnitRandom();
@@ -188,19 +328,19 @@ void quaternion(void) {
 
 template <typename Scalar>
 void mapQuaternion(void) {
-  typedef Map<Quaternion<Scalar>, Aligned> MQuaternionA;
-  typedef Map<const Quaternion<Scalar>, Aligned> MCQuaternionA;
-  typedef Map<Quaternion<Scalar> > MQuaternionUA;
-  typedef Map<const Quaternion<Scalar> > MCQuaternionUA;
-  typedef Quaternion<Scalar> Quaternionx;
-  typedef Matrix<Scalar, 3, 1> Vector3;
-  typedef AngleAxis<Scalar> AngleAxisx;
+  using MQuaternionA = Map<Quaternion<Scalar>, Aligned>;
+  using MCQuaternionA = Map<const Quaternion<Scalar>, Aligned>;
+  using MQuaternionUA = Map<Quaternion<Scalar> >;
+  using MCQuaternionUA = Map<const Quaternion<Scalar> >;
+  using Quaternionx = Quaternion<Scalar>;
+  using Vector3 = Matrix<Scalar, 3, 1>;
+  using AngleAxisx = AngleAxis<Scalar>;
 
   Vector3 v0 = Vector3::Random(), v1 = Vector3::Random();
   Scalar a = internal::random<Scalar>(-Scalar(EIGEN_PI), Scalar(EIGEN_PI));
 
-  EIGEN_ALIGN_MAX Scalar array1[4];
-  EIGEN_ALIGN_MAX Scalar array2[4];
+  EIGEN_ALIGN_TO_BOUNDARY(Aligned) Scalar array1[4];
+  EIGEN_ALIGN_TO_BOUNDARY(Aligned) Scalar array2[4];
   EIGEN_ALIGN_MAX Scalar array3[4 + 1];
   Scalar* array3unaligned = array3 + 1;
 
@@ -223,6 +363,9 @@ void mapQuaternion(void) {
   VERIFY_IS_APPROX(q1.coeffs(), q2.coeffs());
   VERIFY_IS_APPROX(q1.coeffs(), q3.coeffs());
   VERIFY_IS_APPROX(q4.coeffs(), q3.coeffs());
+  VERIFY_IS_EQUAL(mq3.coeffsScalarFirst(), q3.coeffsScalarFirst());
+  VERIFY_IS_EQUAL(mcq3.coeffsScalarFirst(), q3.coeffsScalarFirst());
+  VERIFY_IS_EQUAL(mcq3.coeffsScalarLast(), q3.coeffsScalarLast());
 
   VERIFY_IS_APPROX(mq1 * (mq1.inverse() * v1), v1);
   VERIFY_IS_APPROX(mq1 * (mq1.conjugate() * v1), v1);
@@ -265,8 +408,8 @@ void mapQuaternion(void) {
 
 template <typename Scalar>
 void quaternionAlignment(void) {
-  typedef Quaternion<Scalar, AutoAlign> QuaternionA;
-  typedef Quaternion<Scalar, DontAlign> QuaternionUA;
+  using QuaternionA = Quaternion<Scalar, AutoAlign>;
+  using QuaternionUA = Quaternion<Scalar, DontAlign>;
 
   EIGEN_ALIGN_MAX Scalar array1[4];
   EIGEN_ALIGN_MAX Scalar array2[4];
@@ -292,7 +435,7 @@ void check_const_correctness(const PlainObjectType&) {
   // CMake can help with that.
 
   // verify that map-to-const don't have LvalueBit
-  typedef std::add_const_t<PlainObjectType> ConstPlainObjectType;
+  using ConstPlainObjectType = std::add_const_t<PlainObjectType>;
   VERIFY(!(internal::traits<Map<ConstPlainObjectType> >::Flags & LvalueBit));
   VERIFY(!(internal::traits<Map<ConstPlainObjectType, Aligned> >::Flags & LvalueBit));
   VERIFY(!(Map<ConstPlainObjectType>::Flags & LvalueBit));
@@ -301,7 +444,6 @@ void check_const_correctness(const PlainObjectType&) {
 
 // Regression for bug 1573
 struct MovableClass {
-  // The following line is a workaround for gcc 4.7 and 4.8 (see bug 1573 comments).
   static_assert(std::is_nothrow_move_constructible<Quaternionf>::value, "");
   MovableClass() = default;
   MovableClass(const MovableClass&) = default;
@@ -311,23 +453,234 @@ struct MovableClass {
   Quaternionf m_quat;
 };
 
+void quaternion_product_fma() {
+#if defined(EIGEN_VECTORIZE_FMA) && !defined(EIGEN_VECTORIZE_GENERIC) && \
+    (defined(EIGEN_VECTORIZE_SSE) || (defined(EIGEN_VECTORIZE_NEON) && EIGEN_ARCH_ARM64))
+  const double half_max = NumTraits<double>::highest() / 2;
+  const Quaterniond a(half_max, 0, -half_max, 0), b(0, 3, 0, 1);
+  const Quaterniond result = a * b;
+  // Pin fusion of these particular products; mirrored inputs can still overflow.
+  VERIFY_IS_EQUAL(result.x(), NumTraits<double>::highest());
+  const Quaterniond c(0, half_max, 0, half_max), d(0, 3, 0, 1);
+  const Quaterniond difference = c * d;
+  VERIFY_IS_EQUAL(difference.y(), NumTraits<double>::highest());
+  const float half_max_float = NumTraits<float>::highest() / 2;
+  const Quaternionf sum_a(half_max_float, 0, -half_max_float, 0), sum_b(0, 3, 0, 1);
+  VERIFY_IS_EQUAL((sum_a * sum_b).x(), NumTraits<float>::highest());
+  const Quaternionf e(0, half_max_float, 0, half_max_float), f(3, 0, 1, 0);
+  const Quaternionf difference_float = e * f;
+  VERIFY_IS_EQUAL(difference_float.x(), NumTraits<float>::highest());
+#endif
+}
+
+// Checks that Quaternion::FromTwoVectors(a, b) is a unit quaternion that rotates the direction of a to the direction of
+// b, against a long double reference built from the rounded inputs, to within `tolerance_in_eps` eps. The default is 16
+// eps. The largest rotation error measured is 9.4 eps and the largest norm error 2.1 eps (float, double and half; 3e6
+// random inputs with pi - angle in [eps^3, 16 eps] and 1000 repeats of the sweep below), so the tolerance leaves a
+// factor of 1.7.
+template <typename Scalar>
+void check_from_two_vectors(const Matrix<Scalar, 3, 1>& a, const Matrix<Scalar, 3, 1>& b,
+                            double tolerance_in_eps = 16) {
+  using LongDouble = long double;
+  using Vector3L = Matrix<LongDouble, 3, 1>;
+  const LongDouble tolerance = LongDouble(tolerance_in_eps) * LongDouble(double(NumTraits<Scalar>::epsilon()));
+  const Quaternion<Scalar> q = Quaternion<Scalar>::FromTwoVectors(a, b);
+  const Quaternion<LongDouble> ql(LongDouble(double(q.w())), LongDouble(double(q.x())), LongDouble(double(q.y())),
+                                  LongDouble(double(q.z())));
+  // stableNormalized(): the squared norm of an extreme input does not exist even in long double if that is double.
+  const Vector3L a_unit = a.template cast<double>().template cast<LongDouble>().stableNormalized();
+  const Vector3L b_unit = b.template cast<double>().template cast<LongDouble>().stableNormalized();
+  const LongDouble norm_error = std::abs(ql.norm() - 1);
+  const LongDouble rotation_error = (ql * a_unit - b_unit).norm();
+  VERIFY(norm_error <= tolerance);
+  VERIFY(rotation_error <= tolerance);
+}
+
+// Accuracy of Quaternion::FromTwoVectors over the whole range of angles between the two vectors, in particular close to
+// pi, where 1 + v0.v1 and v0 x v1 cancel, and around pi/2, where the formula changes.
+template <typename Scalar>
+void quaternion_two_vectors_accuracy() {
+  using LongDouble = long double;
+  using Vector3 = Matrix<Scalar, 3, 1>;
+  using Vector3L = Matrix<LongDouble, 3, 1>;
+  const LongDouble pi = LongDouble(3.141592653589793238462643383279502884L);
+  const double eps = double(NumTraits<Scalar>::epsilon());
+  auto to_scalar = [](const Vector3L& x) {
+    Vector3 y;
+    for (int i = 0; i < 3; ++i) y[i] = Scalar(double(x[i]));
+    return y;
+  };
+
+  // Vectors a and b at the angle pi - delta (cos = -cos(delta)) or at an angle with the given cosine, with random
+  // axis and random norms.
+  auto random_pair = [&](LongDouble cos_angle, LongDouble sin_angle, Vector3& a, Vector3& b) {
+    Vector3L axis = Vector3L::Random().normalized();
+    Vector3L perp = Vector3L::Random();
+    perp = (perp - perp.dot(axis) * axis).normalized();
+    const LongDouble sa = std::pow(LongDouble(10), LongDouble(internal::random<double>(-2, 2)));
+    const LongDouble sb = std::pow(LongDouble(10), LongDouble(internal::random<double>(-2, 2)));
+    a = to_scalar(sa * axis);
+    b = to_scalar(sb * (cos_angle * axis + sin_angle * perp));
+  };
+
+  // delta from 1 down to far below eps (exactly antipodal after rounding), and a coarse sweep of the angle from 0 to
+  // pi.
+  std::vector<LongDouble> deltas;
+  for (int k = 0; k < 2 * NumTraits<Scalar>::digits() + 4; ++k)
+    deltas.push_back(std::pow(LongDouble(2), -LongDouble(k) / 2));
+  for (int k = 0; k <= 32; ++k) deltas.push_back(pi * LongDouble(k) / LongDouble(32));
+  deltas.push_back(0);
+  for (size_t i = 0; i < deltas.size(); ++i) {
+    for (int trial = 0; trial < 4; ++trial) {
+      Vector3 a, b;
+      random_pair(-std::cos(deltas[i]), std::sin(deltas[i]), a, b);
+      check_from_two_vectors(a, b);
+    }
+  }
+
+  // A dense band of delta in [eps^3, 16 eps], where |v0 + v1| is a few eps and the cross product is mostly rounding
+  // noise.
+  for (int i = 0; i < 4096; ++i) {
+    const LongDouble delta =
+        std::pow(LongDouble(2), LongDouble(internal::random<double>(3 * std::log2(eps), std::log2(eps) + 4)));
+    Vector3 a, b;
+    random_pair(-std::cos(delta), std::sin(delta), a, b);
+    check_from_two_vectors(a, b);
+  }
+
+  // Cosines of +-k eps around the switch between the two formulas at cos = 0.
+  for (int k = 0; k <= 16; k = (k == 0 ? 1 : 2 * k)) {
+    for (int sign = -1; sign <= 1; sign += 2) {
+      const LongDouble c = LongDouble(sign) * LongDouble(k) * LongDouble(eps);
+      Vector3 a, b;
+      random_pair(c, std::sqrt(1 - c * c), a, b);
+      check_from_two_vectors(a, b);
+    }
+  }
+
+  // Pairs where the projection of the cross product onto the plane orthogonal to v0 must be done twice: with one
+  // projection they have errors of 24 eps and 34 eps in some builds (the rounding of the normalization decides).
+  check_from_two_vectors<Scalar>(
+      Vector3(Scalar(0.40689840912818909), Scalar(-0.12618118524551392), Scalar(-0.97086304426193237)),
+      Vector3(Scalar(-0.40689828991889954), Scalar(0.12618115544319153), Scalar(0.97086280584335327)));
+  check_from_two_vectors<Scalar>(
+      Vector3(Scalar(-0.27598738739370821), Scalar(0.08133442155882098), Scalar(0.11249741522661272)),
+      Vector3(Scalar(0.27598738739370815), Scalar(-0.081334421558820966), Scalar(-0.11249741522661269)));
+}
+
+// For half, sqrt(min) = 2^-7 is above the cutoff 4 eps = 2^-8 on |v0 + v1| below which the axis is replaced: the cross
+// product of such nearly antipodal inputs has a norm in the band (4 eps, sqrt(min)] whose square is subnormal. Its axis
+// is meaningful and must not be replaced by v0.unitOrthogonal(), which has an error of 7 to 16 eps in q v0 here where
+// the correct result has 0.13 eps or less. (t = 1/256 has |v0 + v1| = 4 eps exactly, where the replacement is
+// intended.)
+void quaternion_two_vectors_half_antipodal() {
+  using Vector3 = Matrix<half, 3, 1>;
+  for (double t : {1. / 64, 1. / 128, 1. / 200}) {
+    check_from_two_vectors<half>(Vector3(half(1), half(0), half(0)), Vector3(half(-1), half(t), half(0)), 1);
+    check_from_two_vectors<half>(Vector3(half(0), half(1), half(0)), Vector3(half(0), half(-1), half(t)), 1);
+    check_from_two_vectors<half>(Vector3(half(0), half(1), half(0)), Vector3(half(-t), half(-1), half(0)), 1);
+  }
+}
+
+// The inputs of FromTwoVectors need not be normalized: this holds for magnitudes whose square or whose squared norm is
+// not representable.
+template <typename Scalar>
+void quaternion_two_vectors_extreme_scale() {
+  using Vector3 = Matrix<Scalar, 3, 1>;
+  using Quaternionx = Quaternion<Scalar>;
+  const Scalar tolerance = Scalar(16) * NumTraits<Scalar>::epsilon();
+  const Scalar sqrt2_half = Scalar(0.70710678118654752440);
+  const Scalar big = std::sqrt((NumTraits<Scalar>::highest)()) * Scalar(4);
+  const Scalar tiny = std::sqrt((std::numeric_limits<Scalar>::min)()) * NumTraits<Scalar>::epsilon();
+  const Scalar scales[] = {big, tiny, Scalar(1)};  // the scale 1 mixes normal and extreme magnitudes
+  const Vector3 d0(Scalar(0.3), Scalar(-0.4), Scalar(0.5));
+  const Vector3 d1(Scalar(-0.2), Scalar(0.7), Scalar(0.1));
+  const Vector3 d_orth = d0.cross(d1);
+  for (Scalar sa : scales) {
+    for (Scalar sb : scales) {
+      // Along an axis: parallel, orthogonal and antiparallel vectors.
+      Quaternionx q = Quaternionx::FromTwoVectors(Vector3(sa, 0, 0), Vector3(sb, 0, 0));
+      VERIFY(numext::abs(q.norm() - Scalar(1)) <= tolerance);
+      VERIFY_IS_APPROX(q.coeffs(), Quaternionx::Identity().coeffs());
+      q = Quaternionx::FromTwoVectors(Vector3(sa, 0, 0), Vector3(0, sb, 0));
+      VERIFY(numext::abs(q.norm() - Scalar(1)) <= tolerance);
+      VERIFY(numext::abs(q.x()) <= tolerance && numext::abs(q.y()) <= tolerance);
+      VERIFY(numext::abs(q.z() - sqrt2_half) <= tolerance && numext::abs(q.w() - sqrt2_half) <= tolerance);
+      q = Quaternionx::FromTwoVectors(Vector3(sa, 0, 0), Vector3(-sb, 0, 0));
+      VERIFY(numext::abs(q.norm() - Scalar(1)) <= tolerance);
+      VERIFY(numext::abs(q.w()) <= tolerance);
+
+      // Skew directions: q a is parallel to b in every case.
+      check_from_two_vectors<Scalar>(sa * d0, sb * d0);
+      check_from_two_vectors<Scalar>(sa * d0, -sb * d0);
+      check_from_two_vectors<Scalar>(sa * d0, sb * d1);
+      check_from_two_vectors<Scalar>(sa * d0, sb * d_orth);
+      check_from_two_vectors<Scalar>(sa * d0, -sb * d1);
+    }
+  }
+}
+
+// setFromScaledAxis must stay finite when the norm of the rotation vector overflows although its coefficients do not.
+template <typename Scalar>
+void quaternion_scaled_axis_extreme_norm() {
+  using Vector3 = Matrix<Scalar, 3, 1>;
+  using Quaternionx = Quaternion<Scalar>;
+  const Scalar tolerance = Scalar(16) * NumTraits<Scalar>::epsilon();
+  const Scalar big = std::sqrt((NumTraits<Scalar>::highest)()) * Scalar(4);
+  // Along an axis the angle is the coefficient itself, so sin and cos of half of it are the expected values.
+  for (Scalar angle : {big, -big, Scalar(0.5) * (NumTraits<Scalar>::highest)()}) {
+    const Quaternionx q = Quaternionx::FromScaledAxis(Vector3(angle, 0, 0));
+    VERIFY((numext::isfinite)(q.coeffs().sum()));
+    VERIFY(numext::abs(q.norm() - Scalar(1)) <= tolerance);
+    VERIFY_IS_APPROX(q.w(), std::cos(Scalar(0.5) * numext::abs(angle)));
+    VERIFY_IS_APPROX(q.x(), std::sin(Scalar(0.5) * angle));
+    VERIFY_IS_EQUAL(q.y(), Scalar(0));
+    VERIFY_IS_EQUAL(q.z(), Scalar(0));
+  }
+  // A skew direction: the vector part stays parallel to the input and the quaternion has unit norm. The squared
+  // norm of v overflows, so v.normalized() would be zero and make the parallelism check vacuous.
+  const Vector3 v = big * Vector3(Scalar(0.5), Scalar(-0.25), Scalar(0.75));
+  const Quaternionx q = Quaternionx::FromScaledAxis(v);
+  VERIFY(numext::abs(q.norm() - Scalar(1)) <= tolerance);
+  VERIFY(q.vec().cross(v.stableNormalized()).norm() <= tolerance);
+  VERIFY_IS_APPROX(q.w(), std::cos(Scalar(0.5) * v.stableNorm()));
+}
+
+// Overflow of a squared norm cannot be observed under -ffinite-math-only, which folds the range checks away. The macro
+// is defined as 0 or 1 by GCC and clang, so it must be tested for its value.
+#if defined(__FINITE_MATH_ONLY__) && __FINITE_MATH_ONLY__
+#define EIGEN_TEST_OVERFLOW_HANDLING(x)
+#else
+#define EIGEN_TEST_OVERFLOW_HANDLING(x) x
+#endif
+
 EIGEN_DECLARE_TEST(geo_quaternion) {
+  CALL_SUBTEST_2(quaternion_product_fma());
   for (int i = 0; i < g_repeat; i++) {
     CALL_SUBTEST_1((quaternion<float, AutoAlign>()));
     CALL_SUBTEST_1(check_const_correctness(Quaternionf()));
     CALL_SUBTEST_1((quaternion<float, DontAlign>()));
     CALL_SUBTEST_1((quaternionAlignment<float>()));
     CALL_SUBTEST_1(mapQuaternion<float>());
+    CALL_SUBTEST_1(quaternion_two_vectors_accuracy<float>());
+    EIGEN_TEST_OVERFLOW_HANDLING(CALL_SUBTEST_1(quaternion_two_vectors_extreme_scale<float>()));
+    EIGEN_TEST_OVERFLOW_HANDLING(CALL_SUBTEST_1(quaternion_scaled_axis_extreme_norm<float>()));
 
     CALL_SUBTEST_2((quaternion<double, AutoAlign>()));
     CALL_SUBTEST_2(check_const_correctness(Quaterniond()));
     CALL_SUBTEST_2((quaternion<double, DontAlign>()));
     CALL_SUBTEST_2((quaternionAlignment<double>()));
     CALL_SUBTEST_2(mapQuaternion<double>());
+    CALL_SUBTEST_2(quaternion_two_vectors_accuracy<double>());
+    EIGEN_TEST_OVERFLOW_HANDLING(CALL_SUBTEST_2(quaternion_two_vectors_extreme_scale<double>()));
+    EIGEN_TEST_OVERFLOW_HANDLING(CALL_SUBTEST_2(quaternion_scaled_axis_extreme_norm<double>()));
 
 #ifndef EIGEN_TEST_ANNOYING_SCALAR_DONT_THROW
     AnnoyingScalar::dont_throw = true;
 #endif
     CALL_SUBTEST_3((quaternion<AnnoyingScalar, AutoAlign>()));
+
+    CALL_SUBTEST_4(quaternion_two_vectors_accuracy<half>());
+    CALL_SUBTEST_4(quaternion_two_vectors_half_antipodal());
   }
 }

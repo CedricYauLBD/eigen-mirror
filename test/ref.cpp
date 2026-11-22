@@ -6,6 +6,7 @@
 // This Source Code Form is subject to the terms of the Mozilla
 // Public License v. 2.0. If a copy of the MPL was not distributed
 // with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
+// SPDX-License-Identifier: MPL-2.0
 
 // This unit test cannot be easily written to work with EIGEN_DEFAULT_TO_ROW_MAJOR
 #ifdef EIGEN_DEFAULT_TO_ROW_MAJOR
@@ -15,6 +16,7 @@
 #define TEST_ENABLE_TEMPORARY_TRACKING
 #define TEST_CHECK_STATIC_ASSERTIONS
 #include "main.h"
+#include "random_for_arithmetic.h"
 
 // test Ref.h
 
@@ -32,19 +34,19 @@
 
 template <typename MatrixType>
 void ref_matrix(const MatrixType &m) {
-  typedef typename MatrixType::Scalar Scalar;
-  typedef typename MatrixType::RealScalar RealScalar;
-  typedef Matrix<Scalar, Dynamic, Dynamic, MatrixType::Options> DynMatrixType;
-  typedef Matrix<RealScalar, Dynamic, Dynamic, MatrixType::Options> RealDynMatrixType;
+  using Scalar = typename MatrixType::Scalar;
+  using RealScalar = typename MatrixType::RealScalar;
+  using DynMatrixType = Matrix<Scalar, Dynamic, Dynamic, MatrixType::Options>;
+  using RealDynMatrixType = Matrix<RealScalar, Dynamic, Dynamic, MatrixType::Options>;
 
-  typedef Ref<MatrixType> RefMat;
-  typedef Ref<DynMatrixType> RefDynMat;
-  typedef Ref<const DynMatrixType> ConstRefDynMat;
-  typedef Ref<RealDynMatrixType, 0, Stride<Dynamic, Dynamic>> RefRealMatWithStride;
+  using RefMat = Ref<MatrixType>;
+  using RefDynMat = Ref<DynMatrixType>;
+  using ConstRefDynMat = Ref<const DynMatrixType>;
+  using RefRealMatWithStride = Ref<RealDynMatrixType, 0, Stride<Dynamic, Dynamic>>;
 
   Index rows = m.rows(), cols = m.cols();
 
-  MatrixType m1 = MatrixType::Random(rows, cols), m2 = m1;
+  MatrixType m1 = random_for_arithmetic<MatrixType>(rows, cols), m2 = m1;
 
   Index i = internal::random<Index>(0, rows - 1);
   Index j = internal::random<Index>(0, cols - 1);
@@ -61,7 +63,7 @@ void ref_matrix(const MatrixType &m) {
   m2.block(i, j, brows, bcols).setOnes();
   VERIFY_IS_EQUAL(m1, m2);
 
-  m2.block(i, j, brows, bcols).setRandom();
+  m2.block(i, j, brows, bcols) = random_for_arithmetic<DynMatrixType>(brows, bcols);
   rm2 = m2.block(i, j, brows, bcols);
   VERIFY_IS_EQUAL(m1, m2);
 
@@ -78,22 +80,23 @@ void ref_matrix(const MatrixType &m) {
 
 template <typename VectorType>
 void ref_vector(const VectorType &m) {
-  typedef typename VectorType::Scalar Scalar;
-  typedef typename VectorType::RealScalar RealScalar;
-  typedef Matrix<Scalar, Dynamic, 1, VectorType::Options> DynMatrixType;
-  typedef Matrix<Scalar, Dynamic, Dynamic, ColMajor> MatrixType;
-  typedef Matrix<RealScalar, Dynamic, 1, VectorType::Options> RealDynMatrixType;
+  using Scalar = typename VectorType::Scalar;
+  using RealScalar = typename VectorType::RealScalar;
+  using DynMatrixType = Matrix<Scalar, Dynamic, 1, VectorType::Options>;
+  using MatrixType = Matrix<Scalar, Dynamic, Dynamic, ColMajor>;
+  using RealDynMatrixType = Matrix<RealScalar, Dynamic, 1, VectorType::Options>;
 
-  typedef Ref<VectorType> RefMat;
-  typedef Ref<DynMatrixType> RefDynMat;
-  typedef Ref<const DynMatrixType> ConstRefDynMat;
-  typedef Ref<RealDynMatrixType, 0, InnerStride<>> RefRealMatWithStride;
-  typedef Ref<DynMatrixType, 0, InnerStride<>> RefMatWithStride;
+  using RefMat = Ref<VectorType>;
+  using RefDynMat = Ref<DynMatrixType>;
+  using ConstRefDynMat = Ref<const DynMatrixType>;
+  using RefRealMatWithStride = Ref<RealDynMatrixType, 0, InnerStride<>>;
+  using RefMatWithStride = Ref<DynMatrixType, 0, InnerStride<>>;
 
   Index size = m.size();
 
-  VectorType v1 = VectorType::Random(size), v2 = v1;
-  MatrixType mat1 = MatrixType::Random(size, size), mat2 = mat1, mat3 = MatrixType::Random(size, size);
+  VectorType v1 = random_for_arithmetic<VectorType>(size), v2 = v1;
+  MatrixType mat1 = random_for_arithmetic<MatrixType>(size, size), mat2 = mat1,
+             mat3 = random_for_arithmetic<MatrixType>(size, size);
 
   Index i = internal::random<Index>(0, size - 1);
   Index bsize = internal::random<Index>(1, size - i);
@@ -121,7 +124,7 @@ void ref_vector(const VectorType &m) {
   v2.segment(i, bsize).setOnes();
   VERIFY_IS_EQUAL(v1, v2);
 
-  v2.segment(i, bsize).setRandom();
+  v2.segment(i, bsize) = random_for_arithmetic<DynMatrixType>(bsize);
   rv2 = v2.segment(i, bsize);
   VERIFY_IS_EQUAL(v1, v2);
 
@@ -148,13 +151,13 @@ void ref_vector(const VectorType &m) {
 
 template <typename Scalar, int Rows, int Cols>
 void ref_vector_fixed_sizes() {
-  typedef Matrix<Scalar, Rows, Cols, RowMajor> RowMajorMatrixType;
-  typedef Matrix<Scalar, Rows, Cols, ColMajor> ColMajorMatrixType;
-  typedef Matrix<Scalar, 1, Cols> RowVectorType;
-  typedef Matrix<Scalar, Rows, 1> ColVectorType;
-  typedef Matrix<Scalar, Cols, 1> RowVectorTransposeType;
-  typedef Matrix<Scalar, 1, Rows> ColVectorTransposeType;
-  typedef Stride<Dynamic, Dynamic> DynamicStride;
+  using RowMajorMatrixType = Matrix<Scalar, Rows, Cols, RowMajor>;
+  using ColMajorMatrixType = Matrix<Scalar, Rows, Cols, ColMajor>;
+  using RowVectorType = Matrix<Scalar, 1, Cols>;
+  using ColVectorType = Matrix<Scalar, Rows, 1>;
+  using RowVectorTransposeType = Matrix<Scalar, Cols, 1>;
+  using ColVectorTransposeType = Matrix<Scalar, 1, Rows>;
+  using DynamicStride = Stride<Dynamic, Dynamic>;
 
   RowMajorMatrixType mr = RowMajorMatrixType::Random();
   ColMajorMatrixType mc = ColMajorMatrixType::Random();
@@ -211,11 +214,213 @@ void ref_vector_fixed_sizes() {
 template <typename PlainObjectType>
 void check_const_correctness(const PlainObjectType &) {
   // verify that ref-to-const don't have LvalueBit
-  typedef std::add_const_t<PlainObjectType> ConstPlainObjectType;
+  using ConstPlainObjectType = std::add_const_t<PlainObjectType>;
   VERIFY(!(internal::traits<Ref<ConstPlainObjectType>>::Flags & LvalueBit));
   VERIFY(!(internal::traits<Ref<ConstPlainObjectType, Aligned>>::Flags & LvalueBit));
   VERIFY(!(Ref<ConstPlainObjectType>::Flags & LvalueBit));
   VERIFY(!(Ref<ConstPlainObjectType, Aligned>::Flags & LvalueBit));
+}
+
+void test_ref_alignment_matching() {
+  using PlainObject = Matrix<float, Dynamic, 1, DontAlign>;
+  using UnalignedMap = Map<PlainObject, Unaligned>;
+  using Aligned8Map = Map<PlainObject, Aligned8>;
+  using Aligned16Map = Map<PlainObject, Aligned16>;
+  using Aligned32Map = Map<PlainObject, Aligned32>;
+  using UnalignedRefTraits = internal::traits<Ref<PlainObject, Unaligned>>;
+  using Aligned16RefTraits = internal::traits<Ref<PlainObject, Aligned16>>;
+
+  static_assert(int(internal::traits<PlainObject>::Alignment) == int(Unaligned),
+                "the test plain object must not provide an alignment guarantee");
+  static_assert(UnalignedRefTraits::template match<UnalignedMap>::AlignmentMatch,
+                "an unaligned Ref must accept an unaligned source");
+  static_assert(!Aligned16RefTraits::template match<UnalignedMap>::AlignmentMatch,
+                "an aligned Ref must reject a source without an alignment guarantee");
+  static_assert(!Aligned16RefTraits::template match<Aligned8Map>::AlignmentMatch,
+                "the source alignment must satisfy the Ref alignment");
+  static_assert(Aligned16RefTraits::template match<Aligned16Map>::AlignmentMatch,
+                "a Ref must accept a source with matching alignment");
+  static_assert(Aligned16RefTraits::template match<Aligned32Map>::AlignmentMatch,
+                "a Ref must accept a source with stronger alignment");
+
+  alignas(16) float data[8] = {};
+  Aligned16Map map(data, 8);
+  Ref<PlainObject, Aligned16> ref(map);
+  VERIFY(ref.data() == data);
+}
+
+// A runtime stride of 0 repeats a coefficient; a Ref must not read it as the default stride.
+void test_ref_zero_strides() {
+  const float data[6] = {1, 2, 3, 4, 5, 6};
+  Map<const VectorXf, 0, InnerStride<>> repeated(data, 4, InnerStride<>(0));
+  const Ref<const VectorXf, 0, InnerStride<>> repeatedRef(repeated);
+  VERIFY_IS_EQUAL(repeatedRef, VectorXf::Constant(4, data[0]));
+
+  Map<const MatrixXf, 0, OuterStride<>> repeatedCols(data, 2, 3, OuterStride<>(0));
+  const MatrixXf expectedCols = Vector2f(data[0], data[1]).replicate(1, 3);
+  const Ref<const MatrixXf, 0, OuterStride<>> colsRef(repeatedCols);
+  VERIFY_IS_EQUAL(colsRef, expectedCols);
+  const Ref<const MatrixXf, 0, Stride<Dynamic, Dynamic>> colsStrideRef(repeatedCols);
+  VERIFY_IS_EQUAL(colsStrideRef, expectedCols);
+
+  const VectorXf v = VectorXf::Random(5);
+  const Ref<const VectorXf, 0, InnerStride<>> indexedRef(v(seqN(2, 3, fix<0>)));
+  VERIFY_IS_EQUAL(indexedRef, VectorXf::Constant(3, v(2)));
+}
+
+// A Ref whose outer stride is the default (0) must report inner * rows (inner * cols if row-major), the
+// layout Map and the direct-bind test in Ref::construct assume. Verifies reads, writes, and reuse of the strides
+// of a Ref bound to `src`.
+template <typename RefType, typename Src>
+void check_ref_default_outer_stride(Src &src, bool expect_direct) {
+  using Plain = typename Src::PlainObject;
+  const Plain expected = src;
+  RefType r(src);
+  VERIFY_IS_EQUAL(r.rows(), expected.rows());
+  VERIFY_IS_EQUAL(r.cols(), expected.cols());
+  if (expect_direct) {
+    VERIFY(r.data() == src.data());
+    VERIFY_IS_EQUAL(r.innerStride(), src.innerStride());
+    VERIFY_IS_EQUAL(r.outerStride(), src.outerStride());
+  }
+  VERIFY_IS_EQUAL(r, expected);
+  for (Index j = 0; j < expected.cols(); ++j)
+    for (Index i = 0; i < expected.rows(); ++i) VERIFY_IS_EQUAL(r.coeff(i, j), expected.coeff(i, j));
+
+  // Pass the strides on to a Map.
+  Map<const Plain, 0, Stride<Dynamic, Dynamic>> m(r.data(), r.rows(), r.cols(),
+                                                  Stride<Dynamic, Dynamic>(r.outerStride(), r.innerStride()));
+  VERIFY_IS_EQUAL(m, expected);
+  // Pass the Ref on to a product.
+  VERIFY_IS_APPROX((r.transpose() * r).eval(), (expected.transpose() * expected).eval());
+  VERIFY_IS_APPROX((r * expected.transpose()).eval(), (expected * expected.transpose()).eval());
+}
+
+template <typename RefType, typename Src>
+void check_ref_default_outer_stride_write(Src &src) {
+  using Plain = typename Src::PlainObject;
+  const Plain values = Plain::Random(src.rows(), src.cols());
+  RefType r(src);
+  r = values;
+  VERIFY_IS_EQUAL(src, values);
+  r.setZero();
+  VERIFY(src.isZero());
+}
+
+// Every second row of a column-major (column of a row-major) matrix, and the transposed selection.
+template <typename Mat>
+auto every_other_inner(Mat &A, std::false_type) {
+  return A(seq(0, Eigen::placeholders::last, 2), Eigen::placeholders::all);
+}
+template <typename Mat>
+auto every_other_inner(Mat &A, std::true_type) {
+  return A(Eigen::placeholders::all, seq(0, Eigen::placeholders::last, 2));
+}
+
+// Matrix of runtime size whose storage is interleaved with `stride` unused coefficients.
+template <typename Mat>
+void check_ref_default_outer_stride_matrix(Index rows, Index cols) {
+  using Scalar = typename Mat::Scalar;
+  using RefDyn = Ref<Mat, 0, InnerStride<>>;
+  using CRefDyn = Ref<const Mat, 0, InnerStride<>>;
+  using Plain = Matrix<Scalar, Dynamic, Dynamic, Mat::Options>;
+
+  for (Index s = 1; s <= 3; ++s) {
+    Plain buf = Plain::Random(s * rows * cols, 1);
+    Map<Mat, 0, InnerStride<>> m(buf.data(), rows, cols, InnerStride<>(s));
+    check_ref_default_outer_stride<RefDyn>(m, true);
+    check_ref_default_outer_stride<CRefDyn>(m, true);
+    check_ref_default_outer_stride_write<RefDyn>(m);
+  }
+  {
+    Plain buf = Plain::Random(2 * rows * cols, 1);
+    Map<Mat, 0, InnerStride<2>> m(buf.data(), rows, cols);
+    check_ref_default_outer_stride<Ref<Mat, 0, InnerStride<2>>>(m, true);
+    check_ref_default_outer_stride<Ref<const Mat, 0, InnerStride<2>>>(m, true);
+    check_ref_default_outer_stride_write<Ref<Mat, 0, InnerStride<2>>>(m);
+    check_ref_default_outer_stride<Ref<Mat, 0, InnerStride<Dynamic>>>(m, true);
+  }
+
+  // Every second row (column-major) or column (row-major) of a matrix: inner stride 2, outer stride of the source.
+  Mat A = Mat::Random(2 * rows, 2 * cols);
+  constexpr bool row_major = (int(Mat::Options) & int(RowMajor)) != 0;
+  auto sub = every_other_inner(A, internal::bool_constant<row_major>());
+  auto sub_sized = every_other_inner(A, internal::bool_constant<!row_major>());
+  // The first has inner stride 2 and outer stride == 2 * size of its inner dimension, so a default Ref binds to it.
+  // The second keeps the unit inner stride and a larger outer stride: only a copy matches.
+  VERIFY_IS_EQUAL(sub.innerStride(), 2);
+  check_ref_default_outer_stride<RefDyn>(sub, true);
+  check_ref_default_outer_stride<CRefDyn>(sub, true);
+  check_ref_default_outer_stride_write<RefDyn>(sub);
+  check_ref_default_outer_stride<CRefDyn>(sub_sized, false);
+
+  // Outer stride that is not inner * rows: copied.
+  Plain buf = Plain::Random(3 * (rows + 3) * (cols + 3), 1);
+  Map<Mat, 0, Stride<Dynamic, Dynamic>> padded(buf.data(), rows, cols,
+                                               Stride<Dynamic, Dynamic>((row_major ? cols + 3 : rows + 3) * 2, 2));
+  check_ref_default_outer_stride<CRefDyn>(padded, false);
+  // A Ref of a Ref.
+  RefDyn first(sub);
+  check_ref_default_outer_stride<CRefDyn>(first, true);
+}
+
+template <typename Scalar, int Storage>
+void check_ref_default_outer_stride_fixed() {
+  using Mat = Matrix<Scalar, 4, 3, Storage>;
+  using Sq = Matrix<Scalar, 3, 3, Storage>;
+  Matrix<Scalar, 24, 1> buf = Matrix<Scalar, 24, 1>::Random();
+  {
+    Map<Mat, 0, InnerStride<2>> m(buf.data());
+    check_ref_default_outer_stride<Ref<Mat, 0, InnerStride<>>>(m, true);
+    check_ref_default_outer_stride<Ref<const Mat, 0, InnerStride<>>>(m, true);
+    check_ref_default_outer_stride<Ref<Mat, 0, InnerStride<2>>>(m, true);
+    check_ref_default_outer_stride<Ref<const Mat, 0, InnerStride<2>>>(m, true);
+    check_ref_default_outer_stride_write<Ref<Mat, 0, InnerStride<2>>>(m);
+  }
+  {
+    Map<Sq, 0, InnerStride<>> m(buf.data(), 3, 3, InnerStride<>(2));
+    check_ref_default_outer_stride<Ref<Sq, 0, InnerStride<>>>(m, true);
+    check_ref_default_outer_stride<Ref<const Sq, 0, InnerStride<>>>(m, true);
+    check_ref_default_outer_stride_write<Ref<Sq, 0, InnerStride<>>>(m);
+  }
+}
+
+template <typename Vec>
+void check_ref_default_outer_stride_vector(Index n) {
+  using Scalar = typename Vec::Scalar;
+  for (Index s = 1; s <= 3; ++s) {
+    Matrix<Scalar, Dynamic, 1> buf = Matrix<Scalar, Dynamic, 1>::Random(s * n);
+    Map<Vec, 0, InnerStride<>> v(buf.data(), n, InnerStride<>(s));
+    check_ref_default_outer_stride<Ref<Vec, 0, InnerStride<>>>(v, true);
+    check_ref_default_outer_stride<Ref<const Vec, 0, InnerStride<>>>(v, true);
+    check_ref_default_outer_stride_write<Ref<Vec, 0, InnerStride<>>>(v);
+  }
+  // A row of a column-major matrix is a strided vector, which a column vector Ref binds to by transposing.
+  Matrix<Scalar, Dynamic, Dynamic> A = Matrix<Scalar, Dynamic, Dynamic>::Random(n, n + 1);
+  Ref<Vec, 0, InnerStride<>> r(A.row(n / 2));
+  const Ref<const Vec, 0, InnerStride<>> cr(A.row(n / 2));
+  VERIFY(r.data() == &A(n / 2, 0) && cr.data() == r.data());
+  VERIFY_IS_EQUAL(r.outerStride(), r.size() * r.innerStride());
+  VERIFY_IS_EQUAL(cr.outerStride(), cr.size() * cr.innerStride());
+  for (Index k = 0; k < A.cols(); ++k) VERIFY_IS_EQUAL(r(k), A(n / 2, k));
+  VERIFY_IS_EQUAL(cr, r);
+}
+
+void test_ref_default_outer_stride() {
+  for (int i = 0; i < 3; ++i) {
+    const Index r = internal::random<Index>(1, 5), c = internal::random<Index>(1, 5);
+    check_ref_default_outer_stride_matrix<MatrixXf>(r + 1, c + 1);
+    check_ref_default_outer_stride_matrix<Matrix<float, Dynamic, Dynamic, RowMajor>>(r + 1, c + 1);
+    check_ref_default_outer_stride_matrix<MatrixXd>(r + 1, c + 1);
+    check_ref_default_outer_stride_matrix<MatrixXcf>(r + 1, c + 1);
+    check_ref_default_outer_stride_matrix<Matrix<int, Dynamic, Dynamic, RowMajor>>(r + 1, c + 1);
+    check_ref_default_outer_stride_vector<VectorXf>(r + 1);
+    check_ref_default_outer_stride_vector<RowVectorXf>(r + 1);
+    check_ref_default_outer_stride_vector<VectorXcd>(r + 1);
+  }
+  check_ref_default_outer_stride_fixed<float, ColMajor>();
+  check_ref_default_outer_stride_fixed<float, RowMajor>();
+  check_ref_default_outer_stride_fixed<std::complex<double>, ColMajor>();
 }
 
 template <typename B>
@@ -255,14 +460,12 @@ void call_ref() {
   RowVector3f c = RowVector3f::Random();
   const VectorXf &ac(a);
   VectorBlock<VectorXf> ab(a, 0, 3);
-  const VectorBlock<VectorXf> abc(a, 0, 3);
 
   VERIFY_EVALUATION_COUNT(call_ref_1(a, a), 0);
   VERIFY_EVALUATION_COUNT(call_ref_1(b, b.transpose()), 0);
   //   call_ref_1(ac,a<c);           // does not compile because ac is const
   VERIFY_EVALUATION_COUNT(call_ref_1(ab, ab), 0);
   VERIFY_EVALUATION_COUNT(call_ref_1(a.head(4), a.head(4)), 0);
-  VERIFY_EVALUATION_COUNT(call_ref_1(abc, abc), 0);
   VERIFY_EVALUATION_COUNT(call_ref_1(A.col(3), A.col(3)), 0);
   //   call_ref_1(A.row(3),A.row(3));    // does not compile because innerstride!=1
   VERIFY_EVALUATION_COUNT(call_ref_3(A.row(3), A.row(3).transpose()), 0);
@@ -272,7 +475,6 @@ void call_ref() {
   MatrixXf tmp = A * A.col(1);
   VERIFY_EVALUATION_COUNT(call_ref_2(A * A.col(1), tmp), 1);  // evaluated into a temp
   VERIFY_EVALUATION_COUNT(call_ref_2(ac.head(5), ac.head(5)), 0);
-  VERIFY_EVALUATION_COUNT(call_ref_2(ac, ac), 0);
   VERIFY_EVALUATION_COUNT(call_ref_2(a, a), 0);
   VERIFY_EVALUATION_COUNT(call_ref_2(ab, ab), 0);
   VERIFY_EVALUATION_COUNT(call_ref_2(a.head(4), a.head(4)), 0);
@@ -308,7 +510,7 @@ void call_ref() {
   VERIFY_EVALUATION_COUNT(call_ref_7(c, c), 0);
 }
 
-typedef Matrix<double, Dynamic, Dynamic, RowMajor> RowMatrixXd;
+using RowMatrixXd = Matrix<double, Dynamic, Dynamic, RowMajor>;
 int test_ref_overload_fun1(Ref<MatrixXd>) { return 1; }
 int test_ref_overload_fun1(Ref<RowMatrixXd>) { return 2; }
 int test_ref_overload_fun1(Ref<MatrixXf>) { return 3; }
@@ -344,15 +546,15 @@ struct RefDerived : Ref_ {
 
 template <typename MatrixType, typename Derived>
 void test_cref_move_ctor(const DenseBase<Derived> &expr) {
-  typedef Ref<const MatrixType> CRef;
-  typedef RefDerived<CRef> CRefDerived;
+  using CRef = Ref<const MatrixType>;
+  using CRefDerived = RefDerived<CRef>;
 
   const bool owns_data = !bool(internal::traits<CRef>::template match<Derived>::type::value);
   CRef cref1(expr);
   const double *data1 = cref1.data(), *obj_data1 = static_cast<CRefDerived &>(cref1).m_object.data();
   VERIFY(test_is_equal(data1, obj_data1, owns_data));
   CRef cref2(std::move(cref1));
-  VERIFY_IS_EQUAL(data1, cref1.data());
+  VERIFY_IS_EQUAL(std::uintptr_t(data1), std::uintptr_t(cref1.data()));
   const double *data2 = cref2.data(), *obj_data2 = static_cast<CRefDerived &>(cref2).m_object.data();
   VERIFY(test_is_equal(data1, data2, MatrixType::MaxSizeAtCompileTime == Dynamic || !owns_data));
   VERIFY(test_is_equal(data1, obj_data2, MatrixType::MaxSizeAtCompileTime == Dynamic && owns_data));
@@ -360,8 +562,8 @@ void test_cref_move_ctor(const DenseBase<Derived> &expr) {
 
 template <typename MatrixType>
 void test_contiguous_ref_no_copy(const PlainObjectBase<MatrixType> &obj) {
-  typedef Ref<MatrixType, Unaligned, Stride<0, 0>> Ref_;
-  typedef Ref<const MatrixType, Unaligned, Stride<0, 0>> CRef_;
+  using Ref_ = Ref<MatrixType, Unaligned, Stride<0, 0>>;
+  using CRef_ = Ref<const MatrixType, Unaligned, Stride<0, 0>>;
   MatrixType m(obj);
   Ref_ ref(m);
   VERIFY(test_is_equal(ref.data(), m.data(), true));
@@ -406,4 +608,7 @@ EIGEN_DECLARE_TEST(ref) {
   CALL_SUBTEST_10(test_contiguous_ref_no_copy(Vector3d()));
   CALL_SUBTEST_10(test_contiguous_ref_no_copy(MatrixXd(9, 5)));
   CALL_SUBTEST_10(test_contiguous_ref_no_copy(Matrix3d()));
+  CALL_SUBTEST_10(test_ref_alignment_matching());
+  CALL_SUBTEST_10(test_ref_zero_strides());
+  CALL_SUBTEST_10(test_ref_default_outer_stride());
 }

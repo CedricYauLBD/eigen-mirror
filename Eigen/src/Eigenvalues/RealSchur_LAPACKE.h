@@ -29,6 +29,7 @@
  *    Real Schur needed to real unsymmetrical eigenvalues/eigenvectors.
  ********************************************************************************
 */
+// SPDX-License-Identifier: BSD-3-Clause
 
 #ifndef EIGEN_REAL_SCHUR_LAPACKE_H
 #define EIGEN_REAL_SCHUR_LAPACKE_H
@@ -49,6 +50,14 @@ namespace Eigen {
     eigen_assert(matrix.cols() == matrix.rows());                                                                    \
                                                                                                                      \
     lapack_int n = internal::convert_index<lapack_int>(matrix.cols()), sdim, info;                                   \
+    if (n == 0) {                                                                                                    \
+      m_matT.resize(0, 0);                                                                                           \
+      m_matU.resize(0, 0);                                                                                           \
+      m_info = Success;                                                                                              \
+      m_isInitialized = true;                                                                                        \
+      m_matUisUptodate = computeU;                                                                                   \
+      return *this;                                                                                                  \
+    }                                                                                                                \
     lapack_int matrix_order = LAPACKE_COLROW;                                                                        \
     char jobvs, sort = 'N';                                                                                          \
     LAPACK_##LAPACKE_PREFIX_U##_SELECT2 select = 0;                                                                  \
@@ -77,6 +86,8 @@ EIGEN_LAPACKE_SCHUR_REAL(double, double, d, D, ColMajor, LAPACK_COL_MAJOR)
 EIGEN_LAPACKE_SCHUR_REAL(float, float, s, S, ColMajor, LAPACK_COL_MAJOR)
 EIGEN_LAPACKE_SCHUR_REAL(double, double, d, D, RowMajor, LAPACK_ROW_MAJOR)
 EIGEN_LAPACKE_SCHUR_REAL(float, float, s, S, RowMajor, LAPACK_ROW_MAJOR)
+
+#undef EIGEN_LAPACKE_SCHUR_REAL
 
 }  // end namespace Eigen
 

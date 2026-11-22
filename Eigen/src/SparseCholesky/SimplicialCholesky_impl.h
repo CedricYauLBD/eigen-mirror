@@ -6,6 +6,7 @@
 // This Source Code Form is subject to the terms of the Mozilla
 // Public License v. 2.0. If a copy of the MPL was not distributed
 // with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
+// SPDX-License-Identifier: MPL-2.0
 
 /*
 NOTE: these functions have been adapted from the LDL library:
@@ -41,12 +42,13 @@ struct simpl_chol_helper {
 #ifndef EIGEN_NO_DEBUG
     const Index m_maxSize;
     Stack(StorageIndex* data, StorageIndex size, StorageIndex maxSize)
-        : m_data(data), m_size(size), m_maxSize(maxSize) {
+        : m_data(data), m_size(convert_index<Index>(size)), m_maxSize(convert_index<Index>(maxSize)) {
       eigen_assert(size >= 0);
       eigen_assert(maxSize >= size);
     }
 #else
-    Stack(StorageIndex* data, StorageIndex size, StorageIndex /*maxSize*/) : m_data(data), m_size(size) {}
+    Stack(StorageIndex* data, StorageIndex size, StorageIndex /*maxSize*/)
+        : m_data(data), m_size(convert_index<Index>(size)) {}
 #endif
     bool empty() const { return m_size == 0; }
     Index size() const { return m_size; }
@@ -89,7 +91,7 @@ struct simpl_chol_helper {
         m_set[u] = v;
         u = next;
       }
-    };
+    }
   };
 
   // Computes the higher adjacency pattern by transposing the input lower adjacency matrix.
@@ -99,7 +101,7 @@ struct simpl_chol_helper {
   // Computes the outer index array of the higher adjacency matrix.
   static void calc_hadj_outer(const StorageIndex size, const CholMatrixType& ap, StorageIndex* outerIndex) {
     for (StorageIndex j = 1; j < size; j++) {
-      for (InnerIterator it(ap, j); it; ++it) {
+      for (InnerIterator it(ap, convert_index<Index>(j)); it; ++it) {
         StorageIndex i = it.index();
         if (i < j) outerIndex[i + 1]++;
       }
@@ -113,7 +115,7 @@ struct simpl_chol_helper {
     std::fill_n(tmp, size, 0);
 
     for (StorageIndex j = 1; j < size; j++) {
-      for (InnerIterator it(ap, j); it; ++it) {
+      for (InnerIterator it(ap, convert_index<Index>(j)); it; ++it) {
         StorageIndex i = it.index();
         if (i < j) {
           StorageIndex b = outerIndex[i] + tmp[i];
@@ -138,7 +140,7 @@ struct simpl_chol_helper {
     DisjointSet ancestor(tmp, size);
 
     for (StorageIndex j = 1; j < size; j++) {
-      for (InnerIterator it(ap, j); it; ++it) {
+      for (InnerIterator it(ap, convert_index<Index>(j)); it; ++it) {
         StorageIndex i = it.index();
         if (i < j) {
           StorageIndex r = ancestor.find(i);
@@ -240,19 +242,19 @@ struct simpl_chol_helper {
     }
   }
 
-  // Finalizes the non zero pattern of the L factor and allocates the memory for the factorization.
+  // Finalizes the non-zero pattern of the L factor and allocates the memory for the factorization.
   static void init_matrix(const StorageIndex size, const StorageIndex* nonZerosPerCol, CholMatrixType& L) {
     eigen_assert(L.outerIndexPtr()[0] == 0);
     std::partial_sum(nonZerosPerCol, nonZerosPerCol + size, L.outerIndexPtr() + 1);
-    L.resizeNonZeros(L.outerIndexPtr()[size]);
+    L.resizeNonZeros(convert_index<Index>(L.outerIndexPtr()[size]));
   }
 
   // Driver routine for the symbolic sparse Cholesky factorization.
   static void run(const StorageIndex size, const CholMatrixType& ap, CholMatrixType& L, VectorI& parent,
                   VectorI& workSpace, bool doLDLT) {
-    parent.resize(size);
-    workSpace.resize(4 * size);
-    L.resize(size, size);
+    parent.resize(convert_index<Index>(size));
+    workSpace.resize(4 * convert_index<Index>(size));
+    L.resize(convert_index<Index>(size), convert_index<Index>(size));
 
     StorageIndex* tmp1 = workSpace.data();
     StorageIndex* tmp2 = workSpace.data() + size;
@@ -263,7 +265,8 @@ struct simpl_chol_helper {
     StorageIndex* hadj_outer = L.outerIndexPtr();
     calc_hadj_outer(size, ap, hadj_outer);
     // Request additional temporary storage for the inner indices of the higher adjacency pattern.
-    ei_declare_aligned_stack_constructed_variable(StorageIndex, hadj_inner, hadj_outer[size], nullptr);
+    ei_declare_aligned_stack_constructed_variable(StorageIndex, hadj_inner, convert_index<Index>(hadj_outer[size]),
+                                                  nullptr);
     calc_hadj_inner(size, ap, hadj_outer, hadj_inner, tmp1);
 
     calc_etree(size, ap, parent.data(), tmp1);
@@ -274,9 +277,12 @@ struct simpl_chol_helper {
   }
 };
 
-// Symbol is ODR-used, so we need a definition.
+// Required pre-C++17 for ODR; redundant and deprecated since (C++17 makes
+// constexpr static data members implicitly inline).
+#if EIGEN_COMP_CXXVER < 17
 template <typename Scalar, typename StorageIndex>
 constexpr StorageIndex simpl_chol_helper<Scalar, StorageIndex>::kEmpty;
+#endif
 
 }  // namespace internal
 
@@ -298,11 +304,27 @@ void SimplicialCholeskyBase<Derived>::analyzePattern_preordered(const CholMatrix
 template <typename Derived>
 template <bool DoLDLT, bool NonHermitian>
 void SimplicialCholeskyBase<Derived>::factorize_preordered(const CholMatrixType& ap) {
-  using std::sqrt;
+  EIGEN_IF_CONSTEXPR (internal::packet_traits<Scalar>::Vectorizable && internal::packet_traits<Scalar>::HasMul &&
+                      internal::packet_traits<Scalar>::HasSub && !NumTraits<Scalar>::IsComplex) {
+    const StorageIndex* outer = m_matrix.outerIndexPtr();
+    for (Index i = 0; i < m_matrix.cols(); ++i) {
+      // Exclude the diagonal (LLT) and the entry appended after the last update.
+      if (outer[i + 1] - outer[i] > internal::kSparseScatterPacketMinSize + (DoLDLT ? 0 : 1)) {
+        factorize_preordered_impl<DoLDLT, NonHermitian, true>(ap);
+        return;
+      }
+    }
+  }
+  factorize_preordered_impl<DoLDLT, NonHermitian, false>(ap);
+}
+
+template <typename Derived>
+template <bool DoLDLT, bool NonHermitian, bool UsePackets>
+void SimplicialCholeskyBase<Derived>::factorize_preordered_impl(const CholMatrixType& ap) {
   const StorageIndex size = StorageIndex(ap.rows());
 
   eigen_assert(m_analysisIsOk && "You must first call analyzePattern()");
-  eigen_assert(ap.rows() == ap.cols());
+  EIGEN_INTERNAL_ASSERT_SQUARE(ap);
   eigen_assert(m_parent.size() == size);
   eigen_assert(m_workSpace.size() >= 3 * size);
 
@@ -310,13 +332,13 @@ void SimplicialCholeskyBase<Derived>::factorize_preordered(const CholMatrixType&
   StorageIndex* Li = m_matrix.innerIndexPtr();
   Scalar* Lx = m_matrix.valuePtr();
 
-  ei_declare_aligned_stack_constructed_variable(Scalar, y, size, 0);
+  ei_declare_aligned_stack_constructed_variable(Scalar, y, internal::convert_index<Index>(size), 0);
   StorageIndex* nonZerosPerCol = m_workSpace.data();
   StorageIndex* pattern = m_workSpace.data() + size;
   StorageIndex* tags = m_workSpace.data() + 2 * size;
 
   bool ok = true;
-  m_diag.resize(DoLDLT ? size : 0);
+  m_diag.resize(DoLDLT ? internal::convert_index<Index>(size) : 0);
 
   for (StorageIndex k = 0; k < size; ++k) {
     // compute nonzero pattern of kth row of L, in topological order
@@ -324,12 +346,12 @@ void SimplicialCholeskyBase<Derived>::factorize_preordered(const CholMatrixType&
     StorageIndex top = size;  // stack for pattern is empty
     tags[k] = k;              // mark node k as visited
     nonZerosPerCol[k] = 0;    // count of nonzeros in column k of L
-    for (typename CholMatrixType::InnerIterator it(ap, k); it; ++it) {
+    for (typename CholMatrixType::InnerIterator it(ap, internal::convert_index<Index>(k)); it; ++it) {
       StorageIndex i = it.index();
       if (i <= k) {
         y[i] += getSymm(it.value()); /* scatter A(i,k) into Y (sum duplicates) */
         Index len;
-        for (len = 0; tags[i] != k; i = m_parent[i]) {
+        for (len = 0; tags[i] != k; i = m_parent[internal::convert_index<Index>(i)]) {
           pattern[len++] = i; /* L(k,i) is nonzero */
           tags[i] = k;        /* mark i as visited */
         }
@@ -343,39 +365,49 @@ void SimplicialCholeskyBase<Derived>::factorize_preordered(const CholMatrixType&
         getDiag(y[k]) * m_shiftScale + m_shiftOffset;  // get D(k,k), apply the shift function, and clear Y(k)
     y[k] = Scalar(0);
     for (; top < size; ++top) {
-      Index i = pattern[top]; /* pattern[top:n-1] is pattern of L(:,k) */
+      Index i = internal::convert_index<Index>(pattern[top]); /* pattern[top:n-1] is pattern of L(:,k) */
       Scalar yi = y[i];       /* get and clear Y(i) */
       y[i] = Scalar(0);
 
       /* the nonzero entry L(k,i) */
       Scalar l_ki;
-      if (DoLDLT)
+      EIGEN_IF_CONSTEXPR (DoLDLT)
         l_ki = yi / getDiag(m_diag[i]);
       else
         yi = l_ki = yi / Lx[Lp[i]];
 
-      Index p2 = Lp[i] + nonZerosPerCol[i];
-      Index p;
-      for (p = Lp[i] + (DoLDLT ? 0 : 1); p < p2; ++p) y[Li[p]] -= getSymm(Lx[p]) * yi;
+      Index p2 = internal::convert_index<Index>(Lp[i] + nonZerosPerCol[i]);
+      Index p = internal::convert_index<Index>(Lp[i]) + (DoLDLT ? 0 : 1);
+      EIGEN_IF_CONSTEXPR (UsePackets)
+        p += internal::sparse_scatter_sub_packets<!NonHermitian>(y, Li + p, Lx + p, p2 - p, yi);
+      for (; p < p2; ++p) y[Li[p]] -= getSymm(Lx[p]) * yi;
       d -= getDiag(l_ki * getSymm(yi));
       Li[p] = k; /* store L(k,i) in column form of L */
       Lx[p] = l_ki;
       ++nonZerosPerCol[i]; /* increment count of nonzeros in col i */
     }
-    if (DoLDLT) {
-      m_diag[k] = d;
+    EIGEN_IF_CONSTEXPR (DoLDLT) {
+      m_diag[internal::convert_index<Index>(k)] = d;
       if (d == RealScalar(0)) {
         ok = false; /* failure, D(k,k) is zero */
         break;
       }
     } else {
-      Index p = Lp[k] + nonZerosPerCol[k]++;
+      Index p = internal::convert_index<Index>(Lp[k] + nonZerosPerCol[k]++);
       Li[p] = k; /* store L(k,k) = sqrt (d) in column k */
-      if (NonHermitian ? d == RealScalar(0) : numext::real(d) <= RealScalar(0)) {
+      bool failed;
+      EIGEN_IF_CONSTEXPR (NonHermitian) {
+        // A complex symmetric matrix may have a pivot of any phase, whose square root is complex: only zero fails.
+        // A real pivot must be positive, as for the Hermitian LLT; sqrt of a negative one would be NaN.
+        failed = NumTraits<Scalar>::IsComplex ? (d == RealScalar(0)) : (numext::real(d) <= RealScalar(0));
+      } else {
+        failed = numext::real(d) <= RealScalar(0);
+      }
+      if (failed) {
         ok = false; /* failure, matrix is not positive definite */
         break;
       }
-      Lx[p] = sqrt(d);
+      Lx[p] = numext::sqrt(d);
     }
   }
 

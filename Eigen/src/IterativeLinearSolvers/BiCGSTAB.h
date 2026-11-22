@@ -7,6 +7,7 @@
 // This Source Code Form is subject to the terms of the Mozilla
 // Public License v. 2.0. If a copy of the MPL was not distributed
 // with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
+// SPDX-License-Identifier: MPL-2.0
 
 #ifndef EIGEN_BICGSTAB_H
 #define EIGEN_BICGSTAB_H
@@ -29,12 +30,11 @@ namespace internal {
  * \return false in the case of numerical issue, for example a break down of BiCGSTAB.
  */
 template <typename MatrixType, typename Rhs, typename Dest, typename Preconditioner>
-bool bicgstab(const MatrixType& mat, const Rhs& rhs, Dest& x, const Preconditioner& precond, Index& iters,
-              typename Dest::RealScalar& tol_error) {
-  typedef typename Dest::RealScalar RealScalar;
-  typedef typename Dest::Scalar Scalar;
-  typedef Matrix<Scalar, Dynamic, 1> VectorType;
-  RealScalar tol = tol_error;
+bool bicgstab_unscaled(const MatrixType& mat, const Rhs& rhs, Dest& x, const Preconditioner& precond, Index& iters,
+                       typename Dest::RealScalar& tol_error) {
+  using RealScalar = typename Dest::RealScalar;
+  using Scalar = typename Dest::Scalar;
+  using VectorType = Matrix<Scalar, Dynamic, 1>;
   Index maxIters = iters;
 
   Index n = mat.cols();
@@ -46,15 +46,20 @@ bool bicgstab(const MatrixType& mat, const Rhs& rhs, Dest& x, const Precondition
   RealScalar rhs_norm = rhs.stableNorm();
   if (rhs_norm == 0) {
     x.setZero();
+    iters = 0;
+    tol_error = 0;
     return true;
   }
+
+  RealScalar tol = internal::iterative_solver_threshold(tol_error, rhs_norm,
+                                                        internal::iterative_solver_residual_floor<RealScalar>());
+
   Scalar rho(1);
   Scalar alpha(0);
   Scalar w(1);
 
   VectorType v = VectorType::Zero(n), p = VectorType::Zero(n);
   VectorType y(n), z(n);
-  VectorType kt(n), ks(n);
 
   VectorType s(n), t(n);
 
@@ -68,7 +73,7 @@ bool bicgstab(const MatrixType& mat, const Rhs& rhs, Dest& x, const Precondition
     if (Eigen::numext::abs(rho) / Eigen::numext::maxi(r0_norm, r_norm) < eps * Eigen::numext::mini(r0_norm, r_norm)) {
       // The new residual vector became too orthogonal to the arbitrarily chosen direction r0
       // Let's restart with a new r0:
-      r = rhs - mat * x;
+      r.noalias() = rhs - mat * x;
       r0 = r;
       rho = r.squaredNorm();
       r0_norm = r.stableNorm();
@@ -86,7 +91,7 @@ bool bicgstab(const MatrixType& mat, const Rhs& rhs, Dest& x, const Precondition
     // For small angles ∠(r0, v) < eps, random restart.
     RealScalar v_norm = v.stableNorm();
     if (Eigen::numext::abs(theta) / Eigen::numext::maxi(r0_norm, v_norm) < eps * Eigen::numext::mini(r0_norm, v_norm)) {
-      r = rhs - mat * x;
+      r.noalias() = rhs - mat * x;
       r0.setRandom();
       r0_norm = r0.stableNorm();
       rho = Scalar(1);
@@ -118,6 +123,16 @@ bool bicgstab(const MatrixType& mat, const Rhs& rhs, Dest& x, const Precondition
   return true;
 }
 
+template <typename MatrixType, typename Rhs, typename Dest, typename Preconditioner>
+bool bicgstab(const MatrixType& mat, const Rhs& rhs, Dest& x, const Preconditioner& precond, Index& iters,
+              typename Dest::RealScalar& tol_error) {
+  // The inner products and squared norms are of the order of the residual squared, see
+  // iterative_solver_on_scaled_problem().
+  return iterative_solver_on_scaled_problem(rhs, x, [&](const auto& scaledRhs, auto& scaledGuess) {
+    return bicgstab_unscaled(mat, scaledRhs, scaledGuess, precond, iters, tol_error);
+  });
+}
+
 }  // namespace internal
 
 template <typename MatrixType_, typename Preconditioner_ = DiagonalPreconditioner<typename MatrixType_::Scalar> >
@@ -127,8 +142,8 @@ namespace internal {
 
 template <typename MatrixType_, typename Preconditioner_>
 struct traits<BiCGSTAB<MatrixType_, Preconditioner_> > {
-  typedef MatrixType_ MatrixType;
-  typedef Preconditioner_ Preconditioner;
+  using MatrixType = MatrixType_;
+  using Preconditioner = Preconditioner_;
 };
 
 }  // namespace internal
@@ -145,12 +160,12 @@ struct traits<BiCGSTAB<MatrixType_, Preconditioner_> > {
  * \implsparsesolverconcept
  *
  * The maximal number of iterations and tolerance value can be controlled via the setMaxIterations()
- * and setTolerance() methods. The defaults are the size of the problem for the maximal number of iterations
- * and NumTraits<Scalar>::epsilon() for the tolerance.
+ * and setTolerance() methods. The defaults are twice the number of columns of the matrix for the maximal
+ * number of iterations and NumTraits<Scalar>::epsilon() for the tolerance.
  *
  * The tolerance corresponds to the relative residual error: |Ax-b|/|b|
  *
- * \b Performance: when using sparse matrices, best performance is achied for a row-major sparse matrix format.
+ * \b Performance: when using sparse matrices, best performance is achieved for a row-major sparse matrix format.
  * Moreover, in this case multi-threading can be exploited if the user code is compiled with OpenMP enabled.
  * See \ref TopicMultiThreading for details.
  *
@@ -166,7 +181,8 @@ struct traits<BiCGSTAB<MatrixType_, Preconditioner_> > {
  */
 template <typename MatrixType_, typename Preconditioner_>
 class BiCGSTAB : public IterativeSolverBase<BiCGSTAB<MatrixType_, Preconditioner_> > {
-  typedef IterativeSolverBase<BiCGSTAB> Base;
+ protected:
+  using Base = IterativeSolverBase<BiCGSTAB>;
   using Base::m_error;
   using Base::m_info;
   using Base::m_isInitialized;
@@ -174,10 +190,10 @@ class BiCGSTAB : public IterativeSolverBase<BiCGSTAB<MatrixType_, Preconditioner
   using Base::matrix;
 
  public:
-  typedef MatrixType_ MatrixType;
-  typedef typename MatrixType::Scalar Scalar;
-  typedef typename MatrixType::RealScalar RealScalar;
-  typedef Preconditioner_ Preconditioner;
+  using MatrixType = MatrixType_;
+  using Scalar = typename MatrixType::Scalar;
+  using RealScalar = typename MatrixType::RealScalar;
+  using Preconditioner = Preconditioner_;
 
  public:
   /** Default constructor. */
@@ -196,8 +212,6 @@ class BiCGSTAB : public IterativeSolverBase<BiCGSTAB<MatrixType_, Preconditioner
   template <typename MatrixDerived>
   explicit BiCGSTAB(const EigenBase<MatrixDerived>& A) : Base(A.derived()) {}
 
-  ~BiCGSTAB() {}
-
   /** \internal */
   template <typename Rhs, typename Dest>
   void _solve_vector_with_guess_impl(const Rhs& b, Dest& x) const {
@@ -208,8 +222,6 @@ class BiCGSTAB : public IterativeSolverBase<BiCGSTAB<MatrixType_, Preconditioner
 
     m_info = (!ret) ? NumericalIssue : m_error <= Base::m_tolerance ? Success : NoConvergence;
   }
-
- protected:
 };
 
 }  // end namespace Eigen

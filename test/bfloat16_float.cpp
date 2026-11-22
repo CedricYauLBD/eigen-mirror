@@ -4,6 +4,8 @@
 // This Source Code Form is subject to the terms of the Mozilla
 // Public License v. 2.0. If a copy of the MPL was not distributed
 // with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
+// SPDX-FileCopyrightText: The Eigen Authors
+// SPDX-License-Identifier: MPL-2.0
 
 #include <sstream>
 #include <memory>
@@ -67,6 +69,40 @@ void test_conversion() {
   VERIFY_BFLOAT16_BITS_EQUAL(bfloat16(0.5f * (val1 + val2)), 0x3c00);
   VERIFY_BFLOAT16_BITS_EQUAL(bfloat16(0.5f * (val2 + val3)), 0x3c02);
 
+  // A double rounds once: just above the midpoint 1 + 2^-8 it rounds up, although its float rounding is the midpoint.
+  VERIFY_BFLOAT16_BITS_EQUAL(bfloat16(1.0 + std::ldexp(1.0, -8) + std::ldexp(1.0, -40)), 0x3f81);
+  VERIFY_BFLOAT16_BITS_EQUAL(bfloat16(-(1.0 + std::ldexp(1.0, -7) + std::ldexp(1.0, -8) - std::ldexp(1.0, -40))),
+                             0xbf81);
+  VERIFY_BFLOAT16_BITS_EQUAL(bfloat16(std::complex<double>(1.0 + std::ldexp(1.0, -8) + std::ldexp(1.0, -40), 0.0)),
+                             0x3f81);
+  // Beyond float's range a double overflows to infinity or underflows to zero, keeping its sign. A bfloat16 subnormal
+  // just above the midpoint 2.5 * 2^-133 rounds up, although the excess is below float's subnormal spacing 2^-149.
+  VERIFY_BFLOAT16_BITS_EQUAL(bfloat16(1e39), 0x7f80);
+  VERIFY_BFLOAT16_BITS_EQUAL(bfloat16(-1e39), 0xff80);
+  VERIFY_BFLOAT16_BITS_EQUAL(bfloat16(1e-300), 0x0000);
+  VERIFY_BFLOAT16_BITS_EQUAL(bfloat16(-1e-300), 0x8000);
+  VERIFY_BFLOAT16_BITS_EQUAL(bfloat16(std::ldexp(2.5, -133) + std::ldexp(1.0, -160)), 0x0003);
+  VERIFY((numext::isnan)(bfloat16(std::numeric_limits<double>::quiet_NaN())));
+
+  // An integer of more than 24 bits rounds once too: just above the midpoint 2^30 + 2^22 it rounds up, although its
+  // float rounding is the midpoint. Just below a midpoint, 2^30 + 3 * 2^22 - 1 and -(2^62 + 3 * 2^54 - 1) round toward
+  // zero, and 2^53 + 1 and the extremes of the integer types round to the nearest power of two.
+  VERIFY_BFLOAT16_BITS_EQUAL(bfloat16(int32_t((1 << 30) + (1 << 22) + 1)), 0x4e81);
+  VERIFY_BFLOAT16_BITS_EQUAL(bfloat16(int32_t(-((1 << 30) + (1 << 22) + 1))), 0xce81);
+  VERIFY_BFLOAT16_BITS_EQUAL(bfloat16(int32_t((1 << 30) + 3 * (1 << 22) - 1)), 0x4e81);
+  VERIFY_BFLOAT16_BITS_EQUAL(bfloat16(int32_t((1 << 24) + (1 << 16) + 1)), 0x4b81);
+  VERIFY_BFLOAT16_BITS_EQUAL(bfloat16(std::numeric_limits<int32_t>::lowest()), 0xcf00);
+  VERIFY_BFLOAT16_BITS_EQUAL(bfloat16((std::numeric_limits<uint32_t>::max)()), 0x4f80);
+  VERIFY_BFLOAT16_BITS_EQUAL(bfloat16(uint32_t((1u << 31) + (1u << 23) + 1)), 0x4f01);
+  VERIFY_BFLOAT16_BITS_EQUAL(bfloat16(-((int64_t(1) << 40) + (int64_t(1) << 32) + 1)), 0xd381);
+  VERIFY_BFLOAT16_BITS_EQUAL(bfloat16(-((int64_t(1) << 60) + (int64_t(1) << 52) + 1)), 0xdd81);
+  VERIFY_BFLOAT16_BITS_EQUAL(bfloat16((uint64_t(1) << 63) + (uint64_t(1) << 55) + 1), 0x5f01);
+  VERIFY_BFLOAT16_BITS_EQUAL(bfloat16(-((int64_t(1) << 62) + 3 * (int64_t(1) << 54) - 1)), 0xde81);
+  VERIFY_BFLOAT16_BITS_EQUAL(bfloat16((int64_t(1) << 53) + 1), 0x5a00);
+  VERIFY_BFLOAT16_BITS_EQUAL(bfloat16(std::numeric_limits<int64_t>::lowest()), 0xdf00);
+  VERIFY_BFLOAT16_BITS_EQUAL(bfloat16((std::numeric_limits<int64_t>::max)()), 0x5f00);
+  VERIFY_BFLOAT16_BITS_EQUAL(bfloat16((std::numeric_limits<uint64_t>::max)()), 0x5f80);
+
   // Conversion from int.
   VERIFY_BFLOAT16_BITS_EQUAL(bfloat16(-1), 0xbf80);
   VERIFY_BFLOAT16_BITS_EQUAL(bfloat16(0), 0x0000);
@@ -127,17 +163,15 @@ void test_conversion() {
   VERIFY_IS_EQUAL(static_cast<float>(-bfloat16(3.0f)), -3.0f);
   VERIFY_IS_EQUAL(static_cast<float>(-bfloat16(-4.5f)), 4.5f);
 
-#if !EIGEN_COMP_MSVC
-  // Visual Studio errors out on divisions by 0
-  VERIFY((numext::isnan)(static_cast<float>(bfloat16(0.0 / 0.0))));
-  VERIFY((numext::isinf)(static_cast<float>(bfloat16(1.0 / 0.0))));
-  VERIFY((numext::isinf)(static_cast<float>(bfloat16(-1.0 / 0.0))));
+  const double nan = std::numeric_limits<double>::quiet_NaN();
+  const double infinity = std::numeric_limits<double>::infinity();
+  VERIFY((numext::isnan)(static_cast<float>(bfloat16(nan))));
+  VERIFY((numext::isinf)(static_cast<float>(bfloat16(infinity))));
+  VERIFY((numext::isinf)(static_cast<float>(bfloat16(-infinity))));
 
-  // Visual Studio errors out on divisions by 0
-  VERIFY((numext::isnan)(bfloat16(0.0 / 0.0)));
-  VERIFY((numext::isinf)(bfloat16(1.0 / 0.0)));
-  VERIFY((numext::isinf)(bfloat16(-1.0 / 0.0)));
-#endif
+  VERIFY((numext::isnan)(bfloat16(nan)));
+  VERIFY((numext::isinf)(bfloat16(infinity)));
+  VERIFY((numext::isinf)(bfloat16(-infinity)));
 
   // NaNs and infinities.
   VERIFY(!(numext::isinf)(static_cast<float>(bfloat16(3.38e38f))));  // Largest finite number.
@@ -179,6 +213,13 @@ void test_numtraits() {
 
   VERIFY(NumTraits<bfloat16>::IsSigned);
 
+  // The bfloat16 machine epsilon is 2^-7 = 0x3c00, and NumTraits must agree
+  // with std::numeric_limits.
+  VERIFY_BFLOAT16_BITS_EQUAL(NumTraits<bfloat16>::epsilon(), 0x3c00);
+  VERIFY_BFLOAT16_BITS_EQUAL(std::numeric_limits<bfloat16>::epsilon(), 0x3c00);
+  VERIFY_IS_EQUAL(numext::bit_cast<numext::uint16_t>(NumTraits<bfloat16>::epsilon()),
+                  numext::bit_cast<numext::uint16_t>(std::numeric_limits<bfloat16>::epsilon()));
+
   VERIFY_IS_EQUAL(numext::bit_cast<numext::uint16_t>(std::numeric_limits<bfloat16>::infinity()),
                   numext::bit_cast<numext::uint16_t>(bfloat16(std::numeric_limits<float>::infinity())));
   // There is no guarantee that casting a 32-bit NaN to bfloat16 has a precise
@@ -211,6 +252,12 @@ void test_arithmetic() {
   VERIFY_IS_APPROX(static_cast<float>(bfloat16(1.0f) / bfloat16(3.0f)), 0.3339f);
   VERIFY_IS_EQUAL(static_cast<float>(-bfloat16(4096.0f)), -4096.0f);
   VERIFY_IS_EQUAL(static_cast<float>(-bfloat16(-4096.0f)), 4096.0f);
+
+  // fma rounds once: a * b = 289/256 is a midpoint of bfloat16, and c = 2^-30 rounds the sum up, not to even. A float
+  // fma rounds the sum to that midpoint first.
+  const bfloat16 tiny = bfloat16(std::ldexp(1.0f, -30));
+  VERIFY_IS_EQUAL(static_cast<float>(numext::fma(bfloat16(17.f / 16), bfloat16(17.f / 16), tiny)), 145.f / 128);
+  VERIFY_IS_EQUAL(static_cast<float>(numext::fma(bfloat16(17.f / 16), bfloat16(-17.f / 16), -tiny)), -145.f / 128);
 }
 
 void test_comparison() {
@@ -226,6 +273,10 @@ void test_comparison() {
   VERIFY(!(bfloat16(-0.0f) < bfloat16(0.0f)));
   VERIFY(!(bfloat16(0.0f) > bfloat16(-0.0f)));
   VERIFY(!(bfloat16(-0.0f) > bfloat16(0.0f)));
+#if EIGEN_HAS_STD_HASH
+  // Equal values hash alike.
+  VERIFY_IS_EQUAL(std::hash<bfloat16>()(bfloat16(0.0f)), std::hash<bfloat16>()(bfloat16(-0.0f)));
+#endif
 
   VERIFY(bfloat16(0.2f) > bfloat16(-1.0f));
   VERIFY(bfloat16(-1.0f) < bfloat16(0.2f));
@@ -235,19 +286,19 @@ void test_comparison() {
   VERIFY(bfloat16(1.0f) != bfloat16(2.0f));
 
   // Comparisons with NaNs and infinities.
-#if !EIGEN_COMP_MSVC
-  // Visual Studio errors out on divisions by 0
-  VERIFY(!(bfloat16(0.0 / 0.0) == bfloat16(0.0 / 0.0)));
-  VERIFY(bfloat16(0.0 / 0.0) != bfloat16(0.0 / 0.0));
+  const bfloat16 nan(std::numeric_limits<double>::quiet_NaN());
+  const bfloat16 infinity(std::numeric_limits<double>::infinity());
+  const bfloat16 negative_infinity(-std::numeric_limits<double>::infinity());
+  VERIFY(!(nan == nan));
+  VERIFY(nan != nan);
 
-  VERIFY(!(bfloat16(1.0) == bfloat16(0.0 / 0.0)));
-  VERIFY(!(bfloat16(1.0) < bfloat16(0.0 / 0.0)));
-  VERIFY(!(bfloat16(1.0) > bfloat16(0.0 / 0.0)));
-  VERIFY(bfloat16(1.0) != bfloat16(0.0 / 0.0));
+  VERIFY(!(bfloat16(1.0) == nan));
+  VERIFY(!(bfloat16(1.0) < nan));
+  VERIFY(!(bfloat16(1.0) > nan));
+  VERIFY(bfloat16(1.0) != nan);
 
-  VERIFY(bfloat16(1.0) < bfloat16(1.0 / 0.0));
-  VERIFY(bfloat16(1.0) > bfloat16(-1.0 / 0.0));
-#endif
+  VERIFY(bfloat16(1.0) < infinity);
+  VERIFY(bfloat16(1.0) > negative_infinity);
 }
 
 void test_basic_functions() {
@@ -321,7 +372,7 @@ void test_trigonometric_functions() {
 }
 
 void test_array() {
-  typedef Array<bfloat16, 1, Dynamic> ArrayXh;
+  using ArrayXh = Array<bfloat16, 1, Dynamic>;
   Index size = internal::random<Index>(1, 10);
   Index i = internal::random<Index>(0, size - 1);
   ArrayXh a1 = ArrayXh::Random(size), a2 = ArrayXh::Random(size);
@@ -340,7 +391,7 @@ void test_array() {
 }
 
 void test_product() {
-  typedef Matrix<bfloat16, Dynamic, Dynamic> MatrixXh;
+  using MatrixXh = Matrix<bfloat16, Dynamic, Dynamic>;
   Index rows = internal::random<Index>(1, EIGEN_TEST_MAX_SIZE);
   Index cols = internal::random<Index>(1, EIGEN_TEST_MAX_SIZE);
   Index depth = internal::random<Index>(1, EIGEN_TEST_MAX_SIZE);
@@ -377,9 +428,11 @@ void test_nextafter() {
          std::numeric_limits<bfloat16>::infinity());
   VERIFY(numext::nextafter(-(std::numeric_limits<bfloat16>::max)(), -std::numeric_limits<bfloat16>::infinity()) ==
          -std::numeric_limits<bfloat16>::infinity());
+  // The neighbors of ±0 are the smallest subnormals with the sign of the
+  // direction, matching std::nextafter (IEEE-754 nextUp/nextDown of zero).
   VERIFY_BFLOAT16_BITS_EQUAL(numext::nextafter(bfloat16(0.0f), bfloat16(1.0f)), 0x0001);
-  VERIFY_BFLOAT16_BITS_EQUAL(numext::nextafter(bfloat16(-0.0f), bfloat16(1.0f)), 0x0000);
-  VERIFY_BFLOAT16_BITS_EQUAL(numext::nextafter(bfloat16(0.0f), bfloat16(-1.0f)), 0x8000);
+  VERIFY_BFLOAT16_BITS_EQUAL(numext::nextafter(bfloat16(-0.0f), bfloat16(1.0f)), 0x0001);
+  VERIFY_BFLOAT16_BITS_EQUAL(numext::nextafter(bfloat16(0.0f), bfloat16(-1.0f)), 0x8001);
   VERIFY_BFLOAT16_BITS_EQUAL(numext::nextafter(bfloat16(-0.0f), bfloat16(-1.0f)), 0x8001);
   VERIFY_BFLOAT16_BITS_EQUAL(numext::nextafter(bfloat16(0.0f), bfloat16(-0.0f)), 0x8000);
   VERIFY_BFLOAT16_BITS_EQUAL(numext::nextafter(bfloat16(-0.0f), bfloat16(0.0f)), 0x0000);

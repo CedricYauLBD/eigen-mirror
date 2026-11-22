@@ -6,6 +6,7 @@
 // This Source Code Form is subject to the terms of the Mozilla
 // Public License v. 2.0. If a copy of the MPL was not distributed
 // with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
+// SPDX-License-Identifier: MPL-2.0
 
 #define SCALAR float
 #define SCALAR_SUFFIX s
@@ -13,6 +14,10 @@
 #define ISCOMPLEX 0
 
 #include "cholesky.inc"
+#include "triangular.inc"
 #include "lu.inc"
 #include "eigenvalues.inc"
 #include "svd.inc"
+#include "householder.inc"
+#include "qr.inc"
+#include "utilities.inc"

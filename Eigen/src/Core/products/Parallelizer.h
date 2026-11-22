@@ -6,6 +6,7 @@
 // This Source Code Form is subject to the terms of the Mozilla
 // Public License v. 2.0. If a copy of the MPL was not distributed
 // with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
+// SPDX-License-Identifier: MPL-2.0
 
 #ifndef EIGEN_PARALLELIZER_H
 #define EIGEN_PARALLELIZER_H
@@ -46,10 +47,12 @@ inline void manage_multi_threading(Action action, int* v);
 
 // Public APIs.
 
-/** Must be call first when calling Eigen from multiple threads */
-EIGEN_DEPRECATED inline void initParallel() {}
+/** \deprecated Does nothing. No initialization is required before calling Eigen from multiple threads. */
+EIGEN_DEPRECATED_WITH_REASON("Initialization is no longer needed.") inline void initParallel() {}
 
-/** \returns the max number of threads reserved for Eigen
+/** \returns the max number of threads reserved for Eigen. With \c EIGEN_GEMM_THREADPOOL this is 1 until a pool is
+ * registered with setGemmThreadPool() or setNbThreads() is called; it is then the number of threads of the pool, or
+ * the smaller count given to setNbThreads().
  * \sa setNbThreads */
 inline int nbThreads() {
   int ret;
@@ -57,24 +60,119 @@ inline int nbThreads() {
   return ret;
 }
 
-/** Sets the max number of threads reserved for Eigen
+/** Sets the max number of threads reserved for Eigen. 0 restores the maximum given by OpenMP, or by the number of
+ * threads of the pool with \c EIGEN_GEMM_THREADPOOL; a larger count is lowered to that maximum. The setting is
+ * process-wide, and must not be changed while a product runs on another thread.
  * \sa nbThreads */
 inline void setNbThreads(int v) { internal::manage_multi_threading(SetAction, &v); }
 
-#ifdef EIGEN_GEMM_THREADPOOL
-// Sets the ThreadPool used by Eigen parallel Gemm.
-//
-// NOTICE: This function has a known race condition with
-// parallelize_gemm below, and should not be called while
-// an instance of that function is running.
-//
+#ifdef EIGEN_VECTORIZE_SME
+#ifndef EIGEN_SME_MIN_TASK_SIZE
+#define EIGEN_SME_MIN_TASK_SIZE (double(1 << 20))
+#endif
+namespace internal {
+// Time of one multiply-add on the SME kernel in fp32 multiply-adds: an FP64 outer product covers a quarter of the
+// elements of an FP32 one at the same vector length, and a complex multiply-add is four real ones.
+template <typename Scalar>
+struct sme_madd_cost {
+  static constexpr double value = (std::is_same<typename NumTraits<Scalar>::Real, double>::value ? 4.0 : 1.0) *
+                                  (NumTraits<Scalar>::IsComplex ? 4.0 : 1.0);
+};
+// Apple silicon shares one SME unit per core cluster, so more threads than clusters only contend for the units; other
+// SME implementations may have one per core. The count comes from macOS's performance-cluster topology and is 0 (no
+// cap) everywhere else, where EIGEN_SME_UNITS or setNbSmeUnits() supply it.
+inline int detect_sme_units() {
+#if defined(EIGEN_SME_UNITS)
+  return EIGEN_SME_UNITS;
+#elif EIGEN_OS_MAC
+  // Performance clusters only (a cluster shares one L2): the work is split evenly over the threads,
+  // so a thread on the efficiency cluster's slower unit would set the finishing time.
+  int32_t cores = 0, per_l2 = 0;
+  size_t sz = sizeof(cores);
+  if (sysctlbyname("hw.perflevel0.physicalcpu", &cores, &sz, nullptr, 0) != 0 || cores <= 0) return 0;
+  sz = sizeof(per_l2);
+  if (sysctlbyname("hw.perflevel0.cpusperl2", &per_l2, &sz, nullptr, 0) != 0 || per_l2 <= 0) return 0;
+  return numext::maxi<int32_t>(1, cores / per_l2);
+#else
+  return 0;
+#endif
+}
+inline void manage_sme_units(Action action, int* v) {
+  static int m_units = detect_sme_units();
+  if (action == SetAction)
+    m_units = *v;
+  else
+    *v = m_units;
+}
+}  // namespace internal
+#endif
+
+/** \returns the number of ARM SME units a product on the SME GEMM kernel spreads over, or 0 when it is unknown or
+ * the SME backend is not in use (then \c nbThreads() applies). Detected once from the core topology.
+ * \sa setNbSmeUnits */
+inline int nbSmeUnits() {
+#ifdef EIGEN_VECTORIZE_SME
+  int ret;
+  internal::manage_sme_units(GetAction, &ret);
+  return ret;
+#else
+  return 0;
+#endif
+}
+/** Sets the number of SME units, which caps the threads a product on the SME GEMM kernel uses and, when nonzero, gives
+ * each of them a disjoint part of the result instead of a shared parallel session; 0 removes both.
+ * \c EIGEN_SME_UNITS sets it at compile time. Does nothing when the SME backend is not in use. Like setNbThreads(),
+ * it must not be called while a product runs on another thread.
+ * \sa nbSmeUnits */
+inline void setNbSmeUnits(int v) {
+#ifdef EIGEN_VECTORIZE_SME
+  internal::manage_sme_units(SetAction, &v);
+#else
+  EIGEN_UNUSED_VARIABLE(v);
+#endif
+}
+
+// Doxygen does not define EIGEN_GEMM_THREADPOOL; it reads the declarations below through EIGEN_PARSED_BY_DOXYGEN.
+#if defined(EIGEN_GEMM_THREADPOOL) || defined(EIGEN_PARSED_BY_DOXYGEN)
 // TODO(rmlarsen): Make the device API available instead of
-// storing a local static pointer variable to avoid this issue.
+// storing a local static pointer variable to avoid the race condition below.
+
+/** \ingroup Core_Module
+ * Sets the ThreadPool used by Eigen's parallel matrix-matrix product, and returns the registered pool. A null
+ * argument registers nothing and only returns the current pool. Registering a pool resets nbThreads() to the number of
+ * threads of the pool. There is one registered pool and one nbThreads() for the whole process.
+ *
+ * This function and getGemmThreadPool() exist only when \c EIGEN_GEMM_THREADPOOL is defined before %Eigen is
+ * included. Including \c Eigen/Core then includes \c Eigen/ThreadPool itself. \c EIGEN_GEMM_THREADPOOL cannot be
+ * combined with OpenMP, and with \c EIGEN_USE_BLAS the pool is not used.
+ *
+ * A product runs on the calling thread alone, without using the pool, when
+ *  - nbThreads() is 1, or the product is too small for two threads (the number of threads of a product is also
+ *    bounded by its size and its amount of work), or its result has at most 32 rows at compile time;
+ *  - the calling thread is a thread of the registered pool;
+ *  - another thread is running a parallel product on the pool. The pool serves one parallel product at a time,
+ *    because the threads of a product wait for each other's packed panels, and the workers could otherwise be
+ *    divided among several products with none of them able to finish. A caller that finds the pool in use does not
+ *    wait for it. This is decided per product by a test-and-set of one process-wide flag, whatever nbThreads() is, so
+ *    lowering nbThreads() below the number of threads of the pool does not avoid it.
+ *
+ * Products issued by one thread at a time never meet the third case. Concurrent callers share the one pool, and cannot
+ * be given pools or thread counts of their own. To make the callers the unit of parallelism, call setNbThreads(1)
+ * before they start: every product then runs on its calling thread.
+ *
+ * A product on the ARM SME kernel with a nonzero nbSmeUnits() and no preallocated buffers splits into independent
+ * parts that do not wait for each other, and is not restricted by the third case.
+ *
+ * \warning This function has a known race condition with parallelize_gemm, and must not be called while a product is
+ * running.
+ * \sa getGemmThreadPool, setNbThreads */
 inline ThreadPool* setGemmThreadPool(ThreadPool* new_pool) {
   static ThreadPool* pool = nullptr;
   if (new_pool != nullptr) {
-    // This will wait for work in all threads in *pool to finish,
-    // then destroy the old ThreadPool, and then replace it with new_pool.
+    // This only replaces the stored pointer: work already scheduled on the old
+    // ThreadPool is not waited for, and the old pool is not destroyed. Since
+    // this returns the new pool, the caller must keep its own pointer to the
+    // old one to dispose of it.
     pool = new_pool;
     // Reset the number of threads to the number of threads on the new pool.
     setNbThreads(pool->NumThreads());
@@ -82,13 +180,38 @@ inline ThreadPool* setGemmThreadPool(ThreadPool* new_pool) {
   return pool;
 }
 
-// Gets the ThreadPool used by Eigen parallel Gemm.
+/** \ingroup Core_Module
+ * \returns the ThreadPool registered with setGemmThreadPool(), or a null pointer if there is none. */
 inline ThreadPool* getGemmThreadPool() { return setGemmThreadPool(nullptr); }
-#endif
+#endif  // EIGEN_GEMM_THREADPOOL || EIGEN_PARSED_BY_DOXYGEN
 
 namespace internal {
 
 // Implementation.
+
+// Granularity of the column split. Aligning to Traits::nr instead would avoid a partial leading
+// rhs panel per thread, but nr is 8 on several backends and the coarser split balances worse: on a
+// 72-core Neoverse V2, nr-alignment cost 3.5-4.5% at high thread counts (8192x8192 float, 72
+// threads: 5132 vs 5315 GFLOP/s). gebp handles a partial panel, so prefer the finer balance.
+constexpr int kGemmColGrain = 4;
+
+/** \internal
+ * Splits [0, \a total) into \a parts contiguous ranges and returns the one belonging to \a part.
+ * Lengths are multiples of \a grain apart from the final partial one, and the remainder is spread
+ * over the leading parts rather than appended to the last: every thread waits on the slowest.
+ * The ranges tile [0, \a total) exactly, which the packed-lhs handoff in
+ * general_matrix_matrix_product relies on for its blockA offsets. */
+template <typename Index>
+EIGEN_ALWAYS_INLINE void balanced_gemm_range(Index total, Index parts, Index grain, Index part, Index& start,
+                                             Index& length) {
+  const Index chunks = numext::div_ceil(total, grain);
+  const Index base = chunks / parts;
+  const Index extra = chunks % parts;
+  const Index first_chunk = part * base + numext::mini(part, extra);
+  const Index chunk_count = base + (part < extra ? 1 : 0);
+  start = numext::mini(first_chunk * grain, total);
+  length = numext::mini(chunk_count * grain, total - start);
+}
 
 #if defined(EIGEN_USE_BLAS) || (!defined(EIGEN_HAS_OPENMP) && !defined(EIGEN_GEMM_THREADPOOL))
 
@@ -114,11 +237,11 @@ EIGEN_STRONG_INLINE void parallelize_gemm(const Functor& func, Index rows, Index
 
 template <typename Index>
 struct GemmParallelTaskInfo {
-  GemmParallelTaskInfo() : sync(-1), users(0), lhs_start(0), lhs_length(0) {}
-  std::atomic<Index> sync;
-  std::atomic<int> users;
-  Index lhs_start;
-  Index lhs_length;
+  GemmParallelTaskInfo() {}
+  std::atomic<Index> sync{Index(-1)};
+  std::atomic<int> users{0};
+  Index lhs_start = 0;
+  Index lhs_length = 0;
 };
 
 template <typename Index>
@@ -141,7 +264,7 @@ inline void manage_multi_threading(Action action, int* v) {
     // for OpenMP.
     eigen_internal_assert(*v >= 0);
     int omp_threads = omp_get_max_threads();
-    m_maxThreads = (*v == 0 ? omp_threads : std::min(*v, omp_threads));
+    m_maxThreads = (*v == 0 ? omp_threads : std::min<int>(*v, omp_threads));
 #elif defined(EIGEN_GEMM_THREADPOOL)
     // Calling action == SetAction and *v = 0 means
     // restoring m_maxThreads to the number of threads in the ThreadPool,
@@ -159,12 +282,40 @@ inline void manage_multi_threading(Action action, int* v) {
     else
       *v = omp_get_max_threads();
 #else
-    *v = m_maxThreads;
+    // m_maxThreads is -1 until a pool is registered or setNbThreads is called.
+    *v = m_maxThreads > 0 ? m_maxThreads : 1;
 #endif
   } else {
     eigen_internal_assert(false);
   }
 }
+
+#if defined(EIGEN_GEMM_THREADPOOL)
+// The parts of one shared parallel session wait for each other's packed panels. Sessions of different products on one
+// pool could each occupy some workers while their other parts wait in the queue, so only one session at a time uses
+// the pool. A product that finds it busy runs on its calling thread.
+//
+// The flag is an atomic rather than a std::mutex because the thread that holds the session can issue another product
+// from inside it, when the scalar's own multiplication is a matrix product. std::mutex::try_lock is undefined for the
+// owning thread; the exchange reports the session as busy.
+class gemm_session_guard {
+ public:
+  gemm_session_guard() : m_owns(!busy().exchange(true, std::memory_order_acquire)) {}
+  ~gemm_session_guard() {
+    if (m_owns) busy().store(false, std::memory_order_release);
+  }
+  gemm_session_guard(const gemm_session_guard&) = delete;
+  gemm_session_guard& operator=(const gemm_session_guard&) = delete;
+  bool owns() const { return m_owns; }
+
+ private:
+  static std::atomic<bool>& busy() {
+    static std::atomic<bool> flag(false);
+    return flag;
+  }
+  const bool m_owns;
+};
+#endif
 
 template <bool Condition, typename Functor, typename Index>
 EIGEN_STRONG_INLINE void parallelize_gemm(const Functor& func, Index rows, Index cols, Index depth, bool transpose) {
@@ -182,11 +333,34 @@ EIGEN_STRONG_INLINE void parallelize_gemm(const Functor& func, Index rows, Index
 
   // compute the maximal number of threads from the total amount of work:
   double work = static_cast<double>(rows) * static_cast<double>(cols) * static_cast<double>(depth);
-  double kMinTaskSize = 50000;  // FIXME improve this heuristic.
+  double kMinTaskSize = 50000;  // FIXME: tune this minimum task-size heuristic based on architecture and scalar type.
+#ifdef EIGEN_VECTORIZE_SME
+  // With a known SME unit count (one unit per core cluster), the SME kernel does far more work per unit of time than
+  // the generic one, so a thread needs more of it to repay the handoff; elsewhere the size is not measured and the
+  // generic one applies. With no preallocated buffers, each thread runs a disjoint part of the result (below).
+  constexpr bool kSme =
+      sme_has_gebp_kernel<typename Functor::Traits::LhsScalar, typename Functor::Traits::RhsScalar>::value;
+  const bool sme_units_known = kSme && nbSmeUnits() > 0;
+  const bool sme_disjoint = sme_units_known && func.ownsNoBuffers();
+  if (sme_units_known)
+    kMinTaskSize = EIGEN_SME_MIN_TASK_SIZE / sme_madd_cost<typename Functor::Traits::LhsScalar>::value;
+  if (sme_disjoint) {
+    const Index kernel_rows = transpose ? cols : rows, kernel_cols = transpose ? rows : cols;
+    pb_max_threads =
+        std::max<Index>(1, (std::max)(kernel_rows / Functor::Traits::mr, kernel_cols / Functor::Traits::nr));
+  }
+#endif
   pb_max_threads = std::max<Index>(1, std::min<Index>(pb_max_threads, static_cast<Index>(work / kMinTaskSize)));
 
   // compute the number of threads we are going to use
   int threads = std::min<int>(nbThreads(), static_cast<int>(pb_max_threads));
+#ifdef EIGEN_VECTORIZE_SME
+  // The SME kernels share one unit per cluster; more threads than units only contend.
+  EIGEN_IF_CONSTEXPR (kSme) {
+    const int units = nbSmeUnits();
+    if (units > 0) threads = std::min<int>(threads, units);
+  }
+#endif
 
   // if multi-threading is explicitly disabled, not useful, or if we already are
   // inside a parallel session, then abort multi-threading
@@ -204,6 +378,73 @@ EIGEN_STRONG_INLINE void parallelize_gemm(const Functor& func, Index rows, Index
 #endif
   if (dont_parallelize) return func(0, rows, 0, cols);
 
+#ifdef EIGEN_VECTORIZE_SME
+  // A known unit count stands for one SME unit per core cluster, each with its own L2 (see nbSmeUnits): the
+  // cooperative session below would read the other cluster's packed LHS and wait for it at every depth step, so each
+  // thread runs a disjoint part of the result instead.
+  EIGEN_IF_CONSTEXPR (kSme) {
+    if (sme_disjoint) {
+      // On the kernel's problem (the transposed one for a row-major result), a row split repacks the whole RHS per
+      // thread and a column split the whole LHS (a copy, or nothing when read in place): split the rows only when
+      // they are twice the columns and give 8 LHS panels per part, since a narrower result already runs close to peak.
+      const Index kernel_rows = transpose ? cols : rows, kernel_cols = transpose ? rows : cols;
+      const Index row_parts = kernel_rows / (8 * Functor::Traits::mr);
+      const bool split_kernel_rows = kernel_rows >= 2 * kernel_cols && row_parts >= 2;
+      const bool split_rows = transpose ? !split_kernel_rows : split_kernel_rows;
+      if (split_kernel_rows) threads = static_cast<int>((std::min)(Index(threads), row_parts));
+      // The result's rows are the kernel's columns for a row-major result. No part may be empty.
+      const Index row_grain = transpose ? Functor::Traits::nr : Functor::Traits::mr;
+      const Index col_grain = transpose ? Functor::Traits::mr : Functor::Traits::nr;
+      const Index chunks = split_rows ? (rows + row_grain - 1) / row_grain : (cols + col_grain - 1) / col_grain;
+      threads = static_cast<int>((std::min)(Index(threads), chunks));
+      if (threads <= 1) return func(0, rows, 0, cols);
+      auto part = [&func, rows, cols, threads, split_rows, row_grain, col_grain](int i) {
+        Index start, length;
+        if (split_rows) {
+          balanced_gemm_range<Index>(rows, threads, row_grain, i, start, length);
+          if (length > 0) func(start, length, 0, cols);
+        } else {
+          balanced_gemm_range<Index>(cols, threads, col_grain, i, start, length);
+          if (length > 0) func(0, rows, start, length);
+        }
+      };
+#if defined(EIGEN_HAS_OPENMP)
+#pragma omp parallel for num_threads(threads) schedule(static, 1)
+      for (int i = 0; i < threads; ++i) part(i);
+#elif defined(EIGEN_GEMM_THREADPOOL)
+      // The parts take about as long as each other, so the caller spins for the others (tens of microseconds, less than
+      // a blocking wake-up costs a short product) before it blocks on the barrier, which it always passes, also
+      // before an exception from its own part leaves this frame.
+      std::atomic<int> pending(threads - 1);
+      Barrier done(threads - 1);
+      for (int i = 0; i < threads - 1; ++i)
+        pool->Schedule([&part, &pending, &done, i] {
+          part(i);
+          pending.fetch_sub(1, std::memory_order_release);
+          done.Notify();
+        });
+      const auto wait = [&pending, &done] {
+        for (int spin = 0; spin < 65536 && pending.load(std::memory_order_acquire) != 0; ++spin) {
+        }
+        done.Wait();
+      };
+      EIGEN_TRY { part(threads - 1); }
+      EIGEN_CATCH(...) {
+        wait();
+        EIGEN_THROW;
+      }
+      wait();
+#endif
+      return;
+    }
+  }
+#endif
+
+#if defined(EIGEN_GEMM_THREADPOOL)
+  const gemm_session_guard session;
+  if (!session.owns()) return func(0, rows, 0, cols);
+#endif
+
   func.initParallelSession(threads);
 
   if (transpose) std::swap(rows, cols);
@@ -219,15 +460,11 @@ EIGEN_STRONG_INLINE void parallelize_gemm(const Functor& func, Index rows, Index
     Index actual_threads = omp_get_num_threads();
     GemmParallelInfo<Index> info(static_cast<int>(i), static_cast<int>(actual_threads), task_info);
 
-    Index blockCols = (cols / actual_threads) & ~Index(0x3);
-    Index blockRows = (rows / actual_threads);
-    blockRows = (blockRows / Functor::Traits::mr) * Functor::Traits::mr;
+    Index r0, actualBlockRows;
+    balanced_gemm_range<Index>(rows, actual_threads, Index(Functor::Traits::mr), i, r0, actualBlockRows);
 
-    Index r0 = i * blockRows;
-    Index actualBlockRows = (i + 1 == actual_threads) ? rows - r0 : blockRows;
-
-    Index c0 = i * blockCols;
-    Index actualBlockCols = (i + 1 == actual_threads) ? cols - c0 : blockCols;
+    Index c0, actualBlockCols;
+    balanced_gemm_range<Index>(cols, actual_threads, Index(kGemmColGrain), i, c0, actualBlockCols);
 
     info.task_info[i].lhs_start = r0;
     info.task_info[i].lhs_length = actualBlockRows;
@@ -243,15 +480,11 @@ EIGEN_STRONG_INLINE void parallelize_gemm(const Functor& func, Index rows, Index
   auto task = [=, &func, &barrier, &task_info](int i) {
     Index actual_threads = threads;
     GemmParallelInfo<Index> info(i, static_cast<int>(actual_threads), task_info);
-    Index blockCols = (cols / actual_threads) & ~Index(0x3);
-    Index blockRows = (rows / actual_threads);
-    blockRows = (blockRows / Functor::Traits::mr) * Functor::Traits::mr;
+    Index r0, actualBlockRows;
+    balanced_gemm_range<Index>(rows, actual_threads, Index(Functor::Traits::mr), i, r0, actualBlockRows);
 
-    Index r0 = i * blockRows;
-    Index actualBlockRows = (i + 1 == actual_threads) ? rows - r0 : blockRows;
-
-    Index c0 = i * blockCols;
-    Index actualBlockCols = (i + 1 == actual_threads) ? cols - c0 : blockCols;
+    Index c0, actualBlockCols;
+    balanced_gemm_range<Index>(cols, actual_threads, Index(kGemmColGrain), i, c0, actualBlockCols);
 
     info.task_info[i].lhs_start = r0;
     info.task_info[i].lhs_length = actualBlockRows;
@@ -267,7 +500,7 @@ EIGEN_STRONG_INLINE void parallelize_gemm(const Functor& func, Index rows, Index
   // limit number of running threads, even if the threadpool itself was constructed
   // with a larger number of threads.
   for (int i = 0; i < threads - 1; ++i) {
-    pool->Schedule([=, task = std::move(task)] { task(i); });
+    pool->Schedule([task, i] { task(i); });
   }
   task(threads - 1);
   barrier.Wait();

@@ -1,15 +1,26 @@
-#define EIGEN_NO_DEBUG_SMALL_PRODUCT_BLOCKS
-#include "sparse_solver.h"
+// SPDX-FileCopyrightText: The Eigen Authors
+// SPDX-License-Identifier: MPL-2.0
 
 #if defined(DEBUG)
 #undef DEBUG
 #endif
 
+#define EIGEN_NO_DEBUG_SMALL_PRODUCT_BLOCKS
+
+#pragma clang diagnostic push
+// The following "warning" causes a build failure on macOS with the latest
+// version of clang:
+// error: non-defining declaration of enumeration with a fixed underlying
+//        type is only permitted as a standalone declaration
+#pragma clang diagnostic ignored "-Welaborated-enum-base"
 #include <Eigen/AccelerateSupport>
+#pragma clang diagnostic pop
+
+#include "sparse_solver.h"
 
 template <typename MatrixType, typename DenseMat>
 int generate_sparse_rectangular_problem(MatrixType& A, DenseMat& dA, int maxRows = 300, int maxCols = 300) {
-  typedef typename MatrixType::Scalar Scalar;
+  using Scalar = typename MatrixType::Scalar;
   int rows = internal::random<int>(1, maxRows);
   int cols = internal::random<int>(1, maxCols);
   double density = (std::max)(8.0 / (rows * cols), 0.01);
@@ -23,7 +34,7 @@ int generate_sparse_rectangular_problem(MatrixType& A, DenseMat& dA, int maxRows
 
 template <typename MatrixType, typename DenseMat>
 int generate_sparse_square_symmetric_problem(MatrixType& A, DenseMat& dA, int maxSize = 300) {
-  typedef typename MatrixType::Scalar Scalar;
+  using Scalar = typename MatrixType::Scalar;
   int rows = internal::random<int>(1, maxSize);
   int cols = rows;
   double density = (std::max)(8.0 / (rows * cols), 0.01);
@@ -39,8 +50,8 @@ int generate_sparse_square_symmetric_problem(MatrixType& A, DenseMat& dA, int ma
 
 template <typename Scalar, typename Solver>
 void test_accelerate_ldlt() {
-  typedef SparseMatrix<Scalar> MatrixType;
-  typedef Matrix<Scalar, Dynamic, 1> DenseVector;
+  using MatrixType = SparseMatrix<Scalar>;
+  using DenseVector = Matrix<Scalar, Dynamic, 1>;
 
   MatrixType A;
   Matrix<Scalar, Dynamic, Dynamic> dA;
@@ -73,8 +84,8 @@ void test_accelerate_ldlt() {
 
 template <typename Scalar, typename Solver>
 void test_accelerate_llt() {
-  typedef SparseMatrix<Scalar> MatrixType;
-  typedef Matrix<Scalar, Dynamic, 1> DenseVector;
+  using MatrixType = SparseMatrix<Scalar>;
+  using DenseVector = Matrix<Scalar, Dynamic, 1>;
 
   MatrixType A;
   Matrix<Scalar, Dynamic, Dynamic> dA;
@@ -107,8 +118,8 @@ void test_accelerate_llt() {
 
 template <typename Scalar, typename Solver>
 void test_accelerate_qr() {
-  typedef SparseMatrix<Scalar> MatrixType;
-  typedef Matrix<Scalar, Dynamic, 1> DenseVector;
+  using MatrixType = SparseMatrix<Scalar>;
+  using DenseVector = Matrix<Scalar, Dynamic, 1>;
 
   MatrixType A;
   Matrix<Scalar, Dynamic, Dynamic> dA;
@@ -141,7 +152,7 @@ void test_accelerate_qr() {
 
 template <typename Scalar>
 void run_tests() {
-  typedef SparseMatrix<Scalar> MatrixType;
+  using MatrixType = SparseMatrix<Scalar>;
 
   test_accelerate_ldlt<Scalar, AccelerateLDLT<MatrixType, Lower> >();
   test_accelerate_ldlt<Scalar, AccelerateLDLTUnpivoted<MatrixType, Lower> >();

@@ -6,21 +6,87 @@
 // This Source Code Form is subject to the terms of the Mozilla
 // Public License v. 2.0. If a copy of the MPL was not distributed
 // with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
+// SPDX-License-Identifier: MPL-2.0
 
 #include "main.h"
+#include "MovableScalar.h"
 
+template <typename Scalar>
+struct ReductionIdentity {
+  ReductionIdentity(double initialValue, int& lvalueCount, int& rvalueCount)
+      : value(initialValue), lvalueConversions(lvalueCount), rvalueConversions(rvalueCount) {}
+  ReductionIdentity(const ReductionIdentity&) = delete;
+  ReductionIdentity(ReductionIdentity&&) = delete;
+
+  explicit operator Scalar() const& {
+    ++lvalueConversions;
+    return Scalar(value);
+  }
+  explicit operator Scalar() && {
+    ++rvalueConversions;
+    return Scalar(value);
+  }
+
+  double value;
+  int& lvalueConversions;
+  int& rvalueConversions;
+};
+
+template <typename Scalar>
+void reductionIdentityArguments() {
+  const internal::scalar_sum_op<Scalar, Scalar> sum;
+  const Matrix<Scalar, 0, 1> fixedEmpty;
+  const Matrix<Scalar, Dynamic, 1, 0, 0, 1> zeroCapacity(0);
+  Matrix<Scalar, Dynamic, 1> dynamic(0);
+  const double runtimeIdentity = 0.25;
+  VERIFY_IS_EQUAL(double(internal::redux_with_identity(fixedEmpty, sum, runtimeIdentity)), runtimeIdentity);
+  VERIFY_IS_EQUAL(double(internal::redux_with_identity(dynamic, sum, runtimeIdentity)), runtimeIdentity);
+
+  int lvalueConversions = 0, rvalueConversions = 0;
+  ReductionIdentity<Scalar> identity(runtimeIdentity, lvalueConversions, rvalueConversions);
+  const auto& constIdentity = identity;
+  VERIFY_IS_EQUAL(double(internal::redux_with_identity(fixedEmpty, sum, identity)), runtimeIdentity);
+  VERIFY_IS_EQUAL(double(internal::redux_with_identity(zeroCapacity, sum, identity)), runtimeIdentity);
+  VERIFY_IS_EQUAL(double(internal::redux_with_identity(dynamic, sum, constIdentity)), runtimeIdentity);
+  VERIFY_IS_EQUAL(lvalueConversions, 3);
+  VERIFY_IS_EQUAL(rvalueConversions, 0);
+
+  Matrix<Scalar, 2, 1> fixed;
+  fixed << Scalar(2), Scalar(3);
+  struct UnusedIdentity {};
+  VERIFY_IS_EQUAL(double(internal::redux_with_identity(fixed, sum, UnusedIdentity{})), 5.0);
+  dynamic = fixed;
+  VERIFY_IS_EQUAL(double(internal::redux_with_identity(fixed, sum, identity)), 5.0);
+  VERIFY_IS_EQUAL(double(internal::redux_with_identity(
+                      dynamic, sum, ReductionIdentity<Scalar>(runtimeIdentity, lvalueConversions, rvalueConversions))),
+                  5.0);
+  VERIFY_IS_EQUAL(lvalueConversions, 3);
+  VERIFY_IS_EQUAL(rvalueConversions, 0);
+
+  dynamic.resize(0);
+  VERIFY_IS_EQUAL(double(internal::redux_with_identity(dynamic, sum, std::move(identity))), runtimeIdentity);
+  VERIFY_IS_EQUAL(
+      double(internal::redux_with_identity(
+          fixedEmpty, sum, ReductionIdentity<Scalar>(runtimeIdentity, lvalueConversions, rvalueConversions))),
+      runtimeIdentity);
+  VERIFY_IS_EQUAL(lvalueConversions, 3);
+  VERIFY_IS_EQUAL(rvalueConversions, 2);
+}
+
+// Constructing the identity Scalar(0) of a std::string is the null-pointer constructor, so sum() of a nonempty
+// fixed-size array must not convert its identity.
+void sumOfStringsDoesNotConvertIdentity() {
+  Array<std::string, 2, 1> strings;
+  strings << "a", "b";
+  VERIFY_IS_EQUAL(strings.sum(), std::string("ab"));
+}
+
+// Complex scalars are unordered and not convertible to bool, so these reductions apply only to the others.
 template <typename MatrixType>
-void zeroReduction(const MatrixType& m) {
-  // Reductions that must hold for zero sized objects
+void zeroOrderedReduction(const MatrixType& m, std::true_type) {
   VERIFY(m.all());
   VERIFY(!m.any());
-  VERIFY(m.prod() == 1);
-  VERIFY(m.sum() == 0);
-  VERIFY(m.norm() == 0);
-  VERIFY(m.squaredNorm() == 0);
   VERIFY(m.count() == 0);
-  VERIFY(m.allFinite());
-  VERIFY(!m.hasNaN());
   VERIFY_RAISES_ASSERT(m.minCoeff());
   VERIFY_RAISES_ASSERT(m.maxCoeff());
   Index i, j;
@@ -33,14 +99,44 @@ void zeroReduction(const MatrixType& m) {
 }
 
 template <typename MatrixType>
+void zeroOrderedReduction(const MatrixType&, std::false_type) {}
+
+template <typename MatrixType>
+void zeroReduction(const MatrixType& m) {
+  using Scalar = typename MatrixType::Scalar;
+  // Reductions that must hold for zero sized objects
+  VERIFY(m.prod() == Scalar(1));
+  VERIFY(m.sum() == Scalar(0));
+  VERIFY(m.norm() == 0);
+  VERIFY(m.squaredNorm() == 0);
+  EIGEN_IF_CONSTEXPR (!NumTraits<Scalar>::IsInteger) {
+    VERIFY(m.template lpNorm<Infinity>() == 0);
+    VERIFY(m.hypotNorm() == 0);
+    VERIFY(m.stableNorm() == 0);
+  }
+  VERIFY(m.allFinite());
+  VERIFY(!m.hasNaN());
+  zeroOrderedReduction(m, internal::bool_constant<!NumTraits<Scalar>::IsComplex>());
+}
+
+template <typename MatrixType>
 void zeroSizedMatrix() {
   MatrixType t1;
-  typedef typename MatrixType::Scalar Scalar;
+  using Scalar = typename MatrixType::Scalar;
 
   if (MatrixType::SizeAtCompileTime == Dynamic || MatrixType::SizeAtCompileTime == 0) {
     zeroReduction(t1);
     if (MatrixType::RowsAtCompileTime == Dynamic) VERIFY(t1.rows() == 0);
     if (MatrixType::ColsAtCompileTime == Dynamic) VERIFY(t1.cols() == 0);
+
+    MatrixType reversed = t1;
+    reversed.reverseInPlace();
+    VERIFY(reversed == t1.reverse());
+    if (t1.rows() == t1.cols()) {
+      MatrixType transposed = t1;
+      transposed.transposeInPlace();
+      VERIFY(transposed == t1.transpose());
+    }
 
     if (MatrixType::RowsAtCompileTime == Dynamic && MatrixType::ColsAtCompileTime == Dynamic) {
       MatrixType t2(0, 0);
@@ -79,7 +175,7 @@ void zeroSizedVector() {
   if (VectorType::SizeAtCompileTime == Dynamic || VectorType::SizeAtCompileTime == 0) {
     zeroReduction(t1);
     VERIFY(t1.size() == 0);
-    VectorType t2(DenseIndex(0));  // DenseIndex disambiguates with 0-the-null-pointer (error with gcc 4.4 and MSVC8)
+    VectorType t2(DenseIndex(0));  // Select the size constructor.
     VERIFY(t2.size() == 0);
     zeroReduction(t2);
 
@@ -88,6 +184,9 @@ void zeroSizedVector() {
 }
 
 EIGEN_DECLARE_TEST(zerosized) {
+  sumOfStringsDoesNotConvertIdentity();
+  reductionIdentityArguments<double>();
+  reductionIdentityArguments<MovableScalar<double>>();
   zeroSizedMatrix<Matrix2d>();
   zeroSizedMatrix<Matrix3i>();
   zeroSizedMatrix<Matrix<float, 2, Dynamic> >();
@@ -104,4 +203,9 @@ EIGEN_DECLARE_TEST(zerosized) {
   zeroSizedVector<VectorXf>();
   zeroSizedVector<Matrix<float, 0, 1> >();
   zeroSizedVector<Matrix<float, 1, 0> >();
+  zeroReduction(MatrixXcd(0, 3));
+  zeroReduction(MatrixXcd(3, 0));
+  zeroReduction(Matrix<std::complex<double>, 0, 0>());
+  zeroReduction(Matrix<std::complex<double>, 0, 3>());
+  zeroReduction(Matrix<std::complex<double>, 3, 0>());
 }

@@ -6,6 +6,7 @@
 // This Source Code Form is subject to the terms of the Mozilla
 // Public License v. 2.0. If a copy of the MPL was not distributed
 // with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
+// SPDX-License-Identifier: MPL-2.0
 
 /*
 
@@ -53,7 +54,7 @@ namespace internal {
  * \param jcol The current column of L
  * \param diagpivotthresh diagonal pivoting threshold
  * \param[in,out] perm_r Row permutation (threshold pivoting)
- * \param[in] iperm_c column permutation - used to finf diagonal of Pc*A*Pc'
+ * \param[in] iperm_c column permutation - used to find diagonal of Pc*A*Pc'
  * \param[out] pivrow  The pivot row
  * \param glu Global LU data
  * \return 0 if success, i > 0 if U(i,i) is exactly zero
@@ -63,8 +64,8 @@ template <typename Scalar, typename StorageIndex>
 Index SparseLUImpl<Scalar, StorageIndex>::pivotL(const Index jcol, const RealScalar& diagpivotthresh,
                                                  IndexVector& perm_r, IndexVector& iperm_c, Index& pivrow,
                                                  GlobalLU_t& glu) {
-  Index fsupc = (glu.xsup)((glu.supno)(jcol));  // First column in the supernode containing the column jcol
-  Index nsupc = jcol - fsupc;                   // Number of columns in the supernode portion, excluding jcol; nsupc >=0
+  Index fsupc = glu.xsup(glu.supno(jcol));  // First column in the supernode containing the column jcol
+  Index nsupc = jcol - fsupc;               // Number of columns in the supernode portion, excluding jcol; nsupc >=0
   Index lptr = glu.xlsub(fsupc);  // pointer to the starting location of the row subscripts for this supernode portion
   Index nsupr = glu.xlsub(fsupc + 1) - lptr;                    // Number of rows in the supernode
   Index lda = glu.xlusup(fsupc + 1) - glu.xlusup(fsupc);        // leading dimension
@@ -80,8 +81,7 @@ Index SparseLUImpl<Scalar, StorageIndex>::pivotL(const Index jcol, const RealSca
   RealScalar rtemp;
   Index isub, icol, itemp, k;
   for (isub = nsupc; isub < nsupr; ++isub) {
-    using std::abs;
-    rtemp = abs(lu_col_ptr[isub]);
+    rtemp = numext::abs(lu_col_ptr[isub]);
     if (rtemp > pivmax) {
       pivmax = rtemp;
       pivptr = isub;
@@ -105,8 +105,7 @@ Index SparseLUImpl<Scalar, StorageIndex>::pivotL(const Index jcol, const RealSca
     // Test if the diagonal element can be used as a pivot (given the threshold value)
     if (diag >= 0) {
       // Diagonal element exists
-      using std::abs;
-      rtemp = abs(lu_col_ptr[diag]);
+      rtemp = numext::abs(lu_col_ptr[diag]);
       if (rtemp != RealScalar(0.0) && rtemp >= thresh) pivptr = diag;
     }
     pivrow = lsub_ptr[pivptr];
@@ -124,9 +123,15 @@ Index SparseLUImpl<Scalar, StorageIndex>::pivotL(const Index jcol, const RealSca
       std::swap(lu_sup_ptr[itemp], lu_sup_ptr[nsupc + icol * lda]);
     }
   }
-  // cdiv operations
-  Scalar temp = Scalar(1.0) / lu_col_ptr[nsupc];
-  for (k = nsupc + 1; k < nsupr; k++) lu_col_ptr[k] *= temp;
+  // cdiv operations. As in LAPACK's xGETF2: below the smallest normal number the
+  // reciprocal of the pivot may overflow, so divide instead.
+  const Scalar pivot = lu_col_ptr[nsupc];
+  if (numext::abs(pivot) >= (std::numeric_limits<RealScalar>::min)()) {
+    const Scalar temp = Scalar(1.0) / pivot;
+    for (k = nsupc + 1; k < nsupr; k++) lu_col_ptr[k] *= temp;
+  } else {
+    for (k = nsupc + 1; k < nsupr; k++) lu_col_ptr[k] /= pivot;
+  }
   return 0;
 }
 

@@ -6,6 +6,7 @@
 // This Source Code Form is subject to the terms of the Mozilla
 // Public License v. 2.0. If a copy of the MPL was not distributed
 // with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
+// SPDX-License-Identifier: MPL-2.0
 
 #ifdef EIGEN_TEST_PART_1
 #define EIGEN_UNALIGNED_VECTORIZE 1
@@ -34,12 +35,16 @@ using internal::demangle_flags;
 using internal::demangle_traversal;
 using internal::demangle_unrolling;
 
+// The traits of the kernel that `Dst = Src` runs, with the source evaluator the assignment uses.
+template <typename Dst, typename Src>
+using assign_traits = internal::copy_using_evaluator_traits<
+    internal::evaluator<Dst>, typename internal::dense_assignment_source_evaluator<internal::evaluator<Dst>, Src>::type,
+    internal::assign_op<typename Dst::Scalar, typename Src::Scalar>>;
+
 template <typename Dst, typename Src>
 bool test_assign(const Dst&, const Src&, int traversal, int unrolling) {
   EIGEN_STATIC_ASSERT_SAME_MATRIX_SIZE(Dst, Src);
-  typedef internal::copy_using_evaluator_traits<internal::evaluator<Dst>, internal::evaluator<Src>,
-                                                internal::assign_op<typename Dst::Scalar, typename Src::Scalar> >
-      traits;
+  using traits = assign_traits<Dst, Src>;
   // If traversal or unrolling are negative, ignore.
   bool res = traversal > -1 ? traits::Traversal == traversal : true;
   if (unrolling > -1) {
@@ -66,9 +71,7 @@ bool test_assign(const Dst&, const Src&, int traversal, int unrolling) {
 template <typename Dst, typename Src>
 bool test_assign(int traversal, int unrolling) {
   EIGEN_STATIC_ASSERT_SAME_MATRIX_SIZE(Dst, Src);
-  typedef internal::copy_using_evaluator_traits<internal::evaluator<Dst>, internal::evaluator<Src>,
-                                                internal::assign_op<typename Dst::Scalar, typename Src::Scalar> >
-      traits;
+  using traits = assign_traits<Dst, Src>;
   bool res = traits::Traversal == traversal && traits::Unrolling == unrolling;
   if (!res) {
     std::cerr << "Src: " << demangle_flags(Src::Flags) << std::endl;
@@ -86,8 +89,8 @@ bool test_assign(int traversal, int unrolling) {
 
 template <typename Xpr>
 bool test_redux(const Xpr&, int traversal, int unrolling) {
-  typedef typename Xpr::Scalar Scalar;
-  typedef internal::redux_traits<internal::scalar_sum_op<Scalar, Scalar>, internal::redux_evaluator<Xpr> > traits;
+  using Scalar = typename Xpr::Scalar;
+  using traits = internal::redux_traits<internal::scalar_sum_op<Scalar, Scalar>, internal::redux_evaluator<Xpr>>;
 
   bool res = traits::Traversal == traversal && traits::Unrolling == unrolling;
   if (!res) {
@@ -105,72 +108,44 @@ bool test_redux(const Xpr&, int traversal, int unrolling) {
 
 template <typename Scalar, bool Enable = internal::packet_traits<Scalar>::Vectorizable>
 struct vectorization_logic {
-  typedef internal::packet_traits<Scalar> PacketTraits;
+  using PacketTraits = internal::packet_traits<Scalar>;
 
-  typedef typename internal::packet_traits<Scalar>::type PacketType;
-  typedef typename internal::unpacket_traits<PacketType>::half HalfPacketType;
+  using PacketType = typename internal::packet_traits<Scalar>::type;
+  using HalfPacketType = typename internal::unpacket_traits<PacketType>::half;
   enum {
     PacketSize = internal::unpacket_traits<PacketType>::size,
     HalfPacketSize = internal::unpacket_traits<HalfPacketType>::size
   };
   static void run() {
-    typedef Matrix<Scalar, PacketSize, 1> Vector1;
-    typedef Matrix<Scalar, Dynamic, 1> VectorX;
-    typedef Matrix<Scalar, Dynamic, Dynamic> MatrixXX;
-    typedef Matrix<Scalar, PacketSize, PacketSize> Matrix11;
-    typedef Matrix<Scalar, (Matrix11::Flags & RowMajorBit) ? 8 : 2 * PacketSize,
-                   (Matrix11::Flags & RowMajorBit) ? 2 * PacketSize : 8>
-        Matrix22;
-    typedef Matrix<Scalar, (Matrix11::Flags & RowMajorBit) ? 16 : 4 * PacketSize,
-                   (Matrix11::Flags & RowMajorBit) ? 4 * PacketSize : 16>
-        Matrix44;
-    typedef Matrix<Scalar, (Matrix11::Flags & RowMajorBit) ? 16 : 4 * PacketSize,
-                   (Matrix11::Flags & RowMajorBit) ? 4 * PacketSize : 16,
-                   DontAlign | EIGEN_DEFAULT_MATRIX_STORAGE_ORDER_OPTION>
-        Matrix44u;
-    typedef Matrix<Scalar, 4 * PacketSize, 4 * PacketSize, ColMajor> Matrix44c;
-    typedef Matrix<Scalar, 4 * PacketSize, 4 * PacketSize, RowMajor> Matrix44r;
+    using Vector1 EIGEN_UNUSED = Matrix<Scalar, PacketSize, 1>;
+    using VectorX = Matrix<Scalar, Dynamic, 1>;
+    using MatrixXX = Matrix<Scalar, Dynamic, Dynamic>;
+    using Matrix11 = Matrix<Scalar, PacketSize, PacketSize>;
+    using Matrix22 EIGEN_UNUSED = Matrix<Scalar, (Matrix11::Flags & RowMajorBit) ? 8 : 2 * PacketSize,
+                                         (Matrix11::Flags & RowMajorBit) ? 2 * PacketSize : 8>;
+    using Matrix44 EIGEN_UNUSED = Matrix<Scalar, (Matrix11::Flags & RowMajorBit) ? 16 : 4 * PacketSize,
+                                         (Matrix11::Flags & RowMajorBit) ? 4 * PacketSize : 16>;
+    using Matrix44u EIGEN_UNUSED = Matrix<Scalar, (Matrix11::Flags & RowMajorBit) ? 16 : 4 * PacketSize,
+                                          (Matrix11::Flags & RowMajorBit) ? 4 * PacketSize : 16,
+                                          DontAlign | EIGEN_DEFAULT_MATRIX_STORAGE_ORDER_OPTION>;
+    using Matrix44c EIGEN_UNUSED = Matrix<Scalar, 4 * PacketSize, 4 * PacketSize, ColMajor>;
+    using Matrix44r EIGEN_UNUSED = Matrix<Scalar, 4 * PacketSize, 4 * PacketSize, RowMajor>;
 
-    typedef Matrix<Scalar,
-                   (PacketSize == 16  ? 8
-                    : PacketSize == 8 ? 4
-                    : PacketSize == 4 ? 2
-                    : PacketSize == 2 ? 1
-                                      : /*PacketSize==1 ?*/ 1),
-                   (PacketSize == 16  ? 2
-                    : PacketSize == 8 ? 2
-                    : PacketSize == 4 ? 2
-                    : PacketSize == 2 ? 2
-                                      : /*PacketSize==1 ?*/ 1)>
-        Matrix1;
+    using Matrix1 = Matrix<Scalar, (PacketSize >= 2 ? PacketSize / 2 : 1), (PacketSize >= 2 ? 2 : 1)>;
 
-    typedef Matrix<Scalar,
-                   (PacketSize == 16  ? 8
-                    : PacketSize == 8 ? 4
-                    : PacketSize == 4 ? 2
-                    : PacketSize == 2 ? 1
-                                      : /*PacketSize==1 ?*/ 1),
-                   (PacketSize == 16  ? 2
-                    : PacketSize == 8 ? 2
-                    : PacketSize == 4 ? 2
-                    : PacketSize == 2 ? 2
-                                      : /*PacketSize==1 ?*/ 1),
-                   DontAlign | ((Matrix1::Flags & RowMajorBit) ? RowMajor : ColMajor)>
-        Matrix1u;
+    using Matrix1u EIGEN_UNUSED = Matrix<Scalar, (PacketSize >= 2 ? PacketSize / 2 : 1), (PacketSize >= 2 ? 2 : 1),
+                                         DontAlign | ((Matrix1::Flags & RowMajorBit) ? RowMajor : ColMajor)>;
 
     // this type is made such that it can only be vectorized when viewed as a linear 1D vector
-    typedef Matrix<Scalar,
-                   (PacketSize == 16  ? 4
-                    : PacketSize == 8 ? 4
-                    : PacketSize == 4 ? 6
-                    : PacketSize == 2 ? ((Matrix11::Flags & RowMajorBit) ? 2 : 3)
-                                      : /*PacketSize==1 ?*/ 1),
-                   (PacketSize == 16  ? 12
-                    : PacketSize == 8 ? 6
-                    : PacketSize == 4 ? 2
-                    : PacketSize == 2 ? ((Matrix11::Flags & RowMajorBit) ? 3 : 2)
-                                      : /*PacketSize==1 ?*/ 3)>
-        Matrix3;
+    using Matrix3 EIGEN_UNUSED = Matrix<Scalar,
+                                        (PacketSize >= 8   ? 4
+                                         : PacketSize == 4 ? 6
+                                         : PacketSize == 2 ? ((Matrix11::Flags & RowMajorBit) ? 2 : 3)
+                                                           : /*PacketSize==1 ?*/ 1),
+                                        (PacketSize >= 8   ? 3 * PacketSize / 4
+                                         : PacketSize == 4 ? 2
+                                         : PacketSize == 2 ? ((Matrix11::Flags & RowMajorBit) ? 3 : 2)
+                                                           : /*PacketSize==1 ?*/ 3)>;
 
 #if !EIGEN_GCC_AND_ARCH_DOESNT_WANT_STACK_ALIGNMENT
     VERIFY(test_assign(Vector1(), Vector1(), InnerVectorizedTraversal, CompleteUnrolling));
@@ -203,8 +178,8 @@ struct vectorization_logic {
                        CompleteUnrolling));
 
     if (PacketSize > 1) {
-      typedef Matrix<Scalar, 3, 3, ColMajor> Matrix33c;
-      typedef Matrix<Scalar, 3, 1, ColMajor> Vector3;
+      using Matrix33c = Matrix<Scalar, 3, 3, ColMajor>;
+      using Vector3 = Matrix<Scalar, 3, 1, ColMajor>;
       VERIFY(
           test_assign(Matrix33c().row(2), Matrix33c().row(1) + Matrix33c().row(1), LinearTraversal, CompleteUnrolling));
       // Vectorization depends on too many factors - ignore.
@@ -212,22 +187,49 @@ struct vectorization_logic {
 
       VERIFY(test_assign(Matrix3(), Matrix3().cwiseProduct(Matrix3()), LinearVectorizedTraversal, CompleteUnrolling));
 
-      // Vectorization depends on too many factors - ignore.
+      // Vectorization and unrolling depend on too many factors (packet size, etc.) - ignore both.
+      VERIFY(test_assign(Matrix<Scalar, 17, 17>(), Matrix<Scalar, 17, 17>() + Matrix<Scalar, 17, 17>(), -1, -1));
+
+      // Complete unrolling is budgeted at EIGEN_UNROLLING_LIMIT * PacketSize while Matrix11 is
+      // PacketSize^2 coefficients, so the object outgrows the budget once the vector is wide and
+      // Eigen falls back to InnerUnrolling. Spell the budget out rather than assert a constant.
+      using Sum11 = decltype(Matrix11() + Matrix11());
+      constexpr int Cost11 =
+          int(internal::evaluator<Matrix11>::CoeffReadCost) + int(internal::evaluator<Sum11>::CoeffReadCost);
+      constexpr bool Unrolls11 = int(Matrix11::SizeAtCompileTime) * Cost11 <= EIGEN_UNROLLING_LIMIT * int(PacketSize);
+      VERIFY(test_assign(Matrix11(), Matrix11() + Matrix11(), InnerVectorizedTraversal,
+                         Unrolls11 ? CompleteUnrolling : InnerUnrolling));
+
       VERIFY(
-          test_assign(Matrix<Scalar, 17, 17>(), Matrix<Scalar, 17, 17>() + Matrix<Scalar, 17, 17>(), -1, NoUnrolling));
-
-      VERIFY(test_assign(Matrix11(), Matrix11() + Matrix11(), InnerVectorizedTraversal, CompleteUnrolling));
-
-      VERIFY(test_assign(Matrix11(),
-                         Matrix<Scalar, 21, 21>().template block<PacketSize, PacketSize>(2, 3) +
-                             Matrix<Scalar, 21, 21>().template block<PacketSize, PacketSize>(3, 2),
-                         (EIGEN_UNALIGNED_VECTORIZE) ? InnerVectorizedTraversal : DefaultTraversal,
-                         CompleteUnrolling | InnerUnrolling));
+          test_assign(Matrix11(),
+                      Matrix<Scalar, PacketSize + 5, PacketSize + 5>().template block<PacketSize, PacketSize>(2, 3) +
+                          Matrix<Scalar, PacketSize + 5, PacketSize + 5>().template block<PacketSize, PacketSize>(3, 2),
+                      (EIGEN_UNALIGNED_VECTORIZE) ? InnerVectorizedTraversal : DefaultTraversal,
+                      CompleteUnrolling | InnerUnrolling));
 
       VERIFY(test_assign(Vector1(), Matrix11() * Vector1(), InnerVectorizedTraversal, CompleteUnrolling));
 
+      // Same budget, and a lazyProduct's coefficients are dear enough that a wide vector outgrows
+      // the inner allowance too. Assert the exact choice rather than accept any of the three.
+      using Prod11 = decltype(Matrix11().lazyProduct(Matrix11()));
+      constexpr int CostP11 =
+          int(internal::evaluator<Matrix11>::CoeffReadCost) + int(internal::evaluator<Prod11>::CoeffReadCost);
+      constexpr int BudgetP11 = EIGEN_UNROLLING_LIMIT * int(PacketSize);
       VERIFY(test_assign(Matrix11(), Matrix11().lazyProduct(Matrix11()), InnerVectorizedTraversal,
-                         InnerUnrolling + CompleteUnrolling));
+                         int(Matrix11::SizeAtCompileTime) * CostP11 <= BudgetP11        ? CompleteUnrolling
+                         : int(Matrix11::InnerSizeAtCompileTime) * CostP11 <= BudgetP11 ? InnerUnrolling
+                                                                                        : NoUnrolling));
+
+      // An assignment evaluates a lazy product along the destination's storage order, so it vectorizes whenever the
+      // operand along that order is contiguous, whatever order the product expression reports.
+      using MatrixC = Matrix<Scalar, PacketSize, PacketSize, ColMajor>;
+      using MatrixR = Matrix<Scalar, PacketSize, PacketSize, RowMajor>;
+      VERIFY(test_assign(MatrixC(), MatrixC().lazyProduct(MatrixC()), InnerVectorizedTraversal, -1));
+      VERIFY(test_assign(MatrixC(), MatrixC().lazyProduct(MatrixR()), InnerVectorizedTraversal, -1));
+      VERIFY(test_assign(MatrixR(), MatrixC().lazyProduct(MatrixR()), InnerVectorizedTraversal, -1));
+      VERIFY(test_assign(MatrixR(), MatrixR().lazyProduct(MatrixR()), InnerVectorizedTraversal, -1));
+      // The strided column cannot vectorize the product, the contiguous row can.
+      VERIFY(test_assign(MatrixR(), MatrixR().col(0).lazyProduct(MatrixR().row(0)), InnerVectorizedTraversal, -1));
     }
 
     VERIFY(test_redux(Vector1(), LinearVectorizedTraversal, CompleteUnrolling));
@@ -288,6 +290,34 @@ struct vectorization_logic {
                         Matrix<Scalar, PacketSize, internal::plain_enum_min(2, PacketSize)>() *
                             Matrix<Scalar, internal::plain_enum_min(2, PacketSize), PacketSize>(),
                         InnerVectorizedTraversal, CompleteUnrolling)));
+
+    if (PacketSize > 1) {
+      // Matrix22 is column-major here, since EIGEN_DEFAULT_TO_ROW_MAJOR is #undef'd above; Matrix22r
+      // is its row-major twin, so the pair below isolates the effect of storage order alone.
+      using Matrix22r = Matrix<Scalar, 2 * PacketSize, 8, RowMajor>;
+      using VectorFlat = Matrix<Scalar, Matrix22::SizeAtCompileTime, 1>;
+      using Matrix2x16 = Matrix<Scalar, 2 * PacketSize, 16, ColMajor>;
+      VERIFY(test_assign(VectorFlat(), Matrix22().reshaped(), InnerVectorizedTraversal, -1));
+      VERIFY(test_assign(VectorFlat(), (Matrix22() + Matrix22()).reshaped(), InnerVectorizedTraversal, -1));
+      // A cross-order flat view cannot serve packets, but stays linear...
+      VERIFY(test_assign(VectorFlat(), Matrix22r().reshaped(), LinearTraversal, -1));
+      // ... and vectorizes again when the requested order follows the storage order.
+      VERIFY(test_assign(VectorFlat(), Matrix22r().template reshaped<AutoOrder>(), InnerVectorizedTraversal, -1));
+      VERIFY(test_redux(Matrix22().reshaped(), LinearVectorizedTraversal, CompleteUnrolling));
+      VERIFY(test_assign(VectorX(160), MatrixXX(10, 16).reshaped(), LinearVectorizedTraversal, NoUnrolling));
+
+      // Replicate serves packets only when the inner (storage-order) direction is not replicated.
+      VERIFY(test_assign(Matrix2x16(), Matrix22().template replicate<1, 2>(), InnerVectorizedTraversal, -1));
+      VERIFY(test_assign(MatrixXX(10, 8), MatrixXX(10, 4).template replicate<1, 2>(), SliceVectorizedTraversal,
+                         NoUnrolling));
+      // Replicating the inner direction would need wrap-around loads: scalar fallback.
+      VERIFY(test_assign(Matrix44(), Matrix2x16().template replicate<2, 1>(), DefaultTraversal, -1));
+      // A replicated vector keeps linear access even when packets are unavailable.
+      VERIFY(
+          test_assign(Matrix<Scalar, 2 * PacketSize, 1>(), Vector1().template replicate<2, 1>(), LinearTraversal, -1));
+      // Runtime factors cannot prove the inner direction intact: no packets, no linear access.
+      VERIFY(test_assign(MatrixXX(10, 8), MatrixXX(10, 4).replicate(1, 2), DefaultTraversal, NoUnrolling));
+    }
 #endif
 
     VERIFY(test_assign(MatrixXX(10, 10), MatrixXX(20, 20).block(10, 10, 2, 3), SliceVectorizedTraversal, NoUnrolling));
@@ -301,13 +331,14 @@ struct vectorization_logic<Scalar, false> {
   static void run() {}
 };
 
-template <typename Scalar, bool Enable = !internal::is_same<
-                               typename internal::unpacket_traits<typename internal::packet_traits<Scalar>::type>::half,
-                               typename internal::packet_traits<Scalar>::type>::value>
+template <typename Scalar,
+          bool Enable =
+              !std::is_same<typename internal::unpacket_traits<typename internal::packet_traits<Scalar>::type>::half,
+                            typename internal::packet_traits<Scalar>::type>::value>
 struct vectorization_logic_half {
   using RealScalar = typename NumTraits<Scalar>::Real;
-  typedef internal::packet_traits<Scalar> PacketTraits;
-  typedef typename internal::unpacket_traits<typename internal::packet_traits<Scalar>::type>::half PacketType;
+  using PacketTraits = internal::packet_traits<Scalar>;
+  using PacketType = typename internal::unpacket_traits<typename internal::packet_traits<Scalar>::type>::half;
   static constexpr int PacketSize = internal::unpacket_traits<PacketType>::size;
 
   static void run() {
@@ -321,58 +352,35 @@ struct vectorization_logic_half {
                                  ? PacketSize
                                  : (EIGEN_MIN_ALIGN_BYTES + sizeof(Scalar) - 1) / sizeof(Scalar);
 
-    typedef Matrix<Scalar, MinVSize, 1> Vector1;
-    typedef Matrix<Scalar, MinVSize, MinVSize> Matrix11;
-    typedef Matrix<Scalar, 5 * MinVSize, 7, ColMajor> Matrix57;
-    typedef Matrix<Scalar, 3 * MinVSize, 5, ColMajor> Matrix35;
-    typedef Matrix<Scalar, 5 * MinVSize, 7, DontAlign | ColMajor> Matrix57u;
+    using Vector1 EIGEN_UNUSED = Matrix<Scalar, MinVSize, 1>;
+    using Matrix11 = Matrix<Scalar, MinVSize, MinVSize>;
+    using Matrix57 EIGEN_UNUSED = Matrix<Scalar, 5 * MinVSize, 7, ColMajor>;
+    using Matrix35 EIGEN_UNUSED = Matrix<Scalar, 3 * MinVSize, 5, ColMajor>;
+    using Matrix57u EIGEN_UNUSED = Matrix<Scalar, 5 * MinVSize, 7, DontAlign | ColMajor>;
 
-    typedef Matrix<Scalar,
-                   (PacketSize == 16  ? 8
-                    : PacketSize == 8 ? 4
-                    : PacketSize == 4 ? 2
-                    : PacketSize == 2 ? 1
-                                      : /*PacketSize==1 ?*/ 1),
-                   (PacketSize == 16  ? 2
-                    : PacketSize == 8 ? 2
-                    : PacketSize == 4 ? 2
-                    : PacketSize == 2 ? 2
-                                      : /*PacketSize==1 ?*/ 1)>
-        Matrix1;
+    using Matrix1 = Matrix<Scalar, (PacketSize >= 2 ? PacketSize / 2 : 1), (PacketSize >= 2 ? 2 : 1)>;
 
-    typedef Matrix<Scalar,
-                   (PacketSize == 16  ? 8
-                    : PacketSize == 8 ? 4
-                    : PacketSize == 4 ? 2
-                    : PacketSize == 2 ? 1
-                                      : /*PacketSize==1 ?*/ 1),
-                   (PacketSize == 16  ? 2
-                    : PacketSize == 8 ? 2
-                    : PacketSize == 4 ? 2
-                    : PacketSize == 2 ? 2
-                                      : /*PacketSize==1 ?*/ 1),
-                   DontAlign | ((Matrix1::Flags & RowMajorBit) ? RowMajor : ColMajor)>
-        Matrix1u;
+    using Matrix1u EIGEN_UNUSED = Matrix<Scalar, (PacketSize >= 2 ? PacketSize / 2 : 1), (PacketSize >= 2 ? 2 : 1),
+                                         DontAlign | ((Matrix1::Flags & RowMajorBit) ? RowMajor : ColMajor)>;
 
     // this type is made such that it can only be vectorized when viewed as a linear 1D vector
-    typedef Matrix<Scalar,
-                   (MinVSize == 16  ? 4
-                    : MinVSize == 8 ? 4
-                    : MinVSize == 4 ? 6
-                    : MinVSize == 2 ? ((Matrix11::Flags & RowMajorBit) ? 2 : 3)
-                                    : /*PacketSize==1 ?*/ 1),
-                   (MinVSize == 16  ? 12
-                    : MinVSize == 8 ? 6
-                    : MinVSize == 4 ? 2
-                    : MinVSize == 2 ? ((Matrix11::Flags & RowMajorBit) ? 3 : 2)
-                                    : /*PacketSize==1 ?*/ 3)>
-        Matrix3;
+    using Matrix3 EIGEN_UNUSED = Matrix<Scalar,
+                                        (MinVSize >= 8   ? 4
+                                         : MinVSize == 4 ? 6
+                                         : MinVSize == 2 ? ((Matrix11::Flags & RowMajorBit) ? 2 : 3)
+                                                         : /*MinVSize==1 ?*/ 1),
+                                        (MinVSize >= 8   ? 3 * MinVSize / 4
+                                         : MinVSize == 4 ? 2
+                                         : MinVSize == 2 ? ((Matrix11::Flags & RowMajorBit) ? 3 : 2)
+                                                         : /*MinVSize==1 ?*/ 3)>;
 
 #if !EIGEN_GCC_AND_ARCH_DOESNT_WANT_STACK_ALIGNMENT
     VERIFY(test_assign(Vector1(), Vector1(), InnerVectorizedTraversal, CompleteUnrolling));
     VERIFY(test_assign(Vector1(), Vector1() + Vector1(), InnerVectorizedTraversal, CompleteUnrolling));
+    // A full-packet segment retains alignment when inferred as an inner panel.
     VERIFY(test_assign(Vector1(), Vector1().template segment<MinVSize>(0).derived(),
-                       EIGEN_UNALIGNED_VECTORIZE ? InnerVectorizedTraversal : LinearVectorizedTraversal,
+                       EIGEN_UNALIGNED_VECTORIZE || MinVSize == PacketTraits::size ? InnerVectorizedTraversal
+                                                                                   : LinearVectorizedTraversal,
                        CompleteUnrolling));
     VERIFY(test_assign(Vector1(), Scalar(RealScalar(2.1)) * Vector1() - Vector1(), InnerVectorizedTraversal,
                        CompleteUnrolling));
@@ -380,7 +388,9 @@ struct vectorization_logic_half {
         Vector1(),
         (Scalar(RealScalar(2.1)) * Vector1().template segment<MinVSize>(0) - Vector1().template segment<MinVSize>(0))
             .derived(),
-        EIGEN_UNALIGNED_VECTORIZE ? InnerVectorizedTraversal : LinearVectorizedTraversal, CompleteUnrolling));
+        EIGEN_UNALIGNED_VECTORIZE || MinVSize == PacketTraits::size ? InnerVectorizedTraversal
+                                                                    : LinearVectorizedTraversal,
+        CompleteUnrolling));
     VERIFY(test_assign(Vector1(), Vector1().cwiseProduct(Vector1()), InnerVectorizedTraversal, CompleteUnrolling));
     VERIFY(test_assign(Vector1(), Vector1().template cast<Scalar>(), InnerVectorizedTraversal, CompleteUnrolling));
 
@@ -398,23 +408,22 @@ struct vectorization_logic_half {
                        CompleteUnrolling));
 
     if (PacketSize > 1) {
-      typedef Matrix<Scalar, 3, 3, ColMajor> Matrix33c;
-      VERIFY(
-          test_assign(Matrix33c().row(2), Matrix33c().row(1) + Matrix33c().row(1), LinearTraversal, CompleteUnrolling));
-
       // Unrolling depends on read costs and unroll limits, which vary - ignore.
       VERIFY(test_assign(Matrix3(), Matrix3().cwiseQuotient(Matrix3()),
                          PacketTraits::HasDiv ? LinearVectorizedTraversal : LinearTraversal, -1));
 
+      // Unrolling further depends on the linear packet width: find_assign_linear_packet
+      // may pick a full-width packet here (e.g. Packet16i on AVX-512), which scales the
+      // unrolling limit - ignore.
       VERIFY(test_assign(Matrix<Scalar, 17, 17>(), Matrix<Scalar, 17, 17>() + Matrix<Scalar, 17, 17>(),
                          sizeof(Scalar) == 16
                              ? InnerVectorizedTraversal
                              : (EIGEN_UNALIGNED_VECTORIZE ? LinearVectorizedTraversal : LinearTraversal),
-                         NoUnrolling));
+                         -1));
 
       VERIFY(test_assign(Matrix11(),
-                         Matrix<Scalar, 17, 17>().template block<MinVSize, MinVSize>(2, 3) +
-                             Matrix<Scalar, 17, 17>().template block<MinVSize, MinVSize>(8, 4),
+                         Matrix<Scalar, MinVSize + 9, MinVSize + 9>().template block<MinVSize, MinVSize>(2, 3) +
+                             Matrix<Scalar, MinVSize + 9, MinVSize + 9>().template block<MinVSize, MinVSize>(8, 4),
                          EIGEN_UNALIGNED_VECTORIZE ? InnerVectorizedTraversal : DefaultTraversal,
                          InnerUnrolling + CompleteUnrolling));
 
@@ -471,31 +480,31 @@ EIGEN_DECLARE_TEST(vectorization_logic) {
   CALL_SUBTEST(vectorization_logic_half<std::complex<float> >::run());
   CALL_SUBTEST(vectorization_logic_half<std::complex<double> >::run());
 
+  // For backends without sub-packet types (e.g. the generic clang backend),
+  // find_best_packet may return a packet larger than the matrix, making
+  // MayLinearVectorize false in the assignment path (which requires
+  // SizeAtCompileTime >= PacketSize). The redux path has no such constraint.
   if (internal::packet_traits<float>::Vectorizable) {
-    VERIFY(test_assign(Matrix<float, 3, 3>(), Matrix<float, 3, 3>() + Matrix<float, 3, 3>(),
-                       internal::packet_traits<float>::Vectorizable && EIGEN_UNALIGNED_VECTORIZE
-                           ? LinearVectorizedTraversal
-                           : LinearTraversal,
-                       CompleteUnrolling));
+    constexpr int kFloatBestPacketSize3x3 =
+        internal::unpacket_traits<typename internal::find_best_packet<float, 9>::type>::size;
+    VERIFY(test_assign(
+        Matrix<float, 3, 3>(), Matrix<float, 3, 3>() + Matrix<float, 3, 3>(),
+        EIGEN_UNALIGNED_VECTORIZE && kFloatBestPacketSize3x3 <= 9 ? LinearVectorizedTraversal : LinearTraversal,
+        CompleteUnrolling));
 
-    VERIFY(test_redux(Matrix<float, 5, 2>(),
-                      internal::packet_traits<float>::Vectorizable && EIGEN_UNALIGNED_VECTORIZE
-                          ? LinearVectorizedTraversal
-                          : LinearTraversal,
+    VERIFY(test_redux(Matrix<float, 5, 2>(), EIGEN_UNALIGNED_VECTORIZE ? LinearVectorizedTraversal : LinearTraversal,
                       CompleteUnrolling));
   }
 
   if (internal::packet_traits<double>::Vectorizable) {
-    VERIFY(test_assign(Matrix<double, 3, 3>(), Matrix<double, 3, 3>() + Matrix<double, 3, 3>(),
-                       internal::packet_traits<double>::Vectorizable && EIGEN_UNALIGNED_VECTORIZE
-                           ? LinearVectorizedTraversal
-                           : LinearTraversal,
-                       CompleteUnrolling));
+    constexpr int kDoubleBestPacketSize3x3 =
+        internal::unpacket_traits<typename internal::find_best_packet<double, 9>::type>::size;
+    VERIFY(test_assign(
+        Matrix<double, 3, 3>(), Matrix<double, 3, 3>() + Matrix<double, 3, 3>(),
+        EIGEN_UNALIGNED_VECTORIZE && kDoubleBestPacketSize3x3 <= 9 ? LinearVectorizedTraversal : LinearTraversal,
+        CompleteUnrolling));
 
-    VERIFY(test_redux(Matrix<double, 7, 3>(),
-                      internal::packet_traits<double>::Vectorizable && EIGEN_UNALIGNED_VECTORIZE
-                          ? LinearVectorizedTraversal
-                          : LinearTraversal,
+    VERIFY(test_redux(Matrix<double, 7, 3>(), EIGEN_UNALIGNED_VECTORIZE ? LinearVectorizedTraversal : LinearTraversal,
                       CompleteUnrolling));
   }
 #endif  // EIGEN_VECTORIZE

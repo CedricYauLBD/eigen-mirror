@@ -6,14 +6,15 @@
 // This Source Code Form is subject to the terms of the Mozilla
 // Public License v. 2.0. If a copy of the MPL was not distributed
 // with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
+// SPDX-License-Identifier: MPL-2.0
 
 #include "main.h"
 
 using internal::is_same_dense;
 
 EIGEN_DECLARE_TEST(is_same_dense) {
-  typedef Matrix<double, Dynamic, Dynamic, ColMajor> ColMatrixXd;
-  typedef Matrix<std::complex<double>, Dynamic, Dynamic, ColMajor> ColMatrixXcd;
+  using ColMatrixXd = Matrix<double, Dynamic, Dynamic, ColMajor>;
+  using ColMatrixXcd = Matrix<std::complex<double>, Dynamic, Dynamic, ColMajor>;
   ColMatrixXd m1(10, 10);
   ColMatrixXcd m2(10, 10);
   Ref<ColMatrixXd> ref_m1(m1);

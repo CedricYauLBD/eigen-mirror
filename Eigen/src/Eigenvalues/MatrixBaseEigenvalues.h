@@ -7,6 +7,7 @@
 // This Source Code Form is subject to the terms of the Mozilla
 // Public License v. 2.0. If a copy of the MPL was not distributed
 // with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
+// SPDX-License-Identifier: MPL-2.0
 
 #ifndef EIGEN_MATRIXBASEEIGENVALUES_H
 #define EIGEN_MATRIXBASEEIGENVALUES_H
@@ -22,7 +23,7 @@ template <typename Derived, bool IsComplex>
 struct eigenvalues_selector {
   // this is the implementation for the case IsComplex = true
   static inline typename MatrixBase<Derived>::EigenvaluesReturnType const run(const MatrixBase<Derived>& m) {
-    typedef typename Derived::PlainObject PlainObject;
+    using PlainObject = typename Derived::PlainObject;
     PlainObject m_eval(m);
     return ComplexEigenSolver<PlainObject>(m_eval, false).eigenvalues();
   }
@@ -31,7 +32,7 @@ struct eigenvalues_selector {
 template <typename Derived>
 struct eigenvalues_selector<Derived, false> {
   static inline typename MatrixBase<Derived>::EigenvaluesReturnType const run(const MatrixBase<Derived>& m) {
-    typedef typename Derived::PlainObject PlainObject;
+    using PlainObject = typename Derived::PlainObject;
     PlainObject m_eval(m);
     return EigenSolver<PlainObject>(m_eval, false).eigenvalues();
   }
@@ -109,11 +110,19 @@ SelfAdjointView<MatrixType, UpLo>::eigenvalues() const {
  */
 template <typename Derived>
 inline typename MatrixBase<Derived>::RealScalar MatrixBase<Derived>::operatorNorm() const {
-  using std::sqrt;
   typename Derived::PlainObject m_eval(derived());
-  // FIXME if it is really guaranteed that the eigenvalues are already sorted,
-  // then we don't need to compute a maxCoeff() here, comparing the 1st and last ones is enough.
-  return sqrt((m_eval * m_eval.adjoint()).eval().template selfadjointView<Lower>().eigenvalues().maxCoeff());
+  if (m_eval.size() == 0) return RealScalar(0);
+  // Scale by a power of two first, so that forming A*A^* can neither overflow nor underflow: ||A||_2 = s*||A/s||_2.
+  // A NaN or an infinity in A makes the norm NaN or infinite, as it does for the other norms.
+  const RealScalar maxCoeff = internal::safe_scaling<RealScalar>::max_abs_component(m_eval);
+  if (!(numext::isfinite)(maxCoeff) || numext::is_exactly_zero(maxCoeff)) return maxCoeff;
+  const auto factors = internal::safe_scaling<RealScalar>::scale_in_place(m_eval, maxCoeff);
+  const auto gram = (m_eval * m_eval.adjoint()).eval();
+  SelfAdjointEigenSolver<std::decay_t<decltype(gram)>> solver(gram, EigenvaluesOnly);
+  if (solver.info() != Success) return NumTraits<RealScalar>::quiet_NaN();
+  RealScalar result = numext::sqrt(numext::maxi(solver.eigenvalues().maxCoeff(), RealScalar(0)));
+  internal::safe_scaling<RealScalar>::unscale_in_place(result, factors);
+  return result;
 }
 
 /** \brief Computes the L2 operator norm
@@ -134,7 +143,19 @@ inline typename MatrixBase<Derived>::RealScalar MatrixBase<Derived>::operatorNor
 template <typename MatrixType, unsigned int UpLo>
 EIGEN_DEVICE_FUNC inline typename SelfAdjointView<MatrixType, UpLo>::RealScalar
 SelfAdjointView<MatrixType, UpLo>::operatorNorm() const {
-  return eigenvalues().cwiseAbs().maxCoeff();
+  PlainObject thisAsMatrix(*this);
+  if (thisAsMatrix.size() == 0) return RealScalar(0);
+  // The solver ignores the imaginary part of the diagonal, so does the check below.
+  EIGEN_IF_CONSTEXPR (NumTraits<Scalar>::IsComplex) {
+    thisAsMatrix.diagonal() = thisAsMatrix.diagonal().real();
+  }
+  // A NaN gives NaN and an infinity +infinity, as for MatrixBase::operatorNorm(): the solver rejects both, and the
+  // eigenvalues are unspecified after it fails.
+  const RealScalar maxCoeff = internal::safe_scaling<RealScalar>::max_abs_component(thisAsMatrix);
+  if (!(numext::isfinite)(maxCoeff)) return maxCoeff;
+  SelfAdjointEigenSolver<PlainObject> solver(thisAsMatrix, EigenvaluesOnly);
+  if (solver.info() != Success) return NumTraits<RealScalar>::quiet_NaN();
+  return solver.eigenvalues().cwiseAbs().maxCoeff();
 }
 
 }  // end namespace Eigen

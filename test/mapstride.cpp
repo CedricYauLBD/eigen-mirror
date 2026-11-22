@@ -6,12 +6,14 @@
 // This Source Code Form is subject to the terms of the Mozilla
 // Public License v. 2.0. If a copy of the MPL was not distributed
 // with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
+// SPDX-License-Identifier: MPL-2.0
 
 #include "main.h"
+#include "random_for_arithmetic.h"
 
 template <int Alignment, typename VectorType>
 void map_class_vector(const VectorType& m) {
-  typedef typename VectorType::Scalar Scalar;
+  using Scalar = typename VectorType::Scalar;
 
   Index size = m.size();
 
@@ -49,12 +51,12 @@ void map_class_vector(const VectorType& m) {
 
 template <int Alignment, typename MatrixType>
 void map_class_matrix(const MatrixType& _m) {
-  typedef typename MatrixType::Scalar Scalar;
+  using Scalar = typename MatrixType::Scalar;
 
   Index rows = _m.rows(), cols = _m.cols();
 
-  MatrixType m = MatrixType::Random(rows, cols);
-  Scalar s1 = internal::random<Scalar>();
+  MatrixType m = random_for_arithmetic<MatrixType>(rows, cols);
+  Scalar s1 = random_scalar_for_arithmetic<Scalar>();
 
   Index arraysize = 4 * (rows + 4) * (cols + 4);
 
@@ -207,11 +209,11 @@ template <int>
 void bug1453() {
   const int data[] = {0,  1,  2,  3,  4,  5,  6,  7,  8,  9,  10, 11, 12, 13, 14, 15,
                       16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31};
-  typedef Matrix<int, Dynamic, Dynamic, RowMajor> RowMatrixXi;
-  typedef Matrix<int, 2, 3, ColMajor> ColMatrix23i;
-  typedef Matrix<int, 3, 2, ColMajor> ColMatrix32i;
-  typedef Matrix<int, 2, 3, RowMajor> RowMatrix23i;
-  typedef Matrix<int, 3, 2, RowMajor> RowMatrix32i;
+  using RowMatrixXi = Matrix<int, Dynamic, Dynamic, RowMajor>;
+  using ColMatrix23i = Matrix<int, 2, 3, ColMajor>;
+  using ColMatrix32i = Matrix<int, 3, 2, ColMajor>;
+  using RowMatrix23i = Matrix<int, 2, 3, RowMajor>;
+  using RowMatrix32i = Matrix<int, 3, 2, RowMajor>;
 
   VERIFY_IS_APPROX(MatrixXi::Map(data, 2, 3, InnerStride<2>()), MatrixXi::Map(data, 2, 3, Stride<4, 2>()));
   VERIFY_IS_APPROX(MatrixXi::Map(data, 2, 3, InnerStride<>(2)), MatrixXi::Map(data, 2, 3, Stride<4, 2>()));

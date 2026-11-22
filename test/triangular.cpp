@@ -6,12 +6,281 @@
 // This Source Code Form is subject to the terms of the Mozilla
 // Public License v. 2.0. If a copy of the MPL was not distributed
 // with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
+// SPDX-License-Identifier: MPL-2.0
 
 #if defined(EIGEN_TEST_PART_100) || defined(EIGEN_TEST_PART_ALL)
 #define EIGEN_NO_DEPRECATED_WARNING
 #endif
 
 #include "main.h"
+
+template <typename ViewType, typename = void>
+struct has_left_scalar_multiply : std::false_type {};
+
+template <typename ViewType>
+struct has_left_scalar_multiply<
+    ViewType, internal::void_t<decltype(std::declval<typename ViewType::Scalar>() * std::declval<const ViewType&>())>>
+    : std::true_type {};
+
+template <typename ViewType, typename = void>
+struct has_right_scalar_multiply : std::false_type {};
+
+template <typename ViewType>
+struct has_right_scalar_multiply<
+    ViewType, internal::void_t<decltype(std::declval<const ViewType&>() * std::declval<typename ViewType::Scalar>())>>
+    : std::true_type {};
+
+template <typename ViewType, typename = void>
+struct has_structured_sum : std::false_type {};
+
+template <typename ViewType>
+struct has_structured_sum<ViewType,
+                          internal::void_t<decltype(std::declval<const ViewType&>() + std::declval<const ViewType&>())>>
+    : std::true_type {};
+
+template <typename ViewType, typename DiagonalType, typename = void>
+struct has_diagonal_sum : std::false_type {};
+
+template <typename ViewType, typename DiagonalType>
+struct has_diagonal_sum<
+    ViewType, DiagonalType,
+    internal::void_t<decltype(std::declval<const ViewType&>() + std::declval<const DiagonalType&>()),
+                     decltype(std::declval<const DiagonalType&>() - std::declval<const ViewType&>())>>
+    : std::true_type {};
+
+template <unsigned int Mode, typename MatrixType>
+void triangular_scalar_multiply(const MatrixType& m) {
+  using Scalar = typename MatrixType::Scalar;
+
+  const Index rows = m.rows();
+  const Index cols = m.cols();
+
+  const Scalar s = internal::random<Scalar>();
+  const MatrixType triangular = MatrixType::Random(rows, cols);
+
+  VERIFY_IS_APPROX((s * triangular.template triangularView<Mode>()).toDenseMatrix(),
+                   (s * triangular).template triangularView<Mode>().toDenseMatrix());
+  VERIFY_IS_APPROX((triangular.template triangularView<Mode>() * s).toDenseMatrix(),
+                   (triangular * s).template triangularView<Mode>().toDenseMatrix());
+}
+
+template <unsigned int Mode, typename MatrixType, bool IsSelfAdjointMode = Mode == Upper || Mode == Lower>
+struct selfadjoint_structured_sum_impl {
+  using Scalar = typename MatrixType::Scalar;
+
+  static void run(const Scalar&, const MatrixType&, const MatrixType&, MatrixType&, MatrixType&) {}
+};
+
+template <unsigned int Mode, typename MatrixType>
+struct selfadjoint_structured_sum_impl<Mode, MatrixType, true> {
+  using Scalar = typename MatrixType::Scalar;
+
+  static void run(const Scalar& s, const MatrixType& a, const MatrixType& b, MatrixType& result,
+                  MatrixType& reference) {
+    if (a.rows() != a.cols()) return;
+
+    result.setRandom();
+    result.template selfadjointView<Mode>() =
+        s * a.template selfadjointView<Mode>() + b.template selfadjointView<Mode>();
+    reference = (s * a + b).template selfadjointView<Mode>().toDenseMatrix();
+    VERIFY_IS_APPROX(result, reference);
+
+    result.setRandom();
+    result.template selfadjointView<Mode>() =
+        a.template selfadjointView<Mode>() - s * b.template selfadjointView<Mode>();
+    reference = (a - s * b).template selfadjointView<Mode>().toDenseMatrix();
+    VERIFY_IS_APPROX(result, reference);
+  }
+};
+
+template <unsigned int Mode, typename MatrixType>
+void triangular_structured_sum(const MatrixType& m) {
+  using Scalar = typename MatrixType::Scalar;
+
+  const Index rows = m.rows();
+  const Index cols = m.cols();
+
+  const Scalar s = internal::random<Scalar>();
+  const MatrixType a = MatrixType::Random(rows, cols);
+  const MatrixType b = MatrixType::Random(rows, cols);
+
+  MatrixType result = MatrixType::Random(rows, cols);
+  MatrixType reference = result;
+
+  result.template triangularView<Mode>() = s * a.template triangularView<Mode>() + b.template triangularView<Mode>();
+  reference.template triangularView<Mode>() = s * a + b;
+  VERIFY_IS_APPROX(result, reference);
+
+  result.setRandom();
+  reference = result;
+  result.template triangularView<Mode>() = a.template triangularView<Mode>() - s * b.template triangularView<Mode>();
+  reference.template triangularView<Mode>() = a - s * b;
+  VERIFY_IS_APPROX(result, reference);
+
+  selfadjoint_structured_sum_impl<Mode, MatrixType>::run(s, a, b, result, reference);
+}
+
+// Permutation times triangular or self-adjoint view, both orders, with P and P^-1. Rows or columns of the
+// densified view are only moved, so the products are exact.
+template <typename ViewType, typename PermutationType>
+void triangular_permutation_products_check(const TriangularBase<ViewType>& view, const PermutationType& perm) {
+  using Scalar = typename ViewType::Scalar;
+  using RealScalar = typename NumTraits<Scalar>::Real;
+  using MatrixType = typename ViewType::DenseMatrixType;
+
+  const MatrixType dense = view.derived().toDenseMatrix();
+  const MatrixType permDense = perm.toDenseMatrix().template cast<Scalar>();
+  const MatrixType inverseDense = perm.inverse().toDenseMatrix().template cast<Scalar>();
+
+  MatrixType result = perm * view.derived();
+  VERIFY_IS_EQUAL(result, MatrixType(permDense * dense));
+  result = view.derived() * perm;
+  VERIFY_IS_EQUAL(result, MatrixType(dense * permDense));
+  result = perm.inverse() * view.derived();
+  VERIFY_IS_EQUAL(result, MatrixType(inverseDense * dense));
+  result = view.derived() * perm.transpose();
+  VERIFY_IS_EQUAL(result, MatrixType(dense * inverseDense));
+  result = perm * view.derived() * perm.inverse();
+  VERIFY_IS_APPROX(result, MatrixType(permDense * dense * inverseDense));
+
+  // alpha cannot fold into P or into a unit diagonal, so alpha * (P * V) and alpha * (UnitTri * P^-1) evaluate the
+  // product first and scale it afterwards. A real alpha keeps the scaling exact on every evaluation path.
+  const Scalar alpha(internal::random<RealScalar>(1, 2));
+  result = alpha * (perm * view.derived());
+  VERIFY_IS_EQUAL(result, MatrixType(alpha * MatrixType(permDense * dense)));
+  result = alpha * (view.derived() * perm.inverse());
+  VERIFY_IS_EQUAL(result, MatrixType(alpha * MatrixType(dense * inverseDense)));
+  result.setZero();
+  result.noalias() += alpha * (perm.inverse() * view.derived());
+  VERIFY_IS_EQUAL(result, MatrixType(alpha * MatrixType(inverseDense * dense)));
+}
+
+template <typename MatrixType>
+void triangular_permutation_products(const MatrixType& m) {
+  PermutationMatrix<MatrixType::RowsAtCompileTime> perm(m.rows());
+  randomPermutationVector(perm.indices(), m.rows());
+  const MatrixType a = MatrixType::Random(m.rows(), m.cols());
+
+  triangular_permutation_products_check(a.template triangularView<Upper>(), perm);
+  triangular_permutation_products_check(a.template triangularView<Lower>(), perm);
+  triangular_permutation_products_check(a.template triangularView<UnitLower>(), perm);
+  triangular_permutation_products_check(a.template triangularView<StrictlyUpper>(), perm);
+  triangular_permutation_products_check(a.template selfadjointView<Lower>(), perm);
+  triangular_permutation_products_check(a.template selfadjointView<Upper>(), perm);
+
+  // A complex alpha folded into a self-adjoint view scales the whole view, as in its other products, rather than
+  // being conjugated with the mirrored triangle.
+  using Scalar = typename MatrixType::Scalar;
+  using RealScalar = typename NumTraits<Scalar>::Real;
+  const Scalar alpha = internal::random<Scalar>() + Scalar(RealScalar(2));
+  const MatrixType lower = a.template selfadjointView<Lower>(), upper = a.template selfadjointView<Upper>();
+  const MatrixType permDense = perm.toDenseMatrix().template cast<Scalar>();
+  MatrixType result = alpha * (a.template selfadjointView<Lower>() * perm);
+  VERIFY_IS_APPROX(result, MatrixType(alpha * MatrixType(lower * permDense)));
+  result = a;
+  result += alpha * (a.template selfadjointView<Upper>() * perm.inverse());
+  VERIFY_IS_APPROX(result, MatrixType(a + alpha * MatrixType(upper * permDense.transpose())));
+}
+
+template <typename MatrixType>
+void triangular_setters(const MatrixType& m) {
+  const Index rows = m.rows();
+  const Index cols = m.cols();
+
+  MatrixType result = MatrixType::Random(rows, cols);
+  MatrixType reference = result;
+
+  result.template triangularView<Upper>().setIdentity();
+  reference.template triangularView<Upper>() = MatrixType::Identity(rows, cols);
+  VERIFY_IS_APPROX(result, reference);
+
+  result.setRandom();
+  reference = result;
+  result.template triangularView<Lower>().setIdentity();
+  reference.template triangularView<Lower>() = MatrixType::Identity(rows, cols);
+  VERIFY_IS_APPROX(result, reference);
+
+  result.setRandom();
+  reference = result;
+  result.template triangularView<Upper>().setRandom();
+  VERIFY_IS_APPROX(result.template triangularView<StrictlyLower>().toDenseMatrix(),
+                   reference.template triangularView<StrictlyLower>().toDenseMatrix());
+
+  result.setRandom();
+  reference = result;
+  result.template triangularView<StrictlyLower>().setRandom();
+  VERIFY_IS_APPROX(result.template triangularView<Upper>().toDenseMatrix(),
+                   reference.template triangularView<Upper>().toDenseMatrix());
+}
+
+template <typename MatrixType>
+void triangular_scalar_multiply_sfinae() {
+  using UpperView = decltype(std::declval<MatrixType&>().template triangularView<Upper>());
+  using LowerView = decltype(std::declval<MatrixType&>().template triangularView<Lower>());
+  using StrictlyLowerView = decltype(std::declval<MatrixType&>().template triangularView<StrictlyLower>());
+  using StrictlyUpperView = decltype(std::declval<MatrixType&>().template triangularView<StrictlyUpper>());
+  using UnitLowerView = decltype(std::declval<MatrixType&>().template triangularView<UnitLower>());
+
+  STATIC_CHECK((has_left_scalar_multiply<UpperView>::value));
+  STATIC_CHECK((has_right_scalar_multiply<UpperView>::value));
+  STATIC_CHECK((has_left_scalar_multiply<LowerView>::value));
+  STATIC_CHECK((has_right_scalar_multiply<LowerView>::value));
+  STATIC_CHECK((has_left_scalar_multiply<StrictlyLowerView>::value));
+  STATIC_CHECK((has_right_scalar_multiply<StrictlyLowerView>::value));
+  STATIC_CHECK((has_left_scalar_multiply<StrictlyUpperView>::value));
+  STATIC_CHECK((has_right_scalar_multiply<StrictlyUpperView>::value));
+  STATIC_CHECK((!has_left_scalar_multiply<UnitLowerView>::value));
+  STATIC_CHECK((!has_right_scalar_multiply<UnitLowerView>::value));
+
+  STATIC_CHECK((has_structured_sum<UpperView>::value));
+  STATIC_CHECK((has_structured_sum<LowerView>::value));
+  STATIC_CHECK((has_structured_sum<StrictlyLowerView>::value));
+  STATIC_CHECK((has_structured_sum<StrictlyUpperView>::value));
+  STATIC_CHECK((!has_structured_sum<UnitLowerView>::value));
+
+  // Sums with a diagonal matrix exist only for modes that store their diagonal.
+  using DiagonalType = DiagonalMatrix<typename MatrixType::Scalar, MatrixType::RowsAtCompileTime>;
+  using SelfAdjointLowerView = decltype(std::declval<MatrixType&>().template selfadjointView<Lower>());
+  STATIC_CHECK((has_diagonal_sum<UpperView, DiagonalType>::value));
+  STATIC_CHECK((has_diagonal_sum<LowerView, DiagonalType>::value));
+  STATIC_CHECK((has_diagonal_sum<SelfAdjointLowerView, DiagonalType>::value));
+  STATIC_CHECK((!has_diagonal_sum<StrictlyLowerView, DiagonalType>::value));
+  STATIC_CHECK((!has_diagonal_sum<StrictlyUpperView, DiagonalType>::value));
+  STATIC_CHECK((!has_diagonal_sum<UnitLowerView, DiagonalType>::value));
+}
+
+// view +/- diagonal keeps the view's mode; the dense value is the view of the dense sum.
+template <unsigned int Mode, typename MatrixType>
+void triangular_diagonal_sum(const MatrixType& m) {
+  using Scalar = typename MatrixType::Scalar;
+  using VectorType = Matrix<Scalar, MatrixType::RowsAtCompileTime, 1>;
+
+  const Index rows = m.rows();
+  const MatrixType a = MatrixType::Random(rows, rows);
+  const VectorType d = VectorType::Random(rows);
+  const auto view = internal::make_triangular_base_cwise_view<Mode>(a);
+  const MatrixType viewDense = view.toDenseMatrix();
+  const MatrixType diagDense = d.asDiagonal().toDenseMatrix();
+
+  STATIC_CHECK((int(std::decay_t<decltype(view + d.asDiagonal())>::Mode) == int(Mode)));
+  STATIC_CHECK((int(std::decay_t<decltype(d.asDiagonal() - view)>::Mode) == int(Mode)));
+
+  MatrixType result = view + d.asDiagonal();
+  VERIFY_IS_APPROX(result, viewDense + diagDense);
+  result = d.asDiagonal() + view;
+  VERIFY_IS_APPROX(result, viewDense + diagDense);
+  result = view - d.asDiagonal();
+  VERIFY_IS_APPROX(result, viewDense - diagDense);
+  result = d.asDiagonal() - view;
+  VERIFY_IS_APPROX(result, diagDense - viewDense);
+  result = (view + d.asDiagonal()).toDenseMatrix();
+  VERIFY_IS_APPROX(result, viewDense + diagDense);
+
+  // The dense operand of the lazy sum is the view's nested expression: its other triangle must not leak.
+  const DiagonalMatrix<Scalar, MatrixType::RowsAtCompileTime> dm(d);
+  result = view + dm;
+  VERIFY_IS_APPROX(result, viewDense + diagDense);
+}
 
 template <typename MatrixType>
 void triangular_deprecated(const MatrixType& m) {
@@ -38,9 +307,21 @@ void triangular_deprecated(const MatrixType& m) {
 
 template <typename MatrixType>
 void triangular_square(const MatrixType& m) {
-  typedef typename MatrixType::Scalar Scalar;
-  typedef typename NumTraits<Scalar>::Real RealScalar;
-  typedef Matrix<Scalar, MatrixType::RowsAtCompileTime, 1> VectorType;
+  using Scalar = typename MatrixType::Scalar;
+  using RealScalar = typename NumTraits<Scalar>::Real;
+  using VectorType = Matrix<Scalar, MatrixType::RowsAtCompileTime, 1>;
+
+  triangular_scalar_multiply_sfinae<MatrixType>();
+  triangular_structured_sum<Upper>(m);
+  triangular_structured_sum<Lower>(m);
+  triangular_structured_sum<StrictlyUpper>(m);
+  triangular_structured_sum<StrictlyLower>(m);
+  triangular_permutation_products(m);
+  triangular_diagonal_sum<Upper>(m);
+  triangular_diagonal_sum<Lower>(m);
+  triangular_diagonal_sum<Upper | SelfAdjoint>(m);
+  triangular_diagonal_sum<Lower | SelfAdjoint>(m);
+  triangular_setters(m);
 
   RealScalar largerEps = 10 * test_precision<RealScalar>();
 
@@ -86,7 +367,7 @@ void triangular_square(const MatrixType& m) {
 
   m1 = MatrixType::Random(rows, cols);
   for (int i = 0; i < rows; ++i)
-    while (numext::abs2(m1(i, i)) < RealScalar(1e-1)) m1(i, i) = internal::random<Scalar>();
+    if (numext::abs2(m1(i, i)) < RealScalar(1e-1)) m1(i, i) = Scalar(1);
 
   Transpose<MatrixType> trm4(m4);
   // test back and forward substitution with a vector as the rhs
@@ -151,6 +432,10 @@ void triangular_square(const MatrixType& m) {
   m6.setRandom();
   VERIFY_IS_APPROX(m1.template triangularView<Upper>() * m5, m3 * m5);
   VERIFY_IS_APPROX(m6 * m1.template triangularView<Upper>(), m6 * m3);
+  triangular_scalar_multiply<Upper>(m1);
+  triangular_scalar_multiply<Lower>(m1);
+  triangular_scalar_multiply<StrictlyUpper>(m1);
+  triangular_scalar_multiply<StrictlyLower>(m1);
 
   m1up = m1.template triangularView<Upper>();
   VERIFY_IS_APPROX(m1.template selfadjointView<Upper>().template triangularView<Upper>().toDenseMatrix(), m1up);
@@ -185,8 +470,8 @@ void triangular_square(const MatrixType& m) {
 
 template <typename MatrixType>
 void triangular_rect(const MatrixType& m) {
-  typedef typename MatrixType::Scalar Scalar;
-  typedef typename NumTraits<Scalar>::Real RealScalar;
+  using Scalar = typename MatrixType::Scalar;
+  using RealScalar = typename NumTraits<Scalar>::Real;
   enum { Rows = MatrixType::RowsAtCompileTime, Cols = MatrixType::ColsAtCompileTime };
 
   Index rows = m.rows();
@@ -228,6 +513,15 @@ void triangular_rect(const MatrixType& m) {
   m1.setZero();
   m1.template triangularView<StrictlyLower>() = 3 * m2;
   VERIFY_IS_APPROX(m3.template triangularView<StrictlyLower>().toDenseMatrix(), m1);
+  triangular_scalar_multiply<Upper>(m1);
+  triangular_scalar_multiply<Lower>(m1);
+  triangular_scalar_multiply<StrictlyUpper>(m1);
+  triangular_scalar_multiply<StrictlyLower>(m1);
+  triangular_structured_sum<Upper>(m1);
+  triangular_structured_sum<Lower>(m1);
+  triangular_structured_sum<StrictlyUpper>(m1);
+  triangular_structured_sum<StrictlyLower>(m1);
+  triangular_setters(m1);
   m1.setRandom();
   m2 = m1.template triangularView<Upper>();
   VERIFY(m2.isUpperTriangular());
@@ -258,18 +552,134 @@ void triangular_rect(const MatrixType& m) {
   VERIFY_IS_APPROX(m2, m3);
 }
 
+// isLowerTriangular() and isUpperTriangular() must inspect every off-diagonal coefficient. In a wide matrix the
+// columns past the diagonal block are strictly upper down to their last row, which an off-by-one row bound in
+// isLowerTriangular() used to skip.
+template <typename MatrixType>
+void triangular_predicates(const MatrixType& m) {
+  using Scalar = typename MatrixType::Scalar;
+
+  const Index rows = m.rows();
+  const Index cols = m.cols();
+
+  const MatrixType m1 = MatrixType::Random(rows, cols);
+  const MatrixType lower = m1.template triangularView<Lower>();
+  const MatrixType upper = m1.template triangularView<Upper>();
+  VERIFY(lower.isLowerTriangular());
+  VERIFY(upper.isUpperTriangular());
+
+  MatrixType diag = MatrixType::Zero(rows, cols);
+  diag.diagonal().setConstant(Scalar(1));
+  VERIFY(diag.isLowerTriangular());
+  VERIFY(diag.isUpperTriangular());
+
+  // A single large coefficient off the diagonal must be caught by exactly one of the two predicates, wherever it sits.
+  const Scalar offending = Scalar(100);
+  for (Index j = 0; j < cols; ++j)
+    for (Index i = 0; i < rows; ++i) {
+      if (i == j) continue;
+      MatrixType m2 = diag;
+      m2(i, j) = offending;
+      if (i < j) {
+        VERIFY(!m2.isLowerTriangular());
+        VERIFY(m2.isUpperTriangular());
+      } else {
+        VERIFY(!m2.isUpperTriangular());
+        VERIFY(m2.isLowerTriangular());
+      }
+    }
+}
+
+// Test triangular solve and product at sizes that exercise GEBP blocking.
+// The standard test caps at maxsize=20, which never triggers the blocked code paths
+// in TriangularSolverMatrix.h (requires size >= 48 with EIGEN_DEBUG_SMALL_PRODUCT_BLOCKS).
+template <int>
+void triangular_at_blocking_boundaries() {
+  using Scalar = double;
+  using Mat = Matrix<Scalar, Dynamic, Dynamic>;
+  using Vec = Matrix<Scalar, Dynamic, 1>;
+
+  const int sizes[] = {47, 48, 49, 64, 96, 128};
+  for (int si = 0; si < 6; ++si) {
+    int n = sizes[si];
+    Mat m1 = Mat::Random(n, n);
+    // Make well-conditioned: dominant diagonal
+    for (int i = 0; i < n; ++i) m1(i, i) += Scalar(n);
+
+    Vec v = Vec::Random(n);
+    Mat rhs = Mat::Random(n, 5);
+
+    // Upper triangular solve with vector
+    Mat U = m1.triangularView<Upper>();
+    Vec x = m1.triangularView<Upper>().solve(v);
+    VERIFY_IS_APPROX(U * x, v);
+
+    // Lower triangular solve with vector
+    Mat L = m1.triangularView<Lower>();
+    x = m1.triangularView<Lower>().solve(v);
+    VERIFY_IS_APPROX(L * x, v);
+
+    // Upper triangular solve with matrix rhs
+    Mat X = m1.triangularView<Upper>().solve(rhs);
+    VERIFY_IS_APPROX(U * X, rhs);
+
+    // Lower triangular solve with matrix rhs
+    X = m1.triangularView<Lower>().solve(rhs);
+    VERIFY_IS_APPROX(L * X, rhs);
+
+    // Triangular product
+    Mat prod = m1.triangularView<Upper>() * rhs;
+    VERIFY_IS_APPROX(prod, U * rhs);
+    prod = rhs.transpose() * m1.triangularView<Upper>();
+    VERIFY_IS_APPROX(prod, rhs.transpose() * U);
+  }
+
+  // Also test with float and RowMajor
+  {
+    using RMat = Matrix<float, Dynamic, Dynamic, RowMajor>;
+    using FVec = Matrix<float, Dynamic, 1>;
+    for (int si = 0; si < 6; ++si) {
+      int n = sizes[si];
+      RMat m1 = RMat::Random(n, n);
+      for (int i = 0; i < n; ++i) m1(i, i) += float(n);
+
+      FVec v = FVec::Random(n);
+      RMat U = m1.triangularView<Upper>();
+      FVec x = m1.triangularView<Upper>().solve(v);
+      VERIFY_IS_APPROX(U * x, v);
+
+      RMat L = m1.triangularView<Lower>();
+      x = m1.triangularView<Lower>().solve(v);
+      VERIFY_IS_APPROX(L * x, v);
+    }
+  }
+}
+
+// nestedExpression() on a non-const view keeps the operand's constness: callable for a const operand, writable for a
+// mutable one.
+template <typename = void>
+void triangular_nested_expression() {
+  const Matrix3d a = Matrix3d::Identity();
+  auto lower = a.triangularView<Lower>();
+  VERIFY(&lower.nestedExpression() == &a);
+  Matrix3d b = Matrix3d::Zero();
+  auto upper = b.triangularView<Upper>();
+  upper.nestedExpression()(0, 1) = 1;
+  VERIFY_IS_EQUAL(b(0, 1), 1.0);
+}
+
 void bug_159() {
   Matrix3d m = Matrix3d::Random().triangularView<Lower>();
-  EIGEN_UNUSED_VARIABLE(m)
+  EIGEN_UNUSED_VARIABLE(m);
 }
 
 EIGEN_DECLARE_TEST(triangular) {
   int maxsize = (std::min)(EIGEN_TEST_MAX_SIZE, 20);
   for (int i = 0; i < g_repeat; i++) {
     int r = internal::random<int>(2, maxsize);
-    TEST_SET_BUT_UNUSED_VARIABLE(r)
+    TEST_SET_BUT_UNUSED_VARIABLE(r);
     int c = internal::random<int>(2, maxsize);
-    TEST_SET_BUT_UNUSED_VARIABLE(c)
+    TEST_SET_BUT_UNUSED_VARIABLE(c);
 
     CALL_SUBTEST_1(triangular_square(Matrix<float, 1, 1>()));
     CALL_SUBTEST_2(triangular_square(Matrix<float, 2, 2>()));
@@ -286,7 +696,26 @@ EIGEN_DECLARE_TEST(triangular) {
 
     CALL_SUBTEST_100(triangular_deprecated(Matrix<float, 5, 7>()));
     CALL_SUBTEST_100(triangular_deprecated(MatrixXd(r, c)));
+
+    // isLowerTriangular()/isUpperTriangular() on wide, tall and square shapes, including the 1xN and Nx1 edges.
+    CALL_SUBTEST_12(triangular_predicates(MatrixXd(2, 3)));
+    CALL_SUBTEST_12(triangular_predicates(MatrixXd(3, 2)));
+    CALL_SUBTEST_12(triangular_predicates(MatrixXd(3, 3)));
+    CALL_SUBTEST_12(triangular_predicates(MatrixXd(1, 4)));
+    CALL_SUBTEST_12(triangular_predicates(MatrixXd(4, 1)));
+    CALL_SUBTEST_12(triangular_predicates(MatrixXd(1, 1)));
+    CALL_SUBTEST_12(triangular_predicates(Matrix<float, 2, 5>()));
+    CALL_SUBTEST_12(triangular_predicates(Matrix<double, 5, 2>()));
+    CALL_SUBTEST_12(triangular_predicates(Matrix<std::complex<float>, 3, 7>()));
+    CALL_SUBTEST_12(triangular_predicates(MatrixXcd(r, c)));
+    CALL_SUBTEST_12(triangular_predicates(MatrixXcd(c, r)));
+    CALL_SUBTEST_12(triangular_predicates(Matrix<float, Dynamic, Dynamic, RowMajor>(2, 5)));
+    CALL_SUBTEST_12(triangular_predicates(Matrix<float, Dynamic, Dynamic, RowMajor>(r, c)));
   }
 
   CALL_SUBTEST_1(bug_159());
+  CALL_SUBTEST_1(triangular_nested_expression<>());
+
+  // Triangular solve/product at blocking boundaries (deterministic, outside g_repeat).
+  CALL_SUBTEST_11(triangular_at_blocking_boundaries<0>());
 }

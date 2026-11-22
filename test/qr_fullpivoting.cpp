@@ -7,6 +7,7 @@
 // This Source Code Form is subject to the terms of the Mozilla
 // Public License v. 2.0. If a copy of the MPL was not distributed
 // with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
+// SPDX-License-Identifier: MPL-2.0
 
 #include "main.h"
 #include <Eigen/QR>
@@ -22,8 +23,8 @@ void qr() {
         cols2 = Cols == Dynamic ? internal::random<Index>(min_size, max_size) : Cols,
         rank = internal::random<Index>(1, (std::min)(rows, cols) - 1);
 
-  typedef typename MatrixType::Scalar Scalar;
-  typedef Matrix<Scalar, MatrixType::RowsAtCompileTime, MatrixType::RowsAtCompileTime> MatrixQType;
+  using Scalar = typename MatrixType::Scalar;
+  using MatrixQType = Matrix<Scalar, MatrixType::RowsAtCompileTime, MatrixType::RowsAtCompileTime>;
   MatrixType m1;
   createRandomPIMatrixOfRank(rank, rows, cols, m1);
   FullPivHouseholderQR<MatrixType> qr(m1);
@@ -56,10 +57,10 @@ void qr() {
   {
     MatrixType m2, m3;
     Index size = rows;
-    do {
-      m1 = MatrixType::Random(size, size);
-      qr.compute(m1);
-    } while (!qr.isInvertible());
+    // Create a random diagonally dominant (thus invertible) matrix.
+    m1 = MatrixType::Random(size, size);
+    m1.diagonal().array() += Scalar(2 * size);
+    qr.compute(m1);
     MatrixType m1_inv = qr.inverse();
     m3 = m1 * MatrixType::Random(size, cols2);
     m2 = qr.solve(m3);
@@ -71,8 +72,8 @@ template <typename MatrixType>
 void qr_invertible() {
   using std::abs;
   using std::log;
-  typedef typename NumTraits<typename MatrixType::Scalar>::Real RealScalar;
-  typedef typename MatrixType::Scalar Scalar;
+  using RealScalar = typename NumTraits<typename MatrixType::Scalar>::Real;
+  using Scalar = typename MatrixType::Scalar;
 
   Index max_size = numext::mini(50, EIGEN_TEST_MAX_SIZE);
   Index min_size = numext::maxi(1, EIGEN_TEST_MAX_SIZE / 10);
@@ -81,7 +82,7 @@ void qr_invertible() {
   MatrixType m1(size, size), m2(size, size), m3(size, size);
   m1 = MatrixType::Random(size, size);
 
-  if (internal::is_same<RealScalar, float>::value) {
+  if (std::is_same<RealScalar, float>::value) {
     // let's build a matrix more stable to inverse
     MatrixType a = MatrixType::Random(size, size * 2);
     m1 += a * a.adjoint();
@@ -96,7 +97,7 @@ void qr_invertible() {
 
   // now construct a matrix with prescribed determinant
   m1.setZero();
-  for (int i = 0; i < size; i++) m1(i, i) = internal::random<Scalar>();
+  setRandomWellConditionedDiagonal(m1);
   Scalar det = m1.diagonal().prod();
   RealScalar absdet = abs(det);
   m3 = qr.matrixQ();  // get a unitary
@@ -129,6 +130,29 @@ void qr_verify_assert() {
   VERIFY_RAISES_ASSERT(qr.signDeterminant())
 }
 
+// A right-hand side without columns, and an empty matrix, give an empty solution of the right size; sanitizer builds
+// reported a reference to the first element of an empty workspace.
+template <typename Decomposition, typename MatrixType>
+void qr_empty_rhs() {
+  const MatrixType A = MatrixType::Random(4, 4);
+  const Decomposition dec(A);
+  const MatrixType empty_rhs(4, 0);
+  VERIFY_IS_EQUAL(dec.solve(empty_rhs).rows(), 4);
+  VERIFY_IS_EQUAL(dec.solve(empty_rhs).cols(), 0);
+  VERIFY_IS_EQUAL(dec.transpose().solve(empty_rhs).rows(), 4);
+  VERIFY_IS_EQUAL(dec.transpose().solve(empty_rhs).cols(), 0);
+  VERIFY_IS_EQUAL(dec.adjoint().solve(empty_rhs).cols(), 0);
+  const MatrixType B = MatrixType::Random(4, 3);
+  const MatrixType X = dec.solve(B);
+  VERIFY_IS_EQUAL(X.cols(), 3);
+  VERIFY_IS_APPROX(A * X, B);
+
+  const Decomposition empty_dec{MatrixType(0, 0)};
+  VERIFY_IS_EQUAL(empty_dec.solve(MatrixType(0, 2)).rows(), 0);
+  VERIFY_IS_EQUAL(empty_dec.solve(MatrixType(0, 2)).cols(), 2);
+  VERIFY_IS_EQUAL(empty_dec.transpose().solve(MatrixType(0, 0)).cols(), 0);
+}
+
 EIGEN_DECLARE_TEST(qr_fullpivoting) {
   for (int i = 0; i < 1; i++) {
     CALL_SUBTEST_5(qr<Matrix3f>());
@@ -146,6 +170,9 @@ EIGEN_DECLARE_TEST(qr_fullpivoting) {
     CALL_SUBTEST_3(qr_invertible<MatrixXcd>());
   }
 
+  CALL_SUBTEST_2((qr_empty_rhs<FullPivHouseholderQR<MatrixXd>, MatrixXd>()));
+  CALL_SUBTEST_4((qr_empty_rhs<FullPivHouseholderQR<MatrixXcf>, MatrixXcf>()));
+  CALL_SUBTEST_1((qr_empty_rhs<FullPivHouseholderQR<MatrixXf>, MatrixXf>()));
   CALL_SUBTEST_5(qr_verify_assert<Matrix3f>());
   CALL_SUBTEST_6(qr_verify_assert<Matrix3d>());
   CALL_SUBTEST_1(qr_verify_assert<MatrixXf>());

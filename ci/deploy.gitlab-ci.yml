@@ -1,27 +1,26 @@
- # Push a nightly tag if the pipeline succeeded.
-deploy:tag:nightly:
+# Push a `weekly` tag if the pipeline succeeded.
+# SPDX-FileCopyrightText: The Eigen Authors
+# SPDX-License-Identifier: MPL-2.0
+deploy:tag:weekly:
   stage: deploy
-  image: alpine:edge
+  image: ${EIGEN_CI_IMAGE_LINUX_LINT}
   dependencies: []
-  before_script:
-    - apk add git
   script:
-    - git tag -f nightly $CI_COMMIT_SHORT_SHA
-    - git push -f $EIGEN_CI_GIT_PUSH_URL tag nightly
+    - git tag -f weekly $CI_COMMIT_SHORT_SHA
+    - git push -f "https://gitlab-ci-token:${CI_JOB_TOKEN}@${CI_SERVER_HOST}/${CI_PROJECT_PATH}.git" tag weekly
   tags:
-    - linux
-    - eigen-runner
-  rules:
-    - if: $CI_PIPELINE_SOURCE == "schedule" && $CI_PROJECT_NAMESPACE == "libeigen" && $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
-    - if: $CI_PIPELINE_SOURCE == "web" && $CI_PROJECT_NAMESPACE == "libeigen" && $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+    - saas-linux-small-amd64
+  rules: !reference [.rules:libeigen:scheduled-or-web:default-branch, rules]
 
-# Upload docs if pipeline succeeded.
+# Upload docs once the docs build succeeds. `needs:` rather than stage order,
+# which would also wait on every test job: the full matrix rarely passes
+# outright, so the scheduled docs never deployed.
 deploy:docs:
   stage: deploy
   image: busybox
-  dependencies: [ build:linux:docs ]
+  needs: [ build:linux:docs ]
   variables:
-    PAGES_PREFIX: docs-nightly
+    PAGES_PREFIX: docs-weekly
   script:
     - echo "Deploying site to $CI_PAGES_URL"
     - mv ${EIGEN_CI_BUILDDIR}/doc/html public
@@ -33,11 +32,15 @@ deploy:docs:
     paths:
       - public
   tags:
-    - eigen-runner
-    - linux
+    - saas-linux-small-amd64
   rules:
-    - if: $CI_PIPELINE_SOURCE == "schedule" && $CI_PROJECT_NAMESPACE == "libeigen"
-    - if: $CI_PIPELINE_SOURCE == "web" && $CI_PROJECT_NAMESPACE == "libeigen"
-    - if: $CI_PIPELINE_SOURCE == "push" && $CI_PROJECT_NAMESPACE == "libeigen"
+    - !reference [.rules:libeigen:scheduled-or-web:default-branch, rules]
+    # Any other protected ref (a release branch or tag) gets its own prefix:
+    # `docs-weekly` holds the default branch's docs only.  An unprotected ref
+    # deploys nothing; build:linux:docs still builds its documentation.
+    - if: ($CI_PIPELINE_SOURCE == "schedule" || $CI_PIPELINE_SOURCE == "web") && $CI_PROJECT_NAMESPACE == "libeigen" && $CI_COMMIT_REF_PROTECTED == "true"
+      variables:
+        PAGES_PREFIX: docs-$CI_COMMIT_REF_SLUG
+    - if: $CI_PIPELINE_SOURCE == "push" && $CI_PROJECT_NAMESPACE == "libeigen" && $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
       variables:
         PAGES_PREFIX: docs-$CI_COMMIT_REF_NAME

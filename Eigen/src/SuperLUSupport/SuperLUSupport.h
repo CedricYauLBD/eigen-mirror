@@ -6,6 +6,7 @@
 // This Source Code Form is subject to the terms of the Mozilla
 // Public License v. 2.0. If a copy of the MPL was not distributed
 // with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
+// SPDX-License-Identifier: MPL-2.0
 
 #ifndef EIGEN_SUPERLUSUPPORT_H
 #define EIGEN_SUPERLUSUPPORT_H
@@ -57,6 +58,7 @@ DECL_GSSVX(s, float, float)
 DECL_GSSVX(c, float, std::complex<float>)
 DECL_GSSVX(d, double, double)
 DECL_GSSVX(z, double, std::complex<double>)
+#undef DECL_GSSVX
 
 #ifdef MILU_ALPHA
 #define EIGEN_SUPERLU_HAS_ILU
@@ -65,6 +67,24 @@ DECL_GSSVX(z, double, std::complex<double>)
 #ifdef EIGEN_SUPERLU_HAS_ILU
 
 // similarly for the incomplete factorization using gsisx
+#if defined(SUPERLU_MAJOR_VERSION) && (SUPERLU_MAJOR_VERSION >= 5)
+#define DECL_GSISX(PREFIX, FLOATTYPE, KEYTYPE)                                                                         \
+  extern "C" {                                                                                                         \
+  extern void PREFIX##gsisx(superlu_options_t *, SuperMatrix *, int *, int *, int *, char *, FLOATTYPE *, FLOATTYPE *, \
+                            SuperMatrix *, SuperMatrix *, void *, int, SuperMatrix *, SuperMatrix *, FLOATTYPE *,      \
+                            FLOATTYPE *, GlobalLU_t *, mem_usage_t *, SuperLUStat_t *, int *);                         \
+  }                                                                                                                    \
+  inline float SuperLU_gsisx(superlu_options_t *options, SuperMatrix *A, int *perm_c, int *perm_r, int *etree,         \
+                             char *equed, FLOATTYPE *R, FLOATTYPE *C, SuperMatrix *L, SuperMatrix *U, void *work,      \
+                             int lwork, SuperMatrix *B, SuperMatrix *X, FLOATTYPE *recip_pivot_growth,                 \
+                             FLOATTYPE *rcond, SuperLUStat_t *stats, int *info, KEYTYPE) {                             \
+    mem_usage_t mem_usage;                                                                                             \
+    GlobalLU_t gLU;                                                                                                    \
+    PREFIX##gsisx(options, A, perm_c, perm_r, etree, equed, R, C, L, U, work, lwork, B, X, recip_pivot_growth, rcond,  \
+                  &gLU, &mem_usage, stats, info);                                                                      \
+    return mem_usage.for_lu; /* bytes used by the factor storage */                                                    \
+  }
+#else  // version < 5.0
 #define DECL_GSISX(PREFIX, FLOATTYPE, KEYTYPE)                                                                         \
   extern "C" {                                                                                                         \
   extern void PREFIX##gsisx(superlu_options_t *, SuperMatrix *, int *, int *, int *, char *, FLOATTYPE *, FLOATTYPE *, \
@@ -80,11 +100,13 @@ DECL_GSSVX(z, double, std::complex<double>)
                   &mem_usage, stats, info);                                                                            \
     return mem_usage.for_lu; /* bytes used by the factor storage */                                                    \
   }
+#endif
 
 DECL_GSISX(s, float, float)
 DECL_GSISX(c, float, std::complex<float>)
 DECL_GSISX(d, double, double)
 DECL_GSISX(z, double, std::complex<double>)
+#undef DECL_GSISX
 
 #endif
 
@@ -96,7 +118,7 @@ struct SluMatrixMapHelper;
  * A wrapper class for SuperLU matrices. It supports only compressed sparse matrices
  * and dense matrices. Supernodal and other fancy format are not supported by this wrapper.
  *
- * This wrapper class mainly aims to avoids the need of dynamic allocation of the storage structure.
+ * This wrapper class mainly aims to avoid the need of dynamic allocation of the storage structure.
  */
 struct SluMatrix : SuperMatrix {
   SluMatrix() { Store = &storage; }
@@ -135,13 +157,13 @@ struct SluMatrix : SuperMatrix {
 
   template <typename Scalar>
   void setScalarType() {
-    if (internal::is_same<Scalar, float>::value)
+    EIGEN_IF_CONSTEXPR ((std::is_same<Scalar, float>::value))
       Dtype = SLU_S;
-    else if (internal::is_same<Scalar, double>::value)
+    else EIGEN_IF_CONSTEXPR ((std::is_same<Scalar, double>::value))
       Dtype = SLU_D;
-    else if (internal::is_same<Scalar, std::complex<float> >::value)
+    else EIGEN_IF_CONSTEXPR ((std::is_same<Scalar, std::complex<float> >::value))
       Dtype = SLU_C;
-    else if (internal::is_same<Scalar, std::complex<double> >::value)
+    else EIGEN_IF_CONSTEXPR ((std::is_same<Scalar, std::complex<double> >::value))
       Dtype = SLU_Z;
     else {
       eigen_assert(false && "Scalar type not supported by SuperLU");
@@ -170,7 +192,7 @@ struct SluMatrix : SuperMatrix {
   static SluMatrix Map(SparseMatrixBase<MatrixType> &a_mat) {
     MatrixType &mat(a_mat.derived());
     SluMatrix res;
-    if ((MatrixType::Flags & RowMajorBit) == RowMajorBit) {
+    EIGEN_IF_CONSTEXPR ((MatrixType::Flags & RowMajorBit) == RowMajorBit) {
       res.setStorageType(SLU_NR);
       res.nrow = internal::convert_index<int>(mat.cols());
       res.ncol = internal::convert_index<int>(mat.rows());
@@ -189,9 +211,9 @@ struct SluMatrix : SuperMatrix {
 
     res.setScalarType<typename MatrixType::Scalar>();
 
-    // FIXME the following is not very accurate
-    if (int(MatrixType::Flags) & int(Upper)) res.Mtype = SLU_TRU;
-    if (int(MatrixType::Flags) & int(Lower)) res.Mtype = SLU_TRL;
+    // FIXME: the following type mapping is approximate.
+    EIGEN_IF_CONSTEXPR (int(MatrixType::Flags) & int(Upper)) res.Mtype = SLU_TRU;
+    EIGEN_IF_CONSTEXPR (int(MatrixType::Flags) & int(Lower)) res.Mtype = SLU_TRL;
 
     eigen_assert(((int(MatrixType::Flags) & int(SelfAdjoint)) == 0) &&
                  "SelfAdjoint matrix shape not supported by SuperLU");
@@ -202,7 +224,7 @@ struct SluMatrix : SuperMatrix {
 
 template <typename Scalar, int Rows, int Cols, int Options, int MRows, int MCols>
 struct SluMatrixMapHelper<Matrix<Scalar, Rows, Cols, Options, MRows, MCols> > {
-  typedef Matrix<Scalar, Rows, Cols, Options, MRows, MCols> MatrixType;
+  using MatrixType = Matrix<Scalar, Rows, Cols, Options, MRows, MCols>;
   static void run(MatrixType &mat, SluMatrix &res) {
     eigen_assert(((Options & RowMajor) != RowMajor) && "row-major dense matrices is not supported by SuperLU");
     res.setStorageType(SLU_DN);
@@ -219,9 +241,9 @@ struct SluMatrixMapHelper<Matrix<Scalar, Rows, Cols, Options, MRows, MCols> > {
 
 template <typename Derived>
 struct SluMatrixMapHelper<SparseMatrixBase<Derived> > {
-  typedef Derived MatrixType;
+  using MatrixType = Derived;
   static void run(MatrixType &mat, SluMatrix &res) {
-    if ((MatrixType::Flags & RowMajorBit) == RowMajorBit) {
+    EIGEN_IF_CONSTEXPR ((MatrixType::Flags & RowMajorBit) == RowMajorBit) {
       res.setStorageType(SLU_NR);
       res.nrow = mat.cols();
       res.ncol = mat.rows();
@@ -240,9 +262,9 @@ struct SluMatrixMapHelper<SparseMatrixBase<Derived> > {
 
     res.setScalarType<typename MatrixType::Scalar>();
 
-    // FIXME the following is not very accurate
-    if (MatrixType::Flags & Upper) res.Mtype = SLU_TRU;
-    if (MatrixType::Flags & Lower) res.Mtype = SLU_TRL;
+    // FIXME: the following type mapping is approximate.
+    EIGEN_IF_CONSTEXPR (MatrixType::Flags & Upper) res.Mtype = SLU_TRU;
+    EIGEN_IF_CONSTEXPR (MatrixType::Flags & Lower) res.Mtype = SLU_TRL;
 
     eigen_assert(((MatrixType::Flags & SelfAdjoint) == 0) && "SelfAdjoint matrix shape not supported by SuperLU");
   }
@@ -277,20 +299,20 @@ Map<SparseMatrix<Scalar, Flags, Index> > map_superlu(SluMatrix &sluMat) {
 template <typename MatrixType_, typename Derived>
 class SuperLUBase : public SparseSolverBase<Derived> {
  protected:
-  typedef SparseSolverBase<Derived> Base;
+  using Base = SparseSolverBase<Derived>;
   using Base::derived;
   using Base::m_isInitialized;
 
  public:
-  typedef MatrixType_ MatrixType;
-  typedef typename MatrixType::Scalar Scalar;
-  typedef typename MatrixType::RealScalar RealScalar;
-  typedef typename MatrixType::StorageIndex StorageIndex;
-  typedef Matrix<Scalar, Dynamic, 1> Vector;
-  typedef Matrix<int, 1, MatrixType::ColsAtCompileTime> IntRowVectorType;
-  typedef Matrix<int, MatrixType::RowsAtCompileTime, 1> IntColVectorType;
-  typedef Map<PermutationMatrix<Dynamic, Dynamic, int> > PermutationMap;
-  typedef SparseMatrix<Scalar> LUMatrixType;
+  using MatrixType = MatrixType_;
+  using Scalar = typename MatrixType::Scalar;
+  using RealScalar = typename MatrixType::RealScalar;
+  using StorageIndex = typename MatrixType::StorageIndex;
+  using Vector = Matrix<Scalar, Dynamic, 1>;
+  using IntRowVectorType = Matrix<int, 1, MatrixType::ColsAtCompileTime>;
+  using IntColVectorType = Matrix<int, MatrixType::RowsAtCompileTime, 1>;
+  using PermutationMap = Map<PermutationMatrix<Dynamic, Dynamic, int> >;
+  using LUMatrixType = SparseMatrix<Scalar>;
   enum { ColsAtCompileTime = MatrixType::ColsAtCompileTime, MaxColsAtCompileTime = MatrixType::MaxColsAtCompileTime };
 
  public:
@@ -307,20 +329,20 @@ class SuperLUBase : public SparseSolverBase<Derived> {
   /** \brief Reports whether previous computation was successful.
    *
    * \returns \c Success if computation was successful,
-   *          \c NumericalIssue if the matrix.appears to be negative.
+   *          \c NumericalIssue if the matrix appears to be negative.
    */
   ComputationInfo info() const {
     eigen_assert(m_isInitialized && "Decomposition is not initialized.");
     return m_info;
   }
 
-  /** Computes the sparse Cholesky decomposition of \a matrix */
+  /** Computes the sparse LU decomposition of \a matrix */
   void compute(const MatrixType &matrix) {
     derived().analyzePattern(matrix);
     derived().factorize(matrix);
   }
 
-  /** Performs a symbolic decomposition on the sparcity of \a matrix.
+  /** Performs a symbolic decomposition on the sparsity of \a matrix.
    *
    * This function is particularly useful when solving for several problems having the same structure.
    *
@@ -421,7 +443,7 @@ class SuperLUBase : public SparseSolverBase<Derived> {
  *
  * \tparam MatrixType_ the type of the sparse matrix A, it must be a SparseMatrix<>
  *
- * \warning This class is only for the 4.x versions of SuperLU. The 3.x and 5.x versions are not supported.
+ * \warning This class requires at least version 4.0 of SuperLU. The 3.x versions are not supported.
  *
  * \implsparsesolverconcept
  *
@@ -430,17 +452,17 @@ class SuperLUBase : public SparseSolverBase<Derived> {
 template <typename MatrixType_>
 class SuperLU : public SuperLUBase<MatrixType_, SuperLU<MatrixType_> > {
  public:
-  typedef SuperLUBase<MatrixType_, SuperLU> Base;
-  typedef MatrixType_ MatrixType;
-  typedef typename Base::Scalar Scalar;
-  typedef typename Base::RealScalar RealScalar;
-  typedef typename Base::StorageIndex StorageIndex;
-  typedef typename Base::IntRowVectorType IntRowVectorType;
-  typedef typename Base::IntColVectorType IntColVectorType;
-  typedef typename Base::PermutationMap PermutationMap;
-  typedef typename Base::LUMatrixType LUMatrixType;
-  typedef TriangularView<LUMatrixType, Lower | UnitDiag> LMatrixType;
-  typedef TriangularView<LUMatrixType, Upper> UMatrixType;
+  using Base = SuperLUBase<MatrixType_, SuperLU>;
+  using MatrixType = MatrixType_;
+  using Scalar = typename Base::Scalar;
+  using RealScalar = typename Base::RealScalar;
+  using StorageIndex = typename Base::StorageIndex;
+  using IntRowVectorType = typename Base::IntRowVectorType;
+  using IntColVectorType = typename Base::IntColVectorType;
+  using PermutationMap = typename Base::PermutationMap;
+  using LUMatrixType = typename Base::LUMatrixType;
+  using LMatrixType = TriangularView<LUMatrixType, Lower | UnitDiag>;
+  using UMatrixType = TriangularView<LUMatrixType, Upper>;
 
  public:
   using Base::_solve_impl;
@@ -452,9 +474,7 @@ class SuperLU : public SuperLUBase<MatrixType_, SuperLU<MatrixType_> > {
     Base::compute(matrix);
   }
 
-  ~SuperLU() {}
-
-  /** Performs a symbolic decomposition on the sparcity of \a matrix.
+  /** Performs a symbolic decomposition on the sparsity of \a matrix.
    *
    * This function is particularly useful when solving for several problems having the same structure.
    *
@@ -468,7 +488,8 @@ class SuperLU : public SuperLUBase<MatrixType_, SuperLU<MatrixType_> > {
 
   /** Performs a numeric decomposition of \a matrix
    *
-   * The given matrix must has the same sparcity than the matrix on which the symbolic decomposition has been performed.
+   * The given matrix must have the same sparsity as the matrix on which the symbolic decomposition has been
+   * performed.
    *
    * \sa analyzePattern()
    */
@@ -557,13 +578,13 @@ void SuperLU<MatrixType>::factorize(const MatrixType &a) {
 
   StatInit(&m_sluStat);
   SuperLU_gssvx(&m_sluOptions, &m_sluA, m_q.data(), m_p.data(), &m_sluEtree[0], &m_sluEqued, &m_sluRscale[0],
-                &m_sluCscale[0], &m_sluL, &m_sluU, NULL, 0, &m_sluB, &m_sluX, &recip_pivot_growth, &rcond, &ferr, &berr,
-                &m_sluStat, &info, Scalar());
+                &m_sluCscale[0], &m_sluL, &m_sluU, nullptr, 0, &m_sluB, &m_sluX, &recip_pivot_growth, &rcond, &ferr,
+                &berr, &m_sluStat, &info, Scalar());
   StatFree(&m_sluStat);
 
   m_extractedDataAreDirty = true;
 
-  // FIXME how to better check for errors ???
+  // FIXME: implement more detailed error checking based on SuperLU info codes.
   m_info = info == 0 ? Success : NumericalIssue;
   m_factorizationIsOk = true;
 }
@@ -601,7 +622,7 @@ void SuperLU<MatrixType>::_solve_impl(const MatrixBase<Rhs> &b, MatrixBase<Dest>
   int info = 0;
   RealScalar recip_pivot_growth, rcond;
   SuperLU_gssvx(&m_sluOptions, &m_sluA, m_q.data(), m_p.data(), &m_sluEtree[0], &m_sluEqued, &m_sluRscale[0],
-                &m_sluCscale[0], &m_sluL, &m_sluU, NULL, 0, &m_sluB, &m_sluX, &recip_pivot_growth, &rcond,
+                &m_sluCscale[0], &m_sluL, &m_sluU, nullptr, 0, &m_sluB, &m_sluX, &recip_pivot_growth, &rcond,
                 &m_sluFerr[0], &m_sluBerr[0], &m_sluStat, &info, Scalar());
   StatFree(&m_sluStat);
 
@@ -644,7 +665,6 @@ void SuperLUBase<MatrixType, Derived>::extractData() const {
     int *Urow = m_u.innerIndexPtr();
     Scalar *Uval = m_u.valuePtr();
 
-    Ucol[0] = 0;
     Ucol[0] = 0;
 
     /* for each supernode */
@@ -703,20 +723,25 @@ typename SuperLU<MatrixType>::Scalar SuperLU<MatrixType>::determinant() const {
 
   if (m_extractedDataAreDirty) this->extractData();
 
-  Scalar det = Scalar(1);
+  internal::scaled_product<Scalar> product;
   for (int j = 0; j < m_u.cols(); ++j) {
-    if (m_u.outerIndexPtr()[j + 1] - m_u.outerIndexPtr()[j] > 0) {
-      int lastId = m_u.outerIndexPtr()[j + 1] - 1;
-      eigen_assert(m_u.innerIndexPtr()[lastId] <= j);
-      if (m_u.innerIndexPtr()[lastId] == j) det *= m_u.valuePtr()[lastId];
-    }
+    // extractData() drops exact zeros, so a missing diagonal entry is a zero pivot.
+    if (m_u.outerIndexPtr()[j + 1] - m_u.outerIndexPtr()[j] == 0) return Scalar(0);
+    int lastId = m_u.outerIndexPtr()[j + 1] - 1;
+    eigen_assert(m_u.innerIndexPtr()[lastId] <= j);
+    if (m_u.innerIndexPtr()[lastId] != j) return Scalar(0);
+    product.multiply(m_u.valuePtr()[lastId]);
   }
-  if (PermutationMap(m_p.data(), m_p.size()).determinant() * PermutationMap(m_q.data(), m_q.size()).determinant() < 0)
-    det = -det;
-  if (m_sluEqued != 'N')
-    return det / m_sluRscale.prod() / m_sluCscale.prod();
-  else
-    return det;
+  // SuperLU factored diag(R) A diag(C), with R applied for equed 'R' or 'B' and C for 'C' or 'B'. The scale arrays
+  // hold computed values even when they were not applied.
+  if (m_sluEqued == 'R' || m_sluEqued == 'B')
+    for (Index i = 0; i < m_sluRscale.size(); ++i) product.divide(Scalar(m_sluRscale.coeff(i)));
+  if (m_sluEqued == 'C' || m_sluEqued == 'B')
+    for (Index i = 0; i < m_sluCscale.size(); ++i) product.divide(Scalar(m_sluCscale.coeff(i)));
+  const Scalar det = product.value();
+  const bool negate =
+      PermutationMap(m_p.data(), m_p.size()).determinant() * PermutationMap(m_q.data(), m_q.size()).determinant() < 0;
+  return negate ? Scalar(-det) : det;
 }
 
 #ifdef EIGEN_PARSED_BY_DOXYGEN
@@ -733,7 +758,7 @@ typename SuperLU<MatrixType>::Scalar SuperLU<MatrixType>::determinant() const {
  * factorization using the SuperLU library. This class is aimed to be used as a preconditioner of the iterative linear
  * solvers.
  *
- * \warning This class is only for the 4.x versions of SuperLU. The 3.x and 5.x versions are not supported.
+ * \warning This class requires at least version 4.0 of SuperLU. The 3.x versions are not supported.
  *
  * \tparam MatrixType_ the type of the sparse matrix A, it must be a SparseMatrix<>
  *
@@ -745,10 +770,10 @@ typename SuperLU<MatrixType>::Scalar SuperLU<MatrixType>::determinant() const {
 template <typename MatrixType_>
 class SuperILU : public SuperLUBase<MatrixType_, SuperILU<MatrixType_> > {
  public:
-  typedef SuperLUBase<MatrixType_, SuperILU> Base;
-  typedef MatrixType_ MatrixType;
-  typedef typename Base::Scalar Scalar;
-  typedef typename Base::RealScalar RealScalar;
+  using Base = SuperLUBase<MatrixType_, SuperILU>;
+  using MatrixType = MatrixType_;
+  using Scalar = typename Base::Scalar;
+  using RealScalar = typename Base::RealScalar;
 
  public:
   using Base::_solve_impl;
@@ -760,9 +785,7 @@ class SuperILU : public SuperLUBase<MatrixType_, SuperILU<MatrixType_> > {
     Base::compute(matrix);
   }
 
-  ~SuperILU() {}
-
-  /** Performs a symbolic decomposition on the sparcity of \a matrix.
+  /** Performs a symbolic decomposition on the sparsity of \a matrix.
    *
    * This function is particularly useful when solving for several problems having the same structure.
    *
@@ -772,7 +795,8 @@ class SuperILU : public SuperLUBase<MatrixType_, SuperILU<MatrixType_> > {
 
   /** Performs a numeric decomposition of \a matrix
    *
-   * The given matrix must has the same sparcity than the matrix on which the symbolic decomposition has been performed.
+   * The given matrix must have the same sparsity as the matrix on which the symbolic decomposition has been
+   * performed.
    *
    * \sa analyzePattern()
    */
@@ -847,11 +871,11 @@ void SuperILU<MatrixType>::factorize(const MatrixType &a) {
 
   StatInit(&m_sluStat);
   SuperLU_gsisx(&m_sluOptions, &m_sluA, m_q.data(), m_p.data(), &m_sluEtree[0], &m_sluEqued, &m_sluRscale[0],
-                &m_sluCscale[0], &m_sluL, &m_sluU, NULL, 0, &m_sluB, &m_sluX, &recip_pivot_growth, &rcond, &m_sluStat,
-                &info, Scalar());
+                &m_sluCscale[0], &m_sluL, &m_sluU, nullptr, 0, &m_sluB, &m_sluX, &recip_pivot_growth, &rcond,
+                &m_sluStat, &info, Scalar());
   StatFree(&m_sluStat);
 
-  // FIXME how to better check for errors ???
+  // FIXME: implement more detailed error checking based on SuperLU info codes.
   m_info = info == 0 ? Success : NumericalIssue;
   m_factorizationIsOk = true;
 }
@@ -891,8 +915,8 @@ void SuperILU<MatrixType>::_solve_impl(const MatrixBase<Rhs> &b, MatrixBase<Dest
 
   StatInit(&m_sluStat);
   SuperLU_gsisx(&m_sluOptions, &m_sluA, m_q.data(), m_p.data(), &m_sluEtree[0], &m_sluEqued, &m_sluRscale[0],
-                &m_sluCscale[0], &m_sluL, &m_sluU, NULL, 0, &m_sluB, &m_sluX, &recip_pivot_growth, &rcond, &m_sluStat,
-                &info, Scalar());
+                &m_sluCscale[0], &m_sluL, &m_sluU, nullptr, 0, &m_sluB, &m_sluX, &recip_pivot_growth, &rcond,
+                &m_sluStat, &info, Scalar());
   StatFree(&m_sluStat);
 
   if (x.derived().data() != x_ref.data()) x = x_ref;

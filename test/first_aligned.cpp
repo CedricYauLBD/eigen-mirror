@@ -6,6 +6,7 @@
 // This Source Code Form is subject to the terms of the Mozilla
 // Public License v. 2.0. If a copy of the MPL was not distributed
 // with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
+// SPDX-License-Identifier: MPL-2.0
 
 #include "main.h"
 
@@ -19,7 +20,7 @@ template <typename Scalar>
 void test_none_aligned_helper(Scalar *array, int size) {
   EIGEN_UNUSED_VARIABLE(array);
   EIGEN_UNUSED_VARIABLE(size);
-  VERIFY(internal::packet_traits<Scalar>::size == 1 || internal::first_default_aligned(array, size) == size);
+  VERIFY(!internal::packet_traits<Scalar>::Vectorizable || internal::first_default_aligned(array, size) == size);
 }
 
 struct some_non_vectorizable_type {
@@ -44,7 +45,20 @@ EIGEN_DECLARE_TEST(first_aligned) {
   test_none_aligned_helper(array_double_plus_4_bytes, 50);
   test_none_aligned_helper(array_double_plus_4_bytes + 1, 50);
 
+  // alignof(std::complex<double>) == 8 while sizeof(std::complex<double>) == 16; an 8-byte-offset buffer
+  // cannot reach >= 16-byte alignment at any element stride.
+  EIGEN_ALIGN16 std::complex<double> array_cdouble[100];
+  test_first_aligned_helper(array_cdouble, 50);
+  test_first_aligned_helper(array_cdouble + 1, 50);
+  std::complex<double> *array_cdouble_plus_8_bytes =
+      reinterpret_cast<std::complex<double> *>(std::uintptr_t(array_cdouble) + 8);
+  test_none_aligned_helper(array_cdouble_plus_8_bytes, 50);
+  test_none_aligned_helper(array_cdouble_plus_8_bytes + 1, 50);
+  VERIFY_IS_EQUAL(internal::first_aligned<16>(array_cdouble_plus_8_bytes, 50), 50);
+  VERIFY_IS_EQUAL(internal::first_aligned<8>(array_cdouble_plus_8_bytes, 50), 0);
+
   some_non_vectorizable_type array_nonvec[100];
   test_first_aligned_helper(array_nonvec, 100);
   test_none_aligned_helper(array_nonvec, 100);
+  VERIFY_IS_EQUAL(internal::first_aligned<Unaligned>(array_nonvec, 100), 0);
 }

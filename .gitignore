@@ -10,9 +10,14 @@ save
 *.qm
 core
 core.*
+# Keep the benchmark source directory visible on case-insensitive filesystems.
+!benchmarks/Core/
 *.bak
 *~
 *.build*
+# Keep the build-system test job's script, whose name matches the rule above.
+!ci/scripts/test.buildsystem.script.sh
+.tidy-build/
 *.moc.*
 *.moc
 ui_*
@@ -30,8 +35,6 @@ patch
 *.patch
 a
 a.*
-lapack/testing
-lapack/reference
 .*project
 .settings
 Makefile
@@ -39,3 +42,19 @@ Makefile
 !scripts/buildtests.in
 !Eigen/Core
 !Eigen/src/Core
+CLAUDE.md
+.claude/*
+!.claude/settings.json
+!.claude/rules/
+.codex/*
+!.codex/hooks.json
+.DS_Store
+.ccache/
+.ccache-bin/
+.sccache-bin/
+.sccache/
+.temp/
+ccache-stats.log
+.cred_port
+# Written by ci/lint/lint.sh.
+lint-report.xml

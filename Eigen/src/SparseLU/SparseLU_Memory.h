@@ -6,6 +6,7 @@
 // This Source Code Form is subject to the terms of the Mozilla
 // Public License v. 2.0. If a copy of the MPL was not distributed
 // with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
+// SPDX-License-Identifier: MPL-2.0
 
 /*
 
@@ -40,11 +41,6 @@ namespace internal {
 enum { LUNoMarker = 3 };
 enum { emptyIdxLU = -1 };
 inline Index LUnumTempV(Index& m, Index& w, Index& t, Index& b) { return (std::max)(m, (t + b) * w); }
-
-template <typename Scalar>
-inline Index LUTempSpace(Index& m, Index& w) {
-  return (2 * w + 4 + LUNoMarker) * m * sizeof(Index) + (w + 1) * m * sizeof(Scalar);
-}
 
 /**
  * Expand the existing storage to accommodate more fill-ins
@@ -88,7 +84,7 @@ Index SparseLUImpl<Scalar, StorageIndex>::expand(VectorType& vec, Index& length,
       return -1;
     }
     if (keep_prev) {
-      // In this case, the memory length should not not be reduced
+      // In this case, the memory length should not be reduced
       return new_len;
     } else {
       // Reduce the size and increase again
@@ -128,7 +124,7 @@ Index SparseLUImpl<Scalar, StorageIndex>::expand(VectorType& vec, Index& length,
  * \param n number of columns
  * \param annz number of initial nonzeros in the matrix
  * \param lwork  if lwork=-1, this routine returns an estimated size of the required memory
- * \param glu persistent data to facilitate multiple factors : will be deleted later ??
+ * \param glu persistent data to facilitate multiple factors (may be deleted later).
  * \param fillratio estimated ratio of fill in the factors
  * \param panel_size Size of a panel
  * \return an estimated size of the required memory if lwork = -1; otherwise, return the size of actually allocated
@@ -140,7 +136,9 @@ Index SparseLUImpl<Scalar, StorageIndex>::memInit(Index m, Index n, Index annz, 
                                                   Index panel_size, GlobalLU_t& glu) {
   Index& num_expansions = glu.num_expansions;  // No memory expansions so far
   num_expansions = 0;
-  glu.nzumax = glu.nzlumax = (std::min)(fillratio * (annz + 1) / n, m) * n;  // estimated number of nonzeros in U
+  // estimated number of nonzeros in U; at least one, since the allocation loop below exits only once every buffer is
+  // non-empty, and the truncated estimate is 0 for n == 0 and for n > fillratio * (annz + 1)
+  glu.nzumax = glu.nzlumax = n == 0 ? Index(1) : (std::max)(Index(1), (std::min)(fillratio * (annz + 1) / n, m) * n);
   glu.nzlmax = (std::max)(Index(4), fillratio) * (annz + 1) / 4;             // estimated  nnz in L factor
   // Return the estimated size to the user if necessary
   Index tempSpace;

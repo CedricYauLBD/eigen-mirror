@@ -1,5 +1,5 @@
 
-// This file strutures pages and modules into a convenient hierarchical structure.
+// This file structures pages and modules into a convenient hierarchical structure.
 
 namespace Eigen {
 
@@ -8,6 +8,7 @@ namespace Eigen {
   - \subpage TopicCustomizing_Plugins
   - \subpage TopicCustomizing_InheritingMatrix
   - \subpage TopicCustomizing_CustomScalar
+  - \subpage TopicCustomizing_Functors
   - \subpage TopicCustomizing_NullaryExpr
   - \subpage TopicNewExpressionType
   \sa \ref TopicPreprocessorDirectives
@@ -16,34 +17,30 @@ namespace Eigen {
 
 /** \page UserManual_Generalities General topics
   - \subpage TopicFunctionTakingEigenTypes
+  - \subpage TopicScalarTypes
+  - \subpage TopicVectorization
   - \subpage TopicPreprocessorDirectives
   - \subpage TopicAssertions
   - \subpage TopicMultiThreading
   - \subpage TopicUsingBlasLapack
   - \subpage TopicUsingIntelMKL
+  - \subpage TopicUsingAOCL
   - \subpage TopicCUDA
+  - \subpage TopicGPUModule
   - \subpage TopicPitfalls
   - \subpage TopicTemplateKeyword
+  - \subpage TopicWritingEfficientProductExpression
+  - \subpage Experimental
   - \subpage UserManual_UnderstandingEigen
   - \subpage TopicCMakeGuide
 */
 
 /** \page UserManual_UnderstandingEigen Understanding Eigen
+  - \subpage TopicEigenExpressionTemplates
   - \subpage TopicInsideEigenExample
   - \subpage TopicClassHierarchy
   - \subpage TopicLazyEvaluation
 */
-
-/** \page UnclassifiedPages Unclassified pages
-  - \subpage TopicResizing
-  - \subpage TopicVectorization
-  - \subpage TopicEigenExpressionTemplates
-  - \subpage TopicScalarTypes
-  - \subpage TutorialSparse_example_details
-  - \subpage TopicWritingEfficientProductExpression
-  - \subpage Experimental
-*/
-
 
 /** \defgroup Support_modules Support modules
   * Category of modules which add support for external libraries.
@@ -69,6 +66,8 @@ namespace Eigen {
 /** \addtogroup TutorialReductionsVisitorsBroadcasting
     \ingroup DenseMatrixManipulation_chapter */
 /** \addtogroup TutorialReshape
+    \ingroup DenseMatrixManipulation_chapter */
+/** \addtogroup TopicResizing
     \ingroup DenseMatrixManipulation_chapter */
 /** \addtogroup TutorialSTL
     \ingroup DenseMatrixManipulation_chapter */

@@ -6,6 +6,7 @@
 // This Source Code Form is subject to the terms of the Mozilla
 // Public License v. 2.0. If a copy of the MPL was not distributed
 // with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
+// SPDX-License-Identifier: MPL-2.0
 
 #ifndef EIGEN_ARCH_GENERIC_PACKET_MATH_FUNCTIONS_FWD_H
 #define EIGEN_ARCH_GENERIC_PACKET_MATH_FUNCTIONS_FWD_H
@@ -42,6 +43,10 @@ EIGEN_STRONG_INLINE EIGEN_DEVICE_FUNC Packet pfrexp_generic_get_biased_exponent(
 template <typename Packet>
 EIGEN_STRONG_INLINE EIGEN_DEVICE_FUNC Packet pldexp_generic(const Packet& a, const Packet& exponent);
 
+/** \internal \returns ((a * c1) * c1) * c2 in that order, for the implementations of pldexp. */
+template <typename Packet>
+EIGEN_STRONG_INLINE EIGEN_DEVICE_FUNC Packet pldexp_apply_factors(const Packet& a, const Packet& c1, const Packet& c2);
+
 // Explicitly multiplies
 //    a * (2^e)
 // clamping e to the range
@@ -53,6 +58,19 @@ EIGEN_STRONG_INLINE EIGEN_DEVICE_FUNC Packet pldexp_generic(const Packet& a, con
 // Assumes IEEE floating point format
 template <typename Packet>
 EIGEN_STRONG_INLINE EIGEN_DEVICE_FUNC Packet pldexp_fast(const Packet& a, const Packet& exponent);
+
+namespace unary_pow {
+// The two operations on a floating-point packet's raw bits that the integer-exponent pow needs: a right shift by
+// the mantissa width and a lane-wise subtraction, both of the exponent field. Defined in GenericPacketMathPow.h
+// in terms of unpacket_traits<Packet>::integer_packet. Override these, and has_exponent_bit_ops, where there is
+// no integer_packet but the two operations can still be expressed.
+template <typename Packet, typename = void>
+struct has_exponent_bit_ops;
+template <typename Packet>
+EIGEN_DEVICE_FUNC EIGEN_ALWAYS_INLINE Packet exponent_bits_shift_right(const Packet& bits);
+template <typename Packet>
+EIGEN_DEVICE_FUNC EIGEN_ALWAYS_INLINE Packet exponent_bits_sub(const Packet& a_bits, const Packet& b_bits);
+}  // namespace unary_pow
 
 /** \internal \returns cbrt(x) for single precision float */
 template <typename Packet>
@@ -70,17 +88,37 @@ EIGEN_DEFINE_FUNCTION_ALLOWING_MULTIPLE_DEFINITIONS Packet plog_float(const Pack
 template <typename Packet>
 EIGEN_DEFINE_FUNCTION_ALLOWING_MULTIPLE_DEFINITIONS Packet plog2_float(const Packet _x);
 
-/** \internal \returns log(x) for single precision float */
+/** \internal \returns log(x) for double precision float */
 template <typename Packet>
 EIGEN_DEFINE_FUNCTION_ALLOWING_MULTIPLE_DEFINITIONS Packet plog_double(const Packet _x);
 
-/** \internal \returns log2(x) for single precision float */
+/** \internal \returns log2(x) for double precision float */
 template <typename Packet>
 EIGEN_DEFINE_FUNCTION_ALLOWING_MULTIPLE_DEFINITIONS Packet plog2_double(const Packet _x);
 
 /** \internal \returns log(1 + x) */
 template <typename Packet>
 EIGEN_DEFINE_FUNCTION_ALLOWING_MULTIPLE_DEFINITIONS Packet generic_log1p(const Packet& x);
+
+/** \internal \returns log(1+x) for single precision float */
+template <typename Packet>
+EIGEN_DEFINE_FUNCTION_ALLOWING_MULTIPLE_DEFINITIONS Packet generic_log1p_float(const Packet& x);
+
+/** \internal \returns log(1+x) for double precision float */
+template <typename Packet>
+EIGEN_DEFINE_FUNCTION_ALLOWING_MULTIPLE_DEFINITIONS Packet generic_log1p_double(const Packet& x);
+
+/** \internal \returns log(1+x) for single precision float */
+template <typename Packet>
+EIGEN_DEFINE_FUNCTION_ALLOWING_MULTIPLE_DEFINITIONS Packet plog1p_float(const Packet& x) {
+  return generic_log1p_float(x);
+}
+
+/** \internal \returns log(1+x) for double precision float */
+template <typename Packet>
+EIGEN_DEFINE_FUNCTION_ALLOWING_MULTIPLE_DEFINITIONS Packet plog1p_double(const Packet& x) {
+  return generic_log1p_double(x);
+}
 
 /** \internal \returns exp(x)-1 */
 template <typename Packet>
@@ -94,8 +132,12 @@ EIGEN_DEFINE_FUNCTION_ALLOWING_MULTIPLE_DEFINITIONS Packet generic_atan(const Pa
 template <typename Packet>
 EIGEN_DEFINE_FUNCTION_ALLOWING_MULTIPLE_DEFINITIONS Packet generic_exp2(const Packet& x);
 
-/** \internal \returns exp(x) for single precision float */
+/** \internal \returns exp2(f) for |f| <= 1/2 */
 template <typename Packet>
+EIGEN_DEFINE_FUNCTION_ALLOWING_MULTIPLE_DEFINITIONS Packet generic_exp2_reduced(const Packet& f);
+
+/** \internal \returns exp(x) for single precision float */
+template <typename Packet, bool IsFinite = false>
 EIGEN_DEFINE_FUNCTION_ALLOWING_MULTIPLE_DEFINITIONS Packet pexp_float(const Packet _x);
 
 /** \internal \returns exp(x) for double precision real numbers */
@@ -110,6 +152,10 @@ EIGEN_DEFINE_FUNCTION_ALLOWING_MULTIPLE_DEFINITIONS Packet psin_float(const Pack
 template <typename Packet>
 EIGEN_DEFINE_FUNCTION_ALLOWING_MULTIPLE_DEFINITIONS Packet pcos_float(const Packet& x);
 
+/** \internal \returns tan(x) for single precision float */
+template <typename Packet>
+EIGEN_DEFINE_FUNCTION_ALLOWING_MULTIPLE_DEFINITIONS Packet ptan_float(const Packet& x);
+
 /** \internal \returns sin(x) for double precision float */
 template <typename Packet>
 EIGEN_DEFINE_FUNCTION_ALLOWING_MULTIPLE_DEFINITIONS Packet psin_double(const Packet& x);
@@ -117,6 +163,10 @@ EIGEN_DEFINE_FUNCTION_ALLOWING_MULTIPLE_DEFINITIONS Packet psin_double(const Pac
 /** \internal \returns cos(x) for double precision float */
 template <typename Packet>
 EIGEN_DEFINE_FUNCTION_ALLOWING_MULTIPLE_DEFINITIONS Packet pcos_double(const Packet& x);
+
+/** \internal \returns tan(x) for double precision float */
+template <typename Packet>
+EIGEN_DEFINE_FUNCTION_ALLOWING_MULTIPLE_DEFINITIONS Packet ptan_double(const Packet& x);
 
 /** \internal \returns asin(x) for single precision float */
 template <typename Packet>
@@ -142,6 +192,46 @@ EIGEN_DEFINE_FUNCTION_ALLOWING_MULTIPLE_DEFINITIONS Packet patanh_float(const Pa
 template <typename Packet>
 EIGEN_DEFINE_FUNCTION_ALLOWING_MULTIPLE_DEFINITIONS Packet patanh_double(const Packet& x);
 
+/** \internal \returns sinh(x) for single precision float */
+template <typename Packet>
+EIGEN_DEFINE_FUNCTION_ALLOWING_MULTIPLE_DEFINITIONS Packet psinh_float(const Packet& x);
+
+/** \internal \returns sinh(x) for double precision float */
+template <typename Packet>
+EIGEN_DEFINE_FUNCTION_ALLOWING_MULTIPLE_DEFINITIONS Packet psinh_double(const Packet& x);
+
+/** \internal \returns cosh(x) for single precision float */
+template <typename Packet>
+EIGEN_DEFINE_FUNCTION_ALLOWING_MULTIPLE_DEFINITIONS Packet pcosh_float(const Packet& x);
+
+/** \internal \returns cosh(x) for double precision float */
+template <typename Packet>
+EIGEN_DEFINE_FUNCTION_ALLOWING_MULTIPLE_DEFINITIONS Packet pcosh_double(const Packet& x);
+
+/** \internal \returns asinh(x) for single precision float */
+template <typename Packet>
+EIGEN_DEFINE_FUNCTION_ALLOWING_MULTIPLE_DEFINITIONS Packet pasinh_float(const Packet& x);
+
+/** \internal \returns asinh(x) for double precision float */
+template <typename Packet>
+EIGEN_DEFINE_FUNCTION_ALLOWING_MULTIPLE_DEFINITIONS Packet pasinh_double(const Packet& x);
+
+/** \internal \returns acosh(x) for single precision float */
+template <typename Packet>
+EIGEN_DEFINE_FUNCTION_ALLOWING_MULTIPLE_DEFINITIONS Packet pacosh_float(const Packet& x);
+
+/** \internal \returns acosh(x) for double precision float */
+template <typename Packet>
+EIGEN_DEFINE_FUNCTION_ALLOWING_MULTIPLE_DEFINITIONS Packet pacosh_double(const Packet& x);
+
+/** \internal \returns log10(x) for single precision float */
+template <typename Packet>
+EIGEN_DEFINE_FUNCTION_ALLOWING_MULTIPLE_DEFINITIONS Packet plog10_float(const Packet& x);
+
+/** \internal \returns log10(x) for double precision float */
+template <typename Packet>
+EIGEN_DEFINE_FUNCTION_ALLOWING_MULTIPLE_DEFINITIONS Packet plog10_double(const Packet& x);
+
 /** \internal \returns sqrt(x) for complex types */
 template <typename Packet>
 EIGEN_DEFINE_FUNCTION_ALLOWING_MULTIPLE_DEFINITIONS Packet psqrt_complex(const Packet& a);
@@ -150,11 +240,15 @@ EIGEN_DEFINE_FUNCTION_ALLOWING_MULTIPLE_DEFINITIONS Packet psqrt_complex(const P
 template <typename Packet>
 EIGEN_DEFINE_FUNCTION_ALLOWING_MULTIPLE_DEFINITIONS Packet pdiv_complex(const Packet& x, const Packet& y);
 
+/** \internal \returns x * y for complex types */
+template <typename Packet>
+EIGEN_DEFINE_FUNCTION_ALLOWING_MULTIPLE_DEFINITIONS Packet pmul_complex(const Packet& x, const Packet& y);
+
 template <typename Packet, int N>
 struct ppolevl;
 
-/** \internal \returns log(x) for complex types */
-template <typename Packet>
+/** \internal \returns log(x), or log2(x) for Base2, for complex types */
+template <typename Packet, bool Base2 = false>
 EIGEN_DEFINE_FUNCTION_ALLOWING_MULTIPLE_DEFINITIONS Packet plog_complex(const Packet& x);
 
 /** \internal \returns exp(x) for complex types */
@@ -196,30 +290,71 @@ EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE Packet generic_round(const Packet& a);
 #define EIGEN_INSTANTIATE_GENERIC_MATH_FUNCS_FLOAT(PACKET) \
   EIGEN_FLOAT_PACKET_FUNCTION(sin, PACKET)                 \
   EIGEN_FLOAT_PACKET_FUNCTION(cos, PACKET)                 \
+  EIGEN_FLOAT_PACKET_FUNCTION(tan, PACKET)                 \
   EIGEN_FLOAT_PACKET_FUNCTION(asin, PACKET)                \
   EIGEN_FLOAT_PACKET_FUNCTION(acos, PACKET)                \
+  EIGEN_FLOAT_PACKET_FUNCTION(sinh, PACKET)                \
+  EIGEN_FLOAT_PACKET_FUNCTION(cosh, PACKET)                \
   EIGEN_FLOAT_PACKET_FUNCTION(tanh, PACKET)                \
+  EIGEN_FLOAT_PACKET_FUNCTION(asinh, PACKET)               \
+  EIGEN_FLOAT_PACKET_FUNCTION(acosh, PACKET)               \
   EIGEN_FLOAT_PACKET_FUNCTION(atanh, PACKET)               \
   EIGEN_FLOAT_PACKET_FUNCTION(log, PACKET)                 \
   EIGEN_FLOAT_PACKET_FUNCTION(log2, PACKET)                \
+  EIGEN_FLOAT_PACKET_FUNCTION(log10, PACKET)               \
   EIGEN_FLOAT_PACKET_FUNCTION(exp, PACKET)                 \
   EIGEN_FLOAT_PACKET_FUNCTION(cbrt, PACKET)                \
   EIGEN_GENERIC_PACKET_FUNCTION(expm1, PACKET)             \
   EIGEN_GENERIC_PACKET_FUNCTION(exp2, PACKET)              \
-  EIGEN_GENERIC_PACKET_FUNCTION(log1p, PACKET)             \
+  EIGEN_FLOAT_PACKET_FUNCTION(log1p, PACKET)               \
   EIGEN_GENERIC_PACKET_FUNCTION(atan, PACKET)
 
 #define EIGEN_INSTANTIATE_GENERIC_MATH_FUNCS_DOUBLE(PACKET) \
-  EIGEN_DOUBLE_PACKET_FUNCTION(atanh, PACKET)               \
-  EIGEN_DOUBLE_PACKET_FUNCTION(log, PACKET)                 \
   EIGEN_DOUBLE_PACKET_FUNCTION(sin, PACKET)                 \
   EIGEN_DOUBLE_PACKET_FUNCTION(cos, PACKET)                 \
-  EIGEN_DOUBLE_PACKET_FUNCTION(log2, PACKET)                \
-  EIGEN_DOUBLE_PACKET_FUNCTION(exp, PACKET)                 \
+  EIGEN_DOUBLE_PACKET_FUNCTION(tan, PACKET)                 \
+  EIGEN_DOUBLE_PACKET_FUNCTION(sinh, PACKET)                \
+  EIGEN_DOUBLE_PACKET_FUNCTION(cosh, PACKET)                \
   EIGEN_DOUBLE_PACKET_FUNCTION(tanh, PACKET)                \
+  EIGEN_DOUBLE_PACKET_FUNCTION(asinh, PACKET)               \
+  EIGEN_DOUBLE_PACKET_FUNCTION(acosh, PACKET)               \
+  EIGEN_DOUBLE_PACKET_FUNCTION(atanh, PACKET)               \
+  EIGEN_DOUBLE_PACKET_FUNCTION(log, PACKET)                 \
+  EIGEN_DOUBLE_PACKET_FUNCTION(log2, PACKET)                \
+  EIGEN_DOUBLE_PACKET_FUNCTION(log10, PACKET)               \
+  EIGEN_DOUBLE_PACKET_FUNCTION(exp, PACKET)                 \
   EIGEN_DOUBLE_PACKET_FUNCTION(cbrt, PACKET)                \
-  EIGEN_GENERIC_PACKET_FUNCTION(atan, PACKET)               \
-  EIGEN_GENERIC_PACKET_FUNCTION(exp2, PACKET)
+  EIGEN_GENERIC_PACKET_FUNCTION(expm1, PACKET)              \
+  EIGEN_GENERIC_PACKET_FUNCTION(exp2, PACKET)               \
+  EIGEN_DOUBLE_PACKET_FUNCTION(log1p, PACKET)               \
+  EIGEN_GENERIC_PACKET_FUNCTION(atan, PACKET)
+
+// Macro to instantiate complex math function specializations (psqrt, plog, pexp)
+// that delegate to the generic implementations. Use in arch-specific Complex.h files.
+#define EIGEN_INSTANTIATE_COMPLEX_MATH_FUNCS(PacketType)                  \
+  template <>                                                             \
+  EIGEN_STRONG_INLINE PacketType psqrt<PacketType>(const PacketType& a) { \
+    return psqrt_complex<PacketType>(a);                                  \
+  }                                                                       \
+  template <>                                                             \
+  EIGEN_STRONG_INLINE PacketType plog<PacketType>(const PacketType& a) {  \
+    return plog_complex<PacketType>(a);                                   \
+  }                                                                       \
+  template <>                                                             \
+  EIGEN_STRONG_INLINE PacketType pexp<PacketType>(const PacketType& a) {  \
+    return pexp_complex<PacketType>(a);                                   \
+  }
+
+// Variant without pexp, for backends where pexp needs special handling for a given packet type.
+#define EIGEN_INSTANTIATE_COMPLEX_MATH_FUNCS_NO_EXP(PacketType)           \
+  template <>                                                             \
+  EIGEN_STRONG_INLINE PacketType psqrt<PacketType>(const PacketType& a) { \
+    return psqrt_complex<PacketType>(a);                                  \
+  }                                                                       \
+  template <>                                                             \
+  EIGEN_STRONG_INLINE PacketType plog<PacketType>(const PacketType& a) {  \
+    return plog_complex<PacketType>(a);                                   \
+  }
 
 }  // end namespace internal
 }  // end namespace Eigen

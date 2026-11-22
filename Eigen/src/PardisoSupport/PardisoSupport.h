@@ -28,6 +28,7 @@
  *   Content : Eigen bindings to Intel(R) MKL PARDISO
  ********************************************************************************
 */
+// SPDX-License-Identifier: BSD-3-Clause
 
 #ifndef EIGEN_PARDISOSUPPORT_H
 #define EIGEN_PARDISOSUPPORT_H
@@ -57,7 +58,7 @@ struct pardiso_run_selector {
 };
 template <>
 struct pardiso_run_selector<long long int> {
-  typedef long long int IndexType;
+  using IndexType = long long int;
   static IndexType run(_MKL_DSS_HANDLE_t pt, IndexType maxfct, IndexType mnum, IndexType type, IndexType phase,
                        IndexType n, void* a, IndexType* ia, IndexType* ja, IndexType* perm, IndexType nrhs,
                        IndexType* iparm, IndexType msglvl, void* b, void* x) {
@@ -72,26 +73,26 @@ struct pardiso_traits;
 
 template <typename MatrixType_>
 struct pardiso_traits<PardisoLU<MatrixType_> > {
-  typedef MatrixType_ MatrixType;
-  typedef typename MatrixType_::Scalar Scalar;
-  typedef typename MatrixType_::RealScalar RealScalar;
-  typedef typename MatrixType_::StorageIndex StorageIndex;
+  using MatrixType = MatrixType_;
+  using Scalar = typename MatrixType_::Scalar;
+  using RealScalar = typename MatrixType_::RealScalar;
+  using StorageIndex = typename MatrixType_::StorageIndex;
 };
 
 template <typename MatrixType_, int Options>
 struct pardiso_traits<PardisoLLT<MatrixType_, Options> > {
-  typedef MatrixType_ MatrixType;
-  typedef typename MatrixType_::Scalar Scalar;
-  typedef typename MatrixType_::RealScalar RealScalar;
-  typedef typename MatrixType_::StorageIndex StorageIndex;
+  using MatrixType = MatrixType_;
+  using Scalar = typename MatrixType_::Scalar;
+  using RealScalar = typename MatrixType_::RealScalar;
+  using StorageIndex = typename MatrixType_::StorageIndex;
 };
 
 template <typename MatrixType_, int Options>
 struct pardiso_traits<PardisoLDLT<MatrixType_, Options> > {
-  typedef MatrixType_ MatrixType;
-  typedef typename MatrixType_::Scalar Scalar;
-  typedef typename MatrixType_::RealScalar RealScalar;
-  typedef typename MatrixType_::StorageIndex StorageIndex;
+  using MatrixType = MatrixType_;
+  using Scalar = typename MatrixType_::Scalar;
+  using RealScalar = typename MatrixType_::RealScalar;
+  using StorageIndex = typename MatrixType_::StorageIndex;
 };
 
 }  // end namespace internal
@@ -99,24 +100,24 @@ struct pardiso_traits<PardisoLDLT<MatrixType_, Options> > {
 template <class Derived>
 class PardisoImpl : public SparseSolverBase<Derived> {
  protected:
-  typedef SparseSolverBase<Derived> Base;
+  using Base = SparseSolverBase<Derived>;
   using Base::derived;
   using Base::m_isInitialized;
 
-  typedef internal::pardiso_traits<Derived> Traits;
+  using Traits = internal::pardiso_traits<Derived>;
 
  public:
   using Base::_solve_impl;
 
-  typedef typename Traits::MatrixType MatrixType;
-  typedef typename Traits::Scalar Scalar;
-  typedef typename Traits::RealScalar RealScalar;
-  typedef typename Traits::StorageIndex StorageIndex;
-  typedef SparseMatrix<Scalar, RowMajor, StorageIndex> SparseMatrixType;
-  typedef Matrix<Scalar, Dynamic, 1> VectorType;
-  typedef Matrix<StorageIndex, 1, MatrixType::ColsAtCompileTime> IntRowVectorType;
-  typedef Matrix<StorageIndex, MatrixType::RowsAtCompileTime, 1> IntColVectorType;
-  typedef Array<StorageIndex, 64, 1, DontAlign> ParameterType;
+  using MatrixType = typename Traits::MatrixType;
+  using Scalar = typename Traits::Scalar;
+  using RealScalar = typename Traits::RealScalar;
+  using StorageIndex = typename Traits::StorageIndex;
+  using SparseMatrixType = SparseMatrix<Scalar, RowMajor, StorageIndex>;
+  using VectorType = Matrix<Scalar, Dynamic, 1>;
+  using IntRowVectorType = Matrix<StorageIndex, 1, MatrixType::ColsAtCompileTime>;
+  using IntColVectorType = Matrix<StorageIndex, MatrixType::RowsAtCompileTime, 1>;
+  using ParameterType = Array<StorageIndex, 64, 1, DontAlign>;
   enum { ScalarIsComplex = NumTraits<Scalar>::IsComplex, ColsAtCompileTime = Dynamic, MaxColsAtCompileTime = Dynamic };
 
   PardisoImpl() : m_analysisIsOk(false), m_factorizationIsOk(false) {
@@ -147,7 +148,7 @@ class PardisoImpl : public SparseSolverBase<Derived> {
    * See the PARDISO manual to know how to use it. */
   ParameterType& pardisoParameterArray() { return m_iparm; }
 
-  /** Performs a symbolic decomposition on the sparcity of \a matrix.
+  /** Performs a symbolic decomposition on the sparsity of \a matrix.
    *
    * This function is particularly useful when solving for several problems having the same structure.
    *
@@ -157,7 +158,8 @@ class PardisoImpl : public SparseSolverBase<Derived> {
 
   /** Performs a numeric decomposition of \a matrix
    *
-   * The given matrix must has the same sparcity than the matrix on which the symbolic decomposition has been performed.
+   * The given matrix must have the same sparsity as the matrix on which the symbolic decomposition has been
+   * performed.
    *
    * \sa analyzePattern()
    */
@@ -174,17 +176,17 @@ class PardisoImpl : public SparseSolverBase<Derived> {
     {
       internal::pardiso_run_selector<StorageIndex>::run(m_pt, 1, 1, m_type, -1,
                                                         internal::convert_index<StorageIndex>(m_size), 0, 0, 0,
-                                                        m_perm.data(), 0, m_iparm.data(), m_msglvl, NULL, NULL);
+                                                        m_perm.data(), 0, m_iparm.data(), m_msglvl, nullptr, nullptr);
       m_isInitialized = false;
     }
   }
 
   void pardisoInit(int type) {
     m_type = type;
-    bool symmetric = std::abs(m_type) < 10;
+    bool symmetric = numext::abs(m_type) < 10;
     m_iparm[0] = 1;                   // No solver default
     m_iparm[1] = 2;                   // use Metis for the ordering
-    m_iparm[2] = 0;                   // Reserved. Set to zero. (??Numbers of processors, value of OMP_NUM_THREADS??)
+    m_iparm[2] = 0;                   // Reserved. Set to zero. (Was number of processors / OMP_NUM_THREADS.)
     m_iparm[3] = 0;                   // No iterative-direct algorithm
     m_iparm[4] = 0;                   // No user fill-in reducing permutation
     m_iparm[5] = 0;                   // Write solution into x, b is left unchanged
@@ -253,7 +255,7 @@ Derived& PardisoImpl<Derived>::compute(const MatrixType& a) {
   Index error;
   error = internal::pardiso_run_selector<StorageIndex>::run(
       m_pt, 1, 1, m_type, 12, internal::convert_index<StorageIndex>(m_size), m_matrix.valuePtr(),
-      m_matrix.outerIndexPtr(), m_matrix.innerIndexPtr(), m_perm.data(), 0, m_iparm.data(), m_msglvl, NULL, NULL);
+      m_matrix.outerIndexPtr(), m_matrix.innerIndexPtr(), m_perm.data(), 0, m_iparm.data(), m_msglvl, nullptr, nullptr);
   manageErrorCode(error);
   m_analysisIsOk = m_info == Eigen::Success;
   m_factorizationIsOk = m_info == Eigen::Success;
@@ -273,7 +275,7 @@ Derived& PardisoImpl<Derived>::analyzePattern(const MatrixType& a) {
   Index error;
   error = internal::pardiso_run_selector<StorageIndex>::run(
       m_pt, 1, 1, m_type, 11, internal::convert_index<StorageIndex>(m_size), m_matrix.valuePtr(),
-      m_matrix.outerIndexPtr(), m_matrix.innerIndexPtr(), m_perm.data(), 0, m_iparm.data(), m_msglvl, NULL, NULL);
+      m_matrix.outerIndexPtr(), m_matrix.innerIndexPtr(), m_perm.data(), 0, m_iparm.data(), m_msglvl, nullptr, nullptr);
 
   manageErrorCode(error);
   m_analysisIsOk = m_info == Eigen::Success;
@@ -292,7 +294,7 @@ Derived& PardisoImpl<Derived>::factorize(const MatrixType& a) {
   Index error;
   error = internal::pardiso_run_selector<StorageIndex>::run(
       m_pt, 1, 1, m_type, 22, internal::convert_index<StorageIndex>(m_size), m_matrix.valuePtr(),
-      m_matrix.outerIndexPtr(), m_matrix.innerIndexPtr(), m_perm.data(), 0, m_iparm.data(), m_msglvl, NULL, NULL);
+      m_matrix.outerIndexPtr(), m_matrix.innerIndexPtr(), m_perm.data(), 0, m_iparm.data(), m_msglvl, nullptr, nullptr);
 
   manageErrorCode(error);
   m_factorizationIsOk = m_info == Eigen::Success;
@@ -308,14 +310,12 @@ void PardisoImpl<Derived>::_solve_impl(const MatrixBase<BDerived>& b, MatrixBase
     return;
   }
 
-  // Index n = m_matrix.rows();
   Index nrhs = Index(b.cols());
   eigen_assert(m_size == b.rows());
   eigen_assert(((MatrixBase<BDerived>::Flags & RowMajorBit) == 0 || nrhs == 1) &&
                "Row-major right hand sides are not supported");
   eigen_assert(((MatrixBase<XDerived>::Flags & RowMajorBit) == 0 || nrhs == 1) &&
                "Row-major matrices of unknowns are not supported");
-  eigen_assert(((nrhs == 1) || b.outerStride() == b.rows()));
 
   //  switch (transposed) {
   //    case SvNoTrans    : m_iparm[11] = 0 ; break;
@@ -326,21 +326,28 @@ void PardisoImpl<Derived>::_solve_impl(const MatrixBase<BDerived>& b, MatrixBase
   //      m_iparm[11] = 0;
   //  }
 
+  // PARDISO reads b and writes x as contiguous column-major arrays, and cannot solve in place.
+  const bool b_contiguous = b.derived().rowStride() == 1 && (nrhs == 1 || b.derived().colStride() == m_size);
+  const bool x_contiguous = x.derived().rowStride() == 1 && (nrhs == 1 || x.derived().colStride() == m_size);
+  Matrix<Scalar, Dynamic, Dynamic, ColMajor> b_tmp, x_tmp;
   Scalar* rhs_ptr = const_cast<Scalar*>(b.derived().data());
-  Matrix<Scalar, Dynamic, Dynamic, ColMajor> tmp;
-
-  // Pardiso cannot solve in-place
-  if (rhs_ptr == x.derived().data()) {
-    tmp = b;
-    rhs_ptr = tmp.data();
+  if (!b_contiguous || rhs_ptr == x.derived().data()) {
+    b_tmp = b;
+    rhs_ptr = b_tmp.data();
+  }
+  Scalar* x_ptr = x.derived().data();
+  if (!x_contiguous) {
+    x_tmp.resize(m_size, nrhs);
+    x_ptr = x_tmp.data();
   }
 
   Index error;
   error = internal::pardiso_run_selector<StorageIndex>::run(
       m_pt, 1, 1, m_type, 33, internal::convert_index<StorageIndex>(m_size), m_matrix.valuePtr(),
       m_matrix.outerIndexPtr(), m_matrix.innerIndexPtr(), m_perm.data(), internal::convert_index<StorageIndex>(nrhs),
-      m_iparm.data(), m_msglvl, rhs_ptr, x.derived().data());
+      m_iparm.data(), m_msglvl, rhs_ptr, x_ptr);
 
+  if (!x_contiguous) x.derived() = x_tmp;
   manageErrorCode(error);
 }
 
@@ -364,14 +371,14 @@ void PardisoImpl<Derived>::_solve_impl(const MatrixBase<BDerived>& b, MatrixBase
 template <typename MatrixType>
 class PardisoLU : public PardisoImpl<PardisoLU<MatrixType> > {
  protected:
-  typedef PardisoImpl<PardisoLU> Base;
+  using Base = PardisoImpl<PardisoLU>;
   using Base::m_matrix;
   using Base::pardisoInit;
   friend class PardisoImpl<PardisoLU<MatrixType> >;
 
  public:
-  typedef typename Base::Scalar Scalar;
-  typedef typename Base::RealScalar RealScalar;
+  using Scalar = typename Base::Scalar;
+  using RealScalar = typename Base::RealScalar;
 
   using Base::compute;
   using Base::solve;
@@ -395,7 +402,7 @@ class PardisoLU : public PardisoImpl<PardisoLU<MatrixType> > {
  * \brief A sparse direct Cholesky (LLT) factorization and solver based on the PARDISO library
  *
  * This class allows to solve for A.X = B sparse linear problems via a LL^T Cholesky factorization
- * using the Intel MKL PARDISO library. The sparse matrix A must be selfajoint and positive definite.
+ * using the Intel MKL PARDISO library. The sparse matrix A must be selfadjoint and positive definite.
  * The vectors or matrices X and B can be either dense or sparse.
  *
  * By default, it runs in in-core mode. To enable PARDISO's out-of-core feature, set:
@@ -412,15 +419,15 @@ class PardisoLU : public PardisoImpl<PardisoLU<MatrixType> > {
 template <typename MatrixType, int UpLo_>
 class PardisoLLT : public PardisoImpl<PardisoLLT<MatrixType, UpLo_> > {
  protected:
-  typedef PardisoImpl<PardisoLLT<MatrixType, UpLo_> > Base;
+  using Base = PardisoImpl<PardisoLLT<MatrixType, UpLo_> >;
   using Base::m_matrix;
   using Base::pardisoInit;
   friend class PardisoImpl<PardisoLLT<MatrixType, UpLo_> >;
 
  public:
-  typedef typename Base::Scalar Scalar;
-  typedef typename Base::RealScalar RealScalar;
-  typedef typename Base::StorageIndex StorageIndex;
+  using Scalar = typename Base::Scalar;
+  using RealScalar = typename Base::RealScalar;
+  using StorageIndex = typename Base::StorageIndex;
   enum { UpLo = UpLo_ };
   using Base::compute;
 
@@ -446,7 +453,7 @@ class PardisoLLT : public PardisoImpl<PardisoLLT<MatrixType, UpLo_> > {
  * \brief A sparse direct Cholesky (LDLT) factorization and solver based on the PARDISO library
  *
  * This class allows to solve for A.X = B sparse linear problems via a LDL^T Cholesky factorization
- * using the Intel MKL PARDISO library. The sparse matrix A is assumed to be selfajoint and positive definite.
+ * using the Intel MKL PARDISO library. The sparse matrix A is assumed to be selfadjoint and positive definite.
  * For complex matrices, A can also be symmetric only, see the \a Options template parameter.
  * The vectors or matrices X and B can be either dense or sparse.
  *
@@ -466,15 +473,15 @@ class PardisoLLT : public PardisoImpl<PardisoLLT<MatrixType, UpLo_> > {
 template <typename MatrixType, int Options>
 class PardisoLDLT : public PardisoImpl<PardisoLDLT<MatrixType, Options> > {
  protected:
-  typedef PardisoImpl<PardisoLDLT<MatrixType, Options> > Base;
+  using Base = PardisoImpl<PardisoLDLT<MatrixType, Options> >;
   using Base::m_matrix;
   using Base::pardisoInit;
   friend class PardisoImpl<PardisoLDLT<MatrixType, Options> >;
 
  public:
-  typedef typename Base::Scalar Scalar;
-  typedef typename Base::RealScalar RealScalar;
-  typedef typename Base::StorageIndex StorageIndex;
+  using Scalar = typename Base::Scalar;
+  using RealScalar = typename Base::RealScalar;
+  using StorageIndex = typename Base::StorageIndex;
   using Base::compute;
   enum { UpLo = Options & (Upper | Lower) };
 

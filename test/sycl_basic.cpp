@@ -9,6 +9,7 @@
 // This Source Code Form is subject to the terms of the Mozilla
 // Public License v. 2.0. If a copy of the MPL was not distributed
 // with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
+// SPDX-License-Identifier: MPL-2.0
 
 #define EIGEN_TEST_NO_LONGDOUBLE
 #define EIGEN_DEFAULT_DENSE_INDEX_TYPE int
@@ -84,13 +85,13 @@ template <typename DataType, typename Input, typename Output>
 void test_complex_sqrt(size_t num_elements, const Input& in, Output& out) {
   auto operation = [](size_t i, const typename DataType::Scalar* in, typename DataType::Scalar* out) {
     using namespace Eigen;
-    typedef typename DataType::Scalar ComplexType;
-    typedef typename DataType::Scalar::value_type ValueType;
+    using ComplexType = typename DataType::Scalar;
+    using ValueType = typename DataType::Scalar::value_type;
     const int num_special_inputs = 18;
 
     if (i == 0) {
       const ValueType nan = std::numeric_limits<ValueType>::quiet_NaN();
-      typedef Eigen::Vector<ComplexType, num_special_inputs> SpecialInputs;
+      using SpecialInputs = Eigen::Vector<ComplexType, num_special_inputs>;
       SpecialInputs special_in;
       special_in.setZero();
       int idx = 0;
@@ -129,8 +130,8 @@ template <typename DataType, typename Input, typename Output>
 void test_complex_operators(size_t num_elements, const Input& in, Output& out) {
   auto operation = [](size_t i, const typename DataType::Scalar* in, typename DataType::Scalar* out) {
     using namespace Eigen;
-    typedef typename DataType::Scalar ComplexType;
-    typedef typename DataType::Scalar::value_type ValueType;
+    using ComplexType = typename DataType::Scalar;
+    using ValueType = typename DataType::Scalar::value_type;
     const int num_scalar_operators = 24;
     const int num_vector_operators = 23;  // no unary + operator.
     size_t out_idx = i * (num_scalar_operators + num_vector_operators * DataType::MaxSizeAtCompileTime);
@@ -267,7 +268,7 @@ void test_replicate(size_t num_elements, const Input& in, Output& out) {
     int step = x1.size() * 4;
     int stride = 3 * step;
 
-    typedef Map<Array<typename DataType::Scalar, Dynamic, Dynamic>> MapType;
+    using MapType = Map<Array<typename DataType::Scalar, Dynamic, Dynamic>>;
     MapType(out + i * stride + 0 * step, x1.rows() * 2, x1.cols() * 2) = x1.replicate(2, 2);
     MapType(out + i * stride + 1 * step, x1.rows() * 3, x1.cols()) = in[i] * x1.colwise().replicate(3);
     MapType(out + i * stride + 2 * step, x1.rows(), x1.cols() * 3) = in[i] * x1.rowwise().replicate(3);
@@ -279,7 +280,7 @@ template <typename DataType1, typename DataType2, typename Input, typename Outpu
 void test_product(size_t num_elements, const Input& in, Output& out) {
   auto operation = [](size_t i, const typename DataType1::Scalar* in, typename DataType1::Scalar* out) {
     using namespace Eigen;
-    typedef Matrix<typename DataType1::Scalar, DataType1::RowsAtCompileTime, DataType2::ColsAtCompileTime> DataType3;
+    using DataType3 = Matrix<typename DataType1::Scalar, DataType1::RowsAtCompileTime, DataType2::ColsAtCompileTime>;
     DataType1 x1(in + i);
     DataType2 x2(in + i + 1);
     Map<DataType3> res(out + i * DataType3::MaxSizeAtCompileTime);
@@ -303,7 +304,7 @@ template <typename DataType, typename Input, typename Output>
 void test_eigenvalues_direct(size_t num_elements, const Input& in, Output& out) {
   auto operation = [](size_t i, const typename DataType::Scalar* in, typename DataType::Scalar* out) {
     using namespace Eigen;
-    typedef Matrix<typename DataType::Scalar, DataType::RowsAtCompileTime, 1> Vec;
+    using Vec = Matrix<typename DataType::Scalar, DataType::RowsAtCompileTime, 1>;
     DataType M(in + i);
     Map<Vec> res(out + i * Vec::MaxSizeAtCompileTime);
     DataType A = M * M.adjoint();
@@ -328,7 +329,7 @@ void test_matrix_inverse(size_t num_elements, const Input& in, Output& out) {
 template <typename DataType, typename Input, typename Output>
 void test_numeric_limits(const Input& in, Output& out) {
   auto operation = [](const typename DataType::Scalar* in, typename DataType::Scalar* out) {
-    EIGEN_UNUSED_VARIABLE(in)
+    EIGEN_UNUSED_VARIABLE(in);
     out[0] = numext::numeric_limits<float>::epsilon();
     out[1] = (numext::numeric_limits<float>::max)();
     out[2] = (numext::numeric_limits<float>::min)();
@@ -336,6 +337,73 @@ void test_numeric_limits(const Input& in, Output& out) {
     out[4] = numext::numeric_limits<float>::quiet_NaN();
   };
   run_and_verify<true, true>(operation, 1, in, out);
+}
+
+template <typename Operation>
+void test_predux_any(Operation& operation) {
+  VectorXf in(1);
+  Matrix<int, 3, 1> out;
+  in.setZero();
+  out.setZero();
+
+  run_and_verify<false, true>(operation, 1, in, out);
+}
+
+void test_predux_any_float() {
+  auto operation = [](const float* in, int* out) {
+#ifdef EIGEN_SYCL_DEVICE_ONLY
+    const cl::sycl::cl_int4 int_none(0);
+    const cl::sycl::cl_int4 int_some(0, -1, 0, 0);
+    const cl::sycl::cl_int4 int_all(-1);
+    out[0] = internal::predux_any(int_none.template as<cl::sycl::cl_float4>());
+    out[1] = internal::predux_any(int_some.template as<cl::sycl::cl_float4>());
+    out[2] = internal::predux_any(int_all.template as<cl::sycl::cl_float4>());
+#else
+    EIGEN_UNUSED_VARIABLE(in);
+    out[0] = 0;
+    out[1] = 1;
+    out[2] = 1;
+#endif
+  };
+  test_predux_any(operation);
+}
+
+void test_predux_any_half() {
+  auto operation = [](const float* in, int* out) {
+#ifdef EIGEN_SYCL_DEVICE_ONLY
+    const cl::sycl::cl_short8 short_none(0);
+    const cl::sycl::cl_short8 short_some(0, -1, 0, 0, 0, 0, 0, 0);
+    const cl::sycl::cl_short8 short_all(-1);
+    out[0] = internal::predux_any(short_none.template as<cl::sycl::cl_half8>());
+    out[1] = internal::predux_any(short_some.template as<cl::sycl::cl_half8>());
+    out[2] = internal::predux_any(short_all.template as<cl::sycl::cl_half8>());
+#else
+    EIGEN_UNUSED_VARIABLE(in);
+    out[0] = 0;
+    out[1] = 1;
+    out[2] = 1;
+#endif
+  };
+  test_predux_any(operation);
+}
+
+void test_predux_any_double() {
+  auto operation = [](const float* in, int* out) {
+#ifdef EIGEN_SYCL_DEVICE_ONLY
+    const cl::sycl::cl_long2 long_none(0);
+    const cl::sycl::cl_long2 long_some(0, -1);
+    const cl::sycl::cl_long2 long_all(-1);
+    out[0] = internal::predux_any(long_none.template as<cl::sycl::cl_double2>());
+    out[1] = internal::predux_any(long_some.template as<cl::sycl::cl_double2>());
+    out[2] = internal::predux_any(long_all.template as<cl::sycl::cl_double2>());
+#else
+    EIGEN_UNUSED_VARIABLE(in);
+    out[0] = 0;
+    out[1] = 1;
+    out[2] = 1;
+#endif
+  };
+  test_predux_any(operation);
 }
 
 EIGEN_DECLARE_TEST(sycl_basic) {
@@ -379,4 +447,8 @@ EIGEN_DECLARE_TEST(sycl_basic) {
   CALL_SUBTEST(test_matrix_inverse<Matrix4f>(num_elements, in, out));
 
   CALL_SUBTEST(test_numeric_limits<Vector3f>(in, out));
+  CALL_SUBTEST(test_predux_any_float());
+  const sycl::device device{sycl::default_selector_v};
+  if (device.has(sycl::aspect::fp16)) CALL_SUBTEST(test_predux_any_half());
+  if (device.has(sycl::aspect::fp64)) CALL_SUBTEST(test_predux_any_double());
 }

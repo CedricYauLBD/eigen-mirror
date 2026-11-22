@@ -6,6 +6,7 @@
 // This Source Code Form is subject to the terms of the Mozilla
 // Public License v. 2.0. If a copy of the MPL was not distributed
 // with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
+// SPDX-License-Identifier: MPL-2.0
 
 #ifndef EIGEN_TEST_ANNOYING_SCALAR_H
 #define EIGEN_TEST_ANNOYING_SCALAR_H
@@ -156,10 +157,10 @@ struct NumTraits<AnnoyingScalar> : NumTraits<float> {
   enum {
     RequireInitialization = 1,
   };
-  typedef AnnoyingScalar Real;
-  typedef AnnoyingScalar Nested;
-  typedef AnnoyingScalar Literal;
-  typedef AnnoyingScalar NonInteger;
+  using Real = AnnoyingScalar;
+  using Nested = AnnoyingScalar;
+  using Literal = AnnoyingScalar;
+  using NonInteger = AnnoyingScalar;
 };
 
 template <>

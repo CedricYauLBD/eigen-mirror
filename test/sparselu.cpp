@@ -6,6 +6,7 @@
 // This Source Code Form is subject to the terms of the Mozilla
 // Public License v. 2.0. If a copy of the MPL was not distributed
 // with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
+// SPDX-License-Identifier: MPL-2.0
 
 // SparseLU solve does not accept column major matrices for the destination.
 // However, as expected, the generic check_sparse_square_solving routines produces row-major
@@ -16,6 +17,7 @@
 #endif
 
 #include "sparse_solver.h"
+#include "fp_control.h"
 #include <Eigen/SparseLU>
 
 template <typename T>
@@ -35,9 +37,247 @@ void test_sparselu_T() {
   check_sparse_square_determinant(sparselu_amd);
 }
 
+template <typename T>
+void test_sparselu_rowmajor_compressed_input() {
+  using RowMajorSparseMatrix = SparseMatrix<T, RowMajor>;
+  using Vector = Matrix<T, Dynamic, 1>;
+
+  Vector b(2);
+  b << T(1.1), T(3.14);
+
+  Vector expected(2);
+  expected << T(1.1 - 0.0001 * 3.14), T(3.14);
+
+  RowMajorSparseMatrix compressed(2, 2);
+  compressed.insert(0, 0) = T(1.0);
+  compressed.insert(0, 1) = T(0.0001);
+  compressed.insert(1, 1) = T(1.0);
+  compressed.makeCompressed();
+
+  RowMajorSparseMatrix uncompressed(2, 2);
+  uncompressed.insert(0, 0) = T(1.0);
+  uncompressed.insert(0, 1) = T(0.0001);
+  uncompressed.insert(1, 1) = T(1.0);
+
+  SparseLU<RowMajorSparseMatrix> compressed_solver;
+  compressed_solver.compute(compressed);
+  VERIFY_IS_EQUAL(compressed_solver.info(), Success);
+  VERIFY_IS_APPROX(compressed_solver.solve(b), expected);
+
+  SparseLU<RowMajorSparseMatrix> two_step_solver;
+  two_step_solver.analyzePattern(compressed);
+  two_step_solver.factorize(compressed);
+  VERIFY_IS_EQUAL(two_step_solver.info(), Success);
+  VERIFY_IS_APPROX(two_step_solver.solve(b), expected);
+
+  SparseLU<RowMajorSparseMatrix> uncompressed_solver;
+  uncompressed_solver.compute(uncompressed);
+  VERIFY_IS_EQUAL(uncompressed_solver.info(), Success);
+  VERIFY_IS_APPROX(uncompressed_solver.solve(b), expected);
+}
+
+template <typename T>
+void test_sparselu_colmajor_uncompressed_input() {
+  using ColMajorSparseMatrix = SparseMatrix<T, ColMajor>;
+  using Vector = Matrix<T, Dynamic, 1>;
+
+  Vector b(2);
+  b << T(1.1), T(3.14);
+
+  Vector expected(2);
+  expected << T(1.1 - 0.0001 * 3.14), T(3.14);
+
+  ColMajorSparseMatrix uncompressed(2, 2);
+  uncompressed.insert(0, 0) = T(1.0);
+  uncompressed.insert(0, 1) = T(0.0001);
+  uncompressed.insert(1, 1) = T(1.0);
+
+  SparseLU<ColMajorSparseMatrix> uncompressed_solver;
+  uncompressed_solver.compute(uncompressed);
+  VERIFY_IS_EQUAL(uncompressed_solver.info(), Success);
+  VERIFY_IS_APPROX(uncompressed_solver.solve(b), expected);
+}
+
+// Regression for issue #1908: lastErrorMessage() must not carry over from a
+// previous failed factorize() once a subsequent factorize() succeeds.
+template <typename T>
+void test_sparselu_clear_error_state() {
+  using ColMajorSparseMatrix = SparseMatrix<T, ColMajor>;
+
+  ColMajorSparseMatrix singular(3, 3);  // structurally singular: no nonzeros
+
+  ColMajorSparseMatrix non_singular(3, 3);
+  non_singular.insert(0, 0) = T(1);
+  non_singular.insert(1, 1) = T(1);
+  non_singular.insert(2, 2) = T(1);
+  non_singular.makeCompressed();
+
+  SparseLU<ColMajorSparseMatrix> solver;
+  solver.compute(singular);
+  VERIFY(solver.info() != Success);
+  VERIFY(!solver.lastErrorMessage().empty());
+
+  solver.compute(non_singular);
+  VERIFY_IS_EQUAL(solver.info(), Success);
+  VERIFY(solver.lastErrorMessage().empty());
+}
+
+// A = M diag(1, .., s, .., 1), M = n I + ones, with s and the pivot of the scaled column subnormal: A is well
+// conditioned up to that column scaling, but 1 / pivot overflows, which used to fill the column of L with Inf
+// while info() reported Success. det A = +-2 n^n s, and the solve is judged by its componentwise backward error
+// max_i |b - A x|_i / (|A| |x| + |b|)_i, which a column scaling leaves unchanged.
+template <typename T, typename Ordering>
+void test_sparselu_subnormal_pivot(Index n, Index scaledColumn, const T& phase) {
+  using Real = typename NumTraits<T>::Real;
+  using DenseMatrix = Matrix<T, Dynamic, Dynamic>;
+  using DenseVector = Matrix<T, Dynamic, 1>;
+  using RealVector = Matrix<Real, Dynamic, 1>;
+
+  if (!subnormalDivisionIsExact<Real>() || underflowProbe<Real>() == Real(0)) {
+    std::cout << "SKIP: test_sparselu_subnormal_pivot needs gradual underflow and IEEE 754 division by subnormals."
+              << std::endl;
+    return;
+  }
+
+  // 1 / pivot overflows for |pivot| < min / 4, and the pivot is about (n + 1) s. A subnormal near s carries
+  // only log2(s / denorm_min) bits, hence the unit roundoff u.
+  const Real s = (std::numeric_limits<Real>::min)() / Real(32);
+  const Real u = numext::maxi(NumTraits<Real>::epsilon(), (std::numeric_limits<Real>::denorm_min)() / s);
+  const Real tolerance = Real(16 * n) * u;
+  Real detM = Real(2);
+  for (Index i = 0; i < n; ++i) detM *= Real(n);
+
+  for (int swap = 0; swap < 2; ++swap) {
+    DenseMatrix dense = DenseMatrix::Ones(n, n);
+    dense.diagonal().array() += T(Real(n));
+    dense.col(scaledColumn) *= T(s) * phase;
+    if (swap) dense.row(0).swap(dense.row(1));
+    // Inserted explicitly: sparseView() prunes on a squared magnitude, which underflows here.
+    SparseMatrix<T> sparse(n, n);
+    sparse.reserve(VectorXi::Constant(n, int(n)));
+    for (Index j = 0; j < n; ++j)
+      for (Index i = 0; i < n; ++i) sparse.insert(i, j) = dense(i, j);
+    sparse.makeCompressed();
+
+    SparseLU<SparseMatrix<T>, Ordering> lu(sparse);
+    VERIFY_IS_EQUAL(lu.info(), Success);
+
+    const T expectedDet = T(swap ? -detM : detM) * T(s) * phase;
+    VERIFY(numext::abs(lu.determinant() - expectedDet) <= tolerance * numext::abs(expectedDet));
+
+    // x = (.., 2^-10 / s, ..) keeps both A x and the solution representable.
+    DenseVector x = DenseVector::Ones(n);
+    x(scaledColumn) = T(Real(1) / (Real(1024) * s));
+    const DenseVector b = dense * x;
+    x = lu.solve(b);
+    VERIFY(x.allFinite());
+    const RealVector residual = (b - dense * x).cwiseAbs();
+    const RealVector scale = dense.cwiseAbs() * x.cwiseAbs() + b.cwiseAbs();
+    VERIFY((residual.array() <= tolerance * scale.array()).all());
+  }
+}
+
+// A 0x0 matrix divided by its column count when sizing the factor storage.
+template <typename T>
+void test_sparselu_empty() {
+  SparseLU<SparseMatrix<T> > lu(SparseMatrix<T>(0, 0));
+  VERIFY_IS_EQUAL(lu.info(), Success);
+  Matrix<T, Dynamic, 1> x = lu.solve(Matrix<T, Dynamic, 1>());
+  VERIFY_IS_EQUAL(x.size(), 0);
+}
+
+// The fill estimate fillratio * (nnz + 1) / n truncated to 0 once n > 20 (nnz + 1), and memInit() then looped forever
+// waiting for a non-empty buffer.
+template <typename T>
+void test_sparselu_tiny_fill_estimate() {
+  for (Index n : {30, 100}) {
+    SparseMatrix<T> A(n, n);
+    for (Index i = 0; i < n / 32; ++i) A.insert(i, i) = T(1);
+    A.makeCompressed();
+    SparseLU<SparseMatrix<T> > lu(A);
+    VERIFY_IS_EQUAL(lu.info(), NumericalIssue);
+  }
+}
+
+// signDeterminant() is det / |det|: complex for complex scalars, and the other determinants agree with a dense one.
+template <typename T>
+void test_sparselu_determinants() {
+  using Real = typename NumTraits<T>::Real;
+  using DenseMatrix = Matrix<T, Dynamic, Dynamic>;
+  SparseLU<SparseMatrix<T> > lu;
+  for (int repeat = 0; repeat < 5; ++repeat) {
+    const Index size = internal::random<Index>(1, 30);
+    DenseMatrix dA = DenseMatrix::Random(size, size);
+    dA = (dA.array().abs() < Real(0.3)).select(T(0), dA);
+    dA.diagonal() = (dA.diagonal().array() == T(0)).select(T(1), dA.diagonal());
+    SparseMatrix<T> A = dA.sparseView();
+    A.makeCompressed();
+    check_sparse_determinant(lu, A, dA);
+    check_sparse_abs_determinant(lu, A, dA);
+    check_sparse_log_abs_determinant(lu, A, dA);
+    // det(A + E) / det(A) = 1 + tr(A^-1 E) + O(|E|^2) and |E|_F <= c n eps |A|_F for the LU backward error, so the
+    // phase of the determinant is accurate to c n eps cond_F(A); measured over 2000 samples the error is at most
+    // 0.3 n eps cond_F(A) for the complex scalars, and exact for the real ones. The modulus of signDeterminant() is
+    // a product of n computed unit phases, off by at most ~1 n eps.
+    const T refDet = dA.determinant();
+    const Real eps = NumTraits<Real>::epsilon();
+    const Real kappa = dA.norm() * dA.inverse().norm();
+    const Real phaseTol = Real(4) * Real(size) * kappa * eps;
+    VERIFY((numext::isfinite)(phaseTol));
+    VERIFY(numext::abs(lu.signDeterminant() - numext::sign(refDet)) <= phaseTol);
+    VERIFY(numext::abs(numext::abs(lu.signDeterminant()) - Real(1)) <= Real(10) * Real(size) * eps);
+  }
+
+  // The determinant of a cyclic permutation matrix with entries of magnitude s over- or underflows, its sign does not.
+  const Real scales[] = {(std::numeric_limits<Real>::min)() * Real(1 << 10),
+                         (std::numeric_limits<Real>::max)() / Real(1 << 10)};
+  for (Real s : scales) {
+    for (Index n : {5, 6}) {
+      SparseMatrix<T> A(n, n);
+      T phase = T(1);
+      for (Index i = 0; i < n; ++i) {
+        const T p = numext::sign(internal::random<T>());
+        phase *= p;
+        A.insert((i + 1) % n, i) = T(s) * p;
+      }
+      A.makeCompressed();
+      lu.compute(A);
+      VERIFY_IS_EQUAL(lu.info(), Success);
+      const T expected = (n % 2 == 0) ? T(-1) * phase : phase;  // sign of the n-cycle is (-1)^(n-1)
+      // The pivots are exact up to the phase normalization (measured <= 0.7 n eps), the sum of n logarithms of
+      // |s| has a relative error of at most ~0.5 eps.
+      const Real eps = NumTraits<Real>::epsilon();
+      VERIFY(numext::abs(lu.signDeterminant() - expected) <= Real(10) * Real(n) * eps);
+      VERIFY(numext::abs(numext::real(lu.logAbsDeterminant()) - Real(n) * numext::log(s)) <=
+             Real(8) * eps * Real(n) * numext::abs(numext::log(s)));
+    }
+  }
+}
+
 EIGEN_DECLARE_TEST(sparselu) {
   CALL_SUBTEST_1(test_sparselu_T<float>());
   CALL_SUBTEST_2(test_sparselu_T<double>());
   CALL_SUBTEST_3(test_sparselu_T<std::complex<float> >());
   CALL_SUBTEST_4(test_sparselu_T<std::complex<double> >());
+  CALL_SUBTEST_1(test_sparselu_determinants<float>());
+  CALL_SUBTEST_2(test_sparselu_determinants<double>());
+  CALL_SUBTEST_3(test_sparselu_determinants<std::complex<float> >());
+  CALL_SUBTEST_4(test_sparselu_determinants<std::complex<double> >());
+  CALL_SUBTEST_5(test_sparselu_rowmajor_compressed_input<float>());
+  CALL_SUBTEST_6(test_sparselu_rowmajor_compressed_input<double>());
+  CALL_SUBTEST_7(test_sparselu_colmajor_uncompressed_input<float>());
+  CALL_SUBTEST_8(test_sparselu_colmajor_uncompressed_input<double>());
+  CALL_SUBTEST_9(test_sparselu_clear_error_state<float>());
+  CALL_SUBTEST_10(test_sparselu_clear_error_state<double>());
+  CALL_SUBTEST_10(test_sparselu_empty<double>());
+  CALL_SUBTEST_10(test_sparselu_tiny_fill_estimate<double>());
+  // The scaled column leads a supernode (0) or lies inside one (1); COLAMD is free to move it.
+  for (Index scaledColumn = 0; scaledColumn < 2; ++scaledColumn) {
+    CALL_SUBTEST_9((test_sparselu_subnormal_pivot<float, NaturalOrdering<int> >(4, scaledColumn, 1.0f)));
+    CALL_SUBTEST_9((test_sparselu_subnormal_pivot<float, COLAMDOrdering<int> >(2, scaledColumn, 1.0f)));
+    CALL_SUBTEST_10((test_sparselu_subnormal_pivot<double, NaturalOrdering<int> >(4, scaledColumn, 1.0)));
+    CALL_SUBTEST_10((test_sparselu_subnormal_pivot<double, COLAMDOrdering<int> >(2, scaledColumn, 1.0)));
+    CALL_SUBTEST_10((test_sparselu_subnormal_pivot<std::complex<double>, NaturalOrdering<int> >(
+        4, scaledColumn, std::complex<double>(0, 1))));
+  }
 }

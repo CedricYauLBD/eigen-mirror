@@ -6,8 +6,10 @@
 // This Source Code Form is subject to the terms of the Mozilla
 // Public License v. 2.0. If a copy of the MPL was not distributed
 // with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
+// SPDX-License-Identifier: MPL-2.0
 
 #include "main.h"
+#include "random_for_arithmetic.h"
 #include "random_without_cast_overflow.h"
 
 template <typename MatrixType>
@@ -23,23 +25,23 @@ std::enable_if_t<!(MatrixType::RowsAtCompileTime == 1 || MatrixType::ColsAtCompi
 
 template <typename MatrixType>
 void basicStuff(const MatrixType& m) {
-  typedef typename MatrixType::Scalar Scalar;
-  typedef Matrix<Scalar, MatrixType::RowsAtCompileTime, 1> VectorType;
-  typedef Matrix<Scalar, MatrixType::RowsAtCompileTime, MatrixType::RowsAtCompileTime> SquareMatrixType;
+  using Scalar = typename MatrixType::Scalar;
+  using VectorType = Matrix<Scalar, MatrixType::RowsAtCompileTime, 1>;
+  using SquareMatrixType = Matrix<Scalar, MatrixType::RowsAtCompileTime, MatrixType::RowsAtCompileTime>;
 
   Index rows = m.rows();
   Index cols = m.cols();
 
   // this test relies a lot on Random.h, and there's not much more that we can do
   // to test it, hence I consider that we will have tested Random.h
-  MatrixType m1 = MatrixType::Random(rows, cols), m2 = MatrixType::Random(rows, cols), m3(rows, cols),
-             mzero = MatrixType::Zero(rows, cols),
+  MatrixType m1 = random_for_arithmetic<MatrixType>(rows, cols), m2 = random_for_arithmetic<MatrixType>(rows, cols),
+             m3(rows, cols), mzero = MatrixType::Zero(rows, cols),
              square = Matrix<Scalar, MatrixType::RowsAtCompileTime, MatrixType::RowsAtCompileTime>::Random(rows, rows);
-  VectorType v1 = VectorType::Random(rows), vzero = VectorType::Zero(rows);
-  SquareMatrixType sm1 = SquareMatrixType::Random(rows, rows), sm2(rows, rows);
+  VectorType v1 = random_for_arithmetic<VectorType>(rows), vzero = VectorType::Zero(rows);
+  SquareMatrixType sm1 = random_for_arithmetic<SquareMatrixType>(rows, rows), sm2(rows, rows);
 
-  Scalar x = 0;
-  while (x == Scalar(0)) x = internal::random<Scalar>();
+  Scalar x = random_scalar_for_arithmetic<Scalar>();
+  if (x == Scalar(0)) x = Scalar(1);
 
   Index r = internal::random<Index>(0, rows - 1), c = internal::random<Index>(0, cols - 1);
 
@@ -115,6 +117,8 @@ void basicStuff(const MatrixType& m) {
 
   // check == / != operators
   VERIFY(m1 == m1);
+  // Bounded integer fixtures can coincide by chance; force one coefficient apart.
+  m2(r, c) = m1(r, c) + Scalar(1);
   VERIFY(m1 != m2);
   VERIFY(!(m1 == m2));
   VERIFY(!(m1 != m1));
@@ -162,9 +166,9 @@ void basicStuff(const MatrixType& m) {
 
 template <typename MatrixType>
 void basicStuffComplex(const MatrixType& m) {
-  typedef typename MatrixType::Scalar Scalar;
-  typedef typename NumTraits<Scalar>::Real RealScalar;
-  typedef Matrix<RealScalar, MatrixType::RowsAtCompileTime, MatrixType::ColsAtCompileTime> RealMatrixType;
+  using Scalar = typename MatrixType::Scalar;
+  using RealScalar = typename NumTraits<Scalar>::Real;
+  using RealMatrixType = Matrix<RealScalar, MatrixType::RowsAtCompileTime, MatrixType::ColsAtCompileTime>;
 
   Index rows = m.rows();
   Index cols = m.cols();
@@ -195,6 +199,28 @@ void basicStuffComplex(const MatrixType& m) {
   VERIFY(!static_cast<const MatrixType&>(cm).imag().isZero());
 }
 
+// Regression test for issue #3096: reading imag() of a *non-const* real-valued object used to go
+// through the writable CwiseUnaryView, whose functor returns a dangling reference to a temporary
+// for real scalars (segfault with GCC, garbage with Clang). For real scalars the non-const imag()
+// overload must return the same read-only zero expression as the const one.
+template <typename MatrixType>
+void basicStuffRealImag(const MatrixType& m) {
+  using RealScalar = typename MatrixType::RealScalar;
+
+  Index rows = m.rows();
+  Index cols = m.cols();
+
+  MatrixType m1 = MatrixType::Random(rows, cols);
+  // Non-const lvalue.
+  VERIFY_IS_EQUAL(m1.imag().cwiseAbs().sum(), RealScalar(0));
+  // Non-const expression wrappers (temporaries), the case that used to crash.
+  VERIFY((m1.array().imag() == RealScalar(0)).all());
+  VERIFY_IS_EQUAL(m1.block(0, 0, rows, cols).imag().cwiseAbs().sum(), RealScalar(0));
+  // real() of a real-valued object aliases the object itself, both in the const and non-const case.
+  VERIFY(m1.real().data() == m1.data());
+  VERIFY(static_cast<const MatrixType&>(m1).real().data() == m1.data());
+}
+
 template <typename SrcScalar, typename TgtScalar>
 struct casting_test {
   static void run() {
@@ -207,7 +233,12 @@ struct casting_test {
     Matrix<TgtScalar, 4, 4> n = m.template cast<TgtScalar>();
     for (int i = 0; i < m.rows(); ++i) {
       for (int j = 0; j < m.cols(); ++j) {
-        VERIFY_IS_APPROX(n(i, j), (internal::cast<SrcScalar, TgtScalar>(m(i, j))));
+        // Materialize both values to avoid GCC miscompilation at -O3 on some targets
+        // (e.g., loongarch64) where the compiler may keep intermediate results in wider
+        // FP registers, causing the comparison to see different precision than intended.
+        TgtScalar actual = n(i, j);
+        TgtScalar expected = internal::cast<SrcScalar, TgtScalar>(m(i, j));
+        VERIFY_IS_APPROX(actual, expected);
       }
     }
   }
@@ -245,6 +276,7 @@ struct casting_test_runner<SrcScalar, std::enable_if_t<(NumTraits<SrcScalar>::Is
   }
 };
 
+template <typename = void>
 void casting_all() {
   casting_test_runner<bool>::run();
   casting_test_runner<int8_t>::run();
@@ -261,6 +293,19 @@ void casting_all() {
   casting_test_runner<double>::run();
   casting_test_runner<std::complex<float>>::run();
   casting_test_runner<std::complex<double>>::run();
+}
+
+// Floats beyond the 32-bit integer range must survive a vectorized cast to 64-bit integers.
+template <typename = void>
+void casting_float_to_int64() {
+  Array<float, 8, 1> x;
+  x << 3.0e9f, -3.0e9f, 5.0e9f, 1.0e18f, 2147483648.f, -2147483904.f, 4294967296.f, 1.5f;
+  const Array<int64_t, 8, 1> l = x.cast<int64_t>();
+  const Array<uint64_t, 8, 1> u = x.abs().cast<uint64_t>();
+  for (int i = 0; i < x.size(); ++i) {
+    VERIFY_IS_EQUAL(l(i), static_cast<int64_t>(x(i)));
+    VERIFY_IS_EQUAL(u(i), static_cast<uint64_t>(numext::abs(x(i))));
+  }
 }
 
 template <typename Scalar>
@@ -322,6 +367,29 @@ void fixedSizeMatrixConstruction() {
   }
 }
 
+// InnerIterator of a dense expression advances by more than one coefficient.
+template <typename = void>
+void denseInnerIteratorAdvance() {
+  using ColMajorMatrix = Matrix<float, 5, 3, ColMajor>;
+  ColMajorMatrix m = ColMajorMatrix::Random();
+  InnerIterator<ColMajorMatrix> it(m, 1);
+  it += 2;
+  VERIFY_IS_EQUAL(it.row(), Index(2));
+  VERIFY_IS_EQUAL(it.value(), m(2, 1));
+  it += 3;
+  VERIFY(!it);
+}
+
+// nestedExpression() is callable on a non-const unary expression, whose operand is always nested as const.
+template <typename = void>
+void unaryNestedExpression() {
+  const Matrix3f m = Matrix3f::Random();
+  auto negated = -m;
+  VERIFY(&negated.nestedExpression() == &m);
+  auto absSum = (m + m).cwiseAbs();
+  VERIFY_IS_EQUAL(absSum.nestedExpression().rows(), m.rows());
+}
+
 EIGEN_DECLARE_TEST(basicstuff) {
   for (int i = 0; i < g_repeat; i++) {
     CALL_SUBTEST_1(basicStuff(Matrix<float, 1, 1>()));
@@ -335,14 +403,22 @@ EIGEN_DECLARE_TEST(basicstuff) {
     CALL_SUBTEST_6(basicStuff(Matrix<float, 100, 100>()));
     CALL_SUBTEST_7(basicStuff(Matrix<long double, Dynamic, Dynamic>(internal::random<int>(1, EIGEN_TEST_MAX_SIZE),
                                                                     internal::random<int>(1, EIGEN_TEST_MAX_SIZE))));
-    CALL_SUBTEST_8(casting_all());
+    CALL_SUBTEST_8(casting_all<>());
+    CALL_SUBTEST_8(casting_float_to_int64<>());
 
     CALL_SUBTEST_3(basicStuffComplex(
         MatrixXcf(internal::random<int>(1, EIGEN_TEST_MAX_SIZE), internal::random<int>(1, EIGEN_TEST_MAX_SIZE))));
     CALL_SUBTEST_5(basicStuffComplex(
         MatrixXcd(internal::random<int>(1, EIGEN_TEST_MAX_SIZE), internal::random<int>(1, EIGEN_TEST_MAX_SIZE))));
+
+    CALL_SUBTEST_1(basicStuffRealImag(Matrix<float, 1, 1>()));
+    CALL_SUBTEST_2(basicStuffRealImag(Matrix4d()));
+    CALL_SUBTEST_7(basicStuffRealImag(
+        MatrixXd(internal::random<int>(1, EIGEN_TEST_MAX_SIZE), internal::random<int>(1, EIGEN_TEST_MAX_SIZE))));
   }
 
+  CALL_SUBTEST_1(denseInnerIteratorAdvance<>());
+  CALL_SUBTEST_1(unaryNestedExpression<>());
   CALL_SUBTEST_1(fixedSizeMatrixConstruction<unsigned char>());
   CALL_SUBTEST_1(fixedSizeMatrixConstruction<float>());
   CALL_SUBTEST_1(fixedSizeMatrixConstruction<double>());

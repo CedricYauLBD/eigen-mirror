@@ -6,11 +6,44 @@
 // This Source Code Form is subject to the terms of the Mozilla
 // Public License v. 2.0. If a copy of the MPL was not distributed
 // with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
+// SPDX-License-Identifier: MPL-2.0
 
 #define EIGEN_NO_DEBUG_SMALL_PRODUCT_BLOCKS
 #include "sparse_solver.h"
 
 #include <Eigen/SuperLUSupport>
+
+// The last pivot of this rank-2 matrix is exactly zero; determinant() used to skip it and return 1.
+void test_superlu_singular_determinant() {
+  SparseMatrix<double> A(3, 3);
+  A.insert(0, 0) = 1;
+  A.insert(0, 1) = 2;
+  A.insert(1, 1) = 1;
+  A.insert(1, 2) = 1;
+  A.insert(2, 0) = 1;
+  A.insert(2, 1) = 3;
+  A.insert(2, 2) = 1;
+  A.makeCompressed();
+  SuperLU<SparseMatrix<double> > lu(A);
+  VERIFY_IS_EQUAL(lu.determinant(), 0.0);
+}
+
+// det(A) = -15 for this triangular matrix, while the pivots, or the equilibration scales, of its first three columns
+// overflow together.
+void test_superlu_scaled_determinant() {
+  const double big = std::ldexp(1.0, 400);
+  const double diagonal[6] = {big, 3 * big, big, 1 / big, -5 / big, 1 / big};
+  SparseMatrix<double> A(6, 6);
+  for (int j = 0; j < 6; ++j) {
+    A.insert(j, j) = diagonal[j];
+    if (j > 0) A.insert(j - 1, j) = diagonal[j] / 4;
+  }
+  A.makeCompressed();
+  SuperLU<SparseMatrix<double> > lu(A);
+  VERIFY_IS_EQUAL(lu.info(), Success);
+  // One rounding for each of the 6 pivots and the 12 equilibration scales.
+  VERIFY(numext::abs(lu.determinant() + 15.0) <= 4 * 18 * NumTraits<double>::epsilon() * 15.0);
+}
 
 EIGEN_DECLARE_TEST(superlu_support) {
   SuperLU<SparseMatrix<double> > superlu_double_colmajor;
@@ -19,4 +52,6 @@ EIGEN_DECLARE_TEST(superlu_support) {
   CALL_SUBTEST_2(check_sparse_square_solving(superlu_cplxdouble_colmajor));
   CALL_SUBTEST_1(check_sparse_square_determinant(superlu_double_colmajor));
   CALL_SUBTEST_2(check_sparse_square_determinant(superlu_cplxdouble_colmajor));
+  CALL_SUBTEST_1(test_superlu_singular_determinant());
+  CALL_SUBTEST_1(test_superlu_scaled_determinant());
 }

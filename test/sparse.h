@@ -6,11 +6,10 @@
 // This Source Code Form is subject to the terms of the Mozilla
 // Public License v. 2.0. If a copy of the MPL was not distributed
 // with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
+// SPDX-License-Identifier: MPL-2.0
 
 #ifndef EIGEN_TESTSPARSE_H
 #define EIGEN_TESTSPARSE_H
-
-#define EIGEN_YES_I_KNOW_SPARSE_MODULE_IS_NOT_STABLE_YET
 
 #include "main.h"
 
@@ -23,7 +22,6 @@
 #endif
 
 #include <unordered_map>
-#define EIGEN_UNORDERED_MAP_SUPPORT
 
 #include <Eigen/Cholesky>
 #include <Eigen/LU>

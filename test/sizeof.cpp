@@ -6,12 +6,13 @@
 // This Source Code Form is subject to the terms of the Mozilla
 // Public License v. 2.0. If a copy of the MPL was not distributed
 // with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
+// SPDX-License-Identifier: MPL-2.0
 
 #include "main.h"
 
 template <typename MatrixType>
 void verifySizeOf(const MatrixType&) {
-  typedef typename MatrixType::Scalar Scalar;
+  using Scalar = typename MatrixType::Scalar;
   if (MatrixType::RowsAtCompileTime != Dynamic && MatrixType::ColsAtCompileTime != Dynamic)
     VERIFY_IS_EQUAL(std::ptrdiff_t(sizeof(MatrixType)),
                     std::ptrdiff_t(sizeof(Scalar)) * std::ptrdiff_t(MatrixType::SizeAtCompileTime));

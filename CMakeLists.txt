@@ -1,32 +1,16 @@
-cmake_minimum_required(VERSION 3.10.0)
+# SPDX-FileCopyrightText: The Eigen Authors
+# SPDX-License-Identifier: MPL-2.0
+
+# 3.18 for CMake's CUDA language, which cmake/EigenGpuTesting.cmake enables for the .cu tests. Debian 11 ships
+# 3.18.4; the HIP language and the `native` architecture ask for more, scoped to the options that need them.
+cmake_minimum_required(VERSION 3.18)
 
 #==============================================================================
 # CMake Policy issues.
 #==============================================================================
-# Allow overriding options in a parent project via `set` before including Eigen.
-if (POLICY CMP0077)
-  cmake_policy (SET CMP0077 NEW)
-endif (POLICY CMP0077)
-
-# NOTE Remove setting the policy once the minimum required CMake version is
-# increased to at least 3.15. Retain enabling the export to package registry.
-if (POLICY CMP0090)
-  # The export command does not populate package registry by default
-  cmake_policy (SET CMP0090 NEW)
-  # Unless otherwise specified, always export to package registry to ensure
-  # backwards compatibility.
-  if (NOT DEFINED CMAKE_EXPORT_PACKAGE_REGISTRY)
-    set (CMAKE_EXPORT_PACKAGE_REGISTRY ON)
-  endif (NOT DEFINED CMAKE_EXPORT_PACKAGE_REGISTRY)
-endif (POLICY CMP0090)
-
-# Disable warning about find_package(CUDA).
-# CUDA language support is lacking for clang as the CUDA compiler
-# until at least cmake version 3.18.  Even then, there seems to be
-# issues on Windows+Ninja in passing build flags.  Continue using
-# the "old" way for now.
-if (POLICY CMP0146)
-  cmake_policy(SET CMP0146 OLD)
+# Preserve package-registry exports unless the caller explicitly disables them.
+if (NOT DEFINED CMAKE_EXPORT_PACKAGE_REGISTRY)
+  set (CMAKE_EXPORT_PACKAGE_REGISTRY ON)
 endif ()
 
 # Normalize DESTINATION paths
@@ -35,10 +19,56 @@ if (POLICY CMP0177)
 endif ()
 
 #==============================================================================
+# Version Info.
+#==============================================================================
+
+# MAJOR, MINOR, PATCH, PRERELEASE and BUILD come from Eigen/Version unless given
+# with -D; WORLD is frozen at 3, which cmake/Version.in hard-codes. The parsed
+# values are plain variables, not cache entries: a cached value would survive a
+# later edit of Eigen/Version in the same build tree.
+file(READ "${CMAKE_CURRENT_SOURCE_DIR}/Eigen/Version" _eigen_version_header)
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/Eigen/Version")
+if (NOT DEFINED EIGEN_MAJOR_VERSION)
+  string(REGEX MATCH "define[ \t]+EIGEN_MAJOR_VERSION[ \t]+([0-9]+)" _eigen_major_version_match "${_eigen_version_header}")
+  set(EIGEN_MAJOR_VERSION "${CMAKE_MATCH_1}")
+endif()
+if (NOT DEFINED EIGEN_MINOR_VERSION)
+  string(REGEX MATCH "define[ \t]+EIGEN_MINOR_VERSION[ \t]+([0-9]+)" _eigen_minor_version_match "${_eigen_version_header}")
+  set(EIGEN_MINOR_VERSION "${CMAKE_MATCH_1}")
+endif()
+if (NOT DEFINED EIGEN_PATCH_VERSION)
+  string(REGEX MATCH "define[ \t]+EIGEN_PATCH_VERSION[ \t]+([0-9]+)" _eigen_patch_version_match "${_eigen_version_header}")
+  set(EIGEN_PATCH_VERSION "${CMAKE_MATCH_1}")
+endif()
+if (NOT DEFINED EIGEN_PRERELEASE_VERSION)
+  string(REGEX MATCH "define[ \t]+EIGEN_PRERELEASE_VERSION[ \t]+\"([^\"]*)\"" _eigen_prerelease_version_match "${_eigen_version_header}")
+  set(EIGEN_PRERELEASE_VERSION "${CMAKE_MATCH_1}")
+endif()
+if (NOT DEFINED EIGEN_BUILD_VERSION)
+  string(REGEX MATCH "define[ \t]+EIGEN_BUILD_VERSION[ \t]+\"([^\"]*)\"" _eigen_build_version_match "${_eigen_version_header}")
+  set(EIGEN_BUILD_VERSION "${CMAKE_MATCH_1}")
+endif()
+
+# The EIGEN_VERSION_NUMBER must be of the form <major.minor.patch>.
+# The EIGEN_VERSION_STRING can contain the preprelease/build strings.
+set(EIGEN_VERSION_NUMBER "${EIGEN_MAJOR_VERSION}.${EIGEN_MINOR_VERSION}.${EIGEN_PATCH_VERSION}")
+set(EIGEN_VERSION_STRING "${EIGEN_VERSION_NUMBER}")
+if (NOT "x${EIGEN_PRERELEASE_VERSION}" STREQUAL "x")
+  set(EIGEN_VERSION_STRING "${EIGEN_VERSION_STRING}-${EIGEN_PRERELEASE_VERSION}")
+endif()
+if (NOT "x${EIGEN_BUILD_VERSION}" STREQUAL "x")
+  set(EIGEN_VERSION_STRING "${EIGEN_VERSION_STRING}+${EIGEN_BUILD_VERSION}")
+endif()
+
+#==============================================================================
 # CMake Project.
 #==============================================================================
 
-project(Eigen3)
+# The version is derived above so that project() can declare it here. Declaring
+# it is what populates PROJECT_VERSION, Eigen3_VERSION and, for a top-level
+# build, CMAKE_PROJECT_VERSION; all three are empty otherwise. See the
+# cmake_project_version test.
+project(Eigen3 VERSION ${EIGEN_VERSION_NUMBER})
 
 # Remove this block after bumping CMake to v3.21.0
 # PROJECT_IS_TOP_LEVEL is defined then by default
@@ -63,19 +93,16 @@ option(EIGEN_LEAVE_TEST_IN_ALL_TARGET "Leaves tests in the all target, needed by
 option(EIGEN_BUILD_BLAS "Toggles the building of the Eigen Blas library" ${PROJECT_IS_TOP_LEVEL})
 option(EIGEN_BUILD_LAPACK "Toggles the building of the included Eigen LAPACK library" ${PROJECT_IS_TOP_LEVEL})
 if (EIGEN_BUILD_BLAS OR EIGEN_BUILD_LAPACK)
-  # BLAS and LAPACK currently need a fortran compiler.
-  include(CMakeDetermineFortranCompiler)
-  if (NOT CMAKE_Fortran_COMPILER)
-    set(EIGEN_BUILD_BLAS OFF)
-    set(EIGEN_BUILD_LAPACK OFF)
-  else()
-    # Determine if we should build shared libraries for BLAS/LAPACK on this platform.
-    get_cmake_property(EIGEN_BUILD_SHARED_LIBS TARGET_SUPPORTS_SHARED_LIBS)
+  # Build shared libraries for BLAS/LAPACK where the platform supports them, unless the user
+  # chose otherwise.  The static libraries are always built.
+  get_cmake_property(eigen_platform_supports_shared TARGET_SUPPORTS_SHARED_LIBS)
+  if (NOT DEFINED EIGEN_BUILD_SHARED_LIBS)
+    set(EIGEN_BUILD_SHARED_LIBS ${eigen_platform_supports_shared})
+  elseif (NOT eigen_platform_supports_shared)
+    set(EIGEN_BUILD_SHARED_LIBS OFF)
   endif()
 endif()
 
-option(EIGEN_BUILD_BTL "Build benchmark suite" OFF)
-option(EIGEN_BUILD_SPBENCH "Build sparse benchmark suite" OFF)
 # Avoid building docs if included from another project.
 # Building documentation requires creating and running executables on the host
 # platform.  We shouldn't do this if cross-compiling.
@@ -84,62 +111,33 @@ if (PROJECT_IS_TOP_LEVEL AND NOT CMAKE_CROSSCOMPILING)
 endif()
 option(EIGEN_BUILD_DOC "Enable creation of Eigen documentation" ${EIGEN_BUILD_DOC_DEFAULT})
 
-option(EIGEN_BUILD_DEMOS "Toggles the building of the Eigen demos" ${PROJECT_IS_TOP_LEVEL})
-
 # Disable pkgconfig only for native Windows builds
 if(NOT WIN32 OR NOT CMAKE_HOST_SYSTEM_NAME MATCHES Windows)
   option(EIGEN_BUILD_PKGCONFIG "Build pkg-config .pc file for Eigen" ${PROJECT_IS_TOP_LEVEL})
 endif()
 option(EIGEN_BUILD_CMAKE_PACKAGE "Enables the creation of EigenConfig.cmake and related files" ${PROJECT_IS_TOP_LEVEL})
 
-if (EIGEN_BUILD_TESTING OR EIGEN_BUILD_BLAS OR EIGEN_BUILD_LAPACK OR EIGEN_BUILT_BTL OR EIGEN_BUILD_BTL OR EIGEN_BUILD_SPBENCH OR EIGEN_BUILD_DOC OR EIGEN_BUILD_DEMOS)
+# Set to OFF to place no Eigen file under CMAKE_INSTALL_PREFIX.  This covers the
+# headers, eigen3.pc, the CMake package files, and the BLAS/LAPACK libraries.
+option(EIGEN_INSTALL "Enable Eigen's install rules" ON)
+
+if (EIGEN_BUILD_TESTING OR EIGEN_BUILD_BLAS OR EIGEN_BUILD_LAPACK OR EIGEN_BUILD_DOC)
   set(EIGEN_IS_BUILDING_ ON)
 endif()
 
-#==============================================================================
-# Version Info.
-#==============================================================================
-
-# Automatically parse the version number from header files.
-file(READ "${PROJECT_SOURCE_DIR}/Eigen/src/Core/util/Macros.h" _eigen_version_header)
-string(REGEX MATCH "define[ \t]+EIGEN_WORLD_VERSION[ \t]+([0-9]+)" _eigen_world_version_match "${_eigen_version_header}")
-set(EIGEN_WORLD_VERSION "${CMAKE_MATCH_1}")
-string(REGEX MATCH "define[ \t]+EIGEN_MAJOR_VERSION[ \t]+([0-9]+)" _eigen_major_version_match "${_eigen_version_header}")
-set(EIGEN_MAJOR_VERSION "${CMAKE_MATCH_1}")
-string(REGEX MATCH "define[ \t]+EIGEN_MINOR_VERSION[ \t]+([0-9]+)" _eigen_minor_version_match "${_eigen_version_header}")
-set(EIGEN_MINOR_VERSION "${CMAKE_MATCH_1}")
-set(EIGEN_VERSION_NUMBER ${EIGEN_WORLD_VERSION}.${EIGEN_MAJOR_VERSION}.${EIGEN_MINOR_VERSION})
-
-# If we are in a git repo, extract a changeset.
-if(IS_DIRECTORY ${CMAKE_SOURCE_DIR}/.git)
-  # if the git program is absent or this will leave the EIGEN_GIT_REVNUM string empty,
-  # but won't stop CMake.
-  execute_process(COMMAND git ls-remote -q ${CMAKE_SOURCE_DIR} HEAD OUTPUT_VARIABLE EIGEN_GIT_OUTPUT)
-endif()
-
-# extract the git rev number from the git output...
-if(EIGEN_GIT_OUTPUT)
-string(REGEX MATCH "^([0-9;a-f]+).*" EIGEN_GIT_CHANGESET_MATCH "${EIGEN_GIT_OUTPUT}")
-set(EIGEN_GIT_REVNUM "${CMAKE_MATCH_1}")
-endif()
-#...and show it next to the version number
-if(EIGEN_GIT_REVNUM)
-  set(EIGEN_VERSION "${EIGEN_VERSION_NUMBER} (git rev ${EIGEN_GIT_REVNUM})")
-else()
-  set(EIGEN_VERSION "${EIGEN_VERSION_NUMBER}")
-endif()
+# Generate version file.
+configure_file("${CMAKE_CURRENT_SOURCE_DIR}/cmake/Version.in"
+               "${CMAKE_CURRENT_BINARY_DIR}/include/Eigen/Version")
 
 #==============================================================================
 # Install Path Configuration.
 #==============================================================================
 
-# Unconditionally allow install of targets to support nested dependency
-# installations.
-#
-# Note: projects that depend on Eigen should _probably_ exclude installing
-# Eigen by default (e.g. by using EXCLUDE_FROM_ALL when using
-# FetchContent_Declare or add_subdirectory) to avoid overwriting a previous
-# installation.
+# Install rules are enabled by default even for non-top-level builds, so that a
+# project embedding Eigen can ship it as part of its own package.  Projects that
+# do not want that should set EIGEN_INSTALL to OFF, or exclude Eigen from the
+# default install target with EXCLUDE_FROM_ALL on FetchContent_Declare or
+# add_subdirectory.
 
 include(GNUInstallDirs)
 # Backward compatibility support for EIGEN_INCLUDE_INSTALL_DIR
@@ -176,11 +174,6 @@ endforeach()
 # Eigen Library.
 #==============================================================================
 
-set ( EIGEN_VERSION_STRING ${EIGEN_VERSION_NUMBER} )
-set ( EIGEN_VERSION_MAJOR  ${EIGEN_WORLD_VERSION} )
-set ( EIGEN_VERSION_MINOR  ${EIGEN_MAJOR_VERSION} )
-set ( EIGEN_VERSION_PATCH  ${EIGEN_MINOR_VERSION} )
-
 # Alias Eigen_*_DIR to Eigen3_*_DIR:
 set(Eigen_SOURCE_DIR ${Eigen3_SOURCE_DIR})
 set(Eigen_BINARY_DIR ${Eigen3_BINARY_DIR})
@@ -193,6 +186,9 @@ target_include_directories (eigen INTERFACE
   $<INSTALL_INTERFACE:${INCLUDE_INSTALL_DIR}>
 )
 
+# Eigen requires at least C++14
+target_compile_features (eigen INTERFACE cxx_std_14)
+
 # Export as title case Eigen
 set_target_properties (eigen PROPERTIES EXPORT_NAME Eigen)
 
@@ -200,20 +196,31 @@ set_target_properties (eigen PROPERTIES EXPORT_NAME Eigen)
 # Install Rule Configuration.
 #==============================================================================
 
-install(FILES
-  signature_of_eigen3_matrix_library
-  DESTINATION ${INCLUDE_INSTALL_DIR} COMPONENT Devel
-  )
+if(EIGEN_INSTALL)
+  install(FILES
+    signature_of_eigen3_matrix_library
+    DESTINATION ${INCLUDE_INSTALL_DIR} COMPONENT Devel
+    )
 
-if(EIGEN_BUILD_PKGCONFIG)
-    configure_file(eigen3.pc.in eigen3.pc @ONLY)
-    install(FILES ${CMAKE_CURRENT_BINARY_DIR}/eigen3.pc
-        DESTINATION ${PKGCONFIG_INSTALL_DIR})
+  if(EIGEN_BUILD_PKGCONFIG)
+      # Walk back from the .pc file's location to the install prefix so
+      # eigen3.pc resolves ${prefix} at lookup time via ${pcfiledir} and
+      # honors install-time --prefix overrides.
+      file(RELATIVE_PATH PKGCONFIG_RELATIVE_PATH_TO_PREFIX
+          "${CMAKE_INSTALL_PREFIX}/${PKGCONFIG_INSTALL_DIR}"
+          "${CMAKE_INSTALL_PREFIX}")
+      configure_file(eigen3.pc.in eigen3.pc @ONLY)
+      install(FILES ${CMAKE_CURRENT_BINARY_DIR}/eigen3.pc
+          DESTINATION ${PKGCONFIG_INSTALL_DIR} COMPONENT Devel)
+  endif()
+
+  install(DIRECTORY Eigen DESTINATION ${INCLUDE_INSTALL_DIR} COMPONENT Devel)
+  # Replace the "Version" header file with the generated one.
+  install(FILES ${CMAKE_CURRENT_BINARY_DIR}/include/Eigen/Version
+      DESTINATION ${INCLUDE_INSTALL_DIR}/Eigen/ COMPONENT Devel)
+
+  install(TARGETS eigen EXPORT Eigen3Targets COMPONENT Devel)
 endif()
-
-install(DIRECTORY Eigen DESTINATION ${INCLUDE_INSTALL_DIR} COMPONENT Devel)
-
-install(TARGETS eigen EXPORT Eigen3Targets)
 
 if(EIGEN_BUILD_CMAKE_PACKAGE)
   include (CMakePackageConfigHelpers)
@@ -225,25 +232,10 @@ if(EIGEN_BUILD_CMAKE_PACKAGE)
     NO_CHECK_REQUIRED_COMPONENTS_MACRO # Eigen does not provide components
   )
 
-  # NOTE Remove the first code path once the minimum required CMake version is
-  # bumped to 3.14 or above.
-  if (CMAKE_VERSION VERSION_LESS 3.14)
-    # Remove CMAKE_SIZEOF_VOID_P from Eigen3ConfigVersion.cmake since Eigen does
-    # not depend on architecture specific settings or libraries. More
-    # specifically, an Eigen3Config.cmake generated from a 64 bit target can be
-    # used for 32 bit targets as well (and vice versa).
-    set (_Eigen3_CMAKE_SIZEOF_VOID_P ${CMAKE_SIZEOF_VOID_P})
-    unset (CMAKE_SIZEOF_VOID_P)
-    write_basic_package_version_file (Eigen3ConfigVersion.cmake
-                                      VERSION ${EIGEN_VERSION_NUMBER}
-                                      COMPATIBILITY SameMajorVersion)
-    set (CMAKE_SIZEOF_VOID_P ${_Eigen3_CMAKE_SIZEOF_VOID_P})
-  else (CMAKE_VERSION VERSION_LESS 3.14)
-    write_basic_package_version_file (Eigen3ConfigVersion.cmake
-                                      VERSION ${EIGEN_VERSION_NUMBER}
-                                      COMPATIBILITY SameMajorVersion
-                                      ARCH_INDEPENDENT)
-  endif (CMAKE_VERSION VERSION_LESS 3.14)
+  set(CVF_VERSION "${EIGEN_VERSION_NUMBER}")
+  configure_file("${CMAKE_CURRENT_SOURCE_DIR}/cmake/Eigen3ConfigVersion.cmake.in"
+                 "Eigen3ConfigVersion.cmake"
+                 @ONLY)
 
   # The Eigen target will be located in the Eigen3 namespace. Other CMake
   # targets can refer to it using Eigen3::Eigen.
@@ -252,11 +244,13 @@ if(EIGEN_BUILD_CMAKE_PACKAGE)
   # CMake even if it has not been installed to a standard directory.
   export (PACKAGE Eigen3)
 
-  install (EXPORT Eigen3Targets NAMESPACE Eigen3:: DESTINATION ${CMAKEPACKAGE_INSTALL_DIR})
+  if(EIGEN_INSTALL)
+    install (EXPORT Eigen3Targets NAMESPACE Eigen3:: DESTINATION ${CMAKEPACKAGE_INSTALL_DIR} COMPONENT Devel)
 
-  install (FILES ${CMAKE_CURRENT_BINARY_DIR}/Eigen3Config.cmake
-                ${CMAKE_CURRENT_BINARY_DIR}/Eigen3ConfigVersion.cmake
-          DESTINATION ${CMAKEPACKAGE_INSTALL_DIR})
+    install (FILES ${CMAKE_CURRENT_BINARY_DIR}/Eigen3Config.cmake
+                  ${CMAKE_CURRENT_BINARY_DIR}/Eigen3ConfigVersion.cmake
+            DESTINATION ${CMAKEPACKAGE_INSTALL_DIR} COMPONENT Devel)
+  endif()
 
   # Add uninstall target
   if(NOT TARGET uninstall AND PROJECT_IS_TOP_LEVEL)
@@ -295,17 +289,29 @@ if (EIGEN_IS_BUILDING_)
   set(CMAKE_INCLUDE_CURRENT_DIR OFF)
 
   find_package(StandardMathLibrary)
+  find_package(AOCL QUIET)
   set(EIGEN_STANDARD_LIBRARIES_TO_LINK_TO "")
-  if(NOT STANDARD_MATH_LIBRARY_FOUND)
-    message(FATAL_ERROR
-      "Can't link to the standard math library. Please report to the Eigen developers, telling them about your platform.")
-  else()
-    if(EIGEN_STANDARD_LIBRARIES_TO_LINK_TO)
-      set(EIGEN_STANDARD_LIBRARIES_TO_LINK_TO "${EIGEN_STANDARD_LIBRARIES_TO_LINK_TO} ${STANDARD_MATH_LIBRARY}")
-    else()
-      set(EIGEN_STANDARD_LIBRARIES_TO_LINK_TO "${STANDARD_MATH_LIBRARY}")
+  if(AOCL_FOUND)
+    list(APPEND EIGEN_STANDARD_LIBRARIES_TO_LINK_TO ${AOCL_LIBRARIES})
+    if(AOCL_INCLUDE_DIRS)
+      include_directories(${AOCL_INCLUDE_DIRS})
     endif()
   endif()
+
+  if(NOT STANDARD_MATH_LIBRARY_FOUND)
+  message(FATAL_ERROR
+    "Can't link to the standard math library. Please report to the Eigen developers, telling them about your platform.")
+  else()
+  if(EIGEN_STANDARD_LIBRARIES_TO_LINK_TO)
+    set(EIGEN_STANDARD_LIBRARIES_TO_LINK_TO "${EIGEN_STANDARD_LIBRARIES_TO_LINK_TO} ${STANDARD_MATH_LIBRARY}")
+  else()
+    set(EIGEN_STANDARD_LIBRARIES_TO_LINK_TO "${STANDARD_MATH_LIBRARY}")
+  endif()
+  # Clean up any leading/trailing whitespace in the variable to avoid CMP0004 errors
+  string(STRIP "${EIGEN_STANDARD_LIBRARIES_TO_LINK_TO}" EIGEN_STANDARD_LIBRARIES_TO_LINK_TO)
+ endif()
+
+
   if(EIGEN_STANDARD_LIBRARIES_TO_LINK_TO)
     message(STATUS "Standard libraries to link to explicitly: ${EIGEN_STANDARD_LIBRARIES_TO_LINK_TO}")
   else()
@@ -382,13 +388,21 @@ if (EIGEN_BUILD_TESTING)
     ei_add_cxx_compiler_flag("-Wshorten-64-to-32")
     ei_add_cxx_compiler_flag("-Wlogical-op")
     ei_add_cxx_compiler_flag("-Wenum-conversion")
-    ei_add_cxx_compiler_flag("-Wc++11-extensions")
+    # nvc++ accepts but does not implement these, and sccache 0.18 splits -Werror=<name> into a bare
+    # -Werror for it, which turns every nvc++ warning into an error.
+    if(NOT CMAKE_CXX_COMPILER_ID STREQUAL "NVHPC")
+      ei_add_cxx_compiler_flag("-Werror=deprecated-anon-enum-enum-conversion")
+      ei_add_cxx_compiler_flag("-Werror=deprecated-enum-enum-conversion")
+    endif()
     ei_add_cxx_compiler_flag("-Wdouble-promotion")
     # ei_add_cxx_compiler_flag("-Wconversion")
     ei_add_cxx_compiler_flag("-Wshadow")
     ei_add_cxx_compiler_flag("-Wno-psabi")
     ei_add_cxx_compiler_flag("-Wno-variadic-macros")
     ei_add_cxx_compiler_flag("-Wno-long-long")
+    if (CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+      ei_add_cxx_compiler_flag("-Wno-pass-failed")        # disable clang's warning for unrolling when the loop count is dynamic.
+    endif()
     ei_add_cxx_compiler_flag("-fno-common")
     ei_add_cxx_compiler_flag("-fstrict-aliasing")
     ei_add_cxx_compiler_flag("-wd981")                    # disable ICC's "operands are evaluated in unspecified order" remark
@@ -397,6 +411,19 @@ if (EIGEN_BUILD_TESTING)
     # Clang emits warnings about unused flag.
     if (NOT CMAKE_CXX_COMPILER_ID MATCHES "Clang")
       ei_add_cxx_compiler_flag("-fno-check-new")
+    endif()
+
+    # GCC 12+ emits false-positive -Warray-bounds, -Wmaybe-uninitialized,
+    # -Wstringop-overread, and -Wnonnull warnings at -O2/-O3 in heavily
+    # templated code with mixed static/dynamic sizes.  These are well-known
+    # compiler bugs (see GCC PR 109394, 106247, 105329, 98610, among others).
+    if (CMAKE_COMPILER_IS_GNUCXX)
+      ei_add_cxx_compiler_flag("-Wno-array-bounds")
+      ei_add_cxx_compiler_flag("-Wno-maybe-uninitialized")
+      if (CMAKE_CXX_COMPILER_VERSION VERSION_GREATER_EQUAL 12)
+        ei_add_cxx_compiler_flag("-Wno-stringop-overread")
+      endif()
+      ei_add_cxx_compiler_flag("-Wno-nonnull")
     endif()
 
 
@@ -470,6 +497,16 @@ if (EIGEN_BUILD_TESTING)
     option(EIGEN_TEST_AVX512FP16 "Enable/Disable AVX512-FP16 in tests/examples" OFF)
     if(EIGEN_TEST_AVX512FP16)
       set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -mavx512f -mfma -mavx512vl -mavx512fp16")
+      # GCC before 14.4, and 15.1-15.2, if-convert a _Float16 store of c ? x : 0 into vmovsh with zero-masking on a
+      # memory destination, which the ISA does not have. A recent assembler rejects it ("unsupported masking for
+      # `vmovsh'"); an older one encodes it, and the store raises #UD on AVX512-FP16 hardware. Evaluating arg() or a
+      # typed comparison of a half expression into a temporary, as isApprox does, reaches it at -O2, and at -O3 too
+      # with -mavx512vl. GCC 12.1 is the first with -mavx512fp16.
+      if(CMAKE_COMPILER_IS_GNUCXX AND
+         (CMAKE_CXX_COMPILER_VERSION VERSION_LESS 14.4 OR
+          (CMAKE_CXX_COMPILER_VERSION VERSION_GREATER_EQUAL 15.1 AND CMAKE_CXX_COMPILER_VERSION VERSION_LESS 15.3)))
+        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fno-if-conversion")
+      endif()
     message(STATUS "Enabling AVX512-FP16 in tests/examples")
     endif()
 
@@ -520,16 +557,40 @@ if (EIGEN_BUILD_TESTING)
       message(STATUS "Enabling NEON in tests/examples")
     endif()
 
-    option(EIGEN_TEST_Z13 "Enable/Disable S390X(zEC13) ZVECTOR in tests/examples" OFF)
-    if(EIGEN_TEST_Z13)
-      set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -march=z13 -mzvector")
-      message(STATUS "Enabling S390X(zEC13) ZVECTOR in tests/examples")
+    # SME selects itself whenever the toolchain targets SME2 in scalable mode, so
+    # this option only forces the issue: it turns a toolchain that cannot provide
+    # the backend from a silent NEON fallback into a build error, which is what
+    # the SME test targets want.
+    option(EIGEN_TEST_SME "Require the SME backend in tests/examples" OFF)
+    if(EIGEN_TEST_SME)
+      set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DEIGEN_ARM64_USE_SME")
+      message(STATUS "Requiring SME in tests/examples")
+    endif()
+
+    # The SVE backend needs a compile-time vector length: EIGEN_ARM64_SVE_VL is taken from
+    # __ARM_FEATURE_SVE_BITS, which only -msve-vector-bits sets. An SVE-capable -march is the
+    # caller's responsibility, as it is for SME.
+    option(EIGEN_TEST_SVE "Enable/Disable SVE in tests/examples" OFF)
+    set(EIGEN_TEST_SVE_VL "128" CACHE STRING "SVE vector length in bits used when EIGEN_TEST_SVE is ON")
+    if(EIGEN_TEST_SVE)
+      set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DEIGEN_ARM64_USE_SVE -msve-vector-bits=${EIGEN_TEST_SVE_VL}")
+      # GCC can miscompile fixed-length SVE constructors with at least eight elements and a constant prefix in
+      # their even or odd half. Keep auto-vectorization on NEON; explicit Eigen packets retain their SVE width.
+      if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND CMAKE_CXX_COMPILER_VERSION VERSION_GREATER_EQUAL 10
+         AND EIGEN_TEST_SVE_VL GREATER_EQUAL 256)
+        if(CMAKE_CXX_COMPILER_VERSION VERSION_LESS 15)
+          set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} --param=aarch64-autovec-preference=1")
+        else()
+          set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} --param=aarch64-autovec-preference=asimd-only")
+        endif()
+      endif()
+      message(STATUS "Enabling SVE in tests/examples at vector length ${EIGEN_TEST_SVE_VL}")
     endif()
 
     option(EIGEN_TEST_Z14 "Enable/Disable S390X(zEC14) ZVECTOR in tests/examples" OFF)
     if(EIGEN_TEST_Z14)
       set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -march=z14 -mzvector")
-      message(STATUS "Enabling S390X(zEC13) ZVECTOR in tests/examples")
+      message(STATUS "Enabling S390X(z14) ZVECTOR in tests/examples")
     endif()
 
     check_cxx_compiler_flag("-fopenmp" COMPILER_SUPPORT_OPENMP)
@@ -549,16 +610,16 @@ if (EIGEN_BUILD_TESTING)
     #         throw exceptions - in particular in the unit tests we are throwing extra many
     #         exceptions to cover indexing errors.
     # C4505 - unreferenced local function has been removed (impossible to deactivate selectively)
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /EHsc /wd4127 /wd4505 /wd4714")
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -EHsc -wd4127 -wd4505 -wd4714")
 
-    # replace all /Wx by /W4
-    string(REGEX REPLACE "/W[0-9]" "/W4" CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}")
+    # replace all /Wx or -Wx by -W4
+    string(REGEX REPLACE "[/-]W[0-9]" "-W4" CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}")
 
-    check_cxx_compiler_flag("/openmp" COMPILER_SUPPORT_OPENMP)
+    check_cxx_compiler_flag("-openmp" COMPILER_SUPPORT_OPENMP)
     if(COMPILER_SUPPORT_OPENMP)
       option(EIGEN_TEST_OPENMP "Enable/Disable OpenMP in tests/examples" OFF)
       if(EIGEN_TEST_OPENMP)
-        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /openmp")
+        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -openmp")
         message(STATUS "Enabling OpenMP in tests/examples")
       endif()
     endif()
@@ -567,28 +628,28 @@ if (EIGEN_BUILD_TESTING)
     if(EIGEN_TEST_SSE2)
       if(NOT CMAKE_CL_64)
         # arch is not supported on 64 bit systems, SSE is enabled automatically.
-        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /arch:SSE2")
+        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -arch:SSE2")
       endif()
       message(STATUS "Enabling SSE2 in tests/examples")
     endif()
 
     option(EIGEN_TEST_AVX "Enable/Disable AVX in tests/examples" OFF)
     if(EIGEN_TEST_AVX)
-      set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /arch:AVX")
+      set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -arch:AVX")
       message(STATUS "Enabling AVX in tests/examples")
     endif()
 
     option(EIGEN_TEST_FMA "Enable/Disable FMA/AVX2 in tests/examples" OFF)
     option(EIGEN_TEST_AVX2 "Enable/Disable FMA/AVX2 in tests/examples" OFF)
     if((EIGEN_TEST_FMA AND NOT EIGEN_TEST_NEON) OR EIGEN_TEST_AVX2)
-      set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /arch:AVX2")
+      set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -arch:AVX2")
       message(STATUS "Enabling FMA/AVX2 in tests/examples")
     endif()
 
     option(EIGEN_TEST_AVX512 "Enable/Disable AVX512 in tests/examples" OFF)
     option(EIGEN_TEST_AVX512DQ "Enable/Disable AVX512DQ in tests/examples" OFF)
     if(EIGEN_TEST_AVX512 OR EIGEN_TEST_AVX512DQ)
-      set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /arch:AVX512")
+      set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -arch:AVX512")
       message(STATUS "Enabling AVX512 in tests/examples")
     endif()
 
@@ -635,16 +696,32 @@ if (EIGEN_BUILD_TESTING)
   endif()
 
   set(EIGEN_CUDA_CXX_FLAGS "" CACHE STRING "Additional flags to pass to the cuda compiler.")
-  set(EIGEN_CUDA_COMPUTE_ARCH 30 CACHE STRING "The CUDA compute architecture(s) to target when compiling CUDA code")
+  set(EIGEN_CUDA_COMPUTE_ARCH "" CACHE STRING "The CUDA compute architecture(s) to target when compiling CUDA code, as a ;-separated list of sm_XX numbers (e.g. 75;90). Empty honors CMAKE_CUDA_ARCHITECTURES or CUDAARCHS; otherwise selects sm_60, or sm_75 with CUDA 13 and later. `native` and `all-major` need CMake 3.24.")
+
+  # The GPU test options and the language they enable. enable_language() reaches the calling directory and below,
+  # and test/ and contrib/test/ are siblings, so this has to happen here rather than in either of them.
+  option(EIGEN_TEST_CUDA "Enable CUDA support in unit tests" OFF)
+  option(EIGEN_TEST_CUDA_CLANG "Use clang instead of nvcc to compile the CUDA tests" OFF)
+  option(EIGEN_TEST_CUDA_NVC "Use nvc++ (NVHPC) instead of nvcc to compile the CUDA tests" OFF)
+  option(EIGEN_TEST_HIP "Add HIP support." OFF)
+  if(EIGEN_TEST_CUDA_CLANG AND NOT CMAKE_CXX_COMPILER MATCHES "clang")
+    message(WARNING "EIGEN_TEST_CUDA_CLANG is set, but CMAKE_CXX_COMPILER does not appear to be clang.")
+  endif()
+  if(EIGEN_TEST_CUDA_NVC AND NOT CMAKE_CXX_COMPILER_ID MATCHES "NVHPC")
+    message(WARNING "EIGEN_TEST_CUDA_NVC is set, but CMAKE_CXX_COMPILER does not appear to be nvc++.")
+  endif()
+  include(EigenGpuTesting)
+  ei_gpu_testing_enable()
 
   option(EIGEN_TEST_SYCL "Add Sycl support." OFF)
+  if(EIGEN_SYCL_ComputeCpp)
+    message(FATAL_ERROR "ComputeCpp support has been removed. Use DPC++ (the default) or triSYCL instead.")
+  endif()
   if(EIGEN_TEST_SYCL)
     option(EIGEN_SYCL_DPCPP "Use the DPCPP Sycl implementation (DPCPP is default SYCL-Compiler)." ON)
     option(EIGEN_SYCL_TRISYCL "Use the triSYCL Sycl implementation." OFF)
-    option(EIGEN_SYCL_ComputeCpp "Use the ComputeCPP Sycl implementation." OFF)
 
     # Building options
-    # https://developer.codeplay.com/products/computecpp/ce/2.11.0/guides/eigen-overview/options-for-building-eigen-sycl
     option(EIGEN_SYCL_USE_DEFAULT_SELECTOR "Use sycl default selector to select the preferred device." OFF)
     option(EIGEN_SYCL_NO_LOCAL_MEM "Build for devices without dedicated shared memory." OFF)
     option(EIGEN_SYCL_LOCAL_MEM "Allow the use of local memory (enabled by default)." ON)
@@ -665,17 +742,6 @@ if (EIGEN_BUILD_TESTING)
     if(EIGEN_SYCL_TRISYCL)
       message(STATUS "Using triSYCL")
       include(FindTriSYCL)
-    elseif(EIGEN_SYCL_ComputeCpp)
-      message(STATUS "Using ComputeCPP SYCL")
-      include(FindComputeCpp)
-      set(COMPUTECPP_DRIVER_DEFAULT_VALUE OFF)
-      if (NOT MSVC)
-        set(COMPUTECPP_DRIVER_DEFAULT_VALUE ON)
-      endif()
-      option(COMPUTECPP_USE_COMPILER_DRIVER
-              "Use ComputeCpp driver instead of a 2 steps compilation"
-              ${COMPUTECPP_DRIVER_DEFAULT_VALUE}
-              )
     else() #Default SYCL compiler is DPCPP (EIGEN_SYCL_DPCPP)
       set(DPCPP_SYCL_TARGET "spir64" CACHE STRING "Default target for Intel CPU/GPU")
       message(STATUS "Using DPCPP")
@@ -701,6 +767,10 @@ if (EIGEN_BUILD_TESTING)
     add_subdirectory(failtest EXCLUDE_FROM_ALL)
   endif()
 
+  # Build-system integration tests. These build nothing in this project, so
+  # they need no place in either target above.
+  add_subdirectory(test/buildsystem)
+
   ei_testing_print_summary()
 
   if (EIGEN_SPLIT_TESTSUITE)
@@ -711,6 +781,7 @@ endif(EIGEN_BUILD_TESTING)
 #==============================================================================
 # Other Build Configurations.
 #==============================================================================
+add_subdirectory(contrib)
 add_subdirectory(unsupported)
 
 if(EIGEN_BUILD_BLAS)
@@ -725,21 +796,8 @@ if(EIGEN_BUILD_DOC)
   add_subdirectory(doc EXCLUDE_FROM_ALL)
 endif()
 
-# TODO: consider also replacing EIGEN_BUILD_BTL by a custom target "make btl"?
-if(EIGEN_BUILD_BTL)
-  add_subdirectory(bench/btl EXCLUDE_FROM_ALL)
-endif()
-
-if(NOT WIN32 AND EIGEN_BUILD_SPBENCH)
-  add_subdirectory(bench/spbench EXCLUDE_FROM_ALL)
-endif()
-
-if (EIGEN_BUILD_DEMOS)
-  add_subdirectory(demos EXCLUDE_FROM_ALL)
-endif()
-
 if (PROJECT_IS_TOP_LEVEL)
-  # must be after test and unsupported, for configuring buildtests.in
+  # must be after test and contrib, for configuring buildtests.in
   add_subdirectory(scripts EXCLUDE_FROM_ALL)
   configure_file(scripts/cdashtesting.cmake.in cdashtesting.cmake @ONLY)
 endif()
@@ -758,23 +816,29 @@ if(PROJECT_IS_TOP_LEVEL)
   message(STATUS "------------+--------------------------------------------------------------")
   message(STATUS "Target      |   Description")
   message(STATUS "------------+--------------------------------------------------------------")
-  message(STATUS "install     | Install Eigen. Headers will be installed to:")
-  message(STATUS "            |     <CMAKE_INSTALL_PREFIX>/<INCLUDE_INSTALL_DIR>")
-  message(STATUS "            |   Using the following values:")
-  message(STATUS "            |     CMAKE_INSTALL_PREFIX: ${CMAKE_INSTALL_PREFIX}")
-  message(STATUS "            |     INCLUDE_INSTALL_DIR:  ${INCLUDE_INSTALL_DIR}")
-  message(STATUS "            |   Change the install location of Eigen headers using:")
-  message(STATUS "            |     cmake . -DCMAKE_INSTALL_PREFIX=yourprefix")
-  message(STATUS "            |   Or:")
-  message(STATUS "            |     cmake . -DINCLUDE_INSTALL_DIR=yourdir")
-  message(STATUS "uninstall   | Remove files installed by the install target")
+  if (EIGEN_INSTALL)
+    message(STATUS "install     | Install Eigen. Headers will be installed to:")
+    message(STATUS "            |     <CMAKE_INSTALL_PREFIX>/<INCLUDE_INSTALL_DIR>")
+    message(STATUS "            |   Using the following values:")
+    message(STATUS "            |     CMAKE_INSTALL_PREFIX: ${CMAKE_INSTALL_PREFIX}")
+    message(STATUS "            |     INCLUDE_INSTALL_DIR:  ${INCLUDE_INSTALL_DIR}")
+    message(STATUS "            |   Change the install location of Eigen headers using:")
+    message(STATUS "            |     cmake . -DCMAKE_INSTALL_PREFIX=yourprefix")
+    message(STATUS "            |   Or:")
+    message(STATUS "            |     cmake . -DINCLUDE_INSTALL_DIR=yourdir")
+  endif()
+  if (TARGET uninstall)
+    message(STATUS "uninstall   | Remove files installed by the install target")
+  endif()
   if (EIGEN_BUILD_DOC)
     message(STATUS "doc         | Generate the API documentation, requires Doxygen & LaTeX")
-    message(STATUS "install-doc | Install the API documentation")
+    if (EIGEN_INSTALL)
+      message(STATUS "install-doc | Install the API documentation")
+    endif()
   endif()
   if(EIGEN_BUILD_TESTING)
     message(STATUS "check       | Build and run the unit-tests. Read this page:")
-    message(STATUS "            |   http://eigen.tuxfamily.org/index.php?title=Tests")
+    message(STATUS "            |   CONTRIBUTING.md")
   endif()
   if (EIGEN_BUILD_BLAS)
     message(STATUS "blas        | Build BLAS library (not the same thing as Eigen)")
@@ -783,9 +847,12 @@ if(PROJECT_IS_TOP_LEVEL)
     message(STATUS "lapack      | Build LAPACK subset library (not the same thing as Eigen)")
   endif()
   message(STATUS "------------+--------------------------------------------------------------")
+  if (NOT EIGEN_INSTALL)
+    message(STATUS "EIGEN_INSTALL is OFF, so this build generates no install target.")
+  endif()
   message(STATUS "")
 endif()
 
 message(STATUS "")
-message(STATUS "Configured Eigen ${EIGEN_VERSION_NUMBER}")
+message(STATUS "Configured Eigen ${EIGEN_VERSION_STRING}")
 message(STATUS "")

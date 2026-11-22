@@ -20,7 +20,7 @@ especially if you got wrong results in statements where the destination appears 
 Indeed, prior to C++17,  C++ does not have quite good enough support for explicit data alignment.
 In that case your program hits an assertion failure (that is, a "controlled crash") with a message that tells you to consult this page:
 \code
-http://eigen.tuxfamily.org/dox/group__TopicUnalignedArrayAssert.html
+http://eigen.tuxfamily.org/dox-devel/group__TopicUnalignedArrayAssert.html
 \endcode
 Have a look at \link TopicUnalignedArrayAssert it \endlink and see for yourself if that's something that you can cope with.
 It contains detailed information about how to deal with each known cause for that issue.
@@ -28,7 +28,7 @@ It contains detailed information about how to deal with each known cause for tha
 Now what if you don't care about vectorization and so don't want to be annoyed with these alignment issues? Then read \link getrid how to get rid of them \endlink.
 
 
-\section TopicPitfalls_auto_keyword C++11 and the auto keyword
+\section TopicPitfalls_auto_keyword The auto keyword
 
 In short: do not use the auto keywords with %Eigen's expressions, unless you are 100% sure about what you are doing. In particular, do not use the auto keyword as a replacement for a \c Matrix<> type. Here is an example:
 
@@ -99,51 +99,71 @@ Vector3f A;
 A << 1, 2, 3;
 Vector3f B = ((1 < 0) ? (A.reverse()) : A);
 \endcode
-This example will return <code>B = 3, 2, 1</code>. Do you see why?
-The reason is that in c++ the type of the \c ELSE statement is inferred from the type of the \c THEN expression such that both match.
-Since \c THEN is a <code>Reverse<Vector3f></code>, the \c ELSE statement A is converted to a <code>Reverse<Vector3f></code>, and the compiler thus generates:
+This example will return <code>B = 1, 2, 3</code>. Do you see why?
+The reason is that in c++ both statements of the ternary operator must be converted to a common type.
+The constructor of <code>Reverse<Vector3f></code> from a \c Vector3f is \c explicit, so the \c ELSE statement A cannot be converted to a <code>Reverse<Vector3f></code>; the common type is \c Vector3f instead, and the compiler thus generates:
 \code
-Vector3f B = ((1 < 0) ? (A.reverse()) : Reverse<Vector3f>(A));
+Vector3f B = ((1 < 0) ? Vector3f(A.reverse()) : Vector3f(A));
 \endcode
-In this very particular case, a workaround would be to call A.reverse().eval() for the \c THEN statement, but the safest and fastest is really to avoid this ternary operator with %Eigen's expressions and use a if/else construct.
+The value is the expected one here, but the selected statement is silently evaluated into a temporary plain object, and two different %Eigen expression types often have no common type at all, in which case the ternary operator does not even compile. The safest and fastest is really to avoid this ternary operator with %Eigen's expressions and use a if/else construct.
 
 
 \section TopicPitfalls_pass_by_value Pass-by-value
 
 If you don't know why passing-by-value is wrong with %Eigen, read this \link TopicPassingByValue page \endlink first.
 
-While you may be extremely careful and use care to make sure that all of your code that explicitly uses %Eigen types is pass-by-reference you have to watch out for templates which define the argument types at compile time.
+\note If you are compiling in C++17 mode with a sufficiently recent compiler (GCC >= 7, Clang >= 5, MSVC >= 19.12),
+the alignment issues described below are handled automatically by the compiler via over-aligned operator new,
+and pass-by-value is safe.
 
-If a template has a function that takes arguments pass-by-value, and the relevant template parameter ends up being an %Eigen type, then you will of course have the same alignment problems that you would in an explicitly defined function passing %Eigen types by reference.
+For pre-C++17 code, you have to watch out for templates which define argument types at compile time.
+If a template has a function that takes arguments pass-by-value, and the relevant template parameter ends up being an %Eigen type, then you will have the same alignment problems that you would in an explicitly defined function passing %Eigen types by value.
 
 Using %Eigen types with other third party libraries or even the STL can present the same problem.
-<code>boost::bind</code> for example uses pass-by-value to store arguments in the returned functor.
-This will of course be a problem.
+\c std::bind for example uses pass-by-value to store arguments in the returned functor.
 
 There are at least two ways around this:
-  - If the value you are passing is guaranteed to be around for the life of the functor, you can use boost::ref() to wrap the value as you pass it to boost::bind. Generally this is not a solution for values on the stack as if the functor ever gets passed to a lower or independent scope, the object may be gone by the time it's attempted to be used.
-  - The other option is to make your functions take a reference counted pointer like boost::shared_ptr as the argument. This avoids needing to worry about managing the lifetime of the object being passed.
+  - If the value you are passing is guaranteed to be around for the life of the functor, you can use \c std::ref() to wrap the value as you pass it to \c std::bind. Generally this is not a solution for values on the stack as if the functor ever gets passed to a lower or independent scope, the object may be gone by the time it's attempted to be used.
+  - The other option is to make your functions take a reference counted pointer like \c std::shared_ptr as the argument. This avoids needing to worry about managing the lifetime of the object being passed.
 
 
 \section TopicPitfalls_matrix_bool Matrices with boolean coefficients
 
-The current behaviour of using \c Matrix with boolean coefficients is inconsistent and likely to change in future versions of Eigen, so please use it carefully!
+For \c bool coefficients, %Eigen interprets the arithmetic operators in the Boolean semiring: \c + is the
+logical OR and \c * is the logical AND. In particular, the product of two \c bool matrices is a Boolean
+matrix product: coefficient \c (i,j) of <tt>A * B</tt> tells whether row \c i of \c A and column \c j of
+\c B share a \c true entry. This holds for every matrix size and every product implementation.
 
-A simple example for such an inconsistency is 
-
+The Boolean semiring has no additive inverse, so subtraction (including \c -=) and unary minus are
+not supported for \c bool matrices or arrays. These operations produce a compile-time diagnostic.
+For integer arithmetic on 0/1 data, cast the operands to a signed integer type before the operation:
 \code
-template<int Size>
-void foo() {
-  Eigen::Matrix<bool, Size, Size> A, B, C;
-  A.setOnes();
-  B.setOnes();
-
-  C = A * B - A * B;
-  std::cout << C << "\n";
-}
+Matrix<bool, Dynamic, Dynamic> A(n, n), B(n, n);
+A.setOnes();
+B.setOnes();
+MatrixXi C = A.cast<int>() * B.cast<int>() - A.cast<int>() * B.cast<int>(); // zero
 \endcode
+For coefficient-wise Boolean negation use <tt>!A.array()</tt>; for coefficient-wise XOR use
+<tt>A.array() != B.array()</tt>.
 
-since calling \c foo<3>() prints the zero matrix while calling \c foo<10>() prints the identity matrix.
+\section TopicPitfalls_reproducibility Bitwise reproducibility of products
+
+%Eigen does not promise bitwise identical floating-point results across machines, builds, or runs. Matrix
+products, triangular solves, and the decompositions built on them split the summation into blocks sized to the
+CPU caches, and floating-point addition is not associative, so a different blocking can change the last bits of
+the result. The cache sizes are queried once, on the thread that runs the first such operation, and are kept for
+the life of the process. On CPUs that mix core types with different caches, such as Intel processors with
+P-cores and E-cores, the results of a program can therefore depend on which kind of core happened to run its
+first product. The number of threads and the instruction set enabled at compile time change the results in the
+same way.
+
+Where bitwise reproducibility matters, either:
+  - pin the process to one core type, for example with \c taskset on Linux or <tt>start /affinity</tt> on Windows,
+    or
+  - call \c Eigen::setCpuCacheSizes() with fixed values before the first product, so that the blocking no longer
+    depends on the core that is running.
+
+In both cases, also fix the number of threads and the build configuration.
 
 */
 }

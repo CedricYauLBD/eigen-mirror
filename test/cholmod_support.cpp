@@ -6,6 +6,7 @@
 // This Source Code Form is subject to the terms of the Mozilla
 // Public License v. 2.0. If a copy of the MPL was not distributed
 // with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
+// SPDX-License-Identifier: MPL-2.0
 
 #define EIGEN_NO_DEBUG_SMALL_PRODUCT_BLOCKS
 #include "sparse_solver.h"
@@ -76,6 +77,4 @@ EIGEN_DECLARE_TEST(cholmod_support) {
   CALL_SUBTEST_21((test_cholmod_T<std::complex<double>, ColMajor, int>()));
   CALL_SUBTEST_22((test_cholmod_T<std::complex<double>, ColMajor, long>()));
   // TODO complex row-major matrices do not work at the moment:
-  // CALL_SUBTEST_23( (test_cholmod_T<std::complex<double>, RowMajor, int >()) );
-  // CALL_SUBTEST_24( (test_cholmod_T<std::complex<double>, RowMajor, long>()) );
 }

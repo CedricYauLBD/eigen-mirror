@@ -7,6 +7,7 @@
 // This Source Code Form is subject to the terms of the Mozilla
 // Public License v. 2.0. If a copy of the MPL was not distributed
 // with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
+// SPDX-License-Identifier: MPL-2.0
 
 #define SCALAR double
 #define SCALAR_SUFFIX d
@@ -19,25 +20,12 @@
 #include "level2_real_impl.h"
 #include "level3_impl.h"
 
-extern "C" double EIGEN_BLAS_FUNC_NAME(sdot)(int* n, float* x, int* incx, float* y, int* incy) {
-  if (*n <= 0) return 0;
-
-  if (*incx == 1 && *incy == 1)
-    return (make_vector(x, *n).cast<double>().cwiseProduct(make_vector(y, *n).cast<double>())).sum();
-  else if (*incx > 0 && *incy > 0)
-    return (make_vector(x, *n, *incx).cast<double>().cwiseProduct(make_vector(y, *n, *incy).cast<double>())).sum();
-  else if (*incx < 0 && *incy > 0)
-    return (make_vector(x, *n, -*incx).reverse().cast<double>().cwiseProduct(make_vector(y, *n, *incy).cast<double>()))
-        .sum();
-  else if (*incx > 0 && *incy < 0)
-    return (make_vector(x, *n, *incx).cast<double>().cwiseProduct(make_vector(y, *n, -*incy).reverse().cast<double>()))
-        .sum();
-  else if (*incx < 0 && *incy < 0)
-    return (make_vector(x, *n, -*incx)
-                .reverse()
-                .cast<double>()
-                .cwiseProduct(make_vector(y, *n, -*incy).reverse().cast<double>()))
-        .sum();
-  else
-    return 0;
+// dsdot: the dot product of two float vectors, accumulated in double.
+extern "C" double EIGEN_BLAS_FUNC_NAME(sdot)(EIGEN_BLAS_INT* n_in, float* x, EIGEN_BLAS_INT* incx_in, float* y,
+                                             EIGEN_BLAS_INT* incy_in) {
+  const Eigen::Index n = *n_in;
+  if (n <= 0) return 0;
+  return apply_blas_vectors(n, x, *incx_in, y, *incy_in, [](auto vx, auto vy) {
+    return vx.template cast<double>().cwiseProduct(vy.template cast<double>()).sum();
+  });
 }

@@ -6,6 +6,7 @@
 // This Source Code Form is subject to the terms of the Mozilla
 // Public License v. 2.0. If a copy of the MPL was not distributed
 // with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
+// SPDX-License-Identifier: MPL-2.0
 
 #ifndef EIGEN_TYPE_CASTING_SSE_H
 #define EIGEN_TYPE_CASTING_SSE_H
@@ -22,6 +23,9 @@ template <>
 struct type_casting_traits<float, bool> : vectorized_type_casting_traits<float, bool> {};
 template <>
 struct type_casting_traits<bool, float> : vectorized_type_casting_traits<bool, float> {};
+
+template <>
+struct type_casting_traits<bool, int> : vectorized_type_casting_traits<bool, int> {};
 
 template <>
 struct type_casting_traits<float, int> : vectorized_type_casting_traits<float, int> {};
@@ -73,6 +77,19 @@ EIGEN_STRONG_INLINE Packet4f pcast<Packet16b, Packet4f>(const Packet16b& a) {
 #endif
   __m128 result = _mm_andnot_ps(_mm_castsi128_ps(abcd), cst_one);
   return result;
+}
+
+template <>
+EIGEN_STRONG_INLINE Packet4i pcast<Packet16b, Packet4i>(const Packet16b& a) {
+#ifdef EIGEN_VECTORIZE_SSE4_1
+  __m128i a_extended = _mm_cvtepi8_epi32(a);
+  __m128i abcd = _mm_cmpeq_epi32(a_extended, _mm_setzero_si128());
+#else
+  __m128i abcd_efhg_ijkl_mnop = _mm_cmpeq_epi8(a, _mm_setzero_si128());
+  __m128i aabb_ccdd_eeff_gghh = _mm_unpacklo_epi8(abcd_efhg_ijkl_mnop, abcd_efhg_ijkl_mnop);
+  __m128i abcd = _mm_unpacklo_epi8(aabb_ccdd_eeff_gghh, aabb_ccdd_eeff_gghh);
+#endif
+  return _mm_andnot_si128(abcd, _mm_set1_epi32(1));
 }
 
 template <>
@@ -172,56 +189,6 @@ template <>
 EIGEN_STRONG_INLINE Packet4i preinterpret<Packet4i, Packet4ui>(const Packet4ui& a) {
   return Packet4i(a);
 }
-
-// Disable the following code since it's broken on too many platforms / compilers.
-// #elif defined(EIGEN_VECTORIZE_SSE) && (!EIGEN_ARCH_x86_64) && (!EIGEN_COMP_MSVC)
-#if 0
-
-template <>
-struct type_casting_traits<Eigen::half, float> {
-  enum {
-    VectorizedCast = 1,
-    SrcCoeffRatio = 1,
-    TgtCoeffRatio = 1
-  };
-};
-
-template<> EIGEN_STRONG_INLINE Packet4f pcast<Packet4h, Packet4f>(const Packet4h& a) {
-  __int64_t a64 = _mm_cvtm64_si64(a.x);
-  Eigen::half h = raw_uint16_to_half(static_cast<unsigned short>(a64));
-  float f1 = static_cast<float>(h);
-  h = raw_uint16_to_half(static_cast<unsigned short>(a64 >> 16));
-  float f2 = static_cast<float>(h);
-  h = raw_uint16_to_half(static_cast<unsigned short>(a64 >> 32));
-  float f3 = static_cast<float>(h);
-  h = raw_uint16_to_half(static_cast<unsigned short>(a64 >> 48));
-  float f4 = static_cast<float>(h);
-  return _mm_set_ps(f4, f3, f2, f1);
-}
-
-template <>
-struct type_casting_traits<float, Eigen::half> {
-  enum {
-    VectorizedCast = 1,
-    SrcCoeffRatio = 1,
-    TgtCoeffRatio = 1
-  };
-};
-
-template<> EIGEN_STRONG_INLINE Packet4h pcast<Packet4f, Packet4h>(const Packet4f& a) {
-  EIGEN_ALIGN16 float aux[4];
-  pstore(aux, a);
-  Eigen::half h0(aux[0]);
-  Eigen::half h1(aux[1]);
-  Eigen::half h2(aux[2]);
-  Eigen::half h3(aux[3]);
-
-  Packet4h result;
-  result.x = _mm_set_pi16(h3.x, h2.x, h1.x, h0.x);
-  return result;
-}
-
-#endif
 
 }  // end namespace internal
 

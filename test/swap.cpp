@@ -6,17 +6,18 @@
 // This Source Code Form is subject to the terms of the Mozilla
 // Public License v. 2.0. If a copy of the MPL was not distributed
 // with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
+// SPDX-License-Identifier: MPL-2.0
 
 #include "main.h"
 
 template <typename T>
 struct other_matrix_type {
-  typedef int type;
+  using type = int;
 };
 
 template <typename Scalar_, int Rows_, int Cols_, int Options_, int MaxRows_, int MaxCols_>
 struct other_matrix_type<Matrix<Scalar_, Rows_, Cols_, Options_, MaxRows_, MaxCols_> > {
-  typedef Matrix<Scalar_, Rows_, Cols_, Options_ ^ RowMajor, MaxRows_, MaxCols_> type;
+  using type = Matrix<Scalar_, Rows_, Cols_, Options_ ^ RowMajor, MaxRows_, MaxCols_>;
 };
 
 template <typename MatrixType>
@@ -36,10 +37,10 @@ check_row_swap(MatrixType& /* unused */) {}
 
 template <typename MatrixType>
 void swap(const MatrixType& m) {
-  typedef typename other_matrix_type<MatrixType>::type OtherMatrixType;
-  typedef typename MatrixType::Scalar Scalar;
+  using OtherMatrixType = typename other_matrix_type<MatrixType>::type;
+  using Scalar = typename MatrixType::Scalar;
 
-  eigen_assert((!internal::is_same<MatrixType, OtherMatrixType>::value));
+  eigen_assert((!std::is_same<MatrixType, OtherMatrixType>::value));
   Index rows = m.rows();
   Index cols = m.cols();
 
@@ -119,5 +120,5 @@ EIGEN_DECLARE_TEST(swap) {
   CALL_SUBTEST_2(swap(Matrix4d()));      // fixed size, possible vectorization
   CALL_SUBTEST_3(swap(MatrixXd(s, s)));  // dyn size, no vectorization
   CALL_SUBTEST_4(swap(MatrixXf(s, s)));  // dyn size, possible vectorization
-  TEST_SET_BUT_UNUSED_VARIABLE(s)
+  TEST_SET_BUT_UNUSED_VARIABLE(s);
 }

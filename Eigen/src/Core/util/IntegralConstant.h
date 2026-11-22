@@ -6,6 +6,7 @@
 // This Source Code Form is subject to the terms of the Mozilla
 // Public License v. 2.0. If a copy of the MPL was not distributed
 // with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
+// SPDX-License-Identifier: MPL-2.0
 
 #ifndef EIGEN_INTEGRAL_CONSTANT_H
 #define EIGEN_INTEGRAL_CONSTANT_H
@@ -27,11 +28,11 @@ class VariableAndFixedInt;
  *
  * This class embeds a compile-time integer \c N.
  *
- * It is similar to c++11 std::integral_constant<int,N> but with some additional features
+ * It is similar to std::integral_constant<int,N> but with some additional features
  * such as:
  *  - implicit conversion to int
  *  - arithmetic and some bitwise operators: -, +, *, /, %, &, |
- *  - c++98/14 compatibility with fix<N> and fix<N>() syntax to define integral constants.
+ *  - fix<N> and fix<N>() syntax to define integral constants.
  *
  * It is strongly discouraged to directly deal with this class FixedInt. Instances are expected to
  * be created by the user using Eigen::fix<N> or Eigen::fix<N>().
@@ -61,9 +62,7 @@ class FixedInt {
   constexpr FixedInt(std::integral_constant<int, N>) {}
 
   constexpr FixedInt(VariableAndFixedInt<N> other) {
-#ifndef EIGEN_INTERNAL_DEBUGGING
     EIGEN_UNUSED_VARIABLE(other);
-#endif
     eigen_internal_assert(int(other) == N);
   }
 
@@ -110,6 +109,11 @@ class FixedInt {
   constexpr VariableAndFixedInt<N> operator()(int val) const { return VariableAndFixedInt<N>(val); }
 };
 
+#if EIGEN_COMP_CXXVER < 17
+template <int N>
+constexpr int FixedInt<N>::value;
+#endif
+
 /** \internal
  * \class VariableAndFixedInt
  *
@@ -144,8 +148,8 @@ template <int N>
 class VariableAndFixedInt {
  public:
   static const int value = N;
-  operator int() const { return m_value; }
-  VariableAndFixedInt(int val) { m_value = val; }
+  constexpr operator int() const { return m_value; }
+  constexpr VariableAndFixedInt(int val) : m_value(val) {}
 
  protected:
   int m_value;
@@ -172,7 +176,7 @@ struct get_fixed_value<variable_if_dynamic<T, N>, Default> {
 };
 
 template <typename T>
-EIGEN_DEVICE_FUNC Index get_runtime_value(const T &x) {
+EIGEN_DEVICE_FUNC constexpr Index get_runtime_value(const T &x) {
   return x;
 }
 
@@ -181,29 +185,29 @@ EIGEN_DEVICE_FUNC Index get_runtime_value(const T &x) {
 // By default, no cleanup:
 template <typename T, int DynamicKey = Dynamic, typename EnableIf = void>
 struct cleanup_index_type {
-  typedef T type;
+  using type = T;
 };
 
 // Convert any integral type (e.g., short, int, unsigned int, etc.) to Eigen::Index
 template <typename T, int DynamicKey>
-struct cleanup_index_type<T, DynamicKey, std::enable_if_t<internal::is_integral<T>::value>> {
-  typedef Index type;
+struct cleanup_index_type<T, DynamicKey, std::enable_if_t<std::is_integral<T>::value>> {
+  using type = Index;
 };
 
 // If VariableAndFixedInt does not match DynamicKey, then we turn it to a pure compile-time value:
 template <int N, int DynamicKey>
 struct cleanup_index_type<VariableAndFixedInt<N>, DynamicKey> {
-  typedef FixedInt<N> type;
+  using type = FixedInt<N>;
 };
 // If VariableAndFixedInt matches DynamicKey, then we turn it to a pure runtime-value (aka Index):
 template <int DynamicKey>
 struct cleanup_index_type<VariableAndFixedInt<DynamicKey>, DynamicKey> {
-  typedef Index type;
+  using type = Index;
 };
 
 template <int N, int DynamicKey>
 struct cleanup_index_type<std::integral_constant<int, N>, DynamicKey> {
-  typedef FixedInt<N> type;
+  using type = FixedInt<N>;
 };
 
 }  // end namespace internal

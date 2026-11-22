@@ -6,6 +6,7 @@
 // This Source Code Form is subject to the terms of the Mozilla
 // Public License v. 2.0. If a copy of the MPL was not distributed
 // with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
+// SPDX-License-Identifier: MPL-2.0
 
 #ifndef EIGEN_ARRAYWRAPPER_H
 #define EIGEN_ARRAYWRAPPER_H
@@ -21,7 +22,7 @@ namespace Eigen {
  * \brief Expression of a mathematical vector or matrix as an array object
  *
  * This class is the return type of MatrixBase::array(), and most of the time
- * this is the only way it is use.
+ * this is the only way it is used.
  *
  * \sa MatrixBase::array(), class MatrixWrapper
  */
@@ -29,7 +30,7 @@ namespace Eigen {
 namespace internal {
 template <typename ExpressionType>
 struct traits<ArrayWrapper<ExpressionType> > : public traits<remove_all_t<typename ExpressionType::Nested> > {
-  typedef ArrayXpr XprKind;
+  using XprKind = ArrayXpr;
   // Let's remove NestByRefBit
   enum {
     Flags0 = traits<remove_all_t<typename ExpressionType::Nested> >::Flags,
@@ -42,19 +43,20 @@ struct traits<ArrayWrapper<ExpressionType> > : public traits<remove_all_t<typena
 template <typename ExpressionType>
 class ArrayWrapper : public ArrayBase<ArrayWrapper<ExpressionType> > {
  public:
-  typedef ArrayBase<ArrayWrapper> Base;
+  using Base = ArrayBase<ArrayWrapper>;
   EIGEN_DENSE_PUBLIC_INTERFACE(ArrayWrapper)
   EIGEN_INHERIT_ASSIGNMENT_OPERATORS(ArrayWrapper)
-  typedef internal::remove_all_t<ExpressionType> NestedExpression;
+  using NestedExpression = internal::remove_all_t<ExpressionType>;
 
-  typedef std::conditional_t<internal::is_lvalue<ExpressionType>::value, Scalar, const Scalar>
-      ScalarWithConstIfNotLvalue;
+  using ScalarWithConstIfNotLvalue =
+      std::conditional_t<internal::is_lvalue<ExpressionType>::value, Scalar, const Scalar>;
 
-  typedef typename internal::ref_selector<ExpressionType>::non_const_type NestedExpressionType;
+  using NestedExpressionType = typename internal::ref_selector<ExpressionType>::non_const_type;
 
   using Base::coeffRef;
 
-  EIGEN_DEVICE_FUNC explicit EIGEN_STRONG_INLINE ArrayWrapper(ExpressionType& matrix) : m_expression(matrix) {}
+  EIGEN_DEVICE_FUNC constexpr explicit EIGEN_STRONG_INLINE ArrayWrapper(ExpressionType& matrix)
+      : m_expression(matrix) {}
 
   EIGEN_DEVICE_FUNC constexpr Index rows() const noexcept { return m_expression.rows(); }
   EIGEN_DEVICE_FUNC constexpr Index cols() const noexcept { return m_expression.cols(); }
@@ -75,7 +77,7 @@ class ArrayWrapper : public ArrayBase<ArrayWrapper<ExpressionType> > {
     dst = m_expression;
   }
 
-  EIGEN_DEVICE_FUNC const internal::remove_all_t<NestedExpressionType>& nestedExpression() const {
+  EIGEN_DEVICE_FUNC constexpr const internal::remove_all_t<NestedExpressionType>& nestedExpression() const {
     return m_expression;
   }
 
@@ -96,7 +98,7 @@ class ArrayWrapper : public ArrayBase<ArrayWrapper<ExpressionType> > {
  * \brief Expression of an array as a mathematical vector or matrix
  *
  * This class is the return type of ArrayBase::matrix(), and most of the time
- * this is the only way it is use.
+ * this is the only way it is used.
  *
  * \sa MatrixBase::matrix(), class ArrayWrapper
  */
@@ -104,7 +106,7 @@ class ArrayWrapper : public ArrayBase<ArrayWrapper<ExpressionType> > {
 namespace internal {
 template <typename ExpressionType>
 struct traits<MatrixWrapper<ExpressionType> > : public traits<remove_all_t<typename ExpressionType::Nested> > {
-  typedef MatrixXpr XprKind;
+  using XprKind = MatrixXpr;
   // Let's remove NestByRefBit
   enum {
     Flags0 = traits<remove_all_t<typename ExpressionType::Nested> >::Flags,
@@ -117,19 +119,19 @@ struct traits<MatrixWrapper<ExpressionType> > : public traits<remove_all_t<typen
 template <typename ExpressionType>
 class MatrixWrapper : public MatrixBase<MatrixWrapper<ExpressionType> > {
  public:
-  typedef MatrixBase<MatrixWrapper<ExpressionType> > Base;
+  using Base = MatrixBase<MatrixWrapper<ExpressionType>>;
   EIGEN_DENSE_PUBLIC_INTERFACE(MatrixWrapper)
   EIGEN_INHERIT_ASSIGNMENT_OPERATORS(MatrixWrapper)
-  typedef internal::remove_all_t<ExpressionType> NestedExpression;
+  using NestedExpression = internal::remove_all_t<ExpressionType>;
 
-  typedef std::conditional_t<internal::is_lvalue<ExpressionType>::value, Scalar, const Scalar>
-      ScalarWithConstIfNotLvalue;
+  using ScalarWithConstIfNotLvalue =
+      std::conditional_t<internal::is_lvalue<ExpressionType>::value, Scalar, const Scalar>;
 
-  typedef typename internal::ref_selector<ExpressionType>::non_const_type NestedExpressionType;
+  using NestedExpressionType = typename internal::ref_selector<ExpressionType>::non_const_type;
 
   using Base::coeffRef;
 
-  EIGEN_DEVICE_FUNC explicit inline MatrixWrapper(ExpressionType& matrix) : m_expression(matrix) {}
+  EIGEN_DEVICE_FUNC constexpr explicit inline MatrixWrapper(ExpressionType& matrix) : m_expression(matrix) {}
 
   EIGEN_DEVICE_FUNC constexpr Index rows() const noexcept { return m_expression.rows(); }
   EIGEN_DEVICE_FUNC constexpr Index cols() const noexcept { return m_expression.cols(); }
@@ -145,7 +147,7 @@ class MatrixWrapper : public MatrixBase<MatrixWrapper<ExpressionType> > {
 
   EIGEN_DEVICE_FUNC inline const Scalar& coeffRef(Index index) const { return m_expression.coeffRef(index); }
 
-  EIGEN_DEVICE_FUNC const internal::remove_all_t<NestedExpressionType>& nestedExpression() const {
+  EIGEN_DEVICE_FUNC constexpr const internal::remove_all_t<NestedExpressionType>& nestedExpression() const {
     return m_expression;
   }
 

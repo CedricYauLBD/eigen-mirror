@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: The Eigen Authors
+// SPDX-License-Identifier: MPL-2.0
 
 // A Scalar with internal representation T+1 so that zero is internally
 // represented by T(1). This is used to test memory fill.
@@ -11,7 +13,10 @@ class OffByOneScalar {
   OffByOneScalar& operator=(const OffByOneScalar& other) = default;
 
   OffByOneScalar(T val) : val_(val + 1) {}
-  OffByOneScalar& operator=(T val) { val_ = val + 1; }
+  OffByOneScalar& operator=(T val) {
+    val_ = val + 1;
+    return *this;
+  }
 
   operator T() const { return val_ - 1; }
 

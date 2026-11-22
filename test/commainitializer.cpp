@@ -6,6 +6,7 @@
 // This Source Code Form is subject to the terms of the Mozilla
 // Public License v. 2.0. If a copy of the MPL was not distributed
 // with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
+// SPDX-License-Identifier: MPL-2.0
 
 #include "main.h"
 
@@ -67,14 +68,18 @@ struct test_block_recursion<0, N> {
 };
 
 void test_basics() {
+  MatrixXd empty_rows(0, 2), empty_cols(2, 0);
+  VERIFY_RAISES_ASSERT((empty_rows << 1.0));
+  VERIFY_RAISES_ASSERT((empty_cols << 1.0));
+  Matrix<double, 0, 2> fixed_empty;
+  VERIFY_RAISES_ASSERT((fixed_empty << 1.0));
+
   Matrix3d m3;
   Matrix4d m4;
 
   VERIFY_RAISES_ASSERT((m3 << 1, 2, 3, 4, 5, 6, 7, 8));
 
-#ifndef _MSC_VER
   VERIFY_RAISES_ASSERT((m3 << 1, 2, 3, 4, 5, 6, 7, 8, 9, 10));
-#endif
 
   double data[] = {1, 2, 3, 4, 5, 6, 7, 8, 9};
   Matrix3d ref = Map<Matrix<double, 3, 3, RowMajor> >(data);

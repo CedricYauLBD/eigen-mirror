@@ -6,22 +6,24 @@
 // This Source Code Form is subject to the terms of the Mozilla
 // Public License v. 2.0. If a copy of the MPL was not distributed
 // with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
+// SPDX-License-Identifier: MPL-2.0
 
 #include "common.h"
 
 // y = alpha*A*x + beta*y
 EIGEN_BLAS_FUNC(symv)
-(const char *uplo, const int *n, const RealScalar *palpha, const RealScalar *pa, const int *lda, const RealScalar *px,
- const int *incx, const RealScalar *pbeta, RealScalar *py, const int *incy) {
-  typedef void (*functype)(int, const Scalar *, int, const Scalar *, Scalar *, Scalar);
+(const char *uplo, const EIGEN_BLAS_INT *n, const RealScalar *palpha, const RealScalar *pa, const EIGEN_BLAS_INT *lda,
+ const RealScalar *px, const EIGEN_BLAS_INT *incx, const RealScalar *pbeta, RealScalar *py,
+ const EIGEN_BLAS_INT *incy) {
+  using functype = void (*)(Eigen::Index, const Scalar *, Eigen::Index, const Scalar *, Scalar *, Scalar);
   using Eigen::ColMajor;
   using Eigen::Lower;
   using Eigen::Upper;
   static const functype func[2] = {
       // array index: UP
-      (Eigen::internal::selfadjoint_matrix_vector_product<Scalar, int, ColMajor, Upper, false, false>::run),
+      (Eigen::internal::selfadjoint_matrix_vector_product<Scalar, Eigen::Index, ColMajor, Upper, false, false>::run),
       // array index: LO
-      (Eigen::internal::selfadjoint_matrix_vector_product<Scalar, int, ColMajor, Lower, false, false>::run),
+      (Eigen::internal::selfadjoint_matrix_vector_product<Scalar, Eigen::Index, ColMajor, Lower, false, false>::run),
   };
 
   const Scalar *a = reinterpret_cast<const Scalar *>(pa);
@@ -31,93 +33,84 @@ EIGEN_BLAS_FUNC(symv)
   Scalar beta = *reinterpret_cast<const Scalar *>(pbeta);
 
   // check arguments
-  int info = 0;
+  EIGEN_BLAS_INT info = 0;
   if (UPLO(*uplo) == INVALID)
     info = 1;
   else if (*n < 0)
     info = 2;
-  else if (*lda < std::max(1, *n))
+  else if (*lda < std::max<EIGEN_BLAS_INT>(1, *n))
     info = 5;
   else if (*incx == 0)
     info = 7;
   else if (*incy == 0)
     info = 10;
-  if (info) return xerbla_(SCALAR_SUFFIX_UP "SYMV ", &info);
+  if (info) return xerbla_(SCALAR_SUFFIX_UP "SYMV ", &info, kBlasNameLength);
 
   if (*n == 0) return;
 
-  const Scalar *actual_x = get_compact_vector(x, *n, *incx);
-  Scalar *actual_y = get_compact_vector(y, *n, *incy);
+  compact_vector<Scalar> compact_y(y, *n, *incy);
+  Scalar *actual_y = compact_y.data();
+  scale_vector(actual_y, *n, beta);
+  if (alpha == Scalar(0)) return;
 
-  if (beta != Scalar(1)) {
-    if (beta == Scalar(0))
-      make_vector(actual_y, *n).setZero();
-    else
-      make_vector(actual_y, *n) *= beta;
-  }
+  compact_vector<const Scalar> compact_x(x, *n, *incx);
+  const Scalar *actual_x = compact_x.data();
 
   int code = UPLO(*uplo);
-  if (code >= 2 || func[code] == 0) return;
 
   func[code](*n, a, *lda, actual_x, actual_y, alpha);
-
-  if (actual_x != x) delete[] actual_x;
-  if (actual_y != y) delete[] copy_back(actual_y, y, *n, *incy);
 }
 
 // C := alpha*x*x' + C
 EIGEN_BLAS_FUNC(syr)
-(const char *uplo, const int *n, const RealScalar *palpha, const RealScalar *px, const int *incx, RealScalar *pc,
- const int *ldc) {
-  typedef void (*functype)(int, Scalar *, int, const Scalar *, const Scalar *, const Scalar &);
+(const char *uplo, const EIGEN_BLAS_INT *n, const RealScalar *palpha, const RealScalar *px, const EIGEN_BLAS_INT *incx,
+ RealScalar *pc, const EIGEN_BLAS_INT *ldc) {
+  using functype = void (*)(Eigen::Index, Scalar *, Eigen::Index, const Scalar *, const Scalar *, const Scalar &);
   using Eigen::ColMajor;
   using Eigen::Lower;
   using Eigen::Upper;
   static const functype func[2] = {
       // array index: UP
-      (Eigen::selfadjoint_rank1_update<Scalar, int, ColMajor, Upper, false, Conj>::run),
+      (Eigen::selfadjoint_rank1_update<Scalar, Eigen::Index, ColMajor, Upper, false, Conj>::run),
       // array index: LO
-      (Eigen::selfadjoint_rank1_update<Scalar, int, ColMajor, Lower, false, Conj>::run),
+      (Eigen::selfadjoint_rank1_update<Scalar, Eigen::Index, ColMajor, Lower, false, Conj>::run),
   };
 
   const Scalar *x = reinterpret_cast<const Scalar *>(px);
   Scalar *c = reinterpret_cast<Scalar *>(pc);
   Scalar alpha = *reinterpret_cast<const Scalar *>(palpha);
 
-  int info = 0;
+  EIGEN_BLAS_INT info = 0;
   if (UPLO(*uplo) == INVALID)
     info = 1;
   else if (*n < 0)
     info = 2;
   else if (*incx == 0)
     info = 5;
-  else if (*ldc < std::max(1, *n))
+  else if (*ldc < std::max<EIGEN_BLAS_INT>(1, *n))
     info = 7;
-  if (info) return xerbla_(SCALAR_SUFFIX_UP "SYR  ", &info);
+  if (info) return xerbla_(SCALAR_SUFFIX_UP "SYR  ", &info, kBlasNameLength);
 
   if (*n == 0 || alpha == Scalar(0)) return;
 
   // if the increment is not 1, let's copy it to a temporary vector to enable vectorization
-  const Scalar *x_cpy = get_compact_vector(x, *n, *incx);
+  compact_vector<const Scalar> x_cpy(x, *n, *incx);
 
   int code = UPLO(*uplo);
-  if (code >= 2 || func[code] == 0) return;
 
-  func[code](*n, c, *ldc, x_cpy, x_cpy, alpha);
-
-  if (x_cpy != x) delete[] x_cpy;
+  func[code](*n, c, *ldc, x_cpy.data(), x_cpy.data(), alpha);
 }
 
 // C := alpha*x*y' + alpha*y*x' + C
 EIGEN_BLAS_FUNC(syr2)
-(const char *uplo, const int *n, const RealScalar *palpha, const RealScalar *px, const int *incx, const RealScalar *py,
- const int *incy, RealScalar *pc, const int *ldc) {
-  typedef void (*functype)(int, Scalar *, int, const Scalar *, const Scalar *, Scalar);
+(const char *uplo, const EIGEN_BLAS_INT *n, const RealScalar *palpha, const RealScalar *px, const EIGEN_BLAS_INT *incx,
+ const RealScalar *py, const EIGEN_BLAS_INT *incy, RealScalar *pc, const EIGEN_BLAS_INT *ldc) {
+  using functype = void (*)(Eigen::Index, Scalar *, Eigen::Index, const Scalar *, const Scalar *, Scalar);
   static const functype func[2] = {
       // array index: UP
-      (Eigen::internal::rank2_update_selector<Scalar, int, Eigen::Upper>::run),
+      (Eigen::internal::rank2_update_selector<Scalar, Eigen::Index, Eigen::Upper>::run),
       // array index: LO
-      (Eigen::internal::rank2_update_selector<Scalar, int, Eigen::Lower>::run),
+      (Eigen::internal::rank2_update_selector<Scalar, Eigen::Index, Eigen::Lower>::run),
   };
 
   const Scalar *x = reinterpret_cast<const Scalar *>(px);
@@ -125,7 +118,7 @@ EIGEN_BLAS_FUNC(syr2)
   Scalar *c = reinterpret_cast<Scalar *>(pc);
   Scalar alpha = *reinterpret_cast<const Scalar *>(palpha);
 
-  int info = 0;
+  EIGEN_BLAS_INT info = 0;
   if (UPLO(*uplo) == INVALID)
     info = 1;
   else if (*n < 0)
@@ -134,56 +127,100 @@ EIGEN_BLAS_FUNC(syr2)
     info = 5;
   else if (*incy == 0)
     info = 7;
-  else if (*ldc < std::max(1, *n))
+  else if (*ldc < std::max<EIGEN_BLAS_INT>(1, *n))
     info = 9;
-  if (info) return xerbla_(SCALAR_SUFFIX_UP "SYR2 ", &info);
+  if (info) return xerbla_(SCALAR_SUFFIX_UP "SYR2 ", &info, kBlasNameLength);
 
-  if (alpha == Scalar(0)) return;
+  if (*n == 0 || alpha == Scalar(0)) return;
 
-  const Scalar *x_cpy = get_compact_vector(x, *n, *incx);
-  const Scalar *y_cpy = get_compact_vector(y, *n, *incy);
+  compact_vector<const Scalar> x_cpy(x, *n, *incx);
+  compact_vector<const Scalar> y_cpy(y, *n, *incy);
 
   int code = UPLO(*uplo);
-  if (code >= 2 || func[code] == 0) return;
 
-  func[code](*n, c, *ldc, x_cpy, y_cpy, alpha);
-
-  if (x_cpy != x) delete[] x_cpy;
-  if (y_cpy != y) delete[] y_cpy;
-
-  //   int code = UPLO(*uplo);
-  //   if(code>=2 || func[code]==0)
-  //     return 0;
-
-  //   func[code](*n, a, *inca, b, *incb, c, *ldc, alpha);
+  func[code](*n, c, *ldc, x_cpy.data(), y_cpy.data(), alpha);
 }
 
-/**  DSBMV  performs the matrix-vector  operation
+/**  SBMV  performs the matrix-vector operation
  *
  *     y := alpha*A*x + beta*y,
  *
  *  where alpha and beta are scalars, x and y are n element vectors and
  *  A is an n by n symmetric band matrix, with k super-diagonals.
  */
-// EIGEN_BLAS_FUNC(sbmv)( char *uplo, int *n, int *k, RealScalar *alpha, RealScalar *a, int *lda,
-//                            RealScalar *x, int *incx, RealScalar *beta, RealScalar *y, int *incy)
-// {
-//   return 1;
-// }
+EIGEN_BLAS_FUNC(sbmv)
+(char *uplo, EIGEN_BLAS_INT *n_in, EIGEN_BLAS_INT *k_in, RealScalar *palpha, RealScalar *pa, EIGEN_BLAS_INT *lda_in,
+ RealScalar *px, EIGEN_BLAS_INT *incx, RealScalar *pbeta, RealScalar *py, EIGEN_BLAS_INT *incy) {
+  const Scalar alpha = *reinterpret_cast<const Scalar *>(palpha);
+  const Scalar beta = *reinterpret_cast<const Scalar *>(pbeta);
+  const Scalar *a = reinterpret_cast<const Scalar *>(pa);
+  const Scalar *x = reinterpret_cast<const Scalar *>(px);
+  Scalar *y = reinterpret_cast<Scalar *>(py);
+  const Eigen::Index n = *n_in;
+  const Eigen::Index k = *k_in;
+  const Eigen::Index lda = *lda_in;
 
-/**  DSPMV  performs the matrix-vector operation
+  EIGEN_BLAS_INT info = 0;
+  if (UPLO(*uplo) == INVALID)
+    info = 1;
+  else if (n < 0)
+    info = 2;
+  else if (k < 0)
+    info = 3;
+  else if (lda <= k)
+    info = 6;
+  else if (*incx == 0)
+    info = 8;
+  else if (*incy == 0)
+    info = 11;
+  if (info) return xerbla_(SCALAR_SUFFIX_UP "SBMV ", &info, kBlasNameLength);
+
+  if (n == 0 || (alpha == Scalar(0) && beta == Scalar(1))) return;
+
+  compact_vector<Scalar> compact_y(y, n, *incy);
+  scale_vector(compact_y.data(), n, beta);
+  if (alpha == Scalar(0)) return;
+
+  compact_vector<const Scalar> compact_x(x, n, *incx);
+  selfadjoint_band_product(UPLO(*uplo) == UP, n, k, a, lda, compact_x.data(), compact_y.data(), alpha);
+}
+
+/**  SPMV  performs the matrix-vector operation
  *
  *     y := alpha*A*x + beta*y,
  *
  *  where alpha and beta are scalars, x and y are n element vectors and
  *  A is an n by n symmetric matrix, supplied in packed form.
- *
  */
-// EIGEN_BLAS_FUNC(spmv)(char *uplo, int *n, RealScalar *alpha, RealScalar *ap, RealScalar *x, int *incx, RealScalar
-// *beta, RealScalar *y, int *incy)
-// {
-//   return 1;
-// }
+EIGEN_BLAS_FUNC(spmv)
+(char *uplo, EIGEN_BLAS_INT *n, RealScalar *palpha, RealScalar *pap, RealScalar *px, EIGEN_BLAS_INT *incx,
+ RealScalar *pbeta, RealScalar *py, EIGEN_BLAS_INT *incy) {
+  const Scalar alpha = *reinterpret_cast<const Scalar *>(palpha);
+  const Scalar beta = *reinterpret_cast<const Scalar *>(pbeta);
+  const Scalar *ap = reinterpret_cast<const Scalar *>(pap);
+  const Scalar *x = reinterpret_cast<const Scalar *>(px);
+  Scalar *y = reinterpret_cast<Scalar *>(py);
+
+  EIGEN_BLAS_INT info = 0;
+  if (UPLO(*uplo) == INVALID)
+    info = 1;
+  else if (*n < 0)
+    info = 2;
+  else if (*incx == 0)
+    info = 6;
+  else if (*incy == 0)
+    info = 9;
+  if (info) return xerbla_(SCALAR_SUFFIX_UP "SPMV ", &info, kBlasNameLength);
+
+  if (*n == 0 || (alpha == Scalar(0) && beta == Scalar(1))) return;
+
+  compact_vector<Scalar> compact_y(y, *n, *incy);
+  scale_vector(compact_y.data(), *n, beta);
+  if (alpha == Scalar(0)) return;
+
+  compact_vector<const Scalar> compact_x(x, *n, *incx);
+  selfadjoint_packed_product(UPLO(*uplo) == UP, *n, ap, compact_x.data(), compact_y.data(), alpha);
+}
 
 /**  DSPR    performs the symmetric rank 1 operation
  *
@@ -192,38 +229,37 @@ EIGEN_BLAS_FUNC(syr2)
  *  where alpha is a real scalar, x is an n element vector and A is an
  *  n by n symmetric matrix, supplied in packed form.
  */
-EIGEN_BLAS_FUNC(spr)(char *uplo, int *n, Scalar *palpha, Scalar *px, int *incx, Scalar *pap) {
-  typedef void (*functype)(int, Scalar *, const Scalar *, Scalar);
+EIGEN_BLAS_FUNC(spr)(char *uplo, EIGEN_BLAS_INT *n, Scalar *palpha, Scalar *px, EIGEN_BLAS_INT *incx, Scalar *pap) {
+  using functype = void (*)(Eigen::Index, Scalar *, const Scalar *, Scalar);
   static const functype func[2] = {
       // array index: UP
-      (Eigen::internal::selfadjoint_packed_rank1_update<Scalar, int, Eigen::ColMajor, Eigen::Upper, false, false>::run),
+      (Eigen::internal::selfadjoint_packed_rank1_update<Scalar, Eigen::Index, Eigen::ColMajor, Eigen::Upper, false,
+                                                        false>::run),
       // array index: LO
-      (Eigen::internal::selfadjoint_packed_rank1_update<Scalar, int, Eigen::ColMajor, Eigen::Lower, false, false>::run),
+      (Eigen::internal::selfadjoint_packed_rank1_update<Scalar, Eigen::Index, Eigen::ColMajor, Eigen::Lower, false,
+                                                        false>::run),
   };
 
   Scalar *x = reinterpret_cast<Scalar *>(px);
   Scalar *ap = reinterpret_cast<Scalar *>(pap);
   Scalar alpha = *reinterpret_cast<Scalar *>(palpha);
 
-  int info = 0;
+  EIGEN_BLAS_INT info = 0;
   if (UPLO(*uplo) == INVALID)
     info = 1;
   else if (*n < 0)
     info = 2;
   else if (*incx == 0)
     info = 5;
-  if (info) return xerbla_(SCALAR_SUFFIX_UP "SPR  ", &info);
+  if (info) return xerbla_(SCALAR_SUFFIX_UP "SPR  ", &info, kBlasNameLength);
 
-  if (alpha == Scalar(0)) return;
+  if (*n == 0 || alpha == Scalar(0)) return;
 
-  Scalar *x_cpy = get_compact_vector(x, *n, *incx);
+  compact_vector<const Scalar> x_cpy(x, *n, *incx);
 
   int code = UPLO(*uplo);
-  if (code >= 2 || func[code] == 0) return;
 
-  func[code](*n, ap, x_cpy, alpha);
-
-  if (x_cpy != x) delete[] x_cpy;
+  func[code](*n, ap, x_cpy.data(), alpha);
 }
 
 /**  DSPR2  performs the symmetric rank 2 operation
@@ -234,13 +270,14 @@ EIGEN_BLAS_FUNC(spr)(char *uplo, int *n, Scalar *palpha, Scalar *px, int *incx, 
  *  n by n symmetric matrix, supplied in packed form.
  */
 EIGEN_BLAS_FUNC(spr2)
-(char *uplo, int *n, RealScalar *palpha, RealScalar *px, int *incx, RealScalar *py, int *incy, RealScalar *pap) {
-  typedef void (*functype)(int, Scalar *, const Scalar *, const Scalar *, Scalar);
+(char *uplo, EIGEN_BLAS_INT *n, RealScalar *palpha, RealScalar *px, EIGEN_BLAS_INT *incx, RealScalar *py,
+ EIGEN_BLAS_INT *incy, RealScalar *pap) {
+  using functype = void (*)(Eigen::Index, Scalar *, const Scalar *, const Scalar *, Scalar);
   static const functype func[2] = {
       // array index: UP
-      (Eigen::internal::packed_rank2_update_selector<Scalar, int, Eigen::Upper>::run),
+      (Eigen::internal::packed_rank2_update_selector<Scalar, Eigen::Index, Eigen::Upper>::run),
       // array index: LO
-      (Eigen::internal::packed_rank2_update_selector<Scalar, int, Eigen::Lower>::run),
+      (Eigen::internal::packed_rank2_update_selector<Scalar, Eigen::Index, Eigen::Lower>::run),
   };
 
   Scalar *x = reinterpret_cast<Scalar *>(px);
@@ -248,7 +285,7 @@ EIGEN_BLAS_FUNC(spr2)
   Scalar *ap = reinterpret_cast<Scalar *>(pap);
   Scalar alpha = *reinterpret_cast<Scalar *>(palpha);
 
-  int info = 0;
+  EIGEN_BLAS_INT info = 0;
   if (UPLO(*uplo) == INVALID)
     info = 1;
   else if (*n < 0)
@@ -257,20 +294,16 @@ EIGEN_BLAS_FUNC(spr2)
     info = 5;
   else if (*incy == 0)
     info = 7;
-  if (info) return xerbla_(SCALAR_SUFFIX_UP "SPR2 ", &info);
+  if (info) return xerbla_(SCALAR_SUFFIX_UP "SPR2 ", &info, kBlasNameLength);
 
-  if (alpha == Scalar(0)) return;
+  if (*n == 0 || alpha == Scalar(0)) return;
 
-  Scalar *x_cpy = get_compact_vector(x, *n, *incx);
-  Scalar *y_cpy = get_compact_vector(y, *n, *incy);
+  compact_vector<const Scalar> x_cpy(x, *n, *incx);
+  compact_vector<const Scalar> y_cpy(y, *n, *incy);
 
   int code = UPLO(*uplo);
-  if (code >= 2 || func[code] == 0) return;
 
-  func[code](*n, ap, x_cpy, y_cpy, alpha);
-
-  if (x_cpy != x) delete[] x_cpy;
-  if (y_cpy != y) delete[] y_cpy;
+  func[code](*n, ap, x_cpy.data(), y_cpy.data(), alpha);
 }
 
 /**  DGER   performs the rank 1 operation
@@ -281,13 +314,14 @@ EIGEN_BLAS_FUNC(spr2)
  *  vector and A is an m by n matrix.
  */
 EIGEN_BLAS_FUNC(ger)
-(int *m, int *n, Scalar *palpha, Scalar *px, int *incx, Scalar *py, int *incy, Scalar *pa, int *lda) {
+(EIGEN_BLAS_INT *m, EIGEN_BLAS_INT *n, Scalar *palpha, Scalar *px, EIGEN_BLAS_INT *incx, Scalar *py,
+ EIGEN_BLAS_INT *incy, Scalar *pa, EIGEN_BLAS_INT *lda) {
   Scalar *x = reinterpret_cast<Scalar *>(px);
   Scalar *y = reinterpret_cast<Scalar *>(py);
   Scalar *a = reinterpret_cast<Scalar *>(pa);
   Scalar alpha = *reinterpret_cast<Scalar *>(palpha);
 
-  int info = 0;
+  EIGEN_BLAS_INT info = 0;
   if (*m < 0)
     info = 1;
   else if (*n < 0)
@@ -296,18 +330,15 @@ EIGEN_BLAS_FUNC(ger)
     info = 5;
   else if (*incy == 0)
     info = 7;
-  else if (*lda < std::max(1, *m))
+  else if (*lda < std::max<EIGEN_BLAS_INT>(1, *m))
     info = 9;
-  if (info) return xerbla_(SCALAR_SUFFIX_UP "GER  ", &info);
+  if (info) return xerbla_(SCALAR_SUFFIX_UP "GER  ", &info, kBlasNameLength);
 
-  if (alpha == Scalar(0)) return;
+  if (*m == 0 || *n == 0 || alpha == Scalar(0)) return;
 
-  Scalar *x_cpy = get_compact_vector(x, *m, *incx);
-  Scalar *y_cpy = get_compact_vector(y, *n, *incy);
+  compact_vector<const Scalar> x_cpy(x, *m, *incx);
+  compact_vector<const Scalar> y_cpy(y, *n, *incy);
 
-  Eigen::internal::general_rank1_update<Scalar, int, Eigen::ColMajor, false, false>::run(*m, *n, a, *lda, x_cpy, y_cpy,
-                                                                                         alpha);
-
-  if (x_cpy != x) delete[] x_cpy;
-  if (y_cpy != y) delete[] y_cpy;
+  Eigen::internal::general_rank1_update<Scalar, Eigen::Index, Eigen::ColMajor, false, false>::run(
+      *m, *n, a, *lda, x_cpy.data(), y_cpy.data(), alpha);
 }

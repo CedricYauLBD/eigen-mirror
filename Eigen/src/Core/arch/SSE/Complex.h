@@ -6,6 +6,7 @@
 // This Source Code Form is subject to the terms of the Mozilla
 // Public License v. 2.0. If a copy of the MPL was not distributed
 // with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
+// SPDX-License-Identifier: MPL-2.0
 
 #ifndef EIGEN_COMPLEX_SSE_H
 #define EIGEN_COMPLEX_SSE_H
@@ -16,6 +17,8 @@
 namespace Eigen {
 
 namespace internal {
+
+EIGEN_GCC_FAST_MATH_COMPLEX_VECTORIZE_WORKAROUND_PUSH
 
 //---------- float ----------
 struct Packet2cf {
@@ -29,8 +32,8 @@ struct Packet2cf {
 #ifndef EIGEN_VECTORIZE_AVX
 template <>
 struct packet_traits<std::complex<float> > : default_packet_traits {
-  typedef Packet2cf type;
-  typedef Packet2cf half;
+  using type = Packet2cf;
+  using half = Packet2cf;
   enum {
     Vectorizable = 1,
     AlignedOnScalar = 1,
@@ -49,16 +52,15 @@ struct packet_traits<std::complex<float> > : default_packet_traits {
     HasMin = 0,
     HasMax = 0,
     HasSetLinear = 0,
-    HasBlend = 1
   };
 };
 #endif
 
 template <>
 struct unpacket_traits<Packet2cf> {
-  typedef std::complex<float> type;
-  typedef Packet2cf half;
-  typedef Packet4f as_real;
+  using type = std::complex<float>;
+  using half = Packet2cf;
+  using as_real = Packet4f;
   enum {
     size = 2,
     alignment = Aligned16,
@@ -103,7 +105,7 @@ EIGEN_STRONG_INLINE Packet2cf pmul(const Packet2cf& a, const Packet2cf& b) {
 #ifdef EIGEN_VECTORIZE_SSE3
   __m128 result = _mm_addsub_ps(_mm_mul_ps(tmp2, b.v), tmp1);
 #else
-  const __m128 mask = _mm_setr_ps(-0.0f, 0.0f, -0.0f, 0.0f);
+  const __m128 mask = _mm_castsi128_ps(_mm_setr_epi32(0x80000000, 0x00000000, 0x80000000, 0x00000000));
   __m128 result = _mm_add_ps(_mm_mul_ps(tmp2, b.v), _mm_xor_ps(tmp1, mask));
 #endif
 #endif
@@ -142,9 +144,18 @@ EIGEN_STRONG_INLINE Packet2cf ploadu<Packet2cf>(const std::complex<float>* from)
 
 template <>
 EIGEN_STRONG_INLINE Packet2cf pset1<Packet2cf>(const std::complex<float>& from) {
+#if EIGEN_GCC15_SLP_BUG && defined(EIGEN_VECTORIZE_SSE3)
+  // With FMA (which implies SSE3), GCC 15.1/15.2 miscompile _mm_set_ps(im, re, im, re) when from is a complex product
+  // computed in the same function, e.g. Matrix2cf v * v.inverse(); see EIGEN_GCC15_SLP_BUG. Broadcasting the complex as
+  // one 64-bit element (a single movddup) keeps re and im out of the SLP group. _mm_loadl_epi64 loads through __m128i,
+  // which is __may_alias__.
+  const __m128i lo64 = _mm_loadl_epi64(reinterpret_cast<const __m128i*>(&from));
+  return Packet2cf(_mm_castpd_ps(_mm_movedup_pd(_mm_castsi128_pd(lo64))));
+#else
   const float re = std::real(from);
   const float im = std::imag(from);
   return Packet2cf(_mm_set_ps(im, re, im, re));
+#endif
 }
 
 template <>
@@ -164,8 +175,15 @@ EIGEN_STRONG_INLINE void pstoreu<std::complex<float> >(std::complex<float>* to, 
 template <>
 EIGEN_DEVICE_FUNC inline Packet2cf pgather<std::complex<float>, Packet2cf>(const std::complex<float>* from,
                                                                            Index stride) {
+#if EIGEN_GCC15_SLP_BUG
+  // Two 64-bit element loads; the scalar lanes miscompile when both elements hold one complex product, see pset1.
+  const __m128i lo = _mm_loadl_epi64(reinterpret_cast<const __m128i*>(from));
+  const __m128i hi = _mm_loadl_epi64(reinterpret_cast<const __m128i*>(from + stride));
+  return Packet2cf(_mm_castsi128_ps(_mm_unpacklo_epi64(lo, hi)));
+#else
   return Packet2cf(_mm_set_ps(std::imag(from[1 * stride]), std::real(from[1 * stride]), std::imag(from[0 * stride]),
                               std::real(from[0 * stride])));
+#endif
 }
 
 template <>
@@ -184,9 +202,7 @@ EIGEN_STRONG_INLINE void prefetch<std::complex<float> >(const std::complex<float
 
 template <>
 EIGEN_STRONG_INLINE std::complex<float> pfirst<Packet2cf>(const Packet2cf& a) {
-  alignas(alignof(__m64)) std::complex<float> res;
-  _mm_storel_pi((__m64*)&res, a.v);
-  return res;
+  return std::complex<float>(_mm_cvtss_f32(a.v), _mm_cvtss_f32(_mm_shuffle_ps(a.v, a.v, _MM_SHUFFLE(1, 1, 1, 1))));
 }
 
 template <>
@@ -227,8 +243,8 @@ struct Packet1cd {
 #ifndef EIGEN_VECTORIZE_AVX
 template <>
 struct packet_traits<std::complex<double> > : default_packet_traits {
-  typedef Packet1cd type;
-  typedef Packet1cd half;
+  using type = Packet1cd;
+  using half = Packet1cd;
   enum {
     Vectorizable = 1,
     AlignedOnScalar = 0,
@@ -245,16 +261,17 @@ struct packet_traits<std::complex<double> > : default_packet_traits {
     HasAbs2 = 0,
     HasMin = 0,
     HasMax = 0,
-    HasSetLinear = 0
+    HasSetLinear = 0,
+    HasExp = 1
   };
 };
 #endif
 
 template <>
 struct unpacket_traits<Packet1cd> {
-  typedef std::complex<double> type;
-  typedef Packet1cd half;
-  typedef Packet2d as_real;
+  using type = std::complex<double>;
+  using half = Packet1cd;
+  using as_real = Packet2d;
   enum {
     size = 1,
     alignment = Aligned16,
@@ -278,7 +295,7 @@ EIGEN_STRONG_INLINE Packet1cd pnegate(const Packet1cd& a) {
 }
 template <>
 EIGEN_STRONG_INLINE Packet1cd pconj(const Packet1cd& a) {
-  const __m128d mask = _mm_castsi128_pd(_mm_set_epi32(0x80000000, 0x0, 0x0, 0x0));
+  const __m128d mask = _mm_castsi128_pd(_mm_set_epi32(static_cast<int32_t>(0x80000000), 0x0, 0x0, 0x0));
   return Packet1cd(_mm_xor_pd(a.v, mask));
 }
 
@@ -296,7 +313,7 @@ EIGEN_STRONG_INLINE Packet1cd pmul(const Packet1cd& a, const Packet1cd& b) {
 #ifdef EIGEN_VECTORIZE_SSE3
   __m128d result = _mm_addsub_pd(_mm_mul_pd(tmp2, b.v), tmp1);
 #else
-  const __m128d mask = _mm_setr_pd(-0.0, 0.0);
+  const __m128d mask = _mm_castsi128_pd(_mm_set_epi64x(0x0, 0x8000000000000000ull));
   __m128d result = _mm_add_pd(_mm_mul_pd(tmp2, b.v), _mm_xor_pd(tmp1, mask));
 #endif
 #endif
@@ -324,7 +341,6 @@ EIGEN_STRONG_INLINE Packet1cd pandnot<Packet1cd>(const Packet1cd& a, const Packe
   return Packet1cd(_mm_andnot_pd(b.v, a.v));
 }
 
-// FIXME force unaligned load, this is a temporary fix
 template <>
 EIGEN_STRONG_INLINE Packet1cd pload<Packet1cd>(const std::complex<double>* from) {
   EIGEN_DEBUG_ALIGNED_LOAD return Packet1cd(_mm_load_pd((const double*)from));
@@ -339,12 +355,6 @@ pset1<Packet1cd>(const std::complex<double>& from) { /* here we really have to u
   return ploadu<Packet1cd>(&from);
 }
 
-template <>
-EIGEN_STRONG_INLINE Packet1cd ploaddup<Packet1cd>(const std::complex<double>* from) {
-  return pset1<Packet1cd>(*from);
-}
-
-// FIXME force unaligned store, this is a temporary fix
 template <>
 EIGEN_STRONG_INLINE void pstore<std::complex<double> >(std::complex<double>* to, const Packet1cd& from) {
   EIGEN_DEBUG_ALIGNED_STORE _mm_store_pd((double*)to, from.v);
@@ -364,21 +374,6 @@ EIGEN_STRONG_INLINE std::complex<double> pfirst<Packet1cd>(const Packet1cd& a) {
   EIGEN_ALIGN16 double res[2];
   _mm_store_pd(res, a.v);
   return std::complex<double>(res[0], res[1]);
-}
-
-template <>
-EIGEN_STRONG_INLINE Packet1cd preverse(const Packet1cd& a) {
-  return a;
-}
-
-template <>
-EIGEN_STRONG_INLINE std::complex<double> predux<Packet1cd>(const Packet1cd& a) {
-  return pfirst(a);
-}
-
-template <>
-EIGEN_STRONG_INLINE std::complex<double> predux_mul<Packet1cd>(const Packet1cd& a) {
-  return pfirst(a);
 }
 
 EIGEN_MAKE_CONJ_HELPER_CPLX_REAL(Packet1cd, Packet2d)
@@ -413,37 +408,8 @@ EIGEN_STRONG_INLINE Packet1cd pcmp_eq(const Packet1cd& a, const Packet1cd& b) {
   return Packet1cd(pand<Packet2d>(eq, vec2d_swizzle1(eq, 1, 0)));
 }
 
-template <>
-EIGEN_STRONG_INLINE Packet2cf pblend(const Selector<2>& ifPacket, const Packet2cf& thenPacket,
-                                     const Packet2cf& elsePacket) {
-  __m128d result = pblend<Packet2d>(ifPacket, _mm_castps_pd(thenPacket.v), _mm_castps_pd(elsePacket.v));
-  return Packet2cf(_mm_castpd_ps(result));
-}
-
-template <>
-EIGEN_STRONG_INLINE Packet1cd psqrt<Packet1cd>(const Packet1cd& a) {
-  return psqrt_complex<Packet1cd>(a);
-}
-
-template <>
-EIGEN_STRONG_INLINE Packet2cf psqrt<Packet2cf>(const Packet2cf& a) {
-  return psqrt_complex<Packet2cf>(a);
-}
-
-template <>
-EIGEN_STRONG_INLINE Packet1cd plog<Packet1cd>(const Packet1cd& a) {
-  return plog_complex<Packet1cd>(a);
-}
-
-template <>
-EIGEN_STRONG_INLINE Packet2cf plog<Packet2cf>(const Packet2cf& a) {
-  return plog_complex<Packet2cf>(a);
-}
-
-template <>
-EIGEN_STRONG_INLINE Packet2cf pexp<Packet2cf>(const Packet2cf& a) {
-  return pexp_complex<Packet2cf>(a);
-}
+EIGEN_INSTANTIATE_COMPLEX_MATH_FUNCS(Packet1cd)
+EIGEN_INSTANTIATE_COMPLEX_MATH_FUNCS(Packet2cf)
 
 #ifdef EIGEN_VECTORIZE_FMA
 // std::complex<float>
@@ -467,10 +433,6 @@ template <>
 EIGEN_STRONG_INLINE Packet2cf pnmadd(const Packet2cf& a, const Packet2cf& b, const Packet2cf& c) {
   return pnegate(pmsub(a, b, c));
 }
-template <>
-EIGEN_STRONG_INLINE Packet2cf pnmsub(const Packet2cf& a, const Packet2cf& b, const Packet2cf& c) {
-  return pnegate(pmadd(a, b, c));
-}
 // std::complex<double>
 template <>
 EIGEN_STRONG_INLINE Packet1cd pmadd(const Packet1cd& a, const Packet1cd& b, const Packet1cd& c) {
@@ -492,11 +454,9 @@ template <>
 EIGEN_STRONG_INLINE Packet1cd pnmadd(const Packet1cd& a, const Packet1cd& b, const Packet1cd& c) {
   return pnegate(pmsub(a, b, c));
 }
-template <>
-EIGEN_STRONG_INLINE Packet1cd pnmsub(const Packet1cd& a, const Packet1cd& b, const Packet1cd& c) {
-  return pnegate(pmadd(a, b, c));
-}
 #endif
+
+EIGEN_GCC_FAST_MATH_COMPLEX_VECTORIZE_WORKAROUND_POP
 }  // end namespace internal
 }  // end namespace Eigen
 

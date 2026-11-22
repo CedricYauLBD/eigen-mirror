@@ -29,6 +29,7 @@
  *   Triangular matrix-vector product functionality based on ?TRMV.
  ********************************************************************************
 */
+// SPDX-License-Identifier: BSD-3-Clause
 
 #ifndef EIGEN_TRIANGULAR_MATRIX_VECTOR_BLAS_H
 #define EIGEN_TRIANGULAR_MATRIX_VECTOR_BLAS_H
@@ -50,6 +51,34 @@ template <typename Index, int Mode, typename LhsScalar, bool ConjLhs, typename R
           int StorageOrder>
 struct triangular_matrix_vector_product_trmv
     : triangular_matrix_vector_product<Index, Mode, LhsScalar, ConjLhs, RhsScalar, ConjRhs, StorageOrder, BuiltIn> {};
+
+template <typename Index, int Mode, typename Scalar, bool ConjLhs, bool ConjRhs, int Order>
+void trmv_builtin(Index rows, Index cols, const Scalar* lhs, Index lhsStride, const Scalar* rhs, Index rhsIncr,
+                  Scalar* res, Index resIncr, Scalar alpha) {
+  using Vector = Matrix<Scalar, Dynamic, 1>;
+  Vector rhs_copy, result;
+  Scalar* output = res;
+  Index output_stride = resIncr;
+  const Index size = (std::min)(rows, cols);
+  const Index output_size = (Mode & Lower) ? rows : size;
+  // The row-major kernel needs contiguous input; the column-major kernel needs contiguous output.
+  EIGEN_IF_CONSTEXPR (Order == RowMajor) {
+    if (rhsIncr != 1) {
+      rhs_copy = Map<const Vector, 0, InnerStride<>>(rhs, (Mode & Lower) ? size : cols, InnerStride<>(rhsIncr));
+      rhs = rhs_copy.data();
+      rhsIncr = 1;
+    }
+  } else {
+    if (resIncr != 1) {
+      result = Vector::Zero(output_size);
+      output = result.data();
+      output_stride = 1;
+    }
+  }
+  triangular_matrix_vector_product<Index, Mode, Scalar, ConjLhs, Scalar, ConjRhs, Order, BuiltIn>::run(
+      rows, cols, lhs, lhsStride, rhs, rhsIncr, output, output_stride, alpha);
+  if (result.size() != 0) Map<Vector, 0, InnerStride<>>(res, output_size, InnerStride<>(resIncr)) += result;
+}
 
 #define EIGEN_BLAS_TRMV_SPECIALIZE(Scalar)                                                                            \
   template <typename Index, int Mode, bool ConjLhs, bool ConjRhs>                                                     \
@@ -78,6 +107,7 @@ EIGEN_BLAS_TRMV_SPECIALIZE(scomplex)
 #define EIGEN_BLAS_TRMV_CM(EIGTYPE, BLASTYPE, EIGPREFIX, BLASPREFIX, BLASPOSTFIX)                                    \
   template <typename Index, int Mode, bool ConjLhs, bool ConjRhs>                                                    \
   struct triangular_matrix_vector_product_trmv<Index, Mode, EIGTYPE, ConjLhs, EIGTYPE, ConjRhs, ColMajor> {          \
+    using Scalar = EIGTYPE;                                                                                          \
     enum {                                                                                                           \
       IsLower = (Mode & Lower) == Lower,                                                                             \
       SetDiag = (Mode & (ZeroDiag | UnitDiag)) ? 0 : 1,                                                              \
@@ -86,24 +116,29 @@ EIGEN_BLAS_TRMV_SPECIALIZE(scomplex)
       LowUp = IsLower ? Lower : Upper                                                                                \
     };                                                                                                               \
     static void run(Index rows_, Index cols_, const EIGTYPE* lhs_, Index lhsStride, const EIGTYPE* rhs_,             \
-                    Index rhsIncr, EIGTYPE* res_, Index resIncr, EIGTYPE alpha) {                                    \
-      if (rows_ == 0 || cols_ == 0) return;                                                                          \
-      if (ConjLhs || IsZeroDiag) {                                                                                   \
-        triangular_matrix_vector_product<Index, Mode, EIGTYPE, ConjLhs, EIGTYPE, ConjRhs, ColMajor, BuiltIn>::run(   \
-            rows_, cols_, lhs_, lhsStride, rhs_, rhsIncr, res_, resIncr, alpha);                                     \
+                    Index rhsIncr, Scalar* res_, Index resIncr, EIGTYPE alpha) {                                     \
+      if (rows_ == 0 || cols_ == 0 || numext::is_exactly_zero(alpha)) return;                                        \
+      if (!blas_compatible_stride<ColMajor>(rows_, cols_, lhsStride) || (rows_ > 1 && resIncr == 0)) {               \
+        trmv_builtin<Index, Mode, EIGTYPE, ConjLhs, ConjRhs, ColMajor>(rows_, cols_, lhs_, lhsStride, rhs_, rhsIncr, \
+                                                                       res_, resIncr, alpha);                        \
+        return;                                                                                                      \
+      }                                                                                                              \
+      EIGEN_IF_CONSTEXPR (ConjLhs || IsZeroDiag) {                                                                   \
+        trmv_builtin<Index, Mode, EIGTYPE, ConjLhs, ConjRhs, ColMajor>(rows_, cols_, lhs_, lhsStride, rhs_, rhsIncr, \
+                                                                       res_, resIncr, alpha);                        \
         return;                                                                                                      \
       }                                                                                                              \
       Index size = (std::min)(rows_, cols_);                                                                         \
       Index rows = IsLower ? rows_ : size;                                                                           \
       Index cols = IsLower ? size : cols_;                                                                           \
                                                                                                                      \
-      typedef VectorX##EIGPREFIX VectorRhs;                                                                          \
-      EIGTYPE *x, *y;                                                                                                \
+      using VectorRhs = VectorX##EIGPREFIX;                                                                          \
+      Scalar *x, *y;                                                                                                 \
                                                                                                                      \
       /* Set x*/                                                                                                     \
-      Map<const VectorRhs, 0, InnerStride<> > rhs(rhs_, cols, InnerStride<>(rhsIncr));                               \
+      Map<const VectorRhs, 0, InnerStride<>> rhs(rhs_, cols, InnerStride<>(rhsIncr));                                \
       VectorRhs x_tmp;                                                                                               \
-      if (ConjRhs)                                                                                                   \
+      EIGEN_IF_CONSTEXPR (ConjRhs)                                                                                   \
         x_tmp = rhs.conjugate();                                                                                     \
       else                                                                                                           \
         x_tmp = rhs;                                                                                                 \
@@ -118,9 +153,9 @@ EIGEN_BLAS_TRMV_SPECIALIZE(scomplex)
                                                                                                                      \
       /* Set m, n */                                                                                                 \
       n = convert_index<BlasIndex>(size);                                                                            \
-      lda = convert_index<BlasIndex>(lhsStride);                                                                     \
+      lda = blas_leading_dim<ColMajor>(rows, cols, lhsStride);                                                       \
       incx = 1;                                                                                                      \
-      incy = convert_index<BlasIndex>(resIncr);                                                                      \
+      incy = blas_vector_increment(rows, resIncr);                                                                   \
                                                                                                                      \
       /* Set uplo, trans and diag*/                                                                                  \
       trans = 'N';                                                                                                   \
@@ -128,14 +163,17 @@ EIGEN_BLAS_TRMV_SPECIALIZE(scomplex)
       diag = IsUnitDiag ? 'U' : 'N';                                                                                 \
                                                                                                                      \
       /* call ?TRMV*/                                                                                                \
-      BLASPREFIX##trmv##BLASPOSTFIX(&uplo, &trans, &diag, &n, (const BLASTYPE*)lhs_, &lda, (BLASTYPE*)x, &incx);     \
+      EIGEN_CAT(EIGEN_CAT(BLASPREFIX, trmv), BLASPOSTFIX)                                                            \
+      (&uplo, &trans, &diag, &n, (const BLASTYPE*)lhs_, &lda, (BLASTYPE*)x, &incx);                                  \
                                                                                                                      \
       /* Add op(a_tr)rhs into res*/                                                                                  \
-      BLASPREFIX##axpy##BLASPOSTFIX(&n, (const BLASTYPE*)&numext::real_ref(alpha), (const BLASTYPE*)x, &incx,        \
-                                    (BLASTYPE*)res_, &incy);                                                         \
+      /* BLAS addresses a vector with a negative increment from its lowest address, Eigen from entry 0. */           \
+      EIGEN_CAT(EIGEN_CAT(BLASPREFIX, axpy), BLASPOSTFIX)                                                            \
+      (&n, (const BLASTYPE*)&numext::real_ref(alpha), (const BLASTYPE*)x, &incx,                                     \
+       (BLASTYPE*)(resIncr < 0 ? res_ + (size - 1) * resIncr : res_), &incy);                                        \
       /* Non-square case - doesn't fit to BLAS ?TRMV. Fall to default triangular product*/                           \
       if (size < (std::max)(rows, cols)) {                                                                           \
-        if (ConjRhs)                                                                                                 \
+        EIGEN_IF_CONSTEXPR (ConjRhs)                                                                                 \
           x_tmp = rhs.conjugate();                                                                                   \
         else                                                                                                         \
           x_tmp = rhs;                                                                                               \
@@ -152,9 +190,10 @@ EIGEN_BLAS_TRMV_SPECIALIZE(scomplex)
           m = convert_index<BlasIndex>(size);                                                                        \
           n = convert_index<BlasIndex>(cols - size);                                                                 \
         }                                                                                                            \
-        BLASPREFIX##gemv##BLASPOSTFIX(&trans, &m, &n, (const BLASTYPE*)&numext::real_ref(alpha), (const BLASTYPE*)a, \
-                                      &lda, (const BLASTYPE*)x, &incx, (const BLASTYPE*)&numext::real_ref(beta),     \
-                                      (BLASTYPE*)y, &incy);                                                          \
+        if (resIncr < 0) y += (m - 1) * resIncr;                                                                     \
+        EIGEN_CAT(EIGEN_CAT(BLASPREFIX, gemv), BLASPOSTFIX)                                                          \
+        (&trans, &m, &n, (const BLASTYPE*)&numext::real_ref(alpha), (const BLASTYPE*)a, &lda, (const BLASTYPE*)x,    \
+         &incx, (const BLASTYPE*)&numext::real_ref(beta), (BLASTYPE*)y, &incy);                                      \
       }                                                                                                              \
     }                                                                                                                \
   };
@@ -165,16 +204,17 @@ EIGEN_BLAS_TRMV_CM(dcomplex, MKL_Complex16, cd, z, )
 EIGEN_BLAS_TRMV_CM(float, float, f, s, )
 EIGEN_BLAS_TRMV_CM(scomplex, MKL_Complex8, cf, c, )
 #else
-EIGEN_BLAS_TRMV_CM(double, double, d, d, _)
-EIGEN_BLAS_TRMV_CM(dcomplex, double, cd, z, _)
-EIGEN_BLAS_TRMV_CM(float, float, f, s, _)
-EIGEN_BLAS_TRMV_CM(scomplex, float, cf, c, _)
+EIGEN_BLAS_TRMV_CM(double, double, d, d, EIGEN_BLAS_POSTFIX)
+EIGEN_BLAS_TRMV_CM(dcomplex, double, cd, z, EIGEN_BLAS_POSTFIX)
+EIGEN_BLAS_TRMV_CM(float, float, f, s, EIGEN_BLAS_POSTFIX)
+EIGEN_BLAS_TRMV_CM(scomplex, float, cf, c, EIGEN_BLAS_POSTFIX)
 #endif
 
 // implements row-major: res += alpha * op(triangular) * vector
 #define EIGEN_BLAS_TRMV_RM(EIGTYPE, BLASTYPE, EIGPREFIX, BLASPREFIX, BLASPOSTFIX)                                    \
   template <typename Index, int Mode, bool ConjLhs, bool ConjRhs>                                                    \
   struct triangular_matrix_vector_product_trmv<Index, Mode, EIGTYPE, ConjLhs, EIGTYPE, ConjRhs, RowMajor> {          \
+    using Scalar = EIGTYPE;                                                                                          \
     enum {                                                                                                           \
       IsLower = (Mode & Lower) == Lower,                                                                             \
       SetDiag = (Mode & (ZeroDiag | UnitDiag)) ? 0 : 1,                                                              \
@@ -183,24 +223,29 @@ EIGEN_BLAS_TRMV_CM(scomplex, float, cf, c, _)
       LowUp = IsLower ? Lower : Upper                                                                                \
     };                                                                                                               \
     static void run(Index rows_, Index cols_, const EIGTYPE* lhs_, Index lhsStride, const EIGTYPE* rhs_,             \
-                    Index rhsIncr, EIGTYPE* res_, Index resIncr, EIGTYPE alpha) {                                    \
-      if (rows_ == 0 || cols_ == 0) return;                                                                          \
-      if (IsZeroDiag) {                                                                                              \
-        triangular_matrix_vector_product<Index, Mode, EIGTYPE, ConjLhs, EIGTYPE, ConjRhs, RowMajor, BuiltIn>::run(   \
-            rows_, cols_, lhs_, lhsStride, rhs_, rhsIncr, res_, resIncr, alpha);                                     \
+                    Index rhsIncr, Scalar* res_, Index resIncr, EIGTYPE alpha) {                                     \
+      if (rows_ == 0 || cols_ == 0 || numext::is_exactly_zero(alpha)) return;                                        \
+      if (!blas_compatible_stride<RowMajor>(rows_, cols_, lhsStride) || (rows_ > 1 && resIncr == 0)) {               \
+        trmv_builtin<Index, Mode, EIGTYPE, ConjLhs, ConjRhs, RowMajor>(rows_, cols_, lhs_, lhsStride, rhs_, rhsIncr, \
+                                                                       res_, resIncr, alpha);                        \
+        return;                                                                                                      \
+      }                                                                                                              \
+      EIGEN_IF_CONSTEXPR (IsZeroDiag) {                                                                              \
+        trmv_builtin<Index, Mode, EIGTYPE, ConjLhs, ConjRhs, RowMajor>(rows_, cols_, lhs_, lhsStride, rhs_, rhsIncr, \
+                                                                       res_, resIncr, alpha);                        \
         return;                                                                                                      \
       }                                                                                                              \
       Index size = (std::min)(rows_, cols_);                                                                         \
       Index rows = IsLower ? rows_ : size;                                                                           \
       Index cols = IsLower ? size : cols_;                                                                           \
                                                                                                                      \
-      typedef VectorX##EIGPREFIX VectorRhs;                                                                          \
-      EIGTYPE *x, *y;                                                                                                \
+      using VectorRhs = VectorX##EIGPREFIX;                                                                          \
+      Scalar *x, *y;                                                                                                 \
                                                                                                                      \
       /* Set x*/                                                                                                     \
-      Map<const VectorRhs, 0, InnerStride<> > rhs(rhs_, cols, InnerStride<>(rhsIncr));                               \
+      Map<const VectorRhs, 0, InnerStride<>> rhs(rhs_, cols, InnerStride<>(rhsIncr));                                \
       VectorRhs x_tmp;                                                                                               \
-      if (ConjRhs)                                                                                                   \
+      EIGEN_IF_CONSTEXPR (ConjRhs)                                                                                   \
         x_tmp = rhs.conjugate();                                                                                     \
       else                                                                                                           \
         x_tmp = rhs;                                                                                                 \
@@ -215,9 +260,9 @@ EIGEN_BLAS_TRMV_CM(scomplex, float, cf, c, _)
                                                                                                                      \
       /* Set m, n */                                                                                                 \
       n = convert_index<BlasIndex>(size);                                                                            \
-      lda = convert_index<BlasIndex>(lhsStride);                                                                     \
+      lda = blas_leading_dim<RowMajor>(rows, cols, lhsStride);                                                       \
       incx = 1;                                                                                                      \
-      incy = convert_index<BlasIndex>(resIncr);                                                                      \
+      incy = blas_vector_increment(rows, resIncr);                                                                   \
                                                                                                                      \
       /* Set uplo, trans and diag*/                                                                                  \
       trans = ConjLhs ? 'C' : 'T';                                                                                   \
@@ -225,14 +270,17 @@ EIGEN_BLAS_TRMV_CM(scomplex, float, cf, c, _)
       diag = IsUnitDiag ? 'U' : 'N';                                                                                 \
                                                                                                                      \
       /* call ?TRMV*/                                                                                                \
-      BLASPREFIX##trmv##BLASPOSTFIX(&uplo, &trans, &diag, &n, (const BLASTYPE*)lhs_, &lda, (BLASTYPE*)x, &incx);     \
+      EIGEN_CAT(EIGEN_CAT(BLASPREFIX, trmv), BLASPOSTFIX)                                                            \
+      (&uplo, &trans, &diag, &n, (const BLASTYPE*)lhs_, &lda, (BLASTYPE*)x, &incx);                                  \
                                                                                                                      \
       /* Add op(a_tr)rhs into res*/                                                                                  \
-      BLASPREFIX##axpy##BLASPOSTFIX(&n, (const BLASTYPE*)&numext::real_ref(alpha), (const BLASTYPE*)x, &incx,        \
-                                    (BLASTYPE*)res_, &incy);                                                         \
+      /* BLAS addresses a vector with a negative increment from its lowest address, Eigen from entry 0. */           \
+      EIGEN_CAT(EIGEN_CAT(BLASPREFIX, axpy), BLASPOSTFIX)                                                            \
+      (&n, (const BLASTYPE*)&numext::real_ref(alpha), (const BLASTYPE*)x, &incx,                                     \
+       (BLASTYPE*)(resIncr < 0 ? res_ + (size - 1) * resIncr : res_), &incy);                                        \
       /* Non-square case - doesn't fit to BLAS ?TRMV. Fall to default triangular product*/                           \
       if (size < (std::max)(rows, cols)) {                                                                           \
-        if (ConjRhs)                                                                                                 \
+        EIGEN_IF_CONSTEXPR (ConjRhs)                                                                                 \
           x_tmp = rhs.conjugate();                                                                                   \
         else                                                                                                         \
           x_tmp = rhs;                                                                                               \
@@ -249,9 +297,10 @@ EIGEN_BLAS_TRMV_CM(scomplex, float, cf, c, _)
           m = convert_index<BlasIndex>(size);                                                                        \
           n = convert_index<BlasIndex>(cols - size);                                                                 \
         }                                                                                                            \
-        BLASPREFIX##gemv##BLASPOSTFIX(&trans, &n, &m, (const BLASTYPE*)&numext::real_ref(alpha), (const BLASTYPE*)a, \
-                                      &lda, (const BLASTYPE*)x, &incx, (const BLASTYPE*)&numext::real_ref(beta),     \
-                                      (BLASTYPE*)y, &incy);                                                          \
+        if (resIncr < 0) y += (m - 1) * resIncr;                                                                     \
+        EIGEN_CAT(EIGEN_CAT(BLASPREFIX, gemv), BLASPOSTFIX)                                                          \
+        (&trans, &n, &m, (const BLASTYPE*)&numext::real_ref(alpha), (const BLASTYPE*)a, &lda, (const BLASTYPE*)x,    \
+         &incx, (const BLASTYPE*)&numext::real_ref(beta), (BLASTYPE*)y, &incy);                                      \
       }                                                                                                              \
     }                                                                                                                \
   };
@@ -262,12 +311,15 @@ EIGEN_BLAS_TRMV_RM(dcomplex, MKL_Complex16, cd, z, )
 EIGEN_BLAS_TRMV_RM(float, float, f, s, )
 EIGEN_BLAS_TRMV_RM(scomplex, MKL_Complex8, cf, c, )
 #else
-EIGEN_BLAS_TRMV_RM(double, double, d, d, _)
-EIGEN_BLAS_TRMV_RM(dcomplex, double, cd, z, _)
-EIGEN_BLAS_TRMV_RM(float, float, f, s, _)
-EIGEN_BLAS_TRMV_RM(scomplex, float, cf, c, _)
+EIGEN_BLAS_TRMV_RM(double, double, d, d, EIGEN_BLAS_POSTFIX)
+EIGEN_BLAS_TRMV_RM(dcomplex, double, cd, z, EIGEN_BLAS_POSTFIX)
+EIGEN_BLAS_TRMV_RM(float, float, f, s, EIGEN_BLAS_POSTFIX)
+EIGEN_BLAS_TRMV_RM(scomplex, float, cf, c, EIGEN_BLAS_POSTFIX)
 #endif
 
+#undef EIGEN_BLAS_TRMV_RM
+#undef EIGEN_BLAS_TRMV_SPECIALIZE
+#undef EIGEN_BLAS_TRMV_CM
 }  // namespace internal
 
 }  // end namespace Eigen

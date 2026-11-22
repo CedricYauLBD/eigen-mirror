@@ -1,5 +1,20 @@
+# SPDX-FileCopyrightText: The Eigen Authors
+# SPDX-License-Identifier: MPL-2.0
 
 ei_add_failtest("failtest_sanity_check")
+
+ei_add_failtest("bool_subtract")
+ei_add_failtest("bool_negate")
+ei_add_failtest("bool_subtract_assign")
+ei_add_failtest("bool_subtract_product")
+ei_add_failtest("bool_subtract_noalias")
+ei_add_failtest("bool_subtract_noalias_gemv")
+ei_add_failtest("bool_subtract_noalias_inner")
+ei_add_failtest("bool_array_subtract")
+ei_add_failtest("bool_array_negate")
+ei_add_failtest("bool_array_subtract_scalar")
+ei_add_failtest("permutation_unsupported_shape")
+ei_add_failtest("transpositions_unsupported_shape")
 
 ei_add_failtest("block_nonconst_ctor_on_const_xpr_0")
 ei_add_failtest("block_nonconst_ctor_on_const_xpr_1")
@@ -44,6 +59,8 @@ ei_add_failtest("swap_2")
 
 ei_add_failtest("ternary_1")
 ei_add_failtest("ternary_2")
+ei_add_failtest("approx_mixed_scalars")
+ei_add_failtest("orthogonal_mixed_scalars")
 
 ei_add_failtest("sparse_ref_1")
 ei_add_failtest("sparse_ref_2")
@@ -61,8 +78,60 @@ ei_add_failtest("qr_int")
 ei_add_failtest("colpivqr_int")
 ei_add_failtest("fullpivqr_int")
 ei_add_failtest("jacobisvd_int")
+ei_add_failtest("jacobisvd_fullpiv_thinu")
+ei_add_failtest("jacobisvd_fullpiv_thinv")
+ei_add_failtest("jacobisvd_precondition_square_matrix_noqr")
 ei_add_failtest("bdcsvd_int")
 ei_add_failtest("eigensolver_int")
 ei_add_failtest("eigensolver_cplx")
 ei_add_failtest("initializer_list_1")
 ei_add_failtest("initializer_list_2")
+
+ei_add_failtest("erf_no_scalar_overload")
+ei_add_failtest("erfc_no_scalar_overload")
+ei_add_failtest("vandermonde_int")
+ei_add_failtest("vandermonde_rectangular_square")
+ei_add_failtest("bjorckpereyra_rectangular")
+
+ei_add_failtest("array_modulus_float")
+
+ei_add_failtest("structured_bindings_dynamic_matrix")
+ei_add_failtest("structured_bindings_dynamic_array")
+ei_add_failtest("structured_bindings_rowmajor")
+
+# Structured bindings require C++17 — the header is a no-op otherwise and the
+# "_ok" targets would not compile. Force the standard on these four targets
+# (two per failtest: the _ok and _ko variants).
+foreach(_sb_target
+    structured_bindings_dynamic_matrix_ok structured_bindings_dynamic_matrix_ko
+    structured_bindings_dynamic_array_ok  structured_bindings_dynamic_array_ko
+    structured_bindings_rowmajor_ok       structured_bindings_rowmajor_ko)
+  set_target_properties(${_sb_target} PROPERTIES
+                        CXX_STANDARD 17
+                        CXX_STANDARD_REQUIRED ON
+                        CXX_EXTENSIONS OFF)
+endforeach()
+
+ei_add_failtest("reshape_fixed_count")
+ei_add_failtest("shape_same_size")
+ei_add_failtest("shape_product")
+ei_add_failtest("shape_rank_update")
+ei_add_failtest("shape_same_rows")
+ei_add_failtest("shape_same_cols")
+ei_add_failtest("shape_scalar")
+ei_add_failtest("shape_solver_rhs")
+ei_add_failtest("shape_tensor")
+ei_add_failtest("resize_like_vector_shape")
+
+ei_add_failtest("shape_size_rows")
+ei_add_failtest("shape_size_cols")
+ei_add_failtest("numtraits_unknown_binary_precision")
+ei_add_failtest("block_linear_coeff_runtime_vector")
+ei_add_failtest("realview_linear_coeff_ref_non_linear_view")
+ei_add_failtest("realview_linear_coeff_ref_non_linear_view_const")
+ei_add_failtest("realview_coeff_ref_custom_complex")
+ei_add_failtest("realview_coeff_ref_custom_complex_const")
+ei_add_failtest("intdivider_float_numerator")
+ei_add_failtest("intdivider_wide_numerator")
+ei_add_failtest("packet_loaddup_missing_specialization")
+ei_add_failtest_fixture()

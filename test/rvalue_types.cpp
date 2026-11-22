@@ -6,6 +6,7 @@
 // This Source Code Form is subject to the terms of the Mozilla
 // Public License v. 2.0. If a copy of the MPL was not distributed
 // with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
+// SPDX-License-Identifier: MPL-2.0
 
 #define EIGEN_RUNTIME_NO_MALLOC
 
@@ -17,7 +18,7 @@
 
 template <typename MatrixType>
 void rvalue_copyassign(const MatrixType& m) {
-  typedef typename internal::traits<MatrixType>::Scalar Scalar;
+  using Scalar = typename internal::traits<MatrixType>::Scalar;
 
   // create a temporary which we are about to destroy by moving
   MatrixType tmp = m;
@@ -41,7 +42,7 @@ void rvalue_copyassign(const MatrixType& m) {
 }
 template <typename TranspositionsType>
 void rvalue_transpositions(Index rows) {
-  typedef typename TranspositionsType::IndicesType PermutationVectorType;
+  using PermutationVectorType = typename TranspositionsType::IndicesType;
 
   PermutationVectorType vec;
   randomPermutationVector(vec, rows);

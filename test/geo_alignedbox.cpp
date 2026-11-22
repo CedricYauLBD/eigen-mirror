@@ -6,6 +6,7 @@
 // This Source Code Form is subject to the terms of the Mozilla
 // Public License v. 2.0. If a copy of the MPL was not distributed
 // with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
+// SPDX-License-Identifier: MPL-2.0
 
 #include "main.h"
 #include <Eigen/Geometry>
@@ -29,10 +30,10 @@ void alignedbox(const BoxType& box) {
   /* this test covers the following files:
      AlignedBox.h
   */
-  typedef typename BoxType::Scalar Scalar;
-  typedef NumTraits<Scalar> ScalarTraits;
-  typedef typename ScalarTraits::Real RealScalar;
-  typedef Matrix<Scalar, BoxType::AmbientDimAtCompileTime, 1> VectorType;
+  using Scalar = typename BoxType::Scalar;
+  using ScalarTraits = NumTraits<Scalar>;
+  using RealScalar = typename ScalarTraits::Real;
+  using VectorType = Matrix<Scalar, BoxType::AmbientDimAtCompileTime, 1>;
 
   const Index dim = box.dim();
 
@@ -88,10 +89,10 @@ void alignedbox(const BoxType& box) {
 
 template <typename BoxType>
 void alignedboxTranslatable(const BoxType& box) {
-  typedef typename BoxType::Scalar Scalar;
-  typedef Matrix<Scalar, BoxType::AmbientDimAtCompileTime, 1> VectorType;
-  typedef Transform<Scalar, BoxType::AmbientDimAtCompileTime, Isometry> IsometryTransform;
-  typedef Transform<Scalar, BoxType::AmbientDimAtCompileTime, Affine> AffineTransform;
+  using Scalar = typename BoxType::Scalar;
+  using VectorType = Matrix<Scalar, BoxType::AmbientDimAtCompileTime, 1>;
+  using IsometryTransform = Transform<Scalar, BoxType::AmbientDimAtCompileTime, Isometry>;
+  using AffineTransform = Transform<Scalar, BoxType::AmbientDimAtCompileTime, Affine>;
 
   alignedbox(box);
 
@@ -130,6 +131,11 @@ void alignedboxTranslatable(const BoxType& box) {
   VERIFY_IS_APPROX(c.sizes(), a.sizes());
   VERIFY_IS_APPROX((c.min)(), Ones * Scalar(-2) - UnitX);
   VERIFY_IS_APPROX((c.max)(), -UnitX);
+
+  c.transform(Translation<Scalar, BoxType::AmbientDimAtCompileTime>(translate));
+  VERIFY_IS_APPROX((c.min)(), -Ones);
+  VERIFY_IS_APPROX((c.max)(), Ones);
+  c.transform(tf);
 
   // Scaling
 
@@ -178,7 +184,7 @@ Rotation rotate2D(Scalar angle) {
 
 template <typename Scalar, typename Rotation>
 Rotation rotate2DIntegral(typename NumTraits<Scalar>::NonInteger angle) {
-  typedef typename NumTraits<Scalar>::NonInteger NonInteger;
+  using NonInteger = typename NumTraits<Scalar>::NonInteger;
   return Rotation2D<NonInteger>(angle).toRotationMatrix().template cast<Scalar>();
 }
 
@@ -189,7 +195,7 @@ Rotation rotate3DZAxis(Scalar angle) {
 
 template <typename Scalar, typename Rotation>
 Rotation rotate3DZAxisIntegral(typename NumTraits<Scalar>::NonInteger angle) {
-  typedef typename NumTraits<Scalar>::NonInteger NonInteger;
+  using NonInteger = typename NumTraits<Scalar>::NonInteger;
   return AngleAxis<NonInteger>(angle, Matrix<NonInteger, 3, 1>(0, 0, 1)).toRotationMatrix().template cast<Scalar>();
 }
 
@@ -228,11 +234,11 @@ void alignedboxRotatable(const BoxType& box,
                          Rotation (*rotate)(typename NumTraits<typename BoxType::Scalar>::NonInteger /*_angle*/)) {
   alignedboxTranslatable(box);
 
-  typedef typename BoxType::Scalar Scalar;
-  typedef typename NumTraits<Scalar>::NonInteger NonInteger;
-  typedef Matrix<Scalar, BoxType::AmbientDimAtCompileTime, 1> VectorType;
-  typedef Transform<Scalar, BoxType::AmbientDimAtCompileTime, Isometry> IsometryTransform;
-  typedef Transform<Scalar, BoxType::AmbientDimAtCompileTime, Affine> AffineTransform;
+  using Scalar = typename BoxType::Scalar;
+  using NonInteger = typename NumTraits<Scalar>::NonInteger;
+  using VectorType = Matrix<Scalar, BoxType::AmbientDimAtCompileTime, 1>;
+  using IsometryTransform = Transform<Scalar, BoxType::AmbientDimAtCompileTime, Isometry>;
+  using AffineTransform = Transform<Scalar, BoxType::AmbientDimAtCompileTime, Affine>;
 
   const VectorType Zero = VectorType::Zero();
   const VectorType Ones = VectorType::Ones();
@@ -257,8 +263,8 @@ void alignedboxRotatable(const BoxType& box,
   // box((-3, -2, -2), (-1, 0, 0))
 
   IsometryTransform tf2 = IsometryTransform::Identity();
-  // for some weird reason the following statement has to be put separate from
-  // the following rotate call, otherwise precision problems arise...
+  // The following statement must be separate from the rotate call below,
+  // otherwise precision problems arise.
   Rotation rot = rotate(NonInteger(EIGEN_PI));
   tf2.rotate(rot);
 
@@ -297,13 +303,13 @@ void alignedboxNonIntegralRotatable(
     const BoxType& box, Rotation (*rotate)(typename NumTraits<typename BoxType::Scalar>::NonInteger /*_angle*/)) {
   alignedboxRotatable(box, rotate);
 
-  typedef typename BoxType::Scalar Scalar;
-  typedef typename NumTraits<Scalar>::NonInteger NonInteger;
+  using Scalar = typename BoxType::Scalar;
+  using NonInteger = typename NumTraits<Scalar>::NonInteger;
   enum { Dim = BoxType::AmbientDimAtCompileTime };
-  typedef Matrix<Scalar, Dim, 1> VectorType;
-  typedef Matrix<Scalar, Dim, (1 << Dim)> CornersType;
-  typedef Transform<Scalar, Dim, Isometry> IsometryTransform;
-  typedef Transform<Scalar, Dim, Affine> AffineTransform;
+  using VectorType = Matrix<Scalar, Dim, 1>;
+  using CornersType = Matrix<Scalar, Dim, (1 << Dim)>;
+  using IsometryTransform = Transform<Scalar, Dim, Isometry>;
+  using AffineTransform = Transform<Scalar, Dim, Affine>;
 
   const Index dim = box.dim();
   const VectorType Zero = VectorType::Zero();
@@ -415,8 +421,8 @@ void alignedboxNonIntegralRotatable(
 template <typename BoxType>
 void alignedboxCastTests(const BoxType& box) {
   // casting
-  typedef typename BoxType::Scalar Scalar;
-  typedef Matrix<Scalar, BoxType::AmbientDimAtCompileTime, 1> VectorType;
+  using Scalar = typename BoxType::Scalar;
+  using VectorType = Matrix<Scalar, BoxType::AmbientDimAtCompileTime, 1>;
 
   const Index dim = box.dim();
 
@@ -431,11 +437,122 @@ void alignedboxCastTests(const BoxType& box) {
   b0.extend(p1);
 
   const int Dim = BoxType::AmbientDimAtCompileTime;
-  typedef typename GetDifferentType<Scalar>::type OtherScalar;
+  using OtherScalar = typename GetDifferentType<Scalar>::type;
   AlignedBox<OtherScalar, Dim> hp1f = b0.template cast<OtherScalar>();
   VERIFY_IS_APPROX(hp1f.template cast<Scalar>(), b0);
   AlignedBox<Scalar, Dim> hp1d = b0.template cast<Scalar>();
   VERIFY_IS_APPROX(hp1d.template cast<Scalar>(), b0);
+}
+
+// Casting keeps an empty box empty, also when the extreme values are not representable in the target type.
+template <typename To, typename From>
+void alignedboxEmptyCastTo(Index dim) {
+  const From empty(dim);
+  const To converted(empty);
+  VERIFY(converted.isEmpty());
+}
+
+template <int Dim>
+void alignedboxEmptyCast(Index dim) {
+  using Boxf = AlignedBox<float, Dim>;
+  using Boxd = AlignedBox<double, Dim>;
+  using Boxi = AlignedBox<int, Dim>;
+  alignedboxEmptyCastTo<Boxf, Boxd>(dim);
+  alignedboxEmptyCastTo<Boxd, Boxf>(dim);
+  alignedboxEmptyCastTo<Boxi, Boxf>(dim);
+  alignedboxEmptyCastTo<Boxi, Boxd>(dim);
+  alignedboxEmptyCastTo<Boxf, Boxi>(dim);
+  alignedboxEmptyCastTo<Boxd, Boxi>(dim);
+}
+
+// A default-constructed box is empty (min = highest, max = lowest) and must stay empty, with its corners untouched,
+// under translation and transformation. The other methods either keep an empty box empty or are documented as
+// undefined for it.
+template <typename BoxType>
+void alignedboxEmpty(const BoxType& box) {
+  using Scalar = typename BoxType::Scalar;
+  using VectorType = Matrix<Scalar, BoxType::AmbientDimAtCompileTime, 1>;
+  const int Dim = BoxType::AmbientDimAtCompileTime;
+  const Index dim = box.dim();
+
+  const BoxType empty(dim);
+  VERIFY(empty.isEmpty());
+  VERIFY_IS_EQUAL((empty.min)(), VectorType::Constant(dim, NumTraits<Scalar>::highest()).eval());
+  VERIFY_IS_EQUAL((empty.max)(), VectorType::Constant(dim, NumTraits<Scalar>::lowest()).eval());
+
+  auto verify_still_empty = [&](const BoxType& b) {
+    VERIFY(b.isEmpty());
+    VERIFY_IS_EQUAL((b.min)(), (empty.min)());
+    VERIFY_IS_EQUAL((b.max)(), (empty.max)());
+  };
+
+  // Translation by a nonzero vector in either direction (integers would overflow at the extremes).
+  for (int sign = -1; sign <= 1; sign += 2) {
+    const VectorType t = VectorType::Constant(dim, Scalar(sign));
+    BoxType b = empty;
+    b.translate(t);
+    verify_still_empty(b);
+    verify_still_empty(empty.translated(t));
+    b = empty;
+    b.transform(Translation<Scalar, Dim>(t));
+    verify_still_empty(b);
+  }
+
+  // Affine transforms: the identity, a translation-only transform, and a transform with zero and nonzero entries.
+  Transform<Scalar, Dim, Affine> identity = Transform<Scalar, Dim, Affine>::Identity();
+  Transform<Scalar, Dim, Affine> general = Transform<Scalar, Dim, Affine>::Identity();
+  general.linear().setIdentity();
+  general.linear().coeffRef(0, dim - 1) = Scalar(2);
+  general.translation() = VectorType::Constant(dim, Scalar(1));
+  Transform<Scalar, Dim, Isometry> isometry = Transform<Scalar, Dim, Isometry>::Identity();
+  isometry.translation() = VectorType::Constant(dim, Scalar(1));
+  BoxType b = empty;
+  b.transform(identity);
+  verify_still_empty(b);
+  verify_still_empty(empty.transformed(identity));
+  verify_still_empty(empty.transformed(general));
+  verify_still_empty(empty.transformed(isometry));
+
+  // A box that is empty in some dimensions only (min > max there) counts as empty: it is left unchanged by translate()
+  // and transform(), and cast() turns it into the canonical empty box.
+  if (dim >= 2) {
+    BoxType partial(VectorType::Zero(dim), VectorType::Ones(dim));
+    (partial.min)()[0] = Scalar(5);
+    VERIFY(partial.isEmpty());
+    const BoxType original = partial;
+    partial.translate(VectorType::Constant(dim, Scalar(1)));
+    VERIFY_IS_EQUAL((partial.min)(), (original.min)());
+    VERIFY_IS_EQUAL((partial.max)(), (original.max)());
+    partial.transform(general);
+    VERIFY_IS_EQUAL((partial.min)(), (original.min)());
+    VERIFY_IS_EQUAL((partial.max)(), (original.max)());
+    using Other = typename std::conditional<std::is_same<Scalar, double>::value, float, double>::type;
+    const AlignedBox<Other, Dim> converted(original);
+    VERIFY(converted.isEmpty());
+    using OtherVector = Matrix<Other, Dim, 1>;
+    VERIFY_IS_EQUAL((converted.min)(), OtherVector::Constant(dim, NumTraits<Other>::highest()).eval());
+    VERIFY_IS_EQUAL((converted.max)(), OtherVector::Constant(dim, NumTraits<Other>::lowest()).eval());
+  }
+
+  // Methods that are well defined on an empty box.
+  VERIFY_IS_EQUAL(empty.volume(), Scalar(0));
+  VERIFY_IS_EQUAL(empty.center(), VectorType::Zero(dim).eval());
+  verify_still_empty(empty.intersection(empty));
+  verify_still_empty(BoxType(empty).clamp(empty));
+  verify_still_empty(empty.merged(empty));
+  const VectorType p = VectorType::Constant(dim, Scalar(3));
+  BoxType single = empty;
+  single.extend(p);
+  VERIFY(!single.isEmpty());
+  VERIFY_IS_EQUAL((single.min)(), p);
+  VERIFY_IS_EQUAL((single.max)(), p);
+  BoxType unchanged = single;
+  unchanged.extend(empty);
+  VERIFY_IS_EQUAL((unchanged.min)(), p);
+  VERIFY_IS_EQUAL((unchanged.max)(), p);
+  VERIFY(single.intersection(empty).isEmpty());
+  VERIFY(!empty.intersects(single) && !single.intersects(empty));
+  VERIFY(!empty.contains(p));
 }
 
 void specificTest1() {
@@ -444,7 +561,7 @@ void specificTest1() {
   Vector2f M;
   M << 1.0f, 5.0f;
 
-  typedef AlignedBox2f BoxType;
+  using BoxType = AlignedBox2f;
   BoxType box(m, M);
 
   Vector2f sides = M - m;
@@ -473,7 +590,7 @@ void specificTest2() {
   Vector3i M;
   M << 1, 5, 3;
 
-  typedef AlignedBox3i BoxType;
+  using BoxType = AlignedBox3i;
   BoxType box(m, M);
 
   Vector3i sides = M - m;
@@ -493,6 +610,9 @@ void specificTest2() {
   topLeftFloor << m[0], M[1], m[2];
   VERIFY_IS_APPROX(bottomRightFloor, box.corner(BoxType::BottomRightFloor));
   VERIFY_IS_APPROX(topLeftFloor, box.corner(BoxType::TopLeftFloor));
+
+  AlignedBox<int, Dynamic> dynBox(m, M);
+  VERIFY_IS_EQUAL(VectorXi(bottomRightFloor), dynBox.corner(AlignedBox<int, Dynamic>::BottomRightFloor));
 }
 
 EIGEN_DECLARE_TEST(geo_alignedbox) {
@@ -516,6 +636,12 @@ EIGEN_DECLARE_TEST(geo_alignedbox) {
 
     CALL_SUBTEST_14(alignedbox(AlignedBox<double, Dynamic>(4)));
   }
+  CALL_SUBTEST_12(alignedboxEmpty(AlignedBox3i()));
+  CALL_SUBTEST_12(alignedboxEmpty(AlignedBox1i()));
+  CALL_SUBTEST_12(alignedboxEmpty(AlignedBox3f()));
+  CALL_SUBTEST_12(alignedboxEmpty(AlignedBox2d()));
+  CALL_SUBTEST_12(alignedboxEmptyCast<3>(3));
+  CALL_SUBTEST_12(alignedboxEmptyCast<Dynamic>(4));
   CALL_SUBTEST_12(specificTest1());
   CALL_SUBTEST_13(specificTest2());
 }

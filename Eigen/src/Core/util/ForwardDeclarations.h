@@ -7,6 +7,7 @@
 // This Source Code Form is subject to the terms of the Mozilla
 // Public License v. 2.0. If a copy of the MPL was not distributed
 // with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
+// SPDX-License-Identifier: MPL-2.0
 
 #ifndef EIGEN_FORWARDDECLARATIONS_H
 #define EIGEN_FORWARDDECLARATIONS_H
@@ -28,9 +29,7 @@ template <typename T>
 struct traits<const T> : traits<T> {};
 
 template <typename Derived>
-struct has_direct_access {
-  enum { ret = (traits<Derived>::Flags & DirectAccessBit) ? 1 : 0 };
-};
+struct has_direct_access : bool_constant<(traits<Derived>::Flags & DirectAccessBit) != 0> {};
 
 template <typename Derived>
 struct accessors_level {
@@ -74,14 +73,10 @@ class MatrixBase;
 template <typename Derived>
 class ArrayBase;
 
-template <typename ExpressionType, unsigned int Added, unsigned int Removed>
-class Flagged;
 template <typename ExpressionType, template <typename> class StorageBase>
 class NoAlias;
 template <typename ExpressionType>
 class NestByValue;
-template <typename ExpressionType>
-class ForceAlignedAccess;
 template <typename ExpressionType>
 class SwapWrapper;
 
@@ -122,8 +117,6 @@ template <typename DiagonalVectorType_>
 class DiagonalWrapper;
 template <typename Scalar_, int SizeAtCompileTime, int MaxSizeAtCompileTime = SizeAtCompileTime>
 class DiagonalMatrix;
-template <typename MatrixType, typename DiagonalType, int ProductOrder>
-class DiagonalProduct;
 template <typename MatrixType, int Index = 0>
 class Diagonal;
 template <typename Derived>
@@ -134,6 +127,11 @@ template <typename Scalar_>
 class SkewSymmetricMatrix3;
 template <int SizeAtCompileTime, int MaxSizeAtCompileTime = SizeAtCompileTime, typename IndexType = int>
 class PermutationMatrix;
+template <typename Scalar_, int SizeAtCompileTime, int MaxSizeAtCompileTime = SizeAtCompileTime,
+          typename StorageIndex_ = int>
+class ScaledPermutationMatrix;
+template <typename Derived>
+class ScaledPermutationBase;
 template <int SizeAtCompileTime, int MaxSizeAtCompileTime = SizeAtCompileTime, typename IndexType = int>
 class Transpositions;
 template <typename Derived>
@@ -160,7 +158,7 @@ template <typename Derived>
 class RefBase;
 template <typename PlainObjectType, int Options = 0,
           typename StrideType =
-              typename std::conditional_t<PlainObjectType::IsVectorAtCompileTime, InnerStride<1>, OuterStride<>>>
+              std::conditional_t<PlainObjectType::IsVectorAtCompileTime, InnerStride<1>, OuterStride<>>>
 class Ref;
 template <typename ViewOp, typename MatrixType, typename StrideType = Stride<0, 0>>
 class CwiseUnaryView;
@@ -171,6 +169,8 @@ template <typename MatrixType, unsigned int Mode>
 class TriangularView;
 template <typename MatrixType, unsigned int Mode>
 class SelfAdjointView;
+template <typename Derived>
+class RealView;
 template <typename MatrixType>
 class SparseView;
 template <typename ExpressionType>
@@ -197,14 +197,6 @@ template <typename XprType, DirectionType Direction>
 class subvector_stl_iterator;
 template <typename XprType, DirectionType Direction>
 class subvector_stl_reverse_iterator;
-template <typename DecompositionType>
-struct kernel_retval_base;
-template <typename DecompositionType>
-struct kernel_retval;
-template <typename DecompositionType>
-struct image_retval_base;
-template <typename DecompositionType>
-struct image_retval;
 }  // end namespace internal
 
 namespace internal {
@@ -216,29 +208,23 @@ class BandMatrix;
 namespace internal {
 template <typename Lhs, typename Rhs>
 struct product_type;
-
-template <bool>
-struct EnableIf;
+template <typename Derived, typename Func, typename Identity>
+EIGEN_DEVICE_FUNC EIGEN_ALWAYS_INLINE typename Derived::Scalar redux_with_identity(const DenseBase<Derived>& xpr,
+                                                                                   const Func& func,
+                                                                                   Identity&& identity);
 
 /** \internal
  * \class product_evaluator
  * Products need their own evaluator with more template arguments allowing for
  * easier partial template specializations.
  */
-template <typename T, int ProductTag = internal::product_type<typename T::Lhs, typename T::Rhs>::ret,
+template <typename T, int ProductTag = internal::product_type<typename T::Lhs, typename T::Rhs>::value,
           typename LhsShape = typename evaluator_traits<typename T::Lhs>::Shape,
           typename RhsShape = typename evaluator_traits<typename T::Rhs>::Shape,
           typename LhsScalar = typename traits<typename T::Lhs>::Scalar,
           typename RhsScalar = typename traits<typename T::Rhs>::Scalar>
 struct product_evaluator;
 }  // namespace internal
-
-template <typename Lhs, typename Rhs, int ProductType = internal::product_type<Lhs, Rhs>::value>
-struct ProductReturnType;
-
-// this is a workaround for sun CC
-template <typename Lhs, typename Rhs>
-struct LazyProductReturnType;
 
 namespace internal {
 
@@ -397,32 +383,49 @@ template <typename Scalar_, int Rows_, int Cols_,
                                                                    : EIGEN_DEFAULT_MATRIX_STORAGE_ORDER_OPTION),
           int MaxRows_ = Rows_, int MaxCols_ = Cols_>
 class Array;
-template <typename ConditionMatrixType, typename ThenMatrixType, typename ElseMatrixType>
-class Select;
 template <typename MatrixType, typename BinaryOp, int Direction>
 class PartialReduxExpr;
 template <typename ExpressionType, int Direction>
 class VectorwiseOp;
 template <typename MatrixType, int RowFactor, int ColFactor>
 class Replicate;
+template <int Direction, typename LhsType, typename RhsType>
+class Concat;
 template <typename MatrixType, int Direction = BothDirections>
 class Reverse;
 
-#if defined(EIGEN_USE_LAPACKE) && defined(lapack_int)
-// Lapacke interface requires StorageIndex to be lapack_int
-typedef lapack_int DefaultPermutationIndex;
+/* EIGEN_HAS_LAPACK_INT: whether the lapack_int type from the LAPACKE headers is available. Most LAPACKE headers
+ * #define lapack_int (so defined(lapack_int) detects it), but some vendors instead expose lapack_int as a typedef
+ * and #define LAPACK_INT to advertise it. A user whose header does neither can predefine EIGEN_HAS_LAPACK_INT to
+ * 0 or 1 by hand.
+ */
+#ifndef EIGEN_HAS_LAPACK_INT
+#if defined(lapack_int) || defined(LAPACK_INT)
+#define EIGEN_HAS_LAPACK_INT 1
 #else
-typedef int DefaultPermutationIndex;
+#define EIGEN_HAS_LAPACK_INT 0
+#endif
+#endif
+
+#if defined(EIGEN_USE_LAPACKE) && EIGEN_HAS_LAPACK_INT
+// Lapacke interface requires StorageIndex to be lapack_int
+using DefaultPermutationIndex = lapack_int;
+#else
+using DefaultPermutationIndex = int;
+#endif
+
+// Plain static_assert (not EIGEN_STATIC_ASSERT): like the MKL_INT guard it must not be suppressible.
+#if defined(EIGEN_USE_LAPACKE) && defined(EIGEN_USE_BLAS) && EIGEN_HAS_LAPACK_INT
+static_assert(sizeof(lapack_int) == sizeof(BlasIndex),
+              "LAPACKE integer width (lapack_int) does not match the BLAS integer width (Eigen::BlasIndex). Build "
+              "both backends against the same integer interface: pair EIGEN_64BIT_BLAS with an ILP64 LAPACKE "
+              "(lapack_int = 64-bit), or use the 32-bit interface for both.");
 #endif
 
 template <typename MatrixType, typename PermutationIndex = DefaultPermutationIndex>
 class FullPivLU;
 template <typename MatrixType, typename PermutationIndex = DefaultPermutationIndex>
 class PartialPivLU;
-namespace internal {
-template <typename MatrixType>
-struct inverse_impl;
-}
 template <typename MatrixType>
 class HouseholderQR;
 template <typename MatrixType, typename PermutationIndex = DefaultPermutationIndex>
@@ -430,7 +433,15 @@ class ColPivHouseholderQR;
 template <typename MatrixType, typename PermutationIndex = DefaultPermutationIndex>
 class FullPivHouseholderQR;
 template <typename MatrixType, typename PermutationIndex = DefaultPermutationIndex>
+class RandColPivHouseholderQR;
+template <typename MatrixType, typename PermutationIndex = DefaultPermutationIndex>
 class CompleteOrthogonalDecomposition;
+template <typename MatrixType, typename PermutationIndex = DefaultPermutationIndex>
+class RandCompleteOrthogonalDecomposition;
+namespace internal {
+template <typename MatrixType, typename PermutationIndex, template <typename, typename> class RankRevealingQR>
+class CompleteOrthogonalDecompositionImpl;
+}
 template <typename MatrixType>
 class SVDBase;
 template <typename MatrixType, int Options = 0>
@@ -441,6 +452,8 @@ template <typename MatrixType, int UpLo = Lower>
 class LLT;
 template <typename MatrixType, int UpLo = Lower>
 class LDLT;
+template <typename MatrixType, int UpLo = Lower>
+class BunchKaufman;
 template <typename VectorsType, typename CoeffsType, int Side = OnTheLeft>
 class HouseholderSequence;
 template <typename Scalar>
@@ -497,8 +510,8 @@ class MatrixComplexPowerReturnValue;
 namespace internal {
 template <typename Scalar>
 struct stem_function {
-  typedef internal::make_complex_t<Scalar> ComplexScalar;
-  typedef ComplexScalar type(ComplexScalar, int);
+  using ComplexScalar = internal::make_complex_t<Scalar>;
+  using type = ComplexScalar(ComplexScalar, int);
 };
 }  // namespace internal
 
@@ -517,6 +530,9 @@ struct eigen_zero_impl;
 
 template <typename Packet>
 struct has_packet_segment : std::false_type {};
+
+template <typename T>
+struct complex_array_access;
 }  // namespace internal
 
 }  // end namespace Eigen

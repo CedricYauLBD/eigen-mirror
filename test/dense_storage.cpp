@@ -6,6 +6,7 @@
 // This Source Code Form is subject to the terms of the Mozilla
 // Public License v. 2.0. If a copy of the MPL was not distributed
 // with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
+// SPDX-License-Identifier: MPL-2.0
 
 #define EIGEN_TESTING_PLAINOBJECT_CTOR
 
@@ -15,6 +16,7 @@
 #include "SafeScalar.h"
 
 #include <Eigen/Core>
+#include <new>
 
 using DenseStorageD3x3 = Eigen::DenseStorage<double, 9, 3, 3, 0>;
 #if !defined(EIGEN_DENSE_STORAGE_CTOR_PLUGIN)
@@ -53,7 +55,7 @@ static_assert(std::is_trivially_copy_constructible<Array4f>::value, "Array4f not
 
 template <typename T, int Size, int Rows, int Cols>
 void dense_storage_copy(int rows, int cols) {
-  typedef DenseStorage<T, Size, Rows, Cols, 0> DenseStorageType;
+  using DenseStorageType = DenseStorage<T, Size, Rows, Cols, 0>;
 
   const int size = rows * cols;
   DenseStorageType reference(size, rows, cols);
@@ -67,7 +69,7 @@ void dense_storage_copy(int rows, int cols) {
 
 template <typename T, int Size, int Rows, int Cols>
 void dense_storage_assignment(int rows, int cols) {
-  typedef DenseStorage<T, Size, Rows, Cols, 0> DenseStorageType;
+  using DenseStorageType = DenseStorage<T, Size, Rows, Cols, 0>;
 
   const int size = rows * cols;
   DenseStorageType reference(size, rows, cols);
@@ -82,7 +84,7 @@ void dense_storage_assignment(int rows, int cols) {
 
 template <typename T, int Size, int Rows, int Cols>
 void dense_storage_swap(int rowsa, int colsa, int rowsb, int colsb) {
-  typedef DenseStorage<T, Size, Rows, Cols, 0> DenseStorageType;
+  using DenseStorageType = DenseStorage<T, Size, Rows, Cols, 0>;
 
   const int sizea = rowsa * colsa;
   ArrayX<T> referencea(sizea);
@@ -202,12 +204,12 @@ void plaintype_tests() {
   constexpr int ColsAtCompileTime = PlainType::ColsAtCompileTime;
   constexpr int MaxRowsAtCompileTime = PlainType::MaxRowsAtCompileTime;
   constexpr int MaxColsAtCompileTime = PlainType::MaxColsAtCompileTime;
-  const Index expectedDefaultRows = RowsAtCompileTime == Dynamic ? 0 : RowsAtCompileTime;
-  const Index expectedDefaultCols = ColsAtCompileTime == Dynamic ? 0 : ColsAtCompileTime;
-  const Index minRows = RowsAtCompileTime == Dynamic ? 0 : RowsAtCompileTime;
-  const Index minCols = ColsAtCompileTime == Dynamic ? 0 : ColsAtCompileTime;
-  const Index maxRows = MaxRowsAtCompileTime == Dynamic ? 100 : MaxRowsAtCompileTime;
-  const Index maxCols = MaxColsAtCompileTime == Dynamic ? 100 : MaxColsAtCompileTime;
+  constexpr Index expectedDefaultRows = RowsAtCompileTime == Dynamic ? 0 : RowsAtCompileTime;
+  constexpr Index expectedDefaultCols = ColsAtCompileTime == Dynamic ? 0 : ColsAtCompileTime;
+  constexpr Index minRows = RowsAtCompileTime == Dynamic ? 0 : RowsAtCompileTime;
+  constexpr Index minCols = ColsAtCompileTime == Dynamic ? 0 : ColsAtCompileTime;
+  constexpr Index maxRows = MaxRowsAtCompileTime == Dynamic ? 100 : MaxRowsAtCompileTime;
+  constexpr Index maxCols = MaxColsAtCompileTime == Dynamic ? 100 : MaxColsAtCompileTime;
   const Index rows = internal::random<Index>(minRows, maxRows);
   const Index cols = internal::random<Index>(minCols, maxCols);
   // default construction
@@ -250,12 +252,142 @@ void plaintype_tests() {
   VERIFY_IS_CWISE_EQUAL(m1, m0);
 }
 
+// Building a fixed-maximum-size object from an expression must not value-initialize its storage: that zero-fills the
+// whole inline buffer whatever the logical size (#3179). The object is constructed over a sentinel pattern and the
+// bytes past the logical size are checked to still hold it. Aggregate member initialization is copy-initialization,
+// which selects the implicit converting constructors rather than the explicit one-argument one. The sentinel is written
+// and read through volatile so that the optimizer keeps both accesses. Only scalars with a trivial default constructor
+// can be probed this way: std::complex, for instance, zero-initializes itself on default-initialization.
+template <typename PlainType>
+struct plain_holder {
+  PlainType m;
+};
+
+template <typename PlainType>
+struct plain_storage {
+  alignas(PlainType) unsigned char bytes[sizeof(PlainType)];
+  void fill() {
+    volatile unsigned char* v = bytes;
+    for (std::size_t i = 0; i < sizeof(bytes); ++i) v[i] = 0xAB;
+  }
+};
+
+template <typename PlainType>
+void verify_unused_storage_untouched(const PlainType& m) {
+  const volatile unsigned char* p = reinterpret_cast<const unsigned char*>(m.data() + m.size());
+  const volatile unsigned char* end =
+      reinterpret_cast<const unsigned char*>(m.data() + PlainType::MaxSizeAtCompileTime);
+  VERIFY(p < end);
+  for (; p != end; ++p) VERIFY_IS_EQUAL(int(*p), 0xAB);
+}
+
+template <typename PlainType, typename Expr, typename Reference>
+void check_unused_storage_untouched(const Expr& expr, const Reference& reference) {
+  plain_storage<PlainType> storage;
+  storage.fill();
+  plain_holder<PlainType>* holder = new (storage.bytes) plain_holder<PlainType>{expr};
+  VERIFY_IS_CWISE_EQUAL(holder->m, reference);
+  verify_unused_storage_untouched(holder->m);
+}
+
+void fixed_max_storage_tests() {
+  using MatrixMax = Matrix<double, Dynamic, Dynamic, ColMajor, 8, 8>;
+  using RowMatrixMax = Matrix<float, Dynamic, Dynamic, RowMajor, 8, 8>;
+  using ArrayMax = Array<int, 4, Dynamic, ColMajor, 4, 8>;
+  using VectorMax = Matrix<int, Dynamic, 1, ColMajor, 16, 1>;
+  MatrixMax matrix = MatrixMax::Random(8, 8);
+  RowMatrixMax row_matrix = RowMatrixMax::Random(8, 8);
+  ArrayMax array = ArrayMax::Random(4, 8);
+  VectorMax vector = VectorMax::Random(16);
+  // conversion from a DenseBase expression
+  check_unused_storage_untouched<MatrixMax>(matrix.topLeftCorner(3, 5), matrix.topLeftCorner(3, 5));
+  check_unused_storage_untouched<RowMatrixMax>(row_matrix.bottomRows(6) * 2.0f, row_matrix.bottomRows(6) * 2.0f);
+  check_unused_storage_untouched<ArrayMax>(array.leftCols(3) + 1, array.leftCols(3) + 1);
+  check_unused_storage_untouched<VectorMax>(vector.head(5), vector.head(5));
+  // conversion from an EigenBase expression
+  check_unused_storage_untouched<MatrixMax>(matrix.col(0).head(4).asDiagonal(),
+                                            matrix.col(0).head(4).asDiagonal().toDenseMatrix());
+  // initializer list
+  plain_storage<MatrixMax> storage;
+  storage.fill();
+  MatrixMax* m = new (storage.bytes) MatrixMax({{1.0, 2.0}, {3.0, 4.0}});
+  VERIFY_IS_EQUAL(m->rows(), 2);
+  VERIFY_IS_EQUAL(m->cols(), 2);
+  VERIFY_IS_EQUAL((*m)(1, 0), 3.0);
+  verify_unused_storage_untouched(*m);
+}
+
+// The constructors above default-initialize the storage. Every coefficient of a scalar with a non-trivial default
+// constructor must still be constructed before it is assigned: SafeScalar asserts on any read of a value that was not.
+void fixed_max_safe_scalar_tests() {
+  using Scalar = SafeScalar<float>;
+  using MatrixMax = Matrix<Scalar, Dynamic, Dynamic, ColMajor, 8, 8>;
+  using VectorMax = Matrix<Scalar, Dynamic, 1, ColMajor, 16, 1>;
+  using Vector4 = Matrix<Scalar, 4, 1>;
+  MatrixMax source = MatrixMax::Random(8, 8);
+  // conversion from a DenseBase expression
+  MatrixMax dense = source.topLeftCorner(3, 5);
+  VERIFY_IS_CWISE_EQUAL(dense, source.topLeftCorner(3, 5));
+  VectorMax vector = source.col(1).head(5);
+  VERIFY_IS_CWISE_EQUAL(vector, source.col(1).head(5));
+  // conversion from an EigenBase expression
+  MatrixMax diagonal = source.col(0).head(4).asDiagonal();
+  VERIFY_IS_CWISE_EQUAL(diagonal, source.col(0).head(4).asDiagonal().toDenseMatrix());
+  // initializer list
+  MatrixMax list({{Scalar(1.f), Scalar(2.f)}, {Scalar(3.f), Scalar(4.f)}});
+  VERIFY_IS_EQUAL(list.rows(), 2);
+  VERIFY_IS_EQUAL(list.cols(), 2);
+  VERIFY_IS_EQUAL(float(list(1, 0)), 3.f);
+  // four or more coefficients
+  Vector4 coefficients(Scalar(1.f), Scalar(2.f), Scalar(3.f), Scalar(4.f));
+  VERIFY_IS_EQUAL(float(coefficients(3)), 4.f);
+}
+
+// Trivially constructible and destructible, so RequireInitialization stays 0, but not trivially copyable: a copy has
+// to run the assignment operator.
+struct CopyCountingScalar {
+  CopyCountingScalar() = default;
+  explicit CopyCountingScalar(float v) : value(v) {}
+  CopyCountingScalar(const CopyCountingScalar&) = default;
+  CopyCountingScalar& operator=(const CopyCountingScalar& other) {
+    value = other.value;
+    ++copy_assignments();
+    return *this;
+  }
+  static Index& copy_assignments() {
+    static Index count = 0;
+    return count;
+  }
+  float value;
+};
+
+namespace Eigen {
+template <>
+struct NumTraits<CopyCountingScalar> : NumTraits<float> {};
+}  // namespace Eigen
+
+void copy_of_non_trivially_copyable_scalar() {
+  STATIC_CHECK(!NumTraits<CopyCountingScalar>::RequireInitialization);
+  STATIC_CHECK(!std::is_trivially_copyable<CopyCountingScalar>::value);
+  using Vector = Matrix<CopyCountingScalar, Dynamic, 1>;
+  const Index size = 5;
+  Vector source(size);
+  for (Index i = 0; i < size; ++i) source.coeffRef(i).value = float(i);
+  CopyCountingScalar::copy_assignments() = 0;
+  Vector copy(source);
+  VERIFY_IS_EQUAL(CopyCountingScalar::copy_assignments(), size);
+  for (Index i = 0; i < size; ++i) VERIFY_IS_EQUAL(copy.coeff(i).value, float(i));
+}
+
 EIGEN_DECLARE_TEST(dense_storage) {
   dense_storage_tests<int>();
   dense_storage_tests<float>();
   dense_storage_tests<SafeScalar<float>>();
   dense_storage_tests<MovableScalar<float>>();
   dense_storage_tests<AnnoyingScalar>();
+  fixed_max_storage_tests();
+  fixed_max_safe_scalar_tests();
+  copy_of_non_trivially_copyable_scalar();
   for (int i = 0; i < g_repeat; i++) {
     plaintype_tests<Matrix<float, 0, 0, ColMajor>>();
     plaintype_tests<Matrix<float, Dynamic, Dynamic, ColMajor, 0, 0>>();

@@ -6,8 +6,10 @@
 // This Source Code Form is subject to the terms of the Mozilla
 // Public License v. 2.0. If a copy of the MPL was not distributed
 // with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
+// SPDX-License-Identifier: MPL-2.0
 
 #include "main.h"
+#include "random_for_arithmetic.h"
 
 template <typename MatrixType, typename Index, typename Scalar>
 std::enable_if_t<!NumTraits<typename MatrixType::Scalar>::IsComplex, typename MatrixType::Scalar> block_real_only(
@@ -32,7 +34,7 @@ std::enable_if_t<NumTraits<typename MatrixType::Scalar>::IsComplex, typename Mat
 
 // Check at compile-time that T1==T2, and at runtime-time that a==b
 template <typename T1, typename T2>
-std::enable_if_t<internal::is_same<T1, T2>::value, bool> is_same_block(const T1& a, const T2& b) {
+std::enable_if_t<std::is_same<T1, T2>::value, bool> is_same_block(const T1& a, const T2& b) {
   return a.isApprox(b);
 }
 
@@ -49,22 +51,37 @@ std::enable_if_t<((MatrixType::Flags & RowMajorBit) != 0), void> check_left_top(
 }
 
 template <typename MatrixType>
+std::enable_if_t<((MatrixType::Flags & RowMajorBit) == 0), void> checkInnerVector(const MatrixType& m, Index /*r*/,
+                                                                                  Index c, Index /*rows*/, Index cols) {
+  VERIFY_IS_CWISE_EQUAL(m.innerVector(c), m.col(c));
+  VERIFY_IS_CWISE_EQUAL(m.innerVectors(c, cols), m.middleCols(c, cols));
+}
+
+template <typename MatrixType>
+std::enable_if_t<((MatrixType::Flags & RowMajorBit) != 0), void> checkInnerVector(const MatrixType& m, Index r,
+                                                                                  Index /*c*/, Index rows,
+                                                                                  Index /*cols*/) {
+  VERIFY_IS_CWISE_EQUAL(m.innerVector(r), m.row(r));
+  VERIFY_IS_CWISE_EQUAL(m.innerVectors(r, rows), m.middleRows(r, rows));
+}
+
+template <typename MatrixType>
 void block(const MatrixType& m) {
-  typedef typename MatrixType::Scalar Scalar;
-  typedef typename MatrixType::RealScalar RealScalar;
-  typedef Matrix<Scalar, MatrixType::RowsAtCompileTime, 1> VectorType;
-  typedef Matrix<Scalar, 1, MatrixType::ColsAtCompileTime> RowVectorType;
-  typedef Matrix<Scalar, Dynamic, Dynamic, MatrixType::IsRowMajor ? RowMajor : ColMajor> DynamicMatrixType;
-  typedef Matrix<Scalar, Dynamic, 1> DynamicVectorType;
+  using Scalar = typename MatrixType::Scalar;
+  using RealScalar = typename MatrixType::RealScalar;
+  using VectorType = Matrix<Scalar, MatrixType::RowsAtCompileTime, 1>;
+  using RowVectorType = Matrix<Scalar, 1, MatrixType::ColsAtCompileTime>;
+  using DynamicMatrixType = Matrix<Scalar, Dynamic, Dynamic, MatrixType::IsRowMajor ? RowMajor : ColMajor>;
+  using DynamicVectorType = Matrix<Scalar, Dynamic, 1>;
 
   Index rows = m.rows();
   Index cols = m.cols();
 
-  MatrixType m1 = MatrixType::Random(rows, cols), m1_copy = m1, m2 = MatrixType::Random(rows, cols), m3(rows, cols),
-             ones = MatrixType::Ones(rows, cols);
-  VectorType v1 = VectorType::Random(rows);
+  MatrixType m1 = random_for_arithmetic<MatrixType>(rows, cols), m1_copy = m1,
+             m2 = random_for_arithmetic<MatrixType>(rows, cols), m3(rows, cols), ones = MatrixType::Ones(rows, cols);
+  VectorType v1 = random_for_arithmetic<VectorType>(rows);
 
-  Scalar s1 = internal::random<Scalar>();
+  Scalar s1 = random_scalar_for_arithmetic<Scalar>();
 
   Index r1 = internal::random<Index>(0, rows - 1);
   Index r2 = internal::random<Index>(r1, rows - 1);
@@ -72,6 +89,7 @@ void block(const MatrixType& m) {
   Index c2 = internal::random<Index>(c1, cols - 1);
 
   block_real_only(m1, r1, r2, c1, c1, s1);
+  checkInnerVector(m1, r1, c1, r2 - r1, c2 - c1);
 
   // test fill logic with innerpanel and non-innerpanel blocks
   m1.row(r1).setConstant(s1);
@@ -86,6 +104,32 @@ void block(const MatrixType& m) {
   m1 = m1_copy;
   m1.col(c1).setZero();
   VERIFY_IS_CWISE_EQUAL(m1.col(c1), DynamicVectorType::Zero(rows));
+  m1 = m1_copy;
+  // test setZero/setConstant/setOnes on non-contiguous multi-row/multi-col blocks
+  // This exercises the non-fill_n path in Fill.h and verifies no data corruption
+  if (r2 > r1 && c2 > c1) {
+    Index br = r2 - r1, bc = c2 - c1;
+    m1 = m1_copy;
+    m1.block(r1, c1, br, bc).setZero();
+    VERIFY_IS_CWISE_EQUAL(m1.block(r1, c1, br, bc), DynamicMatrixType::Zero(br, bc));
+    for (Index j = 0; j < cols; ++j)
+      for (Index i = 0; i < rows; ++i)
+        if (i < r1 || i >= r2 || j < c1 || j >= c2) VERIFY_IS_EQUAL(m1(i, j), m1_copy(i, j));
+
+    m1 = m1_copy;
+    m1.block(r1, c1, br, bc).setConstant(s1);
+    VERIFY_IS_CWISE_EQUAL(m1.block(r1, c1, br, bc), DynamicMatrixType::Constant(br, bc, s1));
+    for (Index j = 0; j < cols; ++j)
+      for (Index i = 0; i < rows; ++i)
+        if (i < r1 || i >= r2 || j < c1 || j >= c2) VERIFY_IS_EQUAL(m1(i, j), m1_copy(i, j));
+
+    m1 = m1_copy;
+    m1.block(r1, c1, br, bc).setOnes();
+    VERIFY_IS_CWISE_EQUAL(m1.block(r1, c1, br, bc), DynamicMatrixType::Ones(br, bc));
+    for (Index j = 0; j < cols; ++j)
+      for (Index i = 0; i < rows; ++i)
+        if (i < r1 || i >= r2 || j < c1 || j >= c2) VERIFY_IS_EQUAL(m1(i, j), m1_copy(i, j));
+  }
   m1 = m1_copy;
 
   // check row() and col()
@@ -357,11 +401,111 @@ void unwind_test(const BaseXpr&) {
   unwind_test_impl<BaseXpr>::run(xpr);
 }
 
+// A block that is an inner panel of a general sub-block is not an inner panel of
+// the sub-block's base expression: it spans the full inner dimension of its
+// immediate parent, but not that of the base. Unwinding must not promote it to
+// one, since an inner panel advertises linear access over the base's storage.
+template <typename BaseXpr>
+void unwind_inner_panel_test(const BaseXpr&) {
+  const Index rows = 20, cols = 20;
+  BaseXpr xpr = BaseXpr::Random(rows, cols);
+
+  // The parent spans neither dimension fully, so neither panel taken from it is
+  // an inner panel of `xpr`. Copying out through a plain object exercises this:
+  // an unwound block that wrongly claims to be an inner panel is traversed
+  // linearly and reads the wrong coefficients.
+  auto sub = xpr.block(1, 1, rows - 3, cols - 3);
+  auto sub_cols = sub.middleCols(2, 3);
+  auto sub_rows = sub.middleRows(2, 3);
+  VERIFY_IS_EQUAL(int(internal::traits<decltype(sub_cols.unwind())>::InnerPanel), 0);
+  VERIFY_IS_EQUAL(int(internal::traits<decltype(sub_rows.unwind())>::InnerPanel), 0);
+  BaseXpr sub_cols_ref = sub_cols, sub_cols_unwound = sub_cols.unwind();
+  VERIFY_IS_CWISE_EQUAL(sub_cols_ref, sub_cols_unwound);
+  BaseXpr sub_rows_ref = sub_rows, sub_rows_unwound = sub_rows.unwind();
+  VERIFY_IS_CWISE_EQUAL(sub_rows_ref, sub_rows_unwound);
+
+  // An inner panel of an inner panel *is* an inner panel of the base, and must
+  // keep saying so after unwinding.
+  auto inner_cols = xpr.middleCols(1, cols - 3).middleCols(2, 3);
+  VERIFY_IS_EQUAL(int(internal::traits<decltype(inner_cols.unwind())>::InnerPanel), int(BaseXpr::IsRowMajor ? 0 : 1));
+  BaseXpr inner_cols_ref = inner_cols, inner_cols_unwound = inner_cols.unwind();
+  VERIFY_IS_CWISE_EQUAL(inner_cols_ref, inner_cols_unwound);
+
+  auto inner_rows = xpr.middleRows(1, rows - 3).middleRows(2, 3);
+  VERIFY_IS_EQUAL(int(internal::traits<decltype(inner_rows.unwind())>::InnerPanel), int(BaseXpr::IsRowMajor ? 1 : 0));
+  BaseXpr inner_rows_ref = inner_rows, inner_rows_unwound = inner_rows.unwind();
+  VERIFY_IS_CWISE_EQUAL(inner_rows_ref, inner_rows_unwound);
+}
+
+template <typename Xpr, typename Reference>
+void check_inner_panel_like(const Xpr& xpr, const Reference& reference) {
+  VERIFY_IS_EQUAL(int(internal::evaluator<Xpr>::Flags), int(internal::evaluator<Reference>::Flags));
+  VERIFY_IS_EQUAL(int(internal::evaluator<Xpr>::Alignment), int(internal::evaluator<Reference>::Alignment));
+  VERIFY_IS_EQUAL(xpr.eval(), reference.eval());
+  VERIFY_IS_EQUAL(xpr.sum(), reference.sum());
+}
+
+// A fixed-size block spanning the whole fixed inner size of its parent is an inner
+// panel even when it is not built with InnerPanel = true.
+void inner_panel_inference_test() {
+  using ColMajor8 = Matrix<float, 8, 8, ColMajor>;
+  using RowMajor8 = Matrix<float, 8, 8, RowMajor>;
+  ColMajor8 a = ColMajor8::Random();
+  RowMajor8 b = RowMajor8::Random();
+  Index j = internal::random<Index>(0, 4);
+  VERIFY((internal::evaluator<decltype(a.block<8, 4>(0, j))>::Flags & LinearAccessBit) != 0);
+  check_inner_panel_like(a.block<8, 4>(0, j), a.middleCols<4>(j));
+  check_inner_panel_like(b.block<4, 8>(j, 0), b.middleRows<4>(j));
+  check_inner_panel_like((a + a).block<8, 4>(0, j), (a + a).middleCols<4>(j));
+  // The inferred alignment follows the parent's outer stride: 48-byte columns keep 16-byte
+  // alignment, 40-byte columns do not.
+  alignas(16) float buffer[8 * 12] = {};
+  Map<ColMajor8, Aligned16, OuterStride<12>> stride12(buffer);
+  Map<ColMajor8, Aligned16, OuterStride<10>> stride10(buffer);
+  stride12.setRandom();
+  check_inner_panel_like(stride12.block<8, 3>(0, j), stride12.middleCols<3>(j));
+  check_inner_panel_like(stride10.block<8, 3>(0, j), stride10.middleCols<3>(j));
+  // Not spanning the inner size, or spanning the outer one, is not an inner panel.
+  VERIFY(!(internal::evaluator<decltype(a.block<7, 4>(0, 0))>::Flags & LinearAccessBit));
+  VERIFY(!(internal::evaluator<decltype(a.block<4, 8>(0, 0))>::Flags & LinearAccessBit));
+}
+
+// An empty block has a null data pointer whichever constructor built it: its start can
+// lie past the end of the parent's storage.
+void empty_block_data_test() {
+  float buffer[16] = {};
+  Map<MatrixXf, 0, OuterStride<>> no_rows(buffer, 0, 3, OuterStride<>(100));
+  VERIFY(no_rows.col(2).data() == nullptr);
+  VERIFY(no_rows.block(0, 2, 0, 1).data() == nullptr);
+  Map<Matrix<float, Dynamic, Dynamic, RowMajor>, 0, OuterStride<>> no_cols(buffer, 3, 0, OuterStride<>(100));
+  VERIFY(no_cols.row(2).data() == nullptr);
+  VERIFY(no_cols.block(2, 0, 1, 0).data() == nullptr);
+  const auto& const_no_rows = no_rows;
+  VERIFY(const_no_rows.col(2).head(0).data() == nullptr);
+  no_rows.col(2) = 2.0f * const_no_rows.col(1);
+  no_cols.row(2) = 2.0f * no_cols.row(1);
+  VERIFY(Map<VectorXf>(buffer, 16).isZero(0));
+}
+
+// A product evaluates into a temporary with direct access, but the product
+// expression itself has none, so its blocks forward packets to that temporary.
+void product_block_packet_access_test() {
+  using Matrix8 = Matrix<float, 8, 8>;
+  Matrix8 a = Matrix8::Random(), b = Matrix8::Random();
+  Matrix8 ab = a * b;
+  Index j = internal::random<Index>(0, 4);
+  VERIFY_IS_EQUAL(int(internal::evaluator<decltype((a * b).block<8, 4>(0, j))>::Flags & PacketAccessBit),
+                  int(internal::evaluator<Matrix8>::Flags & PacketAccessBit));
+  VERIFY(!(internal::evaluator<decltype((a * b).block<8, 4>(0, j))>::Flags & DirectAccessBit));
+  VERIFY_IS_APPROX((Matrix<float, 8, 4>((a * b).block<8, 4>(0, j))), (ab.block<8, 4>(0, j)));
+  VERIFY_IS_APPROX(MatrixXf((a * b).block(1, j, 6, 3)), MatrixXf(ab.block(1, j, 6, 3)));
+}
+
 EIGEN_DECLARE_TEST(block) {
   for (int i = 0; i < g_repeat; i++) {
     CALL_SUBTEST_1(block(Matrix<float, 1, 1>()));
-    CALL_SUBTEST_1(block(Matrix<float, 1, Dynamic>(internal::random(2, 50))));
-    CALL_SUBTEST_1(block(Matrix<float, Dynamic, 1>(internal::random(2, 50))));
+    CALL_SUBTEST_10(block(Matrix<float, 1, Dynamic>(internal::random(2, 50))));
+    CALL_SUBTEST_11(block(Matrix<float, Dynamic, 1>(internal::random(2, 50))));
     CALL_SUBTEST_2(block(Matrix4d()));
     CALL_SUBTEST_3(block(MatrixXcf(internal::random(2, 50), internal::random(2, 50))));
     CALL_SUBTEST_4(block(MatrixXi(internal::random(2, 50), internal::random(2, 50))));
@@ -371,6 +515,11 @@ EIGEN_DECLARE_TEST(block) {
 
     CALL_SUBTEST_8(block(Matrix<float, Dynamic, 4>(3, 4)));
     CALL_SUBTEST_9(unwind_test(MatrixXf()));
+    CALL_SUBTEST_9(unwind_inner_panel_test(MatrixXf()));
+    CALL_SUBTEST_9(unwind_inner_panel_test(Matrix<float, Dynamic, Dynamic, RowMajor>()));
+    CALL_SUBTEST_12(inner_panel_inference_test());
+    CALL_SUBTEST_12(empty_block_data_test());
+    CALL_SUBTEST_12(product_block_packet_access_test());
 
 #ifndef EIGEN_DEFAULT_TO_ROW_MAJOR
     CALL_SUBTEST_6(data_and_stride(MatrixXf(internal::random(5, 50), internal::random(5, 50))));

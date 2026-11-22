@@ -7,11 +7,13 @@
 // This Source Code Form is subject to the terms of the Mozilla
 // Public License v. 2.0. If a copy of the MPL was not distributed
 // with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
+// SPDX-License-Identifier: MPL-2.0
 
 #include "main.h"
 #include <Eigen/QR>
 #include <Eigen/SVD>
 #include "solverbase.h"
+#include "fp_control.h"
 
 template <typename MatrixType>
 void cod() {
@@ -20,9 +22,9 @@ void cod() {
   Index cols2 = internal::random<Index>(2, EIGEN_TEST_MAX_SIZE);
   Index rank = internal::random<Index>(1, (std::min)(rows, cols) - 1);
 
-  typedef typename MatrixType::Scalar Scalar;
-  typedef typename MatrixType::RealScalar RealScalar;
-  typedef Matrix<Scalar, MatrixType::RowsAtCompileTime, MatrixType::RowsAtCompileTime> MatrixQType;
+  using Scalar = typename MatrixType::Scalar;
+  using RealScalar = typename MatrixType::RealScalar;
+  using MatrixQType = Matrix<Scalar, MatrixType::RowsAtCompileTime, MatrixType::RowsAtCompileTime>;
   MatrixType matrix;
   createRandomPIMatrixOfRank(rank, rows, cols, matrix);
   CompleteOrthogonalDecomposition<MatrixType> cod(matrix);
@@ -58,18 +60,23 @@ void cod() {
   MatrixType pinv = cod.pseudoInverse();
   VERIFY_IS_APPROX(cod_solution, pinv * rhs);
 
+  // Z is the identity at full column rank, also when reusing a rank-deficient decomposition of the same shape.
+  MatrixType deficient;
+  createRandomPIMatrixOfRank(cols - 1, cols, cols, deficient);
+  CompleteOrthogonalDecomposition<MatrixType> cod3(deficient);
+  cod3.compute(MatrixType::Identity(cols, cols));
+  VERIFY_IS_APPROX(MatrixType(cod3.matrixZ()), MatrixType::Identity(cols, cols));
+
   // now construct a (square) matrix with prescribed determinant
   Index size = internal::random<Index>(2, 20);
   matrix.setZero(size, size);
-  for (int i = 0; i < size; i++) {
-    matrix(i, i) = internal::random<Scalar>();
-  }
+  setRandomWellConditionedDiagonal(matrix);
   Scalar det = matrix.diagonal().prod();
   RealScalar absdet = numext::abs(det);
-  CompleteOrthogonalDecomposition<MatrixType> cod2(matrix);
-  cod2.compute(matrix);
-  q = cod2.householderQ();
+  // Rotate the diagonal matrix by a random unitary matrix, so that the determinants are those of a dense matrix.
+  q = generateRandomUnitaryMatrix<MatrixQType>(size);
   matrix = q * matrix * q.adjoint();
+  CompleteOrthogonalDecomposition<MatrixType> cod2(matrix);
   VERIFY_IS_APPROX(det, cod2.determinant());
   VERIFY_IS_APPROX(absdet, cod2.absDeterminant());
   VERIFY_IS_APPROX(numext::log(absdet), cod2.logAbsDeterminant());
@@ -79,8 +86,8 @@ void cod() {
 template <typename MatrixType, int Cols2>
 void cod_fixedsize() {
   enum { Rows = MatrixType::RowsAtCompileTime, Cols = MatrixType::ColsAtCompileTime };
-  typedef typename MatrixType::Scalar Scalar;
-  typedef CompleteOrthogonalDecomposition<Matrix<Scalar, Rows, Cols> > COD;
+  using Scalar = typename MatrixType::Scalar;
+  using COD = CompleteOrthogonalDecomposition<Matrix<Scalar, Rows, Cols>>;
   int rank = internal::random<int>(1, (std::min)(int(Rows), int(Cols)) - 1);
   Matrix<Scalar, Rows, Cols> matrix;
   createRandomPIMatrixOfRank(rank, Rows, Cols, matrix);
@@ -90,6 +97,9 @@ void cod_fixedsize() {
   VERIFY(cod.isInjective() == (rank == Rows));
   VERIFY(cod.isSurjective() == (rank == Cols));
   VERIFY(cod.isInvertible() == (cod.isInjective() && cod.isSurjective()));
+
+  Matrix<Scalar, Cols, Cols> z = cod.matrixZ();
+  VERIFY_IS_UNITARY(z);
 
   check_solverbase<Matrix<Scalar, Cols, Cols2>, Matrix<Scalar, Rows, Cols2> >(matrix, cod, Rows, Cols, Cols2);
 
@@ -114,9 +124,9 @@ void qr() {
         cols2 = internal::random<Index>(2, EIGEN_TEST_MAX_SIZE);
   Index rank = internal::random<Index>(1, (std::min)(rows, cols) - 1);
 
-  typedef typename MatrixType::Scalar Scalar;
-  typedef typename MatrixType::RealScalar RealScalar;
-  typedef Matrix<Scalar, MatrixType::RowsAtCompileTime, MatrixType::RowsAtCompileTime> MatrixQType;
+  using Scalar = typename MatrixType::Scalar;
+  using RealScalar = typename MatrixType::RealScalar;
+  using MatrixQType = Matrix<Scalar, MatrixType::RowsAtCompileTime, MatrixType::RowsAtCompileTime>;
   MatrixType m1;
   createRandomPIMatrixOfRank(rank, rows, cols, m1);
   ColPivHouseholderQR<MatrixType> qr(m1);
@@ -154,10 +164,10 @@ void qr() {
   {
     MatrixType m2, m3;
     Index size = rows;
-    do {
-      m1 = MatrixType::Random(size, size);
-      qr.compute(m1);
-    } while (!qr.isInvertible());
+    // Create a random diagonally dominant (thus invertible) matrix.
+    m1 = MatrixType::Random(size, size);
+    m1.diagonal().array() += Scalar(2 * size);
+    qr.compute(m1);
     MatrixType m1_inv = qr.inverse();
     m3 = m1 * MatrixType::Random(size, cols2);
     m2 = qr.solve(m3);
@@ -170,8 +180,8 @@ void qr_fixedsize() {
   using std::abs;
   using std::sqrt;
   enum { Rows = MatrixType::RowsAtCompileTime, Cols = MatrixType::ColsAtCompileTime };
-  typedef typename MatrixType::Scalar Scalar;
-  typedef typename MatrixType::RealScalar RealScalar;
+  using Scalar = typename MatrixType::Scalar;
+  using RealScalar = typename MatrixType::RealScalar;
   int rank = internal::random<int>(1, (std::min)(int(Rows), int(Cols)) - 1);
   Matrix<Scalar, Rows, Cols> m1;
   createRandomPIMatrixOfRank(rank, Rows, Cols, m1);
@@ -216,8 +226,8 @@ template <typename MatrixType>
 void qr_kahan_matrix() {
   using std::abs;
   using std::sqrt;
-  typedef typename MatrixType::Scalar Scalar;
-  typedef typename MatrixType::RealScalar RealScalar;
+  using Scalar = typename MatrixType::Scalar;
+  using RealScalar = typename MatrixType::RealScalar;
 
   Index rows = 300, cols = rows;
 
@@ -254,15 +264,15 @@ template <typename MatrixType>
 void qr_invertible() {
   using std::abs;
   using std::log;
-  typedef typename NumTraits<typename MatrixType::Scalar>::Real RealScalar;
-  typedef typename MatrixType::Scalar Scalar;
+  using RealScalar = typename NumTraits<typename MatrixType::Scalar>::Real;
+  using Scalar = typename MatrixType::Scalar;
 
   int size = internal::random<int>(10, 50);
 
   MatrixType m1(size, size), m2(size, size), m3(size, size);
   m1 = MatrixType::Random(size, size);
 
-  if (internal::is_same<RealScalar, float>::value) {
+  if (std::is_same<RealScalar, float>::value) {
     // let's build a matrix more stable to inverse
     MatrixType a = MatrixType::Random(size, size * 2);
     m1 += a * a.adjoint();
@@ -274,7 +284,7 @@ void qr_invertible() {
 
   // now construct a matrix with prescribed determinant
   m1.setZero();
-  for (int i = 0; i < size; i++) m1(i, i) = internal::random<Scalar>();
+  setRandomWellConditionedDiagonal(m1);
   Scalar det = m1.diagonal().prod();
   RealScalar absdet = abs(det);
   m3 = qr.householderQ();  // get a unitary
@@ -328,11 +338,300 @@ void cod_verify_assert() {
   VERIFY_RAISES_ASSERT(cod.signDeterminant())
 }
 
+// Stress test: verify rank detection on partial isometries (SVs = 0 or 1) across
+// many random trials and various aspect ratios (square, tall, wide).
+// This tests ROBUSTNESS: the threshold must be large enough that roundoff noise
+// in the null-space R diagonal elements does not cause rank overestimation.
+template <typename MatrixType>
+void qr_rank_detection_stress() {
+  // Test a range of matrix sizes and aspect ratios.
+  const Index sizes[][2] = {{10, 10}, {20, 20}, {50, 50}, {100, 100}, {40, 10}, {100, 10}, {10, 40}, {10, 100}};
+  for (const auto& sz : sizes) {
+    const Index rows = sz[0], cols = sz[1];
+    const Index min_dim = (std::min)(rows, cols);
+    // Test several rank values: 1, half, and min_dim - 1.
+    for (Index rank : {Index(1), (std::max)(Index(1), min_dim / 2), min_dim - 1}) {
+      if (rank >= min_dim) continue;
+      for (int trial = 0; trial < 20; ++trial) {
+        MatrixType m1;
+        createRandomPIMatrixOfRank(rank, rows, cols, m1);
+        ColPivHouseholderQR<MatrixType> qr(m1);
+        VERIFY_IS_EQUAL(rank, qr.rank());
+      }
+    }
+  }
+}
+
+// Efficiency test: verify the threshold is not so large that it causes false
+// rank deficiency. Creates matrices with smallest singular value well above
+// the backward error bound, and verifies they are detected as full rank.
+template <typename MatrixType>
+void qr_threshold_efficiency() {
+  using RealScalar = typename MatrixType::RealScalar;
+  using RealVectorType = Matrix<RealScalar, Dynamic, 1>;
+
+  const Index sizes[][2] = {{10, 10}, {50, 50}, {100, 100}, {40, 10}, {10, 40}};
+  for (const auto& sz : sizes) {
+    const Index rows = sz[0], cols = sz[1];
+    const Index min_dim = (std::min)(rows, cols);
+    // Create a matrix with prescribed singular values: smallest SV = 100 * threshold.
+    // The threshold is 4*min(m,n)*eps, so we set sigma_min = 400*min(m,n)*eps.
+    // This must be detected as full rank.
+    RealScalar sigma_min = RealScalar(400) * RealScalar(min_dim) * NumTraits<RealScalar>::epsilon();
+    RealVectorType svs = setupRangeSvs<RealVectorType>(min_dim, sigma_min, RealScalar(1));
+    MatrixType m1;
+    generateRandomMatrixSvs(svs, rows, cols, m1);
+    ColPivHouseholderQR<MatrixType> qr(m1);
+    // sigma_min is 100x the threshold — must be detected as full rank.
+    VERIFY_IS_EQUAL(min_dim, qr.rank());
+
+    // Also check with FullPivHouseholderQR.
+    FullPivHouseholderQR<MatrixType> fpqr(m1);
+    VERIFY_IS_EQUAL(min_dim, fpqr.rank());
+  }
+}
+
+// Test rank detection on matrices with geometrically distributed singular values
+// and a clear gap at the desired rank. This mimics real-world matrices better
+// than partial isometries and stresses the threshold from both sides.
+template <typename MatrixType>
+void qr_rank_gap_test() {
+  using RealScalar = typename MatrixType::RealScalar;
+  using RealVectorType = Matrix<RealScalar, Dynamic, 1>;
+
+  const Index sizes[][2] = {{20, 20}, {50, 50}, {100, 100}, {50, 20}, {20, 50}};
+  for (const auto& sz : sizes) {
+    const Index rows = sz[0], cols = sz[1];
+    const Index min_dim = (std::min)(rows, cols);
+    const Index rank = (std::max)(Index(1), min_dim / 2);
+
+    // Singular values: [1, ..., sigma_rank] for the "signal" part,
+    // then [eps_level, ..., eps_level] for the "noise" part.
+    // The gap ratio is sigma_rank / eps_level >> 1.
+    RealScalar sigma_rank = RealScalar(0.1);
+    RealScalar eps_level = NumTraits<RealScalar>::epsilon();
+
+    RealVectorType svs(min_dim);
+    // Signal part: geometrically spaced from 1 to sigma_rank.
+    for (Index i = 0; i < rank; ++i) {
+      RealScalar t = (rank > 1) ? RealScalar(i) / RealScalar(rank - 1) : RealScalar(0);
+      svs(i) = std::pow(sigma_rank, t);  // svs(0) = 1, svs(rank-1) = sigma_rank
+    }
+    // Noise part: near machine epsilon (well below any reasonable threshold).
+    for (Index i = rank; i < min_dim; ++i) {
+      svs(i) = eps_level * RealScalar(min_dim - i);
+    }
+
+    MatrixType m1;
+    generateRandomMatrixSvs(svs, rows, cols, m1);
+
+    ColPivHouseholderQR<MatrixType> qr(m1);
+    VERIFY_IS_EQUAL(rank, qr.rank());
+
+    FullPivHouseholderQR<MatrixType> fpqr(m1);
+    VERIFY_IS_EQUAL(rank, fpqr.rank());
+  }
+}
+
+// Regression: a matrix without columns has no column norm to take the maximum of.
+template <typename MatrixType>
+void qr_empty() {
+  ColPivHouseholderQR<MatrixType> qr{MatrixType(3, 0)};
+  VERIFY_IS_EQUAL(qr.rank(), Index(0));
+  qr.compute(MatrixType(0, 0));
+  VERIFY_IS_EQUAL(qr.rank(), Index(0));
+  CompleteOrthogonalDecomposition<MatrixType> cod{MatrixType(3, 0)};
+  VERIFY_IS_EQUAL(cod.rank(), Index(0));
+}
+
+// Column norms and the rank threshold must not square the entries: pivoting and rank detection have to work for entries
+// whose squares overflow or underflow.
+template <typename MatrixType>
+void qr_configure_blocking(ColPivHouseholderQR<MatrixType>&) {}
+template <typename QRType>
+void qr_configure_blocking(QRType&) {}
+template <typename MatrixType>
+void qr_configure_blocking(RandColPivHouseholderQR<MatrixType>& qr) {
+  qr.setBlockSize(4).setSeed(0x5ca1e);
+}
+
+template <typename QRType>
+void qr_extreme_scale() {
+  using MatrixType = typename QRType::MatrixType;
+  using Scalar = typename MatrixType::Scalar;
+  using VectorType = Matrix<Scalar, Dynamic, 1>;
+  const Scalar eps = NumTraits<Scalar>::epsilon();
+  const Scalar big = numext::pow((std::numeric_limits<Scalar>::max)(), Scalar(0.55));
+  for (const Scalar scale : {big, Scalar(1) / big}) {
+    // Rank one: only the largest column, the second one, can be a pivot.
+    VectorType u(6), v(4);
+    u << 1, 2, -1, Scalar(0.5), 3, -2;
+    v << Scalar(0.5), -2, 1, Scalar(0.25);
+    MatrixType A = u * v.transpose();
+    A *= scale;
+    QRType qr;
+    qr_configure_blocking(qr);
+    qr.compute(A);
+    VERIFY_IS_EQUAL(qr.rank(), Index(1));
+    VERIFY_IS_EQUAL(qr.nonzeroPivots(), Index(1));
+    VERIFY_IS_EQUAL(qr.colsPermutation().indices()(0), 1);
+    VERIFY((A * qr.solve(u) - u).stableNorm() <= Scalar(64) * eps * u.stableNorm());
+
+    // Rank 12 in a size for which the randomized QR takes its blocked path.
+    MatrixType B = MatrixType::Random(60, 12) * MatrixType::Random(12, 40);
+    B *= scale;
+    QRType qr2;
+    qr_configure_blocking(qr2);
+    qr2.compute(B);
+    VERIFY_IS_EQUAL(qr2.rank(), Index(12));
+    const MatrixType R = qr2.matrixR().template triangularView<Upper>();
+    VERIFY((qr2.householderQ() * R - B * qr2.colsPermutation()).stableNorm() <= Scalar(1024) * eps * B.stableNorm());
+  }
+}
+
+// Entries uniform in [-1, 1) from a linear congruential generator, so that the matrices of qr_flush_band are the same
+// on every platform and for every seed of the test.
+template <typename Scalar>
+Scalar qr_lcg_scalar(typename NumTraits<Scalar>::Real re, typename NumTraits<Scalar>::Real, std::false_type) {
+  return Scalar(re);
+}
+template <typename Scalar>
+Scalar qr_lcg_scalar(typename NumTraits<Scalar>::Real re, typename NumTraits<Scalar>::Real im, std::true_type) {
+  return Scalar(re, im);
+}
+
+template <typename MatrixType>
+MatrixType qr_lcg_matrix(Index rows, Index cols, uint32_t& state) {
+  using Scalar = typename MatrixType::Scalar;
+  using RealScalar = typename MatrixType::RealScalar;
+  const auto next = [&state]() {
+    state = state * 1664525u + 1013904223u;
+    return RealScalar((state >> 8) & 0xffff) / RealScalar(32768) - RealScalar(1);
+  };
+  MatrixType m(rows, cols);
+  for (Index j = 0; j < cols; ++j)
+    for (Index i = 0; i < rows; ++i) {
+      const RealScalar re = next();
+      const RealScalar im = next();
+      m(i, j) = qr_lcg_scalar<Scalar>(re, im, internal::bool_constant<NumTraits<Scalar>::IsComplex>());
+    }
+  return m;
+}
+
+// Rank detection compares residual column norms with eps * maxnorm. For maxnorm a few 1e4 times sqrt(min) the squares
+// of the entries of the residual of the last pivot are subnormal: the rank must not drop, whether or not subnormals are
+// flushed to zero. A has rank 7 plus a perturbation of relative size 1e-4, which is above the default threshold; the
+// cancellation in the first seven steps makes the factorization recompute the column norms.
+template <typename QRType, bool Blocked>
+void qr_flush_band() {
+  using MatrixType = typename QRType::MatrixType;
+  using Scalar = typename MatrixType::Scalar;
+  using RealScalar = typename MatrixType::RealScalar;
+  const Index rows = 40, rank = 7, cols = 8;
+  uint32_t state = 3u * 7919u;
+  // The factors are generated one after the other: the evaluation order of the operands of a product is unspecified.
+  const MatrixType B1 = qr_lcg_matrix<MatrixType>(rows, rank, state);
+  const MatrixType B2 = qr_lcg_matrix<MatrixType>(rank, cols, state);
+  const MatrixType C1 = qr_lcg_matrix<MatrixType>(rows, 1, state);
+  const MatrixType C2 = qr_lcg_matrix<MatrixType>(1, cols, state);
+  const MatrixType B = B1 * B2;
+  const MatrixType C = C1 * C2;
+  const MatrixType A = B + Scalar(RealScalar(1e-4)) * C;
+  const RealScalar maxnorm = A.colwise().norm().maxCoeff();
+  for (const RealScalar factor : {RealScalar(2e4), RealScalar(3e4), RealScalar(4.5e4)}) {
+    const MatrixType scaled = A * Scalar(factor * numext::sqrt((std::numeric_limits<RealScalar>::min)()) / maxnorm);
+    for (const FlushToZeroMode mode : {FlushToZeroMode::None, FlushToZeroMode::Both}) {
+      ScopedFlushToZero flush(mode);
+      QRType qr;
+      EIGEN_IF_CONSTEXPR (Blocked) qr_configure_blocking(qr);
+      qr.compute(scaled);
+      VERIFY_IS_EQUAL(qr.rank(), cols);
+    }
+  }
+}
+
+template <typename MatrixType>
+void cod_extreme_scale() {
+  using Scalar = typename MatrixType::Scalar;
+  const Scalar eps = NumTraits<Scalar>::epsilon();
+  const Scalar big = numext::pow((std::numeric_limits<Scalar>::max)(), Scalar(0.55));
+  for (const Scalar scale : {big, Scalar(1) / big}) {
+    MatrixType A = MatrixType::Random(6, 2) * MatrixType::Random(2, 4);
+    A *= scale;
+    const MatrixType b = A * MatrixType::Ones(4, 1);
+    CompleteOrthogonalDecomposition<MatrixType> cod(A);
+    VERIFY_IS_EQUAL(cod.rank(), Index(2));
+    VERIFY((A * cod.solve(b) - b).stableNorm() <= Scalar(256) * eps * b.stableNorm());
+  }
+}
+
+// The rank, and with it the Z reflectors, of a complete orthogonal decomposition are fixed by compute(): a threshold
+// set afterwards applies to the next compute() and leaves the decomposition and its solutions unchanged.
+template <typename MatrixType>
+void cod_set_threshold_after_compute() {
+  using Scalar = typename MatrixType::Scalar;
+  using RealScalar = typename MatrixType::RealScalar;
+  const Index rows = 8, cols = 6;
+  MatrixType A = MatrixType::Random(rows, cols);
+  A.col(cols - 1) = A.col(0) + Scalar(RealScalar(1e-6)) * MatrixType::Random(rows, 1);
+  const MatrixType b = MatrixType::Random(rows, 2);
+
+  CompleteOrthogonalDecomposition<MatrixType> cod(A);
+  VERIFY_IS_EQUAL(cod.rank(), cols);
+  const MatrixType x_full = cod.solve(b);
+  cod.setThreshold(RealScalar(1e-4));
+  VERIFY_IS_EQUAL(cod.rank(), cols);
+  VERIFY_IS_APPROX(cod.solve(b), x_full);
+  VERIFY(cod.matrixZ().isUnitary());
+
+  cod.compute(A);
+  VERIFY_IS_EQUAL(cod.rank(), cols - 1);
+  CompleteOrthogonalDecomposition<MatrixType> reference;
+  reference.setThreshold(RealScalar(1e-4));
+  reference.compute(A);
+  VERIFY_IS_EQUAL(reference.rank(), cols - 1);
+  const MatrixType x_deficient = cod.solve(b);
+  VERIFY_IS_APPROX(x_deficient, reference.solve(b));
+  VERIFY(cod.matrixZ().isUnitary());
+
+  // Going back to the default threshold does not change a decomposition that has already been computed either.
+  cod.setThreshold(Default);
+  VERIFY_IS_EQUAL(cod.rank(), cols - 1);
+  VERIFY_IS_APPROX(cod.solve(b), x_deficient);
+  VERIFY_IS_EQUAL(cod.dimensionOfKernel(), Index(1));
+  VERIFY(!cod.isInjective());
+}
+
+// A right-hand side without columns, and an empty matrix, give an empty solution of the right size; sanitizer builds
+// reported a reference to the first element of an empty workspace.
+template <typename Decomposition, typename MatrixType>
+void qr_empty_rhs() {
+  const MatrixType A = MatrixType::Random(4, 4);
+  const Decomposition dec(A);
+  const MatrixType empty_rhs(4, 0);
+  VERIFY_IS_EQUAL(dec.solve(empty_rhs).rows(), 4);
+  VERIFY_IS_EQUAL(dec.solve(empty_rhs).cols(), 0);
+  VERIFY_IS_EQUAL(dec.transpose().solve(empty_rhs).rows(), 4);
+  VERIFY_IS_EQUAL(dec.transpose().solve(empty_rhs).cols(), 0);
+  VERIFY_IS_EQUAL(dec.adjoint().solve(empty_rhs).cols(), 0);
+  const MatrixType B = MatrixType::Random(4, 3);
+  const MatrixType X = dec.solve(B);
+  VERIFY_IS_EQUAL(X.cols(), 3);
+  VERIFY_IS_APPROX(A * X, B);
+
+  const Decomposition empty_dec{MatrixType(0, 0)};
+  VERIFY_IS_EQUAL(empty_dec.solve(MatrixType(0, 2)).rows(), 0);
+  VERIFY_IS_EQUAL(empty_dec.solve(MatrixType(0, 2)).cols(), 2);
+  VERIFY_IS_EQUAL(empty_dec.transpose().solve(MatrixType(0, 0)).cols(), 0);
+}
+
 EIGEN_DECLARE_TEST(qr_colpivoting) {
   for (int i = 0; i < g_repeat; i++) {
     CALL_SUBTEST_1(qr<MatrixXf>());
     CALL_SUBTEST_2(qr<MatrixXd>());
     CALL_SUBTEST_3(qr<MatrixXcd>());
+    CALL_SUBTEST_10((qr<Matrix<double, Dynamic, Dynamic, RowMajor>>()));
+    CALL_SUBTEST_11((qr<Matrix<std::complex<double>, Dynamic, Dynamic, RowMajor>>()));
     CALL_SUBTEST_4((qr_fixedsize<Matrix<float, 3, 5>, 4>()));
     CALL_SUBTEST_5((qr_fixedsize<Matrix<double, 6, 2>, 3>()));
     CALL_SUBTEST_5((qr_fixedsize<Matrix<double, 1, 1>, 1>()));
@@ -370,7 +669,39 @@ EIGEN_DECLARE_TEST(qr_colpivoting) {
 
   // Test problem size constructors
   CALL_SUBTEST_9(ColPivHouseholderQR<MatrixXf>(10, 20));
+  CALL_SUBTEST_2(qr_empty<MatrixXd>());
+  CALL_SUBTEST_2((qr_empty_rhs<ColPivHouseholderQR<MatrixXd>, MatrixXd>()));
+  CALL_SUBTEST_2((qr_empty_rhs<CompleteOrthogonalDecomposition<MatrixXd>, MatrixXd>()));
+  CALL_SUBTEST_3((qr_empty_rhs<ColPivHouseholderQR<MatrixXcd>, MatrixXcd>()));
+  CALL_SUBTEST_3((qr_empty_rhs<CompleteOrthogonalDecomposition<MatrixXcd>, MatrixXcd>()));
+  CALL_SUBTEST_2((qr_empty_rhs<RandColPivHouseholderQR<MatrixXd>, MatrixXd>()));
+  CALL_SUBTEST_1((qr_extreme_scale<ColPivHouseholderQR<MatrixXf>>()));
+  CALL_SUBTEST_2((qr_extreme_scale<ColPivHouseholderQR<MatrixXd>>()));
+  CALL_SUBTEST_1((qr_extreme_scale<RandColPivHouseholderQR<MatrixXf>>()));
+  CALL_SUBTEST_2((qr_extreme_scale<RandColPivHouseholderQR<MatrixXd>>()));
+  CALL_SUBTEST_1((qr_flush_band<ColPivHouseholderQR<MatrixXf>, false>()));
+  CALL_SUBTEST_2((qr_flush_band<ColPivHouseholderQR<MatrixXd>, false>()));
+  CALL_SUBTEST_1((qr_flush_band<RandColPivHouseholderQR<MatrixXf>, false>()));
+  CALL_SUBTEST_1((qr_flush_band<RandColPivHouseholderQR<MatrixXf>, true>()));
+  CALL_SUBTEST_2((qr_flush_band<RandColPivHouseholderQR<MatrixXd>, true>()));
+  CALL_SUBTEST_1((qr_flush_band<CompleteOrthogonalDecomposition<MatrixXf>, false>()));
+  CALL_SUBTEST_2((qr_flush_band<CompleteOrthogonalDecomposition<MatrixXd>, false>()));
+  CALL_SUBTEST_3((qr_flush_band<ColPivHouseholderQR<MatrixXcf>, false>()));
+  CALL_SUBTEST_10((qr_flush_band<ColPivHouseholderQR<Matrix<float, Dynamic, Dynamic, RowMajor>>, false>()));
+  CALL_SUBTEST_10((qr_flush_band<RandColPivHouseholderQR<Matrix<float, Dynamic, Dynamic, RowMajor>>, true>()));
+  CALL_SUBTEST_1(cod_extreme_scale<MatrixXf>());
+  CALL_SUBTEST_2(cod_extreme_scale<MatrixXd>());
+  CALL_SUBTEST_2(cod_set_threshold_after_compute<MatrixXd>());
+  CALL_SUBTEST_3(cod_set_threshold_after_compute<MatrixXcd>());
 
   CALL_SUBTEST_1(qr_kahan_matrix<MatrixXf>());
   CALL_SUBTEST_2(qr_kahan_matrix<MatrixXd>());
+
+  // Stress tests for rank detection threshold robustness and efficiency.
+  CALL_SUBTEST_1(qr_rank_detection_stress<MatrixXf>());
+  CALL_SUBTEST_2(qr_rank_detection_stress<MatrixXd>());
+  CALL_SUBTEST_1(qr_threshold_efficiency<MatrixXf>());
+  CALL_SUBTEST_2(qr_threshold_efficiency<MatrixXd>());
+  CALL_SUBTEST_1(qr_rank_gap_test<MatrixXf>());
+  CALL_SUBTEST_2(qr_rank_gap_test<MatrixXd>());
 }

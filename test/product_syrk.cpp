@@ -6,16 +6,18 @@
 // This Source Code Form is subject to the terms of the Mozilla
 // Public License v. 2.0. If a copy of the MPL was not distributed
 // with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
+// SPDX-License-Identifier: MPL-2.0
 
 #include "main.h"
+#include "product_test_helpers.h"
 
 template <typename MatrixType>
 void syrk(const MatrixType& m) {
-  typedef typename MatrixType::Scalar Scalar;
-  typedef Matrix<Scalar, MatrixType::RowsAtCompileTime, MatrixType::ColsAtCompileTime, RowMajor> RMatrixType;
-  typedef Matrix<Scalar, MatrixType::ColsAtCompileTime, Dynamic> Rhs1;
-  typedef Matrix<Scalar, Dynamic, MatrixType::RowsAtCompileTime> Rhs2;
-  typedef Matrix<Scalar, MatrixType::ColsAtCompileTime, Dynamic, RowMajor> Rhs3;
+  using Scalar = typename MatrixType::Scalar;
+  using RMatrixType = Matrix<Scalar, MatrixType::RowsAtCompileTime, MatrixType::ColsAtCompileTime, RowMajor>;
+  using Rhs1 = Matrix<Scalar, MatrixType::ColsAtCompileTime, Dynamic>;
+  using Rhs2 = Matrix<Scalar, Dynamic, MatrixType::RowsAtCompileTime>;
+  using Rhs3 = Matrix<Scalar, MatrixType::ColsAtCompileTime, Dynamic, RowMajor>;
 
   Index rows = m.rows();
   Index cols = m.cols();
@@ -38,28 +40,32 @@ void syrk(const MatrixType& m) {
   VERIFY_IS_APPROX((m2.template selfadjointView<Lower>().rankUpdate(rhs2, s1)._expression()),
                    ((s1 * rhs2 * rhs2.adjoint()).eval().template triangularView<Lower>().toDenseMatrix()));
   m2.setZero();
-  VERIFY_IS_APPROX(((m2.template triangularView<Lower>() += s1 * rhs2 * rhs22.adjoint()).nestedExpression()),
-                   ((s1 * rhs2 * rhs22.adjoint()).eval().template triangularView<Lower>().toDenseMatrix()));
+  VERIFY(verifyProduct((m2.template triangularView<Lower>() += s1 * rhs2 * rhs22.adjoint()).nestedExpression(),
+                       (s1 * rhs2 * rhs22.adjoint()).eval().template triangularView<Lower>().toDenseMatrix(), s1 * rhs2,
+                       rhs22.adjoint()));
 
   m2.setZero();
   VERIFY_IS_APPROX(m2.template selfadjointView<Upper>().rankUpdate(rhs2, s1)._expression(),
                    (s1 * rhs2 * rhs2.adjoint()).eval().template triangularView<Upper>().toDenseMatrix());
   m2.setZero();
-  VERIFY_IS_APPROX((m2.template triangularView<Upper>() += s1 * rhs22 * rhs2.adjoint()).nestedExpression(),
-                   (s1 * rhs22 * rhs2.adjoint()).eval().template triangularView<Upper>().toDenseMatrix());
+  VERIFY(verifyProduct((m2.template triangularView<Upper>() += s1 * rhs22 * rhs2.adjoint()).nestedExpression(),
+                       (s1 * rhs22 * rhs2.adjoint()).eval().template triangularView<Upper>().toDenseMatrix(),
+                       s1 * rhs22, rhs2.adjoint()));
 
   m2.setZero();
   VERIFY_IS_APPROX(m2.template selfadjointView<Lower>().rankUpdate(rhs1.adjoint(), s1)._expression(),
                    (s1 * rhs1.adjoint() * rhs1).eval().template triangularView<Lower>().toDenseMatrix());
   m2.setZero();
-  VERIFY_IS_APPROX((m2.template triangularView<Lower>() += s1 * rhs11.adjoint() * rhs1).nestedExpression(),
-                   (s1 * rhs11.adjoint() * rhs1).eval().template triangularView<Lower>().toDenseMatrix());
+  VERIFY(verifyProduct((m2.template triangularView<Lower>() += s1 * rhs11.adjoint() * rhs1).nestedExpression(),
+                       (s1 * rhs11.adjoint() * rhs1).eval().template triangularView<Lower>().toDenseMatrix(),
+                       s1 * rhs11.adjoint(), rhs1));
 
   m2.setZero();
   VERIFY_IS_APPROX(m2.template selfadjointView<Upper>().rankUpdate(rhs1.adjoint(), s1)._expression(),
                    (s1 * rhs1.adjoint() * rhs1).eval().template triangularView<Upper>().toDenseMatrix());
-  VERIFY_IS_APPROX((m2.template triangularView<Upper>() = s1 * rhs1.adjoint() * rhs11).nestedExpression(),
-                   (s1 * rhs1.adjoint() * rhs11).eval().template triangularView<Upper>().toDenseMatrix());
+  VERIFY(verifyProduct((m2.template triangularView<Upper>() = s1 * rhs1.adjoint() * rhs11).nestedExpression(),
+                       (s1 * rhs1.adjoint() * rhs11).eval().template triangularView<Upper>().toDenseMatrix(),
+                       s1 * rhs1.adjoint(), rhs11));
 
   m2.setZero();
   VERIFY_IS_APPROX(m2.template selfadjointView<Lower>().rankUpdate(rhs3.adjoint(), s1)._expression(),
@@ -135,30 +141,115 @@ void syrk(const MatrixType& m) {
                         .template triangularView<Upper>()
                         .toDenseMatrix()));
 
+  // The product of a matrix with itself, rather than with its adjoint, shares its storage without being a rank update.
+  m2.setZero();
+  m2.template triangularView<Lower>() = m1 * m1;
+  VERIFY_IS_APPROX(m2, (m1 * m1).eval().template triangularView<Lower>().toDenseMatrix());
+  rm2.setZero();
+  rm2.template triangularView<Upper>() += s1 * m1 * m1;
+  VERIFY_IS_APPROX(rm2, (s1 * m1 * m1).eval().template triangularView<Upper>().toDenseMatrix());
+
+  // A scalar factor of the update enters twice: (s u) (s u)^* = s conj(s) u u^*.
+  {
+    const Scalar s2 = internal::random<Scalar>();
+    const Rhs2 scaled2 = s2 * rhs2;
+    using VectorX = Matrix<Scalar, Dynamic, 1>;
+    const VectorX scaledCol = -(s2 * m1.col(c)), conjCol = (s2 * m1.col(c)).conjugate();
+    m2.setZero();
+    VERIFY_IS_APPROX((m2.template selfadjointView<Lower>().rankUpdate(s2 * rhs2, s1)._expression()),
+                     ((s1 * scaled2 * scaled2.adjoint()).eval().template triangularView<Lower>().toDenseMatrix()));
+    rm2.setZero();
+    VERIFY_IS_APPROX((rm2.template selfadjointView<Upper>().rankUpdate(rhs2 * s2, s1)._expression()),
+                     ((s1 * scaled2 * scaled2.adjoint()).eval().template triangularView<Upper>().toDenseMatrix()));
+    m2.setZero();
+    VERIFY_IS_APPROX((m2.template selfadjointView<Upper>().rankUpdate(-(s2 * m1.col(c)), s1)._expression()),
+                     ((s1 * scaledCol * scaledCol.adjoint()).eval().template triangularView<Upper>().toDenseMatrix()));
+    rm2.setZero();
+    VERIFY_IS_APPROX((rm2.template selfadjointView<Lower>().rankUpdate((s2 * m1.col(c)).conjugate(), s1)._expression()),
+                     ((s1 * conjCol * conjCol.adjoint()).eval().template triangularView<Lower>().toDenseMatrix()));
+  }
+
   // destination with a non-default inner-stride
   // see bug 1741
   {
-    typedef Matrix<Scalar, Dynamic, Dynamic> MatrixX;
+    using MatrixX = Matrix<Scalar, Dynamic, Dynamic>;
     MatrixX buffer(2 * rows, 2 * cols);
     Map<MatrixType, 0, Stride<Dynamic, 2> > map1(buffer.data(), rows, cols, Stride<Dynamic, 2>(2 * rows, 2));
     buffer.setZero();
     VERIFY_IS_APPROX((map1.template selfadjointView<Lower>().rankUpdate(rhs2, s1)._expression()),
                      ((s1 * rhs2 * rhs2.adjoint()).eval().template triangularView<Lower>().toDenseMatrix()));
+    buffer.setZero();
+    VERIFY_IS_APPROX(
+        (map1.template selfadjointView<Upper>().rankUpdate(rhs2.col(0), s1)._expression()),
+        ((s1 * rhs2.col(0) * rhs2.col(0).adjoint()).eval().template triangularView<Upper>().toDenseMatrix()));
+    buffer.setZero();
+    VERIFY_IS_APPROX(
+        (map1.template selfadjointView<Lower>().rankUpdate(rhs2.col(0).transpose(), s1)._expression()),
+        ((s1 * rhs2.col(0) * rhs2.col(0).adjoint()).eval().template triangularView<Lower>().toDenseMatrix()));
+    buffer.setZero();
+    map1.template triangularView<Lower>() = s1 * rhs2.col(0) * rhs22.col(0).adjoint();
+    VERIFY_IS_APPROX(
+        map1, (s1 * rhs2.col(0) * rhs22.col(0).adjoint()).eval().template triangularView<Lower>().toDenseMatrix());
+    VERIFY(buffer.row(1).isZero());
+  }
+
+  // outer products into a strictly triangular part
+  {
+    using VectorX = Matrix<Scalar, Dynamic, 1>;
+    VectorX u = VectorX::Random(rows), v = VectorX::Random(rows);
+    m2.setZero();
+    m2.template triangularView<StrictlyLower>() = s1 * u * v.adjoint();
+    VERIFY_IS_APPROX(m2, (s1 * u * v.adjoint()).eval().template triangularView<StrictlyLower>().toDenseMatrix());
+    rm2.setZero();
+    rm2.template triangularView<StrictlyUpper>() += u * v.adjoint();
+    VERIFY_IS_APPROX(rm2, (u * v.adjoint()).eval().template triangularView<StrictlyUpper>().toDenseMatrix());
+  }
+
+  // products assigned to a triangular part of a rectangular matrix
+  {
+    using MatrixX = Matrix<Scalar, Dynamic, Dynamic>;
+    MatrixX lhs = MatrixX::Random(rows + 2, 3), rhs = MatrixX::Random(3, rows), tall = MatrixX::Zero(rows + 2, rows);
+    tall.template triangularView<Lower>() = lhs * rhs;
+    VERIFY_IS_APPROX(tall, (lhs * rhs).eval().template triangularView<Lower>().toDenseMatrix());
+    tall.setZero();
+    tall.template triangularView<Upper>() += lhs.col(0) * rhs.row(0);
+    VERIFY_IS_APPROX(tall, (lhs.col(0) * rhs.row(0)).eval().template triangularView<Upper>().toDenseMatrix());
   }
 }
 
+template <typename MatrixType>
+void syrk_empty_update(Index size) {
+  using Scalar = typename MatrixType::Scalar;
+  using UpdateType = Matrix<Scalar, Dynamic, Dynamic>;
+
+  MatrixType m = MatrixType::Random(size, size);
+  MatrixType ref = m;
+  UpdateType empty_update(size, 0);
+
+  m.template selfadjointView<Lower>().rankUpdate(empty_update, Scalar(1));
+  VERIFY_IS_APPROX(m, ref);
+
+  m.template selfadjointView<Upper>().rankUpdate(empty_update, Scalar(1));
+  VERIFY_IS_APPROX(m, ref);
+}
+
 EIGEN_DECLARE_TEST(product_syrk) {
+  using RowMajorMatrixXd EIGEN_UNUSED = Matrix<double, Dynamic, Dynamic, RowMajor>;
+
   for (int i = 0; i < g_repeat; i++) {
     int s;
     s = internal::random<int>(1, EIGEN_TEST_MAX_SIZE);
     CALL_SUBTEST_1(syrk(MatrixXf(s, s)));
     CALL_SUBTEST_2(syrk(MatrixXd(s, s)));
-    TEST_SET_BUT_UNUSED_VARIABLE(s)
+    TEST_SET_BUT_UNUSED_VARIABLE(s);
 
     s = internal::random<int>(1, EIGEN_TEST_MAX_SIZE / 2);
     CALL_SUBTEST_3(syrk(MatrixXcf(s, s)));
     CALL_SUBTEST_4(syrk(MatrixXcd(s, s)));
     CALL_SUBTEST_5(syrk(Matrix<bfloat16, Dynamic, Dynamic>(s, s)));
-    TEST_SET_BUT_UNUSED_VARIABLE(s)
+    TEST_SET_BUT_UNUSED_VARIABLE(s);
+
+    CALL_SUBTEST_6(syrk_empty_update<MatrixXd>(48));
+    CALL_SUBTEST_7(syrk_empty_update<RowMajorMatrixXd>(48));
   }
 }

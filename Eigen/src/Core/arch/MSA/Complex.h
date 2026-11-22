@@ -9,6 +9,7 @@
 // This Source Code Form is subject to the terms of the Mozilla
 // Public License v. 2.0. If a copy of the MPL was not distributed
 // with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
+// SPDX-License-Identifier: MPL-2.0
 
 #ifndef EIGEN_COMPLEX_MSA_H
 #define EIGEN_COMPLEX_MSA_H
@@ -21,6 +22,8 @@
 namespace Eigen {
 
 namespace internal {
+
+EIGEN_GCC_FAST_MATH_COMPLEX_VECTORIZE_WORKAROUND_PUSH
 
 //---------- float ----------
 struct Packet2cf {
@@ -88,8 +91,8 @@ inline std::ostream& operator<<(std::ostream& os, const Packet2cf& value) {
 
 template <>
 struct packet_traits<std::complex<float> > : default_packet_traits {
-  typedef Packet2cf type;
-  typedef Packet2cf half;
+  using type = Packet2cf;
+  using half = Packet2cf;
   enum {
     Vectorizable = 1,
     AlignedOnScalar = 1,
@@ -105,13 +108,13 @@ struct packet_traits<std::complex<float> > : default_packet_traits {
     HasMin = 0,
     HasMax = 0,
     HasSetLinear = 0,
-    HasBlend = 1
   };
 };
 
 template <>
 struct unpacket_traits<Packet2cf> {
-  typedef std::complex<float> type;
+  using type = std::complex<float>;
+  using as_real = Packet4f;
   enum {
     size = 2,
     alignment = Aligned16,
@@ -119,7 +122,7 @@ struct unpacket_traits<Packet2cf> {
     masked_load_available = false,
     masked_store_available = false
   };
-  typedef Packet2cf half;
+  using half = Packet2cf;
 };
 
 template <>
@@ -314,12 +317,6 @@ EIGEN_DEVICE_FUNC inline void ptranspose(PacketBlock<Packet2cf, 2>& kernel) {
   kernel.packet[1].v = tmp;
 }
 
-template <>
-EIGEN_STRONG_INLINE Packet2cf pblend(const Selector<2>& ifPacket, const Packet2cf& thenPacket,
-                                     const Packet2cf& elsePacket) {
-  return (Packet2cf)(Packet4f)pblend<Packet2d>(ifPacket, (Packet2d)thenPacket.v, (Packet2d)elsePacket.v);
-}
-
 //---------- double ----------
 
 struct Packet1cd {
@@ -388,8 +385,8 @@ inline std::ostream& operator<<(std::ostream& os, const Packet1cd& value) {
 
 template <>
 struct packet_traits<std::complex<double> > : default_packet_traits {
-  typedef Packet1cd type;
-  typedef Packet1cd half;
+  using type = Packet1cd;
+  using half = Packet1cd;
   enum {
     Vectorizable = 1,
     AlignedOnScalar = 0,
@@ -410,7 +407,8 @@ struct packet_traits<std::complex<double> > : default_packet_traits {
 
 template <>
 struct unpacket_traits<Packet1cd> {
-  typedef std::complex<double> type;
+  using type = std::complex<double>;
+  using as_real = Packet2d;
   enum {
     size = 1,
     alignment = Aligned16,
@@ -418,7 +416,7 @@ struct unpacket_traits<Packet1cd> {
     masked_load_available = false,
     masked_store_available = false
   };
-  typedef Packet1cd half;
+  using half = Packet1cd;
 };
 
 template <>
@@ -559,27 +557,6 @@ EIGEN_STRONG_INLINE std::complex<double> pfirst<Packet1cd>(const Packet1cd& a) {
   return std::complex<double>(a.v[0], a.v[1]);
 }
 
-template <>
-EIGEN_STRONG_INLINE Packet1cd preverse(const Packet1cd& a) {
-  EIGEN_MSA_DEBUG;
-
-  return a;
-}
-
-template <>
-EIGEN_STRONG_INLINE std::complex<double> predux<Packet1cd>(const Packet1cd& a) {
-  EIGEN_MSA_DEBUG;
-
-  return pfirst(a);
-}
-
-template <>
-EIGEN_STRONG_INLINE std::complex<double> predux_mul<Packet1cd>(const Packet1cd& a) {
-  EIGEN_MSA_DEBUG;
-
-  return pfirst(a);
-}
-
 EIGEN_MAKE_CONJ_HELPER_CPLX_REAL(Packet1cd, Packet2d)
 
 template <>
@@ -612,6 +589,8 @@ EIGEN_STRONG_INLINE void ptranspose(PacketBlock<Packet1cd, 2>& kernel) {
   kernel.packet[0].v = v1;
   kernel.packet[1].v = v2;
 }
+
+EIGEN_GCC_FAST_MATH_COMPLEX_VECTORIZE_WORKAROUND_POP
 
 }  // end namespace internal
 

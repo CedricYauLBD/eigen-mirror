@@ -1,0 +1,138 @@
+; Definition file for eigen_lapack.dll and eigen_lapack_ilp64.dll.
+; No LIBRARY statement: the linker names each DLL after its /OUT file, so the
+; ILP64 import library does not resolve to eigen_lapack.dll.
+
+EXPORTS
+    ; Utilities
+    xerbla_
+    ilaver_
+    slamch_
+    dlamch_
+    slamc3_
+    dlamc3_
+    slapy2_
+    dlapy2_
+    slapy3_
+    dlapy3_
+    sladiv_
+    dladiv_
+    cladiv_
+    zladiv_
+    clacgv_
+    zlacgv_
+    ilaclc_
+    ilaclr_
+    iladlc_
+    iladlr_
+    ilaslc_
+    ilaslr_
+    ilazlc_
+    ilazlr_
+
+    ; Householder
+    slarfg_
+    dlarfg_
+    clarfg_
+    zlarfg_
+    slarf_
+    dlarf_
+    clarf_
+    zlarf_
+    slarft_
+    dlarft_
+    clarft_
+    zlarft_
+    slarfb_
+    dlarfb_
+    clarfb_
+    zlarfb_
+
+    ; QR
+    sgeqrf_
+    dgeqrf_
+    cgeqrf_
+    zgeqrf_
+    sorgqr_
+    dorgqr_
+    cungqr_
+    zungqr_
+    sormqr_
+    dormqr_
+    cunmqr_
+    zunmqr_
+
+    ; Eigenvalues
+    ssyev_
+    dsyev_
+    cheev_
+    zheev_
+
+    ; LU
+    sgetrf_
+    sgetrs_
+    dgetrf_
+    dgetrs_
+    cgetrf_
+    cgetrs_
+    zgetrf_
+    zgetrs_
+    sgetri_
+    dgetri_
+    cgetri_
+    zgetri_
+
+    ; Cholesky
+    spotrf_
+    spotrs_
+    dpotrf_
+    dpotrs_
+    cpotrf_
+    cpotrs_
+    zpotrf_
+    zpotrs_
+    spstrf_
+    dpstrf_
+    cpstrf_
+    zpstrf_
+
+    ; Symmetric indefinite
+    ssytrf_
+    ssytrs_
+    dsytrf_
+    dsytrs_
+    chetrf_
+    chetrs_
+    zhetrf_
+    zhetrs_
+    spotri_
+    dpotri_
+    cpotri_
+    zpotri_
+
+    ; Triangular
+    strtri_
+    dtrtri_
+    ctrtri_
+    ztrtri_
+    slauum_
+    dlauum_
+    clauum_
+    zlauum_
+    strtrs_
+    dtrtrs_
+    ctrtrs_
+    ztrtrs_
+
+    ; SVD
+    sgesdd_
+    sgesvd_
+    dgesdd_
+    dgesvd_
+    cgesdd_
+    cgesvd_
+    zgesdd_
+    zgesvd_
+
+    ; Time
+    second_
+    dsecnd_

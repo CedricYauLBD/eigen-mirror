@@ -6,16 +6,18 @@
 // This Source Code Form is subject to the terms of the Mozilla
 // Public License v. 2.0. If a copy of the MPL was not distributed
 // with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
+// SPDX-License-Identifier: MPL-2.0
 
 #include "main.h"
 
 template <typename MatrixType>
 void product_selfadjoint(const MatrixType& m) {
-  typedef typename MatrixType::Scalar Scalar;
-  typedef Matrix<Scalar, MatrixType::RowsAtCompileTime, 1> VectorType;
-  typedef Matrix<Scalar, 1, MatrixType::RowsAtCompileTime> RowVectorType;
+  using Scalar = typename MatrixType::Scalar;
+  using RealScalar = typename NumTraits<Scalar>::Real;
+  using VectorType = Matrix<Scalar, MatrixType::RowsAtCompileTime, 1>;
+  using RowVectorType = Matrix<Scalar, 1, MatrixType::RowsAtCompileTime>;
 
-  typedef Matrix<Scalar, MatrixType::RowsAtCompileTime, Dynamic, RowMajor> RhsMatrixType;
+  using RhsMatrixType = Matrix<Scalar, MatrixType::RowsAtCompileTime, Dynamic, RowMajor>;
 
   Index rows = m.rows();
   Index cols = m.cols();
@@ -28,6 +30,102 @@ void product_selfadjoint(const MatrixType& m) {
   Scalar s1 = internal::random<Scalar>(), s2 = internal::random<Scalar>(), s3 = internal::random<Scalar>();
 
   m1 = (m1.adjoint() + m1).eval();
+
+  // Dense selfadjoint assignment is documented as writing only the referenced triangle.
+  m2.setRandom();
+  m3 = m2;
+  m2.template selfadjointView<Upper>() = m1 + m1.adjoint();
+  m3.template triangularView<Upper>() = m1 + m1.adjoint();
+  VERIFY_IS_APPROX(m2, m3);
+
+  m2.setRandom();
+  m3 = m2;
+  m2.template selfadjointView<Upper>().setZero();
+  m3.template triangularView<Upper>().setZero();
+  VERIFY_IS_APPROX(m2, m3);
+
+  m2.setRandom();
+  m3 = m2;
+  m2.template selfadjointView<Lower>().setOnes();
+  m3.template triangularView<Lower>().setOnes();
+  VERIFY_IS_APPROX(m2, m3);
+
+  m2.setRandom();
+  m3 = m2;
+  m2.template selfadjointView<Upper>().setConstant(s1);
+  m3.template triangularView<Upper>().setConstant(s1);
+  VERIFY_IS_APPROX(m2, m3);
+
+  m2.setRandom();
+  m3 = m2;
+  m2.template selfadjointView<Lower>().fill(s2);
+  m3.template triangularView<Lower>().fill(s2);
+  VERIFY_IS_APPROX(m2, m3);
+
+  m2.setRandom();
+  m3 = m2;
+  m2.template selfadjointView<Upper>().setIdentity();
+  m3.template triangularView<Upper>().setIdentity();
+  VERIFY_IS_APPROX(m2, m3);
+
+  m2.setRandom();
+  m3 = m2;
+  m2.template selfadjointView<Lower>().setRandom();
+  VERIFY_IS_APPROX(m2.template triangularView<StrictlyUpper>().toDenseMatrix(),
+                   m3.template triangularView<StrictlyUpper>().toDenseMatrix());
+
+  m2.setRandom();
+  m3 = m2;
+  m2.template selfadjointView<Upper>() += m1;
+  m3.template triangularView<Upper>() += m1;
+  VERIFY_IS_APPROX(m2, m3);
+
+  m2.setRandom();
+  m3 = m2;
+  m2.template selfadjointView<Lower>() -= m1;
+  m3.template triangularView<Lower>() -= m1;
+  VERIFY_IS_APPROX(m2, m3);
+
+  // SelfAdjointView in-place scaling/division accept real scalars only: scaling only the
+  // stored triangle by a non-real factor would leave conj(other) on the unstored half.
+  const RealScalar real_s1 = numext::real(s1);
+  const RealScalar real_divisor = numext::real(s2) + RealScalar(2);
+  m2.setRandom();
+  m3 = m2;
+  m2.template selfadjointView<Upper>() *= real_s1;
+  m3.template triangularView<Upper>() *= real_s1;
+  VERIFY_IS_APPROX(m2, m3);
+
+  m2.setRandom();
+  m3 = m2;
+  m2.template selfadjointView<Lower>() /= real_divisor;
+  m3.template triangularView<Lower>() /= real_divisor;
+  VERIFY_IS_APPROX(m2, m3);
+
+  m2.setRandom();
+  m2.template selfadjointView<Lower>() = m1.template selfadjointView<Lower>();
+  m3 = m1.template selfadjointView<Lower>().toDenseMatrix();
+  VERIFY_IS_APPROX(m2, m3);
+
+  m2.setRandom();
+  m2.template selfadjointView<Lower>() = m1.template selfadjointView<Upper>();
+  m3 = m1.template selfadjointView<Upper>().toDenseMatrix();
+  VERIFY_IS_APPROX(m2, m3);
+
+  m2.setRandom();
+  m2.template selfadjointView<Lower>() = m1.template triangularView<Upper>();
+  m3 = m1.template triangularView<Upper>().toDenseMatrix();
+  VERIFY_IS_APPROX(m2, m3);
+
+  m2.setRandom();
+  m2.template selfadjointView<Lower>() = m1.template triangularView<UnitUpper>();
+  m3 = m1.template triangularView<UnitUpper>().toDenseMatrix();
+  VERIFY_IS_APPROX(m2, m3);
+
+  m2.setRandom();
+  m2.template selfadjointView<Upper>() = m1.template triangularView<StrictlyLower>();
+  m3 = m1.template triangularView<StrictlyLower>().toDenseMatrix();
+  VERIFY_IS_APPROX(m2, m3);
 
   // rank2 update
   m2 = m1.template triangularView<Lower>();
@@ -58,9 +156,104 @@ void product_selfadjoint(const MatrixType& m) {
     VERIFY_IS_APPROX(m2, m3.template triangularView<Lower>().toDenseMatrix());
   }
 
+  // rank2 update of a matrix with a non-unit inner stride
+  {
+    using VectorX = Matrix<Scalar, Dynamic, 1>;
+    const Index innerSize = MatrixType::IsRowMajor ? cols : rows;
+    VectorX buffer = VectorX::Zero(2 * rows * cols);
+    Map<MatrixType, 0, Stride<Dynamic, 2> > map1(buffer.data(), rows, cols, Stride<Dynamic, 2>(2 * innerSize, 2));
+    map1 = m1.template triangularView<Upper>();
+    map1.template selfadjointView<Upper>().rankUpdate(v1, v2, s1);
+    m3 = map1;
+    VERIFY_IS_APPROX(m3, (m1 + s1 * v1 * v2.adjoint() + numext::conj(s1) * v2 * v1.adjoint())
+                             .template triangularView<Upper>()
+                             .toDenseMatrix());
+    const Map<VectorX, 0, InnerStride<2> > gaps(buffer.data() + 1, rows * cols);
+    VERIFY(gaps.isZero());
+  }
+
   // matrix-vector
   m2 = m1.template triangularView<Lower>();
   VERIFY_IS_APPROX(m1 * m4, m2.template selfadjointView<Lower>() * m4);
+}
+
+// Test selfadjoint products at blocking boundary sizes.
+// The existing test uses random sizes; this tests deterministic sizes
+// at transitions (especially around the GEBP early-return threshold of 48).
+template <int>
+void product_selfadjoint_boundary() {
+  using Scalar = double;
+  using Mat = Matrix<Scalar, Dynamic, Dynamic>;
+  using Vec = Matrix<Scalar, Dynamic, 1>;
+
+  const int sizes[] = {1, 2, 3, 4, 8, 16, 47, 48, 49, 64, 96, 128};
+  for (int si = 0; si < 12; ++si) {
+    int n = sizes[si];
+    Mat m1 = Mat::Random(n, n);
+    m1 = (m1 + m1.transpose()).eval();  // make symmetric
+
+    Vec v1 = Vec::Random(n);
+    Mat rhs = Mat::Random(n, 5);
+
+    // Lower selfadjointView * vector
+    Mat m2 = m1.triangularView<Lower>();
+    VERIFY_IS_APPROX(m2.selfadjointView<Lower>() * v1, m1 * v1);
+
+    // Upper selfadjointView * vector
+    m2 = m1.triangularView<Upper>();
+    VERIFY_IS_APPROX(m2.selfadjointView<Upper>() * v1, m1 * v1);
+
+    // selfadjointView * matrix
+    m2 = m1.triangularView<Lower>();
+    VERIFY_IS_APPROX(m2.selfadjointView<Lower>() * rhs, m1 * rhs);
+
+    // rankUpdate
+    Vec v2 = Vec::Random(n);
+    m2 = m1.triangularView<Lower>();
+    m2.selfadjointView<Lower>().rankUpdate(v1, v2);
+    VERIFY_IS_APPROX(m2, (m1 + v1 * v2.transpose() + v2 * v1.transpose()).triangularView<Lower>().toDenseMatrix());
+  }
+}
+
+// Same test for complex types, including buffers aligned only to alignof(RealScalar) < sizeof(Scalar).
+template <typename Scalar>
+void product_selfadjoint_boundary_complex() {
+  using RealScalar = typename NumTraits<Scalar>::Real;
+  using Mat = Matrix<Scalar, Dynamic, Dynamic>;
+  using Vec = Matrix<Scalar, Dynamic, 1>;
+  using RealVec = Matrix<RealScalar, Dynamic, 1>;
+
+  const int sizes[] = {1, 2, 3, 4, 8, 9, 16, 47, 48, 49, 64};
+  for (int n : sizes) {
+    Mat m1 = Mat::Random(n, n);
+    m1 = (m1 + m1.adjoint()).eval();                               // make Hermitian
+    m1.diagonal() = m1.diagonal().real().template cast<Scalar>();  // real diagonal
+
+    Vec v1 = Vec::Random(n);
+    Mat rhs = Mat::Random(n, 3);
+    Vec ref = m1 * v1;
+
+    Mat m2 = m1.template triangularView<Lower>();
+    VERIFY_IS_APPROX(m2.template selfadjointView<Lower>() * v1, ref);
+    VERIFY_IS_APPROX(m2.template selfadjointView<Lower>() * rhs, m1 * rhs);
+
+    m2 = m1.template triangularView<Upper>();
+    VERIFY_IS_APPROX(m2.template selfadjointView<Upper>() * v1, ref);
+
+    RealVec unaligned_res_storage(2 * n + 1);
+    RealVec unaligned_rhs_storage(2 * n + 1);
+    Map<Vec, Unaligned> unaligned_res(reinterpret_cast<Scalar*>(unaligned_res_storage.data() + 1), n);
+    Map<Vec, Unaligned> unaligned_rhs(reinterpret_cast<Scalar*>(unaligned_rhs_storage.data() + 1), n);
+    unaligned_rhs = v1;
+
+    unaligned_res.setZero();
+    unaligned_res.noalias() += m1.template selfadjointView<Lower>() * unaligned_rhs;
+    VERIFY_IS_APPROX(unaligned_res, ref);
+
+    unaligned_res.setZero();
+    unaligned_res.noalias() += m1.template selfadjointView<Upper>() * unaligned_rhs;
+    VERIFY_IS_APPROX(unaligned_res, ref);
+  }
 }
 
 EIGEN_DECLARE_TEST(product_selfadjoint) {
@@ -72,18 +265,23 @@ EIGEN_DECLARE_TEST(product_selfadjoint) {
 
     s = internal::random<int>(1, EIGEN_TEST_MAX_SIZE / 2);
     CALL_SUBTEST_4(product_selfadjoint(MatrixXcf(s, s)));
-    TEST_SET_BUT_UNUSED_VARIABLE(s)
+    TEST_SET_BUT_UNUSED_VARIABLE(s);
 
     s = internal::random<int>(1, EIGEN_TEST_MAX_SIZE / 2);
     CALL_SUBTEST_5(product_selfadjoint(MatrixXcd(s, s)));
-    TEST_SET_BUT_UNUSED_VARIABLE(s)
+    TEST_SET_BUT_UNUSED_VARIABLE(s);
 
     s = internal::random<int>(1, EIGEN_TEST_MAX_SIZE);
     CALL_SUBTEST_6(product_selfadjoint(MatrixXd(s, s)));
-    TEST_SET_BUT_UNUSED_VARIABLE(s)
+    TEST_SET_BUT_UNUSED_VARIABLE(s);
 
     s = internal::random<int>(1, EIGEN_TEST_MAX_SIZE);
     CALL_SUBTEST_7(product_selfadjoint(Matrix<float, Dynamic, Dynamic, RowMajor>(s, s)));
-    TEST_SET_BUT_UNUSED_VARIABLE(s)
+    TEST_SET_BUT_UNUSED_VARIABLE(s);
   }
+
+  // Deterministic blocking boundary tests (outside g_repeat).
+  CALL_SUBTEST_8(product_selfadjoint_boundary<0>());
+  CALL_SUBTEST_9(product_selfadjoint_boundary_complex<std::complex<float>>());
+  CALL_SUBTEST_9(product_selfadjoint_boundary_complex<std::complex<double>>());
 }

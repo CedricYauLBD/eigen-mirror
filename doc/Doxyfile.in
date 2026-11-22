@@ -1,6 +1,6 @@
 # Doxyfile 1.13.0
 PROJECT_NAME           = ${EIGEN_DOXY_PROJECT_NAME}
-PROJECT_NUMBER         = ${EIGEN_VERSION}
+PROJECT_NUMBER         = ${EIGEN_VERSION_STRING}
 PROJECT_LOGO           = ${Eigen_SOURCE_DIR}/doc/Eigen_Silly_Professor_64x64.png
 OUTPUT_DIRECTORY       = ${Eigen_BINARY_DIR}/doc${EIGEN_DOXY_OUTPUT_DIRECTORY_SUFFIX}
 FULL_PATH_NAMES        = YES
@@ -17,7 +17,7 @@ ALIASES                = "only_for_vectors=This is only for vectors (either row-
                          "lu_module=This is defined in the %LU module. \code #include <Eigen/LU> \endcode" \
                          "qr_module=This is defined in the %QR module. \code #include <Eigen/QR> \endcode" \
                          "svd_module=This is defined in the %SVD module. \code #include <Eigen/SVD> \endcode" \
-                         "specialfunctions_module=This is defined in the \b unsupported SpecialFunctions module. \code #include <Eigen/SpecialFunctions> \endcode" \
+                         "specialfunctions_module=This is defined in the \b contrib SpecialFunctions module. \code #include <contrib/Eigen/SpecialFunctions> \endcode" \
                          label=\bug \
                          "matrixworld=<a href='#matrixonly' style='color:green;text-decoration: none;'>*</a>" \
                          "arrayworld=<a href='#arrayonly' style='color:blue;text-decoration: none;'>*</a>" \
@@ -28,13 +28,12 @@ ALIASES                = "only_for_vectors=This is only for vectors (either row-
                          "nonstableyet=\warning This is not considered to be part of the stable public API yet. Changes may happen in future releases. See \ref Experimental \"Experimental parts of Eigen\"" \
                          "implsparsesolverconcept=This class follows the \link TutorialSparseSolverConcept sparse solver concept \endlink." \
                          blank= \
-                         "cpp11=<span class='cpp11'>[c++11]</span>" \
-                         "cpp14=<span class='cpp14'>[c++14]</span>" \
                          "cpp17=<span class='cpp17'>[c++17]</span>" \
                          "newin{1}=<span class='newin3x'>New in %Eigen \1.</span>" \
-                         eigenAutoToc= \
+                         "eigenAutoToc=<!-- TOC placeholder -->" \
                          eigenManualPage=\defgroup
 EXTENSION_MAPPING      = .h=C++ \
+                         .inc=C++ \
                          no_extension=C++
 DISTRIBUTE_GROUP_DOC   = YES
 NUM_PROC_THREADS       = 0
@@ -59,13 +58,16 @@ WARN_IF_UNDOCUMENTED   = NO
 INPUT                  = ${EIGEN_DOXY_INPUT}
 FILE_PATTERNS          = *
 RECURSIVE              = YES
+# The StructuredMatrices README is written for GitLab, whose math markup and
+# in-page links Doxygen does not render; the classes carry the Doxygen reference.
 EXCLUDE                = ${Eigen_SOURCE_DIR}/Eigen/Eigen2Support \
                          ${Eigen_SOURCE_DIR}/Eigen/src/Eigen2Support \
                          ${Eigen_SOURCE_DIR}/doc/examples \
                          ${Eigen_SOURCE_DIR}/doc/special_examples \
                          ${Eigen_SOURCE_DIR}/doc/snippets \
-                         ${Eigen_SOURCE_DIR}/unsupported/doc/examples \
-                         ${Eigen_SOURCE_DIR}/unsupported/doc/snippets
+                         ${Eigen_SOURCE_DIR}/contrib/doc/examples \
+                         ${Eigen_SOURCE_DIR}/contrib/doc/snippets \
+                         ${Eigen_SOURCE_DIR}/contrib/Eigen/src/StructuredMatrices/README.md
 
 #                        ${Eigen_SOURCE_DIR}/Eigen/src/Core/products \
 #                        ${Eigen_SOURCE_DIR}/Eigen/src/Core/util/ForwardDeclarations.h \
@@ -95,10 +97,10 @@ EXAMPLE_PATH           = ${Eigen_SOURCE_DIR}/doc/snippets \
                          ${Eigen_BINARY_DIR}/doc/examples \
                          ${Eigen_SOURCE_DIR}/doc/special_examples \
                          ${Eigen_BINARY_DIR}/doc/special_examples \
-                         ${Eigen_SOURCE_DIR}/unsupported/doc/snippets \
-                         ${Eigen_BINARY_DIR}/unsupported/doc/snippets \
-                         ${Eigen_SOURCE_DIR}/unsupported/doc/examples \
-                         ${Eigen_BINARY_DIR}/unsupported/doc/examples
+                         ${Eigen_SOURCE_DIR}/contrib/doc/snippets \
+                         ${Eigen_BINARY_DIR}/contrib/doc/snippets \
+                         ${Eigen_SOURCE_DIR}/contrib/doc/examples \
+                         ${Eigen_BINARY_DIR}/contrib/doc/examples
 IMAGE_PATH             = ${Eigen_BINARY_DIR}/doc/html
 # Prevent README.md from being considered a directory description (i.e. for Tensor).
 IMPLICIT_DIR_DOCS      = NO
@@ -127,11 +129,13 @@ PREDEFINED             = EIGEN_EMPTY_STRUCT \
                          EIGEN_QT_SUPPORT \
                          EIGEN_STRONG_INLINE=inline \
                          EIGEN_DEVICE_FUNC= \
-                         "EIGEN_MAKE_CWISE_BINARY_OP(METHOD,FUNCTOR)=template<typename OtherDerived> const CwiseBinaryOp<FUNCTOR<Scalar>, const Derived, const OtherDerived> METHOD(const EIGEN_CURRENT_STORAGE_BASE_CLASS<OtherDerived> &other) const;" \
+                         "EIGEN_DEPRECATED_WITH_REASON(message)=" \
+                         "EIGEN_MAKE_CWISE_UNARY_OP(METHOD,FUNCTOR,RETURN_TYPE)=const CwiseUnaryOp<FUNCTOR<Scalar>,const Derived> METHOD() const; using RETURN_TYPE=CwiseUnaryOp<FUNCTOR<Scalar>,const Derived>;" \
+                         "EIGEN_MAKE_CWISE_BINARY_OP(METHOD,FUNCTOR)=template<typename OtherDerived> const CwiseBinaryOp<FUNCTOR<Scalar,typename OtherDerived::Scalar>, const Derived, const OtherDerived> METHOD(const EIGEN_CURRENT_STORAGE_BASE_CLASS<OtherDerived> &other) const;" \
                          "EIGEN_CWISE_PRODUCT_RETURN_TYPE(LHS,RHS)=CwiseBinaryOp<internal::scalar_product_op<LHS::Scalar,RHS::Scalar>, const LHS, const RHS>" \
                          "EIGEN_CAT2(a,b)= a ## b" \
                          "EIGEN_CAT(a,b)=EIGEN_CAT2(a,b)" \
-                         "EIGEN_CWISE_BINARY_RETURN_TYPE(LHS,RHS,OPNAME)=CwiseBinaryOp<EIGEN_CAT(EIGEN_CAT(internal::scalar_,OPNAME),_op)<LHS::Scalar, RHS::Scalar>, const LHS, const RHS>" \
+                         "EIGEN_CWISE_BINARY_RETURN_TYPE(LHS,RHS,FUNCTOR)=CwiseBinaryOp<FUNCTOR<LHS::Scalar,RHS::Scalar>, const LHS, const RHS>" \
                          EIGEN_ALIGN_TO_BOUNDARY(x)= \
                          "DOXCOMMA=," \
                          "EIGEN_STATIC_ASSERT(COND,MSG)="

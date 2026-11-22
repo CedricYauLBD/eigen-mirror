@@ -7,6 +7,7 @@
 // This Source Code Form is subject to the terms of the Mozilla
 // Public License v. 2.0. If a copy of the MPL was not distributed
 // with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
+// SPDX-License-Identifier: MPL-2.0
 
 #ifndef EIGEN_QUATERNION_H
 #define EIGEN_QUATERNION_H
@@ -34,27 +35,26 @@ struct quaternionbase_assign_impl;
 template <class Derived>
 class QuaternionBase : public RotationBase<Derived, 3> {
  public:
-  typedef RotationBase<Derived, 3> Base;
+  using Base = RotationBase<Derived, 3>;
 
   using Base::operator*;
   using Base::derived;
 
-  typedef typename internal::traits<Derived>::Scalar Scalar;
-  typedef typename NumTraits<Scalar>::Real RealScalar;
-  typedef typename internal::traits<Derived>::Coefficients Coefficients;
-  typedef typename Coefficients::CoeffReturnType CoeffReturnType;
-  typedef std::conditional_t<bool(internal::traits<Derived>::Flags& LvalueBit), Scalar&, CoeffReturnType>
-      NonConstCoeffReturnType;
+  using Scalar = typename internal::traits<Derived>::Scalar;
+  using RealScalar = typename NumTraits<Scalar>::Real;
+  using Coefficients = typename internal::traits<Derived>::Coefficients;
+  using CoeffReturnType = typename Coefficients::CoeffReturnType;
+  using NonConstCoeffReturnType =
+      std::conditional_t<bool(internal::traits<Derived>::Flags& LvalueBit), Scalar&, CoeffReturnType>;
 
   enum { Flags = Eigen::internal::traits<Derived>::Flags };
 
-  // typedef typename Matrix<Scalar,4,1> Coefficients;
   /** the type of a 3D vector */
-  typedef Matrix<Scalar, 3, 1> Vector3;
+  using Vector3 = Matrix<Scalar, 3, 1>;
   /** the equivalent rotation matrix type */
-  typedef Matrix<Scalar, 3, 3> Matrix3;
+  using Matrix3 = Matrix<Scalar, 3, 3>;
   /** the equivalent angle-axis type */
-  typedef AngleAxis<Scalar> AngleAxisType;
+  using AngleAxisType = AngleAxis<Scalar>;
 
   /** \returns the \c x coefficient */
   EIGEN_DEVICE_FUNC constexpr CoeffReturnType x() const { return this->derived().coeffs().coeff(0); }
@@ -93,9 +93,7 @@ class QuaternionBase : public RotationBase<Derived, 3> {
    *
    * \sa QuaternionBase::coeffsScalarLast()
    * */
-  EIGEN_DEVICE_FUNC inline typename internal::traits<Derived>::Coefficients coeffsScalarFirst() const {
-    return derived().coeffsScalarFirst();
-  }
+  EIGEN_DEVICE_FUNC inline Matrix<Scalar, 4, 1> coeffsScalarFirst() const { return derived().coeffsScalarFirst(); }
 
   /** \returns a vector containing the coefficients in their original order [\c x, \c y, \c z, \c w].
    *
@@ -104,9 +102,7 @@ class QuaternionBase : public RotationBase<Derived, 3> {
    *
    * \sa QuaternionBase::coeffsScalarFirst()
    * */
-  EIGEN_DEVICE_FUNC inline typename internal::traits<Derived>::Coefficients coeffsScalarLast() const {
-    return derived().coeffsScalarLast();
-  }
+  EIGEN_DEVICE_FUNC inline Matrix<Scalar, 4, 1> coeffsScalarLast() const { return derived().coeffsScalarLast(); }
 
   /** \returns a vector expression of the coefficients (x,y,z,w) */
   EIGEN_DEVICE_FUNC inline typename internal::traits<Derived>::Coefficients& coeffs() { return derived().coeffs(); }
@@ -114,13 +110,6 @@ class QuaternionBase : public RotationBase<Derived, 3> {
   EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE QuaternionBase<Derived>& operator=(const QuaternionBase<Derived>& other);
   template <class OtherDerived>
   EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE Derived& operator=(const QuaternionBase<OtherDerived>& other);
-
-  // disabled this copy operator as it is giving very strange compilation errors when compiling
-  // test_stdvector with GCC 4.4.2. This looks like a GCC bug though, so feel free to re-enable it if it's
-  // useful; however notice that we already have the templated operator= above and e.g. in MatrixBase
-  // we didn't have to add, in addition to templated operator=, such a non-templated copy operator.
-  //  Derived& operator=(const QuaternionBase& other)
-  //  { return operator=<Derived>(other); }
 
   EIGEN_DEVICE_FUNC Derived& operator=(const AngleAxisType& aa);
   template <class OtherDerived>
@@ -176,6 +165,11 @@ class QuaternionBase : public RotationBase<Derived, 3> {
   /** \returns the quaternion which transform \a a into \a b through a rotation */
   template <typename Derived1, typename Derived2>
   EIGEN_DEVICE_FUNC Derived& setFromTwoVectors(const MatrixBase<Derived1>& a, const MatrixBase<Derived2>& b);
+
+  template <typename OtherDerived>
+  EIGEN_DEVICE_FUNC Derived& setFromScaledAxis(const MatrixBase<OtherDerived>& scaled_axis);
+
+  EIGEN_DEVICE_FUNC inline Vector3 toScaledAxis() const;
 
   template <class OtherDerived>
   EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE Quaternion<Scalar> operator*(const QuaternionBase<OtherDerived>& q) const;
@@ -234,14 +228,12 @@ class QuaternionBase : public RotationBase<Derived, 3> {
 #else
 
   template <typename NewScalarType>
-  EIGEN_DEVICE_FUNC inline std::enable_if_t<internal::is_same<Scalar, NewScalarType>::value, const Derived&> cast()
-      const {
+  EIGEN_DEVICE_FUNC inline std::enable_if_t<std::is_same<Scalar, NewScalarType>::value, const Derived&> cast() const {
     return derived();
   }
 
   template <typename NewScalarType>
-  EIGEN_DEVICE_FUNC inline std::enable_if_t<!internal::is_same<Scalar, NewScalarType>::value,
-                                            Quaternion<NewScalarType> >
+  EIGEN_DEVICE_FUNC inline std::enable_if_t<!std::is_same<Scalar, NewScalarType>::value, Quaternion<NewScalarType> >
   cast() const {
     return Quaternion<NewScalarType>(coeffs().template cast<NewScalarType>());
   }
@@ -297,9 +289,9 @@ class QuaternionBase : public RotationBase<Derived, 3> {
 namespace internal {
 template <typename Scalar_, int Options_>
 struct traits<Quaternion<Scalar_, Options_> > {
-  typedef Quaternion<Scalar_, Options_> PlainObject;
-  typedef Scalar_ Scalar;
-  typedef Matrix<Scalar_, 4, 1, Options_> Coefficients;
+  using PlainObject = Quaternion<Scalar_, Options_>;
+  using Scalar = Scalar_;
+  using Coefficients = Matrix<Scalar_, 4, 1, Options_>;
   enum { Alignment = internal::traits<Coefficients>::Alignment, Flags = LvalueBit };
 };
 }  // namespace internal
@@ -307,16 +299,16 @@ struct traits<Quaternion<Scalar_, Options_> > {
 template <typename Scalar_, int Options_>
 class Quaternion : public QuaternionBase<Quaternion<Scalar_, Options_> > {
  public:
-  typedef QuaternionBase<Quaternion<Scalar_, Options_> > Base;
+  using Base = QuaternionBase<Quaternion<Scalar_, Options_>>;
   enum { NeedsAlignment = internal::traits<Quaternion>::Alignment > 0 };
 
-  typedef Scalar_ Scalar;
+  using Scalar = Scalar_;
 
   EIGEN_INHERIT_ASSIGNMENT_OPERATORS(Quaternion)
   using Base::operator*=;
 
-  typedef typename internal::traits<Quaternion>::Coefficients Coefficients;
-  typedef typename Base::AngleAxisType AngleAxisType;
+  using Coefficients = typename internal::traits<Quaternion>::Coefficients;
+  using AngleAxisType = typename Base::AngleAxisType;
 
   /** Default constructor leaving the quaternion uninitialized. */
   EIGEN_DEVICE_FUNC inline Quaternion() {}
@@ -389,6 +381,9 @@ class Quaternion : public QuaternionBase<Quaternion<Scalar_, Options_> > {
   template <typename Derived1, typename Derived2>
   EIGEN_DEVICE_FUNC static Quaternion FromTwoVectors(const MatrixBase<Derived1>& a, const MatrixBase<Derived2>& b);
 
+  template <typename Derived>
+  EIGEN_DEVICE_FUNC static Quaternion FromScaledAxis(const MatrixBase<Derived>& scaled_axis);
+
   EIGEN_DEVICE_FUNC inline Coefficients& coeffs() { return m_coeffs; }
   EIGEN_DEVICE_FUNC inline const Coefficients& coeffs() const { return m_coeffs; }
 
@@ -413,10 +408,10 @@ class Quaternion : public QuaternionBase<Quaternion<Scalar_, Options_> > {
 
 /** \ingroup Geometry_Module
  * single precision quaternion type */
-typedef Quaternion<float> Quaternionf;
+using Quaternionf = Quaternion<float>;
 /** \ingroup Geometry_Module
  * double precision quaternion type */
-typedef Quaternion<double> Quaterniond;
+using Quaterniond = Quaternion<double>;
 
 /***************************************************************************
  * Specialization of Map<Quaternion<Scalar>>
@@ -426,7 +421,7 @@ namespace internal {
 template <typename Scalar_, int Options_>
 struct traits<Map<Quaternion<Scalar_>, Options_> >
     : traits<Quaternion<Scalar_, (int(Options_) & Aligned) == Aligned ? AutoAlign : DontAlign> > {
-  typedef Map<Matrix<Scalar_, 4, 1>, Options_> Coefficients;
+  using Coefficients = Map<Matrix<Scalar_, 4, 1>, Options_>;
 };
 }  // namespace internal
 
@@ -434,8 +429,8 @@ namespace internal {
 template <typename Scalar_, int Options_>
 struct traits<Map<const Quaternion<Scalar_>, Options_> >
     : traits<Quaternion<Scalar_, (int(Options_) & Aligned) == Aligned ? AutoAlign : DontAlign> > {
-  typedef Map<const Matrix<Scalar_, 4, 1>, Options_> Coefficients;
-  typedef traits<Quaternion<Scalar_, (int(Options_) & Aligned) == Aligned ? AutoAlign : DontAlign> > TraitsBase;
+  using Coefficients = Map<const Matrix<Scalar_, 4, 1>, Options_>;
+  using TraitsBase = traits<Quaternion<Scalar_, (int(Options_) & Aligned) == Aligned ? AutoAlign : DontAlign>>;
   enum { Flags = TraitsBase::Flags & ~LvalueBit };
 };
 }  // namespace internal
@@ -454,10 +449,10 @@ struct traits<Map<const Quaternion<Scalar_>, Options_> >
 template <typename Scalar_, int Options_>
 class Map<const Quaternion<Scalar_>, Options_> : public QuaternionBase<Map<const Quaternion<Scalar_>, Options_> > {
  public:
-  typedef QuaternionBase<Map<const Quaternion<Scalar_>, Options_> > Base;
+  using Base = QuaternionBase<Map<const Quaternion<Scalar_>, Options_>>;
 
-  typedef Scalar_ Scalar;
-  typedef typename internal::traits<Map>::Coefficients Coefficients;
+  using Scalar = Scalar_;
+  using Coefficients = typename internal::traits<Map>::Coefficients;
   EIGEN_INHERIT_ASSIGNMENT_OPERATORS(Map)
   using Base::operator*=;
 
@@ -471,9 +466,9 @@ class Map<const Quaternion<Scalar_>, Options_> : public QuaternionBase<Map<const
 
   EIGEN_DEVICE_FUNC inline const Coefficients& coeffs() const { return m_coeffs; }
 
-  EIGEN_DEVICE_FUNC inline Coefficients coeffsScalarLast() const { return m_coeffs; }
+  EIGEN_DEVICE_FUNC inline Matrix<Scalar, 4, 1> coeffsScalarLast() const { return m_coeffs; }
 
-  EIGEN_DEVICE_FUNC inline Coefficients coeffsScalarFirst() const {
+  EIGEN_DEVICE_FUNC inline Matrix<Scalar, 4, 1> coeffsScalarFirst() const {
     return {m_coeffs.w(), m_coeffs.x(), m_coeffs.y(), m_coeffs.z()};
   }
 
@@ -495,10 +490,10 @@ class Map<const Quaternion<Scalar_>, Options_> : public QuaternionBase<Map<const
 template <typename Scalar_, int Options_>
 class Map<Quaternion<Scalar_>, Options_> : public QuaternionBase<Map<Quaternion<Scalar_>, Options_> > {
  public:
-  typedef QuaternionBase<Map<Quaternion<Scalar_>, Options_> > Base;
+  using Base = QuaternionBase<Map<Quaternion<Scalar_>, Options_>>;
 
-  typedef Scalar_ Scalar;
-  typedef typename internal::traits<Map>::Coefficients Coefficients;
+  using Scalar = Scalar_;
+  using Coefficients = typename internal::traits<Map>::Coefficients;
   EIGEN_INHERIT_ASSIGNMENT_OPERATORS(Map)
   using Base::operator*=;
 
@@ -513,9 +508,9 @@ class Map<Quaternion<Scalar_>, Options_> : public QuaternionBase<Map<Quaternion<
   EIGEN_DEVICE_FUNC inline Coefficients& coeffs() { return m_coeffs; }
   EIGEN_DEVICE_FUNC inline const Coefficients& coeffs() const { return m_coeffs; }
 
-  EIGEN_DEVICE_FUNC inline Coefficients coeffsScalarLast() const { return m_coeffs; }
+  EIGEN_DEVICE_FUNC inline Matrix<Scalar, 4, 1> coeffsScalarLast() const { return m_coeffs; }
 
-  EIGEN_DEVICE_FUNC inline Coefficients coeffsScalarFirst() const {
+  EIGEN_DEVICE_FUNC inline Matrix<Scalar, 4, 1> coeffsScalarFirst() const {
     return {m_coeffs.w(), m_coeffs.x(), m_coeffs.y(), m_coeffs.z()};
   }
 
@@ -525,16 +520,16 @@ class Map<Quaternion<Scalar_>, Options_> : public QuaternionBase<Map<Quaternion<
 
 /** \ingroup Geometry_Module
  * Map an unaligned array of single precision scalars as a quaternion */
-typedef Map<Quaternion<float>, 0> QuaternionMapf;
+using QuaternionMapf = Map<Quaternion<float>, 0>;
 /** \ingroup Geometry_Module
  * Map an unaligned array of double precision scalars as a quaternion */
-typedef Map<Quaternion<double>, 0> QuaternionMapd;
+using QuaternionMapd = Map<Quaternion<double>, 0>;
 /** \ingroup Geometry_Module
  * Map a 16-byte aligned array of single precision scalars as a quaternion */
-typedef Map<Quaternion<float>, Aligned> QuaternionMapAlignedf;
+using QuaternionMapAlignedf = Map<Quaternion<float>, Aligned>;
 /** \ingroup Geometry_Module
  * Map a 16-byte aligned array of double precision scalars as a quaternion */
-typedef Map<Quaternion<double>, Aligned> QuaternionMapAlignedd;
+using QuaternionMapAlignedd = Map<Quaternion<double>, Aligned>;
 
 /***************************************************************************
  * Implementation of QuaternionBase methods
@@ -545,8 +540,20 @@ typedef Map<Quaternion<double>, Aligned> QuaternionMapAlignedd;
 namespace internal {
 template <int Arch, class Derived1, class Derived2, typename Scalar>
 struct quat_product {
-  EIGEN_DEVICE_FUNC static EIGEN_STRONG_INLINE Quaternion<Scalar> run(const QuaternionBase<Derived1>& a,
-                                                                      const QuaternionBase<Derived2>& b) {
+  EIGEN_DEVICE_FUNC static EIGEN_STRONG_INLINE Quaternion<Scalar> run(const QuaternionBase<Derived1>& input_a,
+                                                                      const QuaternionBase<Derived2>& input_b) {
+    const Derived1* a_ptr = &input_a.derived();
+    const Derived2* b_ptr = &input_b.derived();
+#if EIGEN_ARCH_ARM && EIGEN_COMP_CLANG
+    EIGEN_IF_CONSTEXPR (std::is_same<Scalar, double>::value) {
+      // Keep operand addresses opaque to LLVM's ARM load/store optimizer (llvm-project#223630).
+      // Fixed upstream for Clang 24 by https://github.com/llvm/llvm-project/pull/226937.
+      // Register constraints avoid the spills introduced by the general optimization barrier.
+      asm("" : "+r"(a_ptr), "+r"(b_ptr));
+    }
+#endif
+    const Derived1& a = *a_ptr;
+    const Derived2& b = *b_ptr;
     return Quaternion<Scalar>(a.w() * b.w() - a.x() * b.x() - a.y() * b.y() - a.z() * b.z(),
                               a.w() * b.x() + a.x() * b.w() + a.y() * b.z() - a.z() * b.y(),
                               a.w() * b.y() + a.y() * b.w() + a.z() * b.x() - a.x() * b.z(),
@@ -561,7 +568,7 @@ template <class OtherDerived>
 EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE Quaternion<typename internal::traits<Derived>::Scalar>
 QuaternionBase<Derived>::operator*(const QuaternionBase<OtherDerived>& other) const {
   EIGEN_STATIC_ASSERT(
-      (internal::is_same<typename Derived::Scalar, typename OtherDerived::Scalar>::value),
+      (std::is_same<typename Derived::Scalar, typename OtherDerived::Scalar>::value),
       YOU_MIXED_DIFFERENT_NUMERIC_TYPES__YOU_NEED_TO_USE_THE_CAST_METHOD_OF_MATRIXBASE_TO_CAST_NUMERIC_TYPES_EXPLICITLY)
   return internal::quat_product<Architecture::Target, Derived, OtherDerived,
                                 typename internal::traits<Derived>::Scalar>::run(*this, other);
@@ -580,7 +587,7 @@ EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE Derived& QuaternionBase<Derived>::operator
  * \remarks If the quaternion is used to rotate several points (>1)
  * then it is much more efficient to first convert it to a 3x3 Matrix.
  * Comparison of the operation cost for n transformations:
- *   - Quaternion2:    30n
+ *   - Quaternion:    30n
  *   - Via a Matrix3: 24 + 15n
  */
 template <class Derived>
@@ -615,11 +622,9 @@ EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE Derived& QuaternionBase<Derived>::operator
  */
 template <class Derived>
 EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE Derived& QuaternionBase<Derived>::operator=(const AngleAxisType& aa) {
-  EIGEN_USING_STD(cos)
-  EIGEN_USING_STD(sin)
   Scalar ha = Scalar(0.5) * aa.angle();  // Scalar(0.5) to suppress precision loss warnings
-  this->w() = cos(ha);
-  this->vec() = sin(ha) * aa.axis();
+  this->w() = numext::cos(ha);
+  this->vec() = numext::sin(ha) * aa.axis();
   return derived();
 }
 
@@ -633,7 +638,7 @@ template <class Derived>
 template <class MatrixDerived>
 EIGEN_DEVICE_FUNC inline Derived& QuaternionBase<Derived>::operator=(const MatrixBase<MatrixDerived>& xpr) {
   EIGEN_STATIC_ASSERT(
-      (internal::is_same<typename Derived::Scalar, typename MatrixDerived::Scalar>::value),
+      (std::is_same<typename Derived::Scalar, typename MatrixDerived::Scalar>::value),
       YOU_MIXED_DIFFERENT_NUMERIC_TYPES__YOU_NEED_TO_USE_THE_CAST_METHOD_OF_MATRIXBASE_TO_CAST_NUMERIC_TYPES_EXPLICITLY)
   internal::quaternionbase_assign_impl<MatrixDerived>::run(*this, xpr.derived());
   return derived();
@@ -645,10 +650,7 @@ EIGEN_DEVICE_FUNC inline Derived& QuaternionBase<Derived>::operator=(const Matri
 template <class Derived>
 EIGEN_DEVICE_FUNC inline typename QuaternionBase<Derived>::Matrix3 QuaternionBase<Derived>::toRotationMatrix(
     void) const {
-  // NOTE if inlined, then gcc 4.2 and 4.4 get rid of the temporary (not gcc 4.3 !!)
-  // if not inlined then the cost of the return by value is huge ~ +35%,
-  // however, not inlining this function is an order of magnitude slower, so
-  // it has to be inlined, and so the return by value is not an issue
+  // Keep this inline: forcing an out-of-line call is much more expensive than returning Matrix3 by value.
   Matrix3 res;
 
   const Scalar tx = Scalar(2) * this->x();
@@ -677,6 +679,21 @@ EIGEN_DEVICE_FUNC inline typename QuaternionBase<Derived>::Matrix3 QuaternionBas
   return res;
 }
 
+namespace internal {
+// v / ||v||. This is MatrixBase::normalized() except that a squared norm outside the range in which it is accurate
+// (underflow or overflow of the sum of squares) falls back to stableNormalized(). A zero vector is returned unchanged.
+template <typename Derived>
+EIGEN_DEVICE_FUNC inline typename MatrixBase<Derived>::PlainObject quaternion_normalized(const MatrixBase<Derived>& v) {
+  using Scalar = typename traits<Derived>::Scalar;
+  const typename MatrixBase<Derived>::PlainObject x = v;
+  const Scalar n2 = x.squaredNorm();
+  if (n2 > (numext::numeric_limits<Scalar>::min)() && n2 <= NumTraits<Scalar>::highest()) {
+    return x / numext::sqrt(n2);
+  }
+  return x.stableNormalized();
+}
+}  // namespace internal
+
 /** Sets \c *this to be a quaternion representing a rotation between
  * the two arbitrary vectors \a a and \a b. In other words, the built
  * rotation represent a rotation sending the line of direction \a a
@@ -691,38 +708,107 @@ template <class Derived>
 template <typename Derived1, typename Derived2>
 EIGEN_DEVICE_FUNC inline Derived& QuaternionBase<Derived>::setFromTwoVectors(const MatrixBase<Derived1>& a,
                                                                              const MatrixBase<Derived2>& b) {
-  EIGEN_USING_STD(sqrt)
-  Vector3 v0 = a.normalized();
-  Vector3 v1 = b.normalized();
+  Vector3 v0 = internal::quaternion_normalized(a);
+  Vector3 v1 = internal::quaternion_normalized(b);
   Scalar c = v1.dot(v0);
 
-  // if dot == -1, vectors are nearly opposites
-  // => accurately compute the rotation axis by computing the
-  //    intersection of the two planes. This is done by solving:
-  //       x^T v0 = 0
-  //       x^T v1 = 0
-  //    under the constraint:
-  //       ||x|| = 1
-  //    which yields a singular value problem
-  if (c < Scalar(-1) + NumTraits<Scalar>::dummy_precision()) {
-    c = numext::maxi(c, Scalar(-1));
-    Matrix<Scalar, 2, 3> m;
-    m << v0.transpose(), v1.transpose();
-    JacobiSVD<Matrix<Scalar, 2, 3>, ComputeFullV> svd(m);
-    Vector3 axis = svd.matrixV().col(2);
-
-    Scalar w2 = (Scalar(1) + c) * Scalar(0.5);
-    this->w() = sqrt(w2);
-    this->vec() = axis * sqrt(Scalar(1) - w2);
+  if (c < Scalar(0)) {
+    // phi in (pi/2, pi]: q = (sin(phi/2) n, cos(phi/2)) with cos(phi/2) = |v0 + v1| / 2, whose absolute error ~ eps
+    // moves the angle by ~ eps since sin(phi/2) >= 1/sqrt(2). (s = 2 cos(phi/2) below has relative error
+    // eps / (1 + c).) n = v0 x v1 projected twice onto the plane orthogonal to v0 and normalized: one projection
+    // leaves ~ eps |v0 x v1| along v0, not small against the projected vector when |v0 + v1| is a few eps.
+    // For |v0 + v1| <= 4 eps, v0 x v1 is mostly noise and any axis orthogonal to v0 moves q v0 by at most 2 |v0 + v1|.
+    const Scalar sum2 = (v0 + v1).squaredNorm();
+    const Scalar cos_half = numext::sqrt(Scalar(0.25) * sum2);
+    Vector3 axis = v0.cross(v1);
+    axis -= axis.dot(v0) * v0;
+    axis -= axis.dot(v0) * v0;
+    const bool nearly_antipodal = !(sum2 > numext::abs2(Scalar(4) * NumTraits<Scalar>::epsilon()));
+    // Not axis / sqrt(axis.squaredNorm()): for a narrow type the squared norm of a meaningful axis can underflow.
+    if (!nearly_antipodal) axis = internal::quaternion_normalized(axis);
+    if (nearly_antipodal || numext::is_exactly_zero(axis.squaredNorm())) axis = v0.unitOrthogonal();
+    this->vec() = numext::sqrt((Scalar(1) - cos_half) * (Scalar(1) + cos_half)) * axis;
+    this->w() = cos_half;
     return derived();
   }
   Vector3 axis = v0.cross(v1);
-  Scalar s = sqrt((Scalar(1) + c) * Scalar(2));
+  Scalar s = numext::sqrt<Scalar>((Scalar(1) + c) * Scalar(2));
   Scalar invs = Scalar(1) / s;
   this->vec() = axis * invs;
   this->w() = s * Scalar(0.5);
 
   return derived();
+}
+
+/** Sets \c *this to the unit quaternion representing the rotation by `||scaled_axis||` radians
+ * around the axis `scaled_axis / ||scaled_axis||`. This is the SO(3) exponential map.
+ *
+ * The closed form \f$ q = (\cos(\theta/2),\;(\sin(\theta/2)/\theta)\,v),\;\theta=\|v\| \f$ is
+ * evaluated directly for every non-zero input; the limit value (the identity quaternion) is
+ * substituted only at the bit-exact zero input. No Taylor expansion and no scalar-type-
+ * dependent threshold are involved, and the result is accurate to a few ULPs across the
+ * full range of finite inputs.
+ *
+ * \sa toScaledAxis(), Quaternion::FromScaledAxis()
+ */
+template <class Derived>
+template <typename OtherDerived>
+EIGEN_DEVICE_FUNC inline Derived& QuaternionBase<Derived>::setFromScaledAxis(
+    const MatrixBase<OtherDerived>& scaled_axis) {
+  EIGEN_STATIC_ASSERT_VECTOR_SPECIFIC_SIZE(OtherDerived, 3)
+
+  // Materialise the input once so the caller's expression (e.g. omega*dt) is not
+  // recomputed by the norm and the subsequent assignment to vec().
+  const Vector3 v = scaled_axis;
+
+  // Fast path with stableNorm() fallback when norm() returns a suspiciously small
+  // value (below epsilon, where squaredNorm() may have underflowed) or a non-finite
+  // one (squaredNorm() overflowed); same idiom as AngleAxis::operator=(QuaternionBase).
+  Scalar angle = v.norm();
+  if (angle < NumTraits<Scalar>::epsilon() || !(angle <= NumTraits<Scalar>::highest())) angle = v.stableNorm();
+  if (numext::is_exactly_zero(angle)) {
+    this->w() = Scalar(1);
+    this->vec().setZero();
+    return derived();
+  }
+
+  const Scalar half_angle = Scalar(0.5) * angle;
+  this->w() = numext::cos(half_angle);
+  // Scale by v / angle, whose coefficients lie in [-1, 1]: sin(half_angle) / angle is subnormal for
+  // angle above roughly 1e38 for float, and 32-bit Arm NEON flushes subnormals to zero.
+  this->vec() = numext::sin(half_angle) * (v / angle);
+  return derived();
+}
+
+/** \returns the rotation vector (axis scaled by the rotation angle in `[0, pi]`)
+ * corresponding to \c *this. This is the SO(3) logarithmic map and the inverse of
+ * setFromScaledAxis().
+ *
+ * The closed form \f$ v = (2\,\mathrm{atan2}(\|q_v\|,\,q_w)/\|q_v\|)\, q_v \f$ is evaluated
+ * directly for every quaternion with non-zero imaginary part; the limit value (the zero
+ * vector) is substituted only at the bit-exact zero imaginary part. The IEEE corner case
+ * `w == -0.0` is handled by passing \c |w| to \c atan2 and recovering the sign separately,
+ * mirroring AngleAxis::operator=(QuaternionBase). The result is accurate to a few ULPs.
+ *
+ * \pre \c *this is approximately a unit quaternion.
+ * \sa setFromScaledAxis(), Quaternion::FromScaledAxis()
+ */
+template <class Derived>
+EIGEN_DEVICE_FUNC inline typename QuaternionBase<Derived>::Vector3 QuaternionBase<Derived>::toScaledAxis() const {
+  eigen_assert(internal::isApprox(this->squaredNorm(), Scalar(1), Scalar(8) * NumTraits<Scalar>::dummy_precision()) &&
+               "QuaternionBase::toScaledAxis(): the quaternion must be approximately a unit quaternion");
+
+  // Fast path with stableNorm() fallback; same idiom as AngleAxis::operator=(QuaternionBase).
+  Scalar sin_half_angle = this->vec().norm();
+  if (sin_half_angle < NumTraits<Scalar>::epsilon()) sin_half_angle = this->vec().stableNorm();
+  if (numext::is_exactly_zero(sin_half_angle)) return Vector3::Zero();
+
+  // |w| in atan2 prevents -0.0 from flipping the sign; recover it via the comparison below
+  // (false for both +0.0 and -0.0).
+  // Cannot overflow: for unit q, atan2(s, |c|) is O(s) as s -> 0, so k stays in [2, pi].
+  Scalar k = Scalar(2) * numext::atan2(sin_half_angle, numext::abs(this->w())) / sin_half_angle;
+  if (this->w() < Scalar(0)) k = -k;
+  return k * this->vec();
 }
 
 /** \returns a random unit quaternion following a uniform distribution law on SO(3)
@@ -731,13 +817,10 @@ EIGEN_DEVICE_FUNC inline Derived& QuaternionBase<Derived>::setFromTwoVectors(con
  */
 template <typename Scalar, int Options>
 EIGEN_DEVICE_FUNC Quaternion<Scalar, Options> Quaternion<Scalar, Options>::UnitRandom() {
-  EIGEN_USING_STD(sqrt)
-  EIGEN_USING_STD(sin)
-  EIGEN_USING_STD(cos)
   const Scalar u1 = internal::random<Scalar>(0, 1), u2 = internal::random<Scalar>(0, 2 * EIGEN_PI),
                u3 = internal::random<Scalar>(0, 2 * EIGEN_PI);
-  const Scalar a = sqrt(Scalar(1) - u1), b = sqrt(u1);
-  return Quaternion(a * sin(u2), a * cos(u2), b * sin(u3), b * cos(u3));
+  const Scalar a = numext::sqrt<Scalar>(Scalar(1) - u1), b = numext::sqrt(u1);
+  return Quaternion(a * numext::sin(u2), a * numext::cos(u2), b * numext::sin(u3), b * numext::cos(u3));
 }
 
 /** Constructs a quaternion from its coefficients in the order [\c x, \c y, \c z, \c w], i.e. vector part [\c x, \c y,
@@ -788,6 +871,21 @@ EIGEN_DEVICE_FUNC Quaternion<Scalar, Options> Quaternion<Scalar, Options>::FromT
   return quat;
 }
 
+/** Returns a unit quaternion representing the rotation by `||scaled_axis||` radians around
+ * the axis `scaled_axis / ||scaled_axis||`. The natural building block for SO(3)-aware
+ * integration of a body angular velocity \a omega over a small interval \a dt:
+ * \code Quaterniond q_next = q_curr * Quaterniond::FromScaledAxis(omega * dt); \endcode
+ * \sa setFromScaledAxis(), toScaledAxis()
+ */
+template <typename Scalar, int Options>
+template <typename Derived>
+EIGEN_DEVICE_FUNC Quaternion<Scalar, Options> Quaternion<Scalar, Options>::FromScaledAxis(
+    const MatrixBase<Derived>& scaled_axis) {
+  Quaternion quat;
+  quat.setFromScaledAxis(scaled_axis);
+  return quat;
+}
+
 /** \returns the multiplicative inverse of \c *this
  * Note that in most cases, i.e., if you simply want the opposite rotation,
  * and/or the quaternion is normalized, then it is enough to use the conjugate.
@@ -797,7 +895,7 @@ EIGEN_DEVICE_FUNC Quaternion<Scalar, Options> Quaternion<Scalar, Options>::FromT
 template <class Derived>
 EIGEN_DEVICE_FUNC inline Quaternion<typename internal::traits<Derived>::Scalar> QuaternionBase<Derived>::inverse()
     const {
-  // FIXME should this function be called multiplicativeInverse and conjugate() be called inverse() or opposite()  ??
+  // FIXME: consider renaming to multiplicativeInverse() and renaming conjugate() to inverse() or opposite().
   Scalar n2 = this->squaredNorm();
   if (n2 > Scalar(0))
     return Quaternion<Scalar>(conjugate().coeffs() / n2);
@@ -821,7 +919,7 @@ struct quat_conj {
  * if the quaternion is normalized.
  * The conjugate of a quaternion represents the opposite rotation.
  *
- * \sa Quaternion2::inverse()
+ * \sa Quaternion::inverse()
  */
 template <class Derived>
 EIGEN_DEVICE_FUNC inline Quaternion<typename internal::traits<Derived>::Scalar> QuaternionBase<Derived>::conjugate()
@@ -836,9 +934,8 @@ template <class Derived>
 template <class OtherDerived>
 EIGEN_DEVICE_FUNC inline typename internal::traits<Derived>::Scalar QuaternionBase<Derived>::angularDistance(
     const QuaternionBase<OtherDerived>& other) const {
-  EIGEN_USING_STD(atan2)
   Quaternion<Scalar> d = (*this) * other.conjugate();
-  return Scalar(2) * atan2(d.vec().norm(), numext::abs(d.w()));
+  return Scalar(2) * numext::atan2(d.vec().norm(), numext::abs(d.w()));
 }
 
 /** \returns the spherical linear interpolation between the two quaternions
@@ -851,8 +948,6 @@ template <class Derived>
 template <class OtherDerived>
 EIGEN_DEVICE_FUNC Quaternion<typename internal::traits<Derived>::Scalar> QuaternionBase<Derived>::slerp(
     const Scalar& t, const QuaternionBase<OtherDerived>& other) const {
-  EIGEN_USING_STD(acos)
-  EIGEN_USING_STD(sin)
   const Scalar one = Scalar(1) - NumTraits<Scalar>::epsilon();
   Scalar d = this->dot(other);
   Scalar absD = numext::abs(d);
@@ -861,15 +956,18 @@ EIGEN_DEVICE_FUNC Quaternion<typename internal::traits<Derived>::Scalar> Quatern
   Scalar scale1;
 
   if (absD >= one) {
+    // Near-parallel quaternions: use lerp to avoid division by ~zero sinTheta.
     scale0 = Scalar(1) - t;
     scale1 = t;
   } else {
     // theta is the angle between the 2 quaternions
-    Scalar theta = acos(absD);
-    Scalar sinTheta = numext::sqrt(Scalar(1) - absD * absD);
+    Scalar theta = numext::acos(absD);
+    // 1 - absD is exact for absD >= 1/2 (Sterbenz), so sinTheta has O(eps) relative error. sqrt(1 - absD * absD)
+    // cancels as absD -> 1: relative error up to min(eps / (8 * (1 - absD^2)), (1 - absD) / 4) <= sqrt(eps) / 8.
+    Scalar sinTheta = numext::sqrt<Scalar>((Scalar(1) - absD) * (Scalar(1) + absD));
 
-    scale0 = sin((Scalar(1) - t) * theta) / sinTheta;
-    scale1 = sin((t * theta)) / sinTheta;
+    scale0 = numext::sin<Scalar>((Scalar(1) - t) * theta) / sinTheta;
+    scale1 = numext::sin<Scalar>(t * theta) / sinTheta;
   }
   if (d < Scalar(0)) scale1 = -scale1;
 
@@ -881,34 +979,51 @@ namespace internal {
 // set from a rotation matrix
 template <typename Other>
 struct quaternionbase_assign_impl<Other, 3, 3> {
-  typedef typename Other::Scalar Scalar;
-  template <class Derived>
+  using Scalar = typename Other::Scalar;
+
+  template <bool Normalize>
+  EIGEN_DEVICE_FUNC static EIGEN_STRONG_INLINE Scalar compute_scale(Scalar& t) {
+    if (!Normalize) return Scalar(1);
+    t = numext::sqrt(t);
+    Scalar s = Scalar(0.5) / t;
+    t *= Scalar(0.5);
+    return s;
+  }
+
+  template <int AxisI, int AxisJ, int AxisK, bool Normalize, class Derived, class Mat>
+  EIGEN_DEVICE_FUNC static EIGEN_STRONG_INLINE void assign_branch(QuaternionBase<Derived>& q, const Mat& mat,
+                                                                  Scalar mii, Scalar mjj, Scalar mkk) {
+    // Guard against slightly negative argument from non-orthogonal matrices.
+    Scalar t = numext::maxi(mii - mjj - mkk + Scalar(1.0), Scalar(0));
+    const Scalar s = compute_scale<Normalize>(t);
+    q.coeffs().coeffRef(AxisI) = t;
+    q.w() = (mat.coeff(AxisK, AxisJ) - mat.coeff(AxisJ, AxisK)) * s;
+    q.coeffs().coeffRef(AxisJ) = (mat.coeff(AxisJ, AxisI) + mat.coeff(AxisI, AxisJ)) * s;
+    q.coeffs().coeffRef(AxisK) = (mat.coeff(AxisK, AxisI) + mat.coeff(AxisI, AxisK)) * s;
+  }
+
+  template <bool Normalize = true, class Derived>
   EIGEN_DEVICE_FUNC static inline void run(QuaternionBase<Derived>& q, const Other& a_mat) {
     const typename internal::nested_eval<Other, 2>::type mat(a_mat);
-    EIGEN_USING_STD(sqrt)
     // This algorithm comes from  "Quaternion Calculus and Fast Animation",
     // Ken Shoemake, 1987 SIGGRAPH course notes
-    Scalar t = mat.trace();
+    const Scalar m00 = mat.coeff(0, 0);
+    const Scalar m11 = mat.coeff(1, 1);
+    const Scalar m22 = mat.coeff(2, 2);
+    Scalar t = m00 + (m11 + m22);
     if (t > Scalar(0)) {
-      t = sqrt(t + Scalar(1.0));
-      q.w() = Scalar(0.5) * t;
-      t = Scalar(0.5) / t;
-      q.x() = (mat.coeff(2, 1) - mat.coeff(1, 2)) * t;
-      q.y() = (mat.coeff(0, 2) - mat.coeff(2, 0)) * t;
-      q.z() = (mat.coeff(1, 0) - mat.coeff(0, 1)) * t;
+      t = numext::maxi(t + Scalar(1.0), Scalar(0));
+      const Scalar s = compute_scale<Normalize>(t);
+      q.w() = t;
+      q.x() = (mat.coeff(2, 1) - mat.coeff(1, 2)) * s;
+      q.y() = (mat.coeff(0, 2) - mat.coeff(2, 0)) * s;
+      q.z() = (mat.coeff(1, 0) - mat.coeff(0, 1)) * s;
+    } else if (m00 >= m11 && m00 >= m22) {
+      assign_branch<0, 1, 2, Normalize>(q, mat, m00, m11, m22);
+    } else if (m11 >= m22) {
+      assign_branch<1, 2, 0, Normalize>(q, mat, m11, m22, m00);
     } else {
-      Index i = 0;
-      if (mat.coeff(1, 1) > mat.coeff(0, 0)) i = 1;
-      if (mat.coeff(2, 2) > mat.coeff(i, i)) i = 2;
-      Index j = (i + 1) % 3;
-      Index k = (j + 1) % 3;
-
-      t = sqrt(mat.coeff(i, i) - mat.coeff(j, j) - mat.coeff(k, k) + Scalar(1.0));
-      q.coeffs().coeffRef(i) = Scalar(0.5) * t;
-      t = Scalar(0.5) / t;
-      q.w() = (mat.coeff(k, j) - mat.coeff(j, k)) * t;
-      q.coeffs().coeffRef(j) = (mat.coeff(j, i) + mat.coeff(i, j)) * t;
-      q.coeffs().coeffRef(k) = (mat.coeff(k, i) + mat.coeff(i, k)) * t;
+      assign_branch<2, 0, 1, Normalize>(q, mat, m22, m00, m11);
     }
   }
 };
@@ -916,7 +1031,7 @@ struct quaternionbase_assign_impl<Other, 3, 3> {
 // set from a vector of coefficients assumed to be a quaternion
 template <typename Other>
 struct quaternionbase_assign_impl<Other, 4, 1> {
-  typedef typename Other::Scalar Scalar;
+  using Scalar = typename Other::Scalar;
   template <class Derived>
   EIGEN_DEVICE_FUNC static inline void run(QuaternionBase<Derived>& q, const Other& vec) {
     q.coeffs() = vec;

@@ -4,6 +4,8 @@
 // This Source Code Form is subject to the terms of the Mozilla
 // Public License v. 2.0. If a copy of the MPL was not distributed
 // with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
+// SPDX-FileCopyrightText: The Eigen Authors
+// SPDX-License-Identifier: MPL-2.0
 
 #include <sstream>
 
@@ -11,9 +13,9 @@
 
 template <typename From, typename To>
 void test_conversion() {
-  typedef Array<From, Dynamic, 1> ArrayXFrom;
-  typedef Array<To, Dynamic, 1> ArrayXTo;
-  typedef Array<double, Dynamic, 1> ArrayXDouble;
+  using ArrayXFrom = Array<From, Dynamic, 1>;
+  using ArrayXTo = Array<To, Dynamic, 1>;
+  using ArrayXDouble = Array<double, Dynamic, 1>;
 
   Index size = internal::random<Index>(1, EIGEN_TEST_MAX_SIZE);
   double from_min = static_cast<double>((std::numeric_limits<From>::min)());

@@ -6,6 +6,7 @@
 // This Source Code Form is subject to the terms of the Mozilla
 // Public License v. 2.0. If a copy of the MPL was not distributed
 // with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
+// SPDX-License-Identifier: MPL-2.0
 
 #ifndef EIGEN_EMULATE_ARRAY_H
 #define EIGEN_EMULATE_ARRAY_H
@@ -17,9 +18,9 @@ namespace Eigen {
 template <typename T, size_t n>
 class array {
  public:
-  typedef T value_type;
-  typedef T* iterator;
-  typedef const T* const_iterator;
+  using value_type = T;
+  using iterator = T*;
+  using const_iterator = const T*;
 
   EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE iterator begin() { return values; }
   EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE const_iterator begin() const { return values; }
@@ -27,8 +28,8 @@ class array {
   EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE iterator end() { return values + n; }
   EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE const_iterator end() const { return values + n; }
 
-  typedef std::reverse_iterator<iterator> reverse_iterator;
-  typedef std::reverse_iterator<const_iterator> const_reverse_iterator;
+  using reverse_iterator = std::reverse_iterator<iterator>;
+  using const_reverse_iterator = std::reverse_iterator<const_iterator>;
 
   EIGEN_STRONG_INLINE reverse_iterator rbegin() { return reverse_iterator(end()); }
   EIGEN_STRONG_INLINE const_reverse_iterator rbegin() const { return const_reverse_iterator(end()); }
@@ -222,7 +223,7 @@ struct array_size<const array<T, N>&> {
 
 #else
 
-// The compiler supports c++11, and we're not targeting cuda: use std::array as Eigen::array
+// Not targeting cuda: use std::array as Eigen::array.
 #include <array>
 
 namespace Eigen {
@@ -231,36 +232,19 @@ template <typename T, std::size_t N>
 using array = std::array<T, N>;
 
 namespace internal {
-/* std::get is only constexpr in C++14, not yet in C++11
- *     - libstdc++ from version 4.7 onwards has it nevertheless,
- *                                          so use that
- *     - libstdc++ older versions: use _M_instance directly
- *     - libc++ all versions so far: use __elems_ directly
- *     - all other libs: use std::get to be portable, but
- *                       this may not be constexpr
- */
-#if defined(__GLIBCXX__) && __GLIBCXX__ < 20120322
-#define STD_GET_ARR_HACK a._M_instance[I_]
-#elif defined(_LIBCPP_VERSION)
-#define STD_GET_ARR_HACK a.__elems_[I_]
-#else
-#define STD_GET_ARR_HACK std::template get<I_, T, N>(a)
-#endif
 
 template <std::size_t I_, class T, std::size_t N>
 constexpr T& array_get(std::array<T, N>& a) {
-  return (T&)STD_GET_ARR_HACK;
+  return std::get<I_>(a);
 }
 template <std::size_t I_, class T, std::size_t N>
 constexpr T&& array_get(std::array<T, N>&& a) {
-  return (T&&)STD_GET_ARR_HACK;
+  return std::get<I_>(std::move(a));
 }
 template <std::size_t I_, class T, std::size_t N>
 constexpr T const& array_get(std::array<T, N> const& a) {
-  return (T const&)STD_GET_ARR_HACK;
+  return std::get<I_>(a);
 }
-
-#undef STD_GET_ARR_HACK
 
 }  // end namespace internal
 }  // end namespace Eigen

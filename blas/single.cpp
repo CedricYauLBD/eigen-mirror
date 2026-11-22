@@ -6,6 +6,7 @@
 // This Source Code Form is subject to the terms of the Mozilla
 // Public License v. 2.0. If a copy of the MPL was not distributed
 // with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
+// SPDX-License-Identifier: MPL-2.0
 
 #define SCALAR float
 #define SCALAR_SUFFIX s
@@ -18,6 +19,7 @@
 #include "level2_real_impl.h"
 #include "level3_impl.h"
 
-float EIGEN_BLAS_FUNC_NAME(dsdot)(int* n, float* alpha, float* x, int* incx, float* y, int* incy) {
+float EIGEN_BLAS_FUNC_NAME(dsdot)(EIGEN_BLAS_INT* n, float* alpha, float* x, EIGEN_BLAS_INT* incx, float* y,
+                                  EIGEN_BLAS_INT* incy) {
   return double(*alpha) + BLASFUNC(dsdot)(n, x, incx, y, incy);
 }

@@ -29,6 +29,7 @@
  *    Complex Schur needed to complex unsymmetrical eigenvalues/eigenvectors.
  ********************************************************************************
 */
+// SPDX-License-Identifier: BSD-3-Clause
 
 #ifndef EIGEN_COMPLEX_SCHUR_LAPACKE_H
 #define EIGEN_COMPLEX_SCHUR_LAPACKE_H
@@ -47,13 +48,17 @@ namespace Eigen {
   inline ComplexSchur<Matrix<EIGTYPE, Dynamic, Dynamic, EIGCOLROW> >&                                              \
   ComplexSchur<Matrix<EIGTYPE, Dynamic, Dynamic, EIGCOLROW> >::compute(const EigenBase<InputType>& matrix,         \
                                                                        bool computeU) {                            \
-    typedef Matrix<EIGTYPE, Dynamic, Dynamic, EIGCOLROW> MatrixType;                                               \
-    typedef MatrixType::RealScalar RealScalar;                                                                     \
-    typedef std::complex<RealScalar> ComplexScalar;                                                                \
-                                                                                                                   \
     eigen_assert(matrix.cols() == matrix.rows());                                                                  \
                                                                                                                    \
     m_matUisUptodate = false;                                                                                      \
+    if (matrix.cols() == 0) {                                                                                      \
+      m_matT.resize(0, 0);                                                                                         \
+      m_matU.resize(0, 0);                                                                                         \
+      m_info = Success;                                                                                            \
+      m_isInitialized = true;                                                                                      \
+      m_matUisUptodate = computeU;                                                                                 \
+      return *this;                                                                                                \
+    }                                                                                                              \
     if (matrix.cols() == 1) {                                                                                      \
       m_matT = matrix.derived().template cast<ComplexScalar>();                                                    \
       if (computeU) m_matU = ComplexMatrixType::Identity(1, 1);                                                    \
@@ -89,6 +94,8 @@ EIGEN_LAPACKE_SCHUR_COMPLEX(dcomplex, lapack_complex_double, z, Z, ColMajor, LAP
 EIGEN_LAPACKE_SCHUR_COMPLEX(scomplex, lapack_complex_float, c, C, ColMajor, LAPACK_COL_MAJOR)
 EIGEN_LAPACKE_SCHUR_COMPLEX(dcomplex, lapack_complex_double, z, Z, RowMajor, LAPACK_ROW_MAJOR)
 EIGEN_LAPACKE_SCHUR_COMPLEX(scomplex, lapack_complex_float, c, C, RowMajor, LAPACK_ROW_MAJOR)
+
+#undef EIGEN_LAPACKE_SCHUR_COMPLEX
 
 }  // end namespace Eigen
 

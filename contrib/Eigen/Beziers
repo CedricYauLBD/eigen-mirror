@@ -1,0 +1,47 @@
+// This file is part of Eigen, a lightweight C++ template library
+// for linear algebra.
+//
+// Copyright (C) 2023-2024 Jacques Franc <jacquesfrancdev@gmail.com>
+//
+// This Source Code Form is subject to the terms of the Mozilla
+// Public License v. 2.0. If a copy of the MPL was not distributed
+// with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
+// SPDX-License-Identifier: MPL-2.0
+
+#ifndef EIGEN_BEZIERS_MODULE_H
+#define EIGEN_BEZIERS_MODULE_H
+
+#include "../../Eigen/Core"
+#include "../../Eigen/QR"
+
+namespace Eigen {
+/**
+ * \defgroup Beziers_Module Bezier curves and Bezier fitting module
+ *
+ * This module provides a simple multi-dimensional Bezier curve class (Bernstein basis) together with
+ * - BezierFitting: linear least-squares fitting of a Bezier curve to an ordered point set for given
+ *   (by default chord-length) parameters, which interpolates the points when the degree equals the
+ *   number of points minus one;
+ * - BezierLsqFitting: non-linear least-squares fitting which additionally optimizes the parameters
+ *   attached to the points with a Gauss-Newton method, following
+ *   C. F. Borges and T. A. Pastva, Total least squares fitting of Bezier and B-spline curves to ordered data,
+ *   Computer Aided Geometric Design 19(4), 2002.
+ *
+ * \code
+ * #include <contrib/Eigen/Beziers>
+ * \endcode
+ */
+}  // namespace Eigen
+
+#include "../../Eigen/src/Core/util/DisableStupidWarnings.h"
+
+// IWYU pragma: begin_exports
+#include "src/Beziers/BezierFwd.h"
+#include "src/Beziers/Bezier.h"
+#include "src/Beziers/BezierFitting.h"
+#include "src/Beziers/BezierLsqFitting.h"
+// IWYU pragma: end_exports
+
+#include "../../Eigen/src/Core/util/ReenableStupidWarnings.h"
+
+#endif  // EIGEN_BEZIERS_MODULE_H

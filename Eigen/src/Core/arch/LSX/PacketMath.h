@@ -7,6 +7,7 @@
 // This Source Code Form is subject to the terms of the Mozilla
 // Public License v. 2.0. If a copy of the MPL was not distributed
 // with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
+// SPDX-License-Identifier: MPL-2.0
 
 #ifndef EIGEN_PACKET_MATH_LSX_H
 #define EIGEN_PACKET_MATH_LSX_H
@@ -32,62 +33,40 @@ namespace internal {
 #define EIGEN_HAS_SINGLE_INSTRUCTION_MADD
 #endif
 
-typedef __m128 Packet4f;
-typedef __m128d Packet2d;
+using Packet4f = __m128;
+using Packet2d = __m128d;
 
-typedef eigen_packet_wrapper<__m128i, 0> Packet16c;
-typedef eigen_packet_wrapper<__m128i, 1> Packet8s;
-typedef eigen_packet_wrapper<__m128i, 2> Packet4i;
-typedef eigen_packet_wrapper<__m128i, 3> Packet2l;
-typedef eigen_packet_wrapper<__m128i, 4> Packet16uc;
-typedef eigen_packet_wrapper<__m128i, 5> Packet8us;
-typedef eigen_packet_wrapper<__m128i, 6> Packet4ui;
-typedef eigen_packet_wrapper<__m128i, 7> Packet2ul;
+using Packet16c = eigen_packet_wrapper<__m128i, 0>;
+using Packet8s = eigen_packet_wrapper<__m128i, 1>;
+using Packet4i = eigen_packet_wrapper<__m128i, 2>;
+using Packet2l = eigen_packet_wrapper<__m128i, 3>;
+using Packet16uc = eigen_packet_wrapper<__m128i, 4>;
+using Packet8us = eigen_packet_wrapper<__m128i, 5>;
+using Packet4ui = eigen_packet_wrapper<__m128i, 6>;
+using Packet2ul = eigen_packet_wrapper<__m128i, 7>;
 
 template <>
-struct is_arithmetic<__m128> {
-  enum { value = true };
-};
+struct is_arithmetic<__m128> : std::true_type {};
 template <>
-struct is_arithmetic<__m128i> {
-  enum { value = true };
-};
+struct is_arithmetic<__m128i> : std::true_type {};
 template <>
-struct is_arithmetic<__m128d> {
-  enum { value = true };
-};
+struct is_arithmetic<__m128d> : std::true_type {};
 template <>
-struct is_arithmetic<Packet16c> {
-  enum { value = true };
-};
+struct is_arithmetic<Packet16c> : std::true_type {};
 template <>
-struct is_arithmetic<Packet8s> {
-  enum { value = true };
-};
+struct is_arithmetic<Packet8s> : std::true_type {};
 template <>
-struct is_arithmetic<Packet4i> {
-  enum { value = true };
-};
+struct is_arithmetic<Packet4i> : std::true_type {};
 template <>
-struct is_arithmetic<Packet2l> {
-  enum { value = true };
-};
+struct is_arithmetic<Packet2l> : std::true_type {};
 template <>
-struct is_arithmetic<Packet16uc> {
-  enum { value = false };
-};
+struct is_arithmetic<Packet16uc> : std::false_type {};
 template <>
-struct is_arithmetic<Packet8us> {
-  enum { value = false };
-};
+struct is_arithmetic<Packet8us> : std::false_type {};
 template <>
-struct is_arithmetic<Packet4ui> {
-  enum { value = false };
-};
+struct is_arithmetic<Packet4ui> : std::false_type {};
 template <>
-struct is_arithmetic<Packet2ul> {
-  enum { value = false };
-};
+struct is_arithmetic<Packet2ul> : std::false_type {};
 
 EIGEN_ALWAYS_INLINE Packet4f make_packet4f(float a, float b, float c, float d) {
   float from[4] = {a, b, c, d};
@@ -162,157 +141,141 @@ EIGEN_STRONG_INLINE Packet2d vec2d_unpackhi(const Packet2d& a, const Packet2d& b
 
 template <>
 struct packet_traits<int8_t> : default_packet_traits {
-  typedef Packet16c type;
-  typedef Packet16c half;
+  using type = Packet16c;
+  using half = Packet16c;
   enum {
     Vectorizable = 1,
     AlignedOnScalar = 1,
     size = 16,
 
-    HasAbs2 = 0,
     HasSetLinear = 0,
     HasCmp = 1,
-    HasBlend = 0
   };
 };
 
 template <>
 struct packet_traits<int16_t> : default_packet_traits {
-  typedef Packet8s type;
-  typedef Packet8s half;
+  using type = Packet8s;
+  using half = Packet8s;
   enum {
     Vectorizable = 1,
     AlignedOnScalar = 1,
     size = 8,
 
-    HasAbs2 = 0,
     HasSetLinear = 0,
     HasCmp = 1,
     HasDiv = 1,
-    HasBlend = 0
   };
 };
 
 template <>
 struct packet_traits<int32_t> : default_packet_traits {
-  typedef Packet4i type;
-  typedef Packet4i half;
+  using type = Packet4i;
+  using half = Packet4i;
   enum {
     Vectorizable = 1,
     AlignedOnScalar = 1,
     size = 4,
 
-    HasAbs2 = 0,
     HasSetLinear = 0,
     HasCmp = 1,
     HasDiv = 1,
-    HasBlend = 0
   };
 };
 
 template <>
 struct packet_traits<int64_t> : default_packet_traits {
-  typedef Packet2l type;
-  typedef Packet2l half;
+  using type = Packet2l;
+  using half = Packet2l;
   enum {
     Vectorizable = 1,
     AlignedOnScalar = 1,
     size = 2,
 
-    HasAbs2 = 0,
     HasSetLinear = 0,
     HasCmp = 1,
     HasDiv = 1,
-    HasBlend = 0
   };
 };
 
 template <>
 struct packet_traits<uint8_t> : default_packet_traits {
-  typedef Packet16uc type;
-  typedef Packet16uc half;
+  using type = Packet16uc;
+  using half = Packet16uc;
   enum {
     Vectorizable = 1,
     AlignedOnScalar = 1,
     size = 16,
 
-    HasAbs2 = 0,
     HasSetLinear = 0,
     HasNegate = 0,
     HasCmp = 1,
-    HasBlend = 0
   };
 };
 
 template <>
 struct packet_traits<uint16_t> : default_packet_traits {
-  typedef Packet8us type;
-  typedef Packet8us half;
+  using type = Packet8us;
+  using half = Packet8us;
   enum {
     Vectorizable = 1,
     AlignedOnScalar = 1,
     size = 8,
 
-    HasAbs2 = 0,
     HasSetLinear = 0,
     HasNegate = 0,
     HasCmp = 1,
     HasDiv = 1,
-    HasBlend = 0
   };
 };
 
 template <>
 struct packet_traits<uint32_t> : default_packet_traits {
-  typedef Packet4ui type;
-  typedef Packet4ui half;
+  using type = Packet4ui;
+  using half = Packet4ui;
   enum {
     Vectorizable = 1,
     AlignedOnScalar = 1,
     size = 4,
 
-    HasAbs2 = 0,
     HasSetLinear = 0,
     HasNegate = 0,
     HasCmp = 1,
     HasDiv = 1,
-    HasBlend = 0
   };
 };
 
 template <>
 struct packet_traits<uint64_t> : default_packet_traits {
-  typedef Packet2ul type;
-  typedef Packet2ul half;
+  using type = Packet2ul;
+  using half = Packet2ul;
   enum {
     Vectorizable = 1,
     AlignedOnScalar = 1,
     size = 2,
 
-    HasAbs2 = 0,
     HasSetLinear = 0,
     HasNegate = 0,
     HasCmp = 1,
     HasDiv = 1,
-    HasBlend = 0
   };
 };
 
 template <>
 struct packet_traits<float> : default_packet_traits {
-  typedef Packet4f type;
-  typedef Packet4f half;
+  using type = Packet4f;
+  using half = Packet4f;
   enum {
     Vectorizable = 1,
     AlignedOnScalar = 1,
     size = 4,
 
-    HasAbs2 = 0,
+    HasCmp = 1,
     HasSetLinear = 0,
-    HasBlend = 0,
     HasSign = 0,
     HasDiv = 1,
     HasExp = 1,
+    HasExpm1 = 1,
     HasSqrt = 1,
     HasLog = 1,
     HasRsqrt = 1
@@ -321,18 +284,18 @@ struct packet_traits<float> : default_packet_traits {
 
 template <>
 struct packet_traits<double> : default_packet_traits {
-  typedef Packet2d type;
-  typedef Packet2d half;
+  using type = Packet2d;
+  using half = Packet2d;
   enum {
     Vectorizable = 1,
     AlignedOnScalar = 1,
     size = 2,
 
-    HasAbs2 = 0,
+    HasCmp = 1,
     HasSetLinear = 0,
-    HasBlend = 0,
     HasSign = 0,
     HasDiv = 1,
+    HasExpm1 = 1,
     HasSqrt = 1,
     HasLog = 1,
     HasRsqrt = 1
@@ -341,8 +304,8 @@ struct packet_traits<double> : default_packet_traits {
 
 template <>
 struct unpacket_traits<Packet16c> {
-  typedef int8_t type;
-  typedef Packet16c half;
+  using type = int8_t;
+  using half = Packet16c;
   enum {
     size = 16,
     alignment = Aligned16,
@@ -353,8 +316,8 @@ struct unpacket_traits<Packet16c> {
 };
 template <>
 struct unpacket_traits<Packet8s> {
-  typedef int16_t type;
-  typedef Packet8s half;
+  using type = int16_t;
+  using half = Packet8s;
   enum {
     size = 8,
     alignment = Aligned16,
@@ -365,8 +328,8 @@ struct unpacket_traits<Packet8s> {
 };
 template <>
 struct unpacket_traits<Packet4i> {
-  typedef int32_t type;
-  typedef Packet4i half;
+  using type = int32_t;
+  using half = Packet4i;
   enum {
     size = 4,
     alignment = Aligned16,
@@ -377,8 +340,8 @@ struct unpacket_traits<Packet4i> {
 };
 template <>
 struct unpacket_traits<Packet2l> {
-  typedef int64_t type;
-  typedef Packet2l half;
+  using type = int64_t;
+  using half = Packet2l;
   enum {
     size = 2,
     alignment = Aligned16,
@@ -389,8 +352,8 @@ struct unpacket_traits<Packet2l> {
 };
 template <>
 struct unpacket_traits<Packet16uc> {
-  typedef uint8_t type;
-  typedef Packet16uc half;
+  using type = uint8_t;
+  using half = Packet16uc;
   enum {
     size = 16,
     alignment = Aligned16,
@@ -401,8 +364,8 @@ struct unpacket_traits<Packet16uc> {
 };
 template <>
 struct unpacket_traits<Packet8us> {
-  typedef uint16_t type;
-  typedef Packet8us half;
+  using type = uint16_t;
+  using half = Packet8us;
   enum {
     size = 8,
     alignment = Aligned16,
@@ -413,8 +376,8 @@ struct unpacket_traits<Packet8us> {
 };
 template <>
 struct unpacket_traits<Packet4ui> {
-  typedef uint32_t type;
-  typedef Packet4ui half;
+  using type = uint32_t;
+  using half = Packet4ui;
   enum {
     size = 4,
     alignment = Aligned16,
@@ -425,8 +388,8 @@ struct unpacket_traits<Packet4ui> {
 };
 template <>
 struct unpacket_traits<Packet2ul> {
-  typedef uint64_t type;
-  typedef Packet2ul half;
+  using type = uint64_t;
+  using half = Packet2ul;
   enum {
     size = 2,
     alignment = Aligned16,
@@ -437,9 +400,9 @@ struct unpacket_traits<Packet2ul> {
 };
 template <>
 struct unpacket_traits<Packet4f> {
-  typedef float type;
-  typedef Packet4f half;
-  typedef Packet4i integer_packet;
+  using type = float;
+  using half = Packet4f;
+  using integer_packet = Packet4i;
   enum {
     size = 4,
     alignment = Aligned16,
@@ -450,9 +413,9 @@ struct unpacket_traits<Packet4f> {
 };
 template <>
 struct unpacket_traits<Packet2d> {
-  typedef double type;
-  typedef Packet2d half;
-  typedef Packet2l integer_packet;
+  using type = double;
+  using half = Packet2d;
+  using integer_packet = Packet2l;
   enum {
     size = 2,
     alignment = Aligned16,
@@ -693,47 +656,6 @@ EIGEN_STRONG_INLINE Packet2l pnegate(const Packet2l& a) {
 }
 
 template <>
-EIGEN_STRONG_INLINE Packet4f pconj(const Packet4f& a) {
-  return a;
-}
-template <>
-EIGEN_STRONG_INLINE Packet2d pconj(const Packet2d& a) {
-  return a;
-}
-template <>
-EIGEN_STRONG_INLINE Packet16c pconj(const Packet16c& a) {
-  return a;
-}
-template <>
-EIGEN_STRONG_INLINE Packet8s pconj(const Packet8s& a) {
-  return a;
-}
-template <>
-EIGEN_STRONG_INLINE Packet4i pconj(const Packet4i& a) {
-  return a;
-}
-template <>
-EIGEN_STRONG_INLINE Packet2l pconj(const Packet2l& a) {
-  return a;
-}
-template <>
-EIGEN_STRONG_INLINE Packet16uc pconj(const Packet16uc& a) {
-  return a;
-}
-template <>
-EIGEN_STRONG_INLINE Packet8us pconj(const Packet8us& a) {
-  return a;
-}
-template <>
-EIGEN_STRONG_INLINE Packet4ui pconj(const Packet4ui& a) {
-  return a;
-}
-template <>
-EIGEN_STRONG_INLINE Packet2ul pconj(const Packet2ul& a) {
-  return a;
-}
-
-template <>
 EIGEN_STRONG_INLINE Packet4f pmul<Packet4f>(const Packet4f& a, const Packet4f& b) {
   return __lsx_vfmul_s(a, b);
 }
@@ -808,9 +730,13 @@ EIGEN_STRONG_INLINE Packet2ul pdiv<Packet2ul>(const Packet2ul& a, const Packet2u
 }
 
 template <>
+struct is_fused_madd<Packet4f> : true_type {};
+template <>
 EIGEN_STRONG_INLINE Packet4f pmadd(const Packet4f& a, const Packet4f& b, const Packet4f& c) {
   return __lsx_vfmadd_s(a, b, c);
 }
+template <>
+struct is_fused_madd<Packet2d> : true_type {};
 template <>
 EIGEN_STRONG_INLINE Packet2d pmadd(const Packet2d& a, const Packet2d& b, const Packet2d& c) {
   return __lsx_vfmadd_d(a, b, c);
@@ -1383,20 +1309,44 @@ EIGEN_STRONG_INLINE Packet2l pabs(const Packet2l& a) {
   return __lsx_vabsd_d(a, pzero(a));
 }
 template <>
-EIGEN_STRONG_INLINE Packet16uc pabs(const Packet16uc& a) {
-  return a;
+EIGEN_STRONG_INLINE Packet16c pabsdiff(const Packet16c& a, const Packet16c& b) {
+  return __lsx_vabsd_b(a, b);
 }
 template <>
-EIGEN_STRONG_INLINE Packet8us pabs(const Packet8us& a) {
-  return a;
+EIGEN_STRONG_INLINE Packet8s pabsdiff(const Packet8s& a, const Packet8s& b) {
+  return __lsx_vabsd_h(a, b);
 }
 template <>
-EIGEN_STRONG_INLINE Packet4ui pabs(const Packet4ui& a) {
-  return a;
+EIGEN_STRONG_INLINE Packet4i pabsdiff(const Packet4i& a, const Packet4i& b) {
+  return __lsx_vabsd_w(a, b);
 }
 template <>
-EIGEN_STRONG_INLINE Packet2ul pabs(const Packet2ul& a) {
-  return a;
+EIGEN_STRONG_INLINE Packet2l pabsdiff(const Packet2l& a, const Packet2l& b) {
+  return __lsx_vabsd_d(a, b);
+}
+template <>
+EIGEN_STRONG_INLINE Packet16uc pabsdiff(const Packet16uc& a, const Packet16uc& b) {
+  return __lsx_vabsd_bu(a, b);
+}
+template <>
+EIGEN_STRONG_INLINE Packet8us pabsdiff(const Packet8us& a, const Packet8us& b) {
+  return __lsx_vabsd_hu(a, b);
+}
+template <>
+EIGEN_STRONG_INLINE Packet4ui pabsdiff(const Packet4ui& a, const Packet4ui& b) {
+  return __lsx_vabsd_wu(a, b);
+}
+template <>
+EIGEN_STRONG_INLINE Packet2ul pabsdiff(const Packet2ul& a, const Packet2ul& b) {
+  return __lsx_vabsd_du(a, b);
+}
+template <>
+EIGEN_STRONG_INLINE Packet4f pabsdiff(const Packet4f& a, const Packet4f& b) {
+  return pabs(psub(a, b));
+}
+template <>
+EIGEN_STRONG_INLINE Packet2d pabsdiff(const Packet2d& a, const Packet2d& b) {
+  return pabs(psub(a, b));
 }
 
 template <>
@@ -1487,48 +1437,41 @@ EIGEN_STRONG_INLINE Packet4f ploaddup<Packet4f>(const float* from) {
   return make_packet4f(f0, f0, f1, f1);
 }
 template <>
-EIGEN_STRONG_INLINE Packet2d ploaddup<Packet2d>(const double* from) {
-  return pset1<Packet2d>(from[0]);
-}
-template <>
 EIGEN_STRONG_INLINE Packet16c ploaddup<Packet16c>(const int8_t* from) {
-  Packet16c tmp = pload<Packet16c>(from);
+  __m128i tmp = {};
+  memcpy(&tmp, from, sizeof(tmp) / 2);
   return __lsx_vilvl_b(tmp, tmp);
 }
 template <>
 EIGEN_STRONG_INLINE Packet8s ploaddup<Packet8s>(const int16_t* from) {
-  Packet8s tmp = pload<Packet8s>(from);
+  __m128i tmp = {};
+  memcpy(&tmp, from, sizeof(tmp) / 2);
   return __lsx_vilvl_h(tmp, tmp);
 }
 template <>
 EIGEN_STRONG_INLINE Packet4i ploaddup<Packet4i>(const int32_t* from) {
-  Packet4i tmp = pload<Packet4i>(from);
+  __m128i tmp = {};
+  memcpy(&tmp, from, sizeof(tmp) / 2);
   return __lsx_vilvl_w(tmp, tmp);
 }
 template <>
-EIGEN_STRONG_INLINE Packet2l ploaddup<Packet2l>(const int64_t* from) {
-  return pset1<Packet2l>(from[0]);
-}
-template <>
 EIGEN_STRONG_INLINE Packet16uc ploaddup<Packet16uc>(const uint8_t* from) {
-  Packet16uc tmp = pload<Packet16uc>(from);
+  __m128i tmp = {};
+  memcpy(&tmp, from, sizeof(tmp) / 2);
   return __lsx_vilvl_b(tmp, tmp);
 }
 template <>
 EIGEN_STRONG_INLINE Packet8us ploaddup<Packet8us>(const uint16_t* from) {
-  Packet8us tmp = pload<Packet8us>(from);
+  __m128i tmp = {};
+  memcpy(&tmp, from, sizeof(tmp) / 2);
   return __lsx_vilvl_h(tmp, tmp);
 }
 template <>
 EIGEN_STRONG_INLINE Packet4ui ploaddup<Packet4ui>(const uint32_t* from) {
-  Packet4ui tmp = pload<Packet4ui>(from);
+  __m128i tmp = {};
+  memcpy(&tmp, from, sizeof(tmp) / 2);
   return __lsx_vilvl_w(tmp, tmp);
 }
-template <>
-EIGEN_STRONG_INLINE Packet2ul ploaddup<Packet2ul>(const uint64_t* from) {
-  return pset1<Packet2ul>(from[0]);
-}
-
 template <>
 EIGEN_STRONG_INLINE void pstore<float>(float* to, const Packet4f& from) {
   EIGEN_DEBUG_ALIGNED_STORE __lsx_vst(from, to, 0);
@@ -1965,6 +1908,62 @@ template <>
 EIGEN_STRONG_INLINE double predux<Packet2d>(const Packet2d& a) {
   return pfirst<Packet2d>(__lsx_vfadd_d(a, preverse(a)));
 }
+
+template <typename Packet>
+EIGEN_STRONG_INLINE bool predux_any_lsx(const Packet& a) {
+  return __lsx_bnz_v((__m128i)a);
+}
+
+template <>
+EIGEN_STRONG_INLINE bool predux_any(const Packet4f& a) {
+  return predux_any_lsx(a);
+}
+
+template <>
+EIGEN_STRONG_INLINE bool predux_any(const Packet2d& a) {
+  return predux_any_lsx(a);
+}
+
+template <>
+EIGEN_STRONG_INLINE bool predux_any(const Packet16c& a) {
+  return predux_any_lsx(a);
+}
+
+template <>
+EIGEN_STRONG_INLINE bool predux_any(const Packet8s& a) {
+  return predux_any_lsx(a);
+}
+
+template <>
+EIGEN_STRONG_INLINE bool predux_any(const Packet4i& a) {
+  return predux_any_lsx(a);
+}
+
+template <>
+EIGEN_STRONG_INLINE bool predux_any(const Packet2l& a) {
+  return predux_any_lsx(a);
+}
+
+template <>
+EIGEN_STRONG_INLINE bool predux_any(const Packet16uc& a) {
+  return predux_any_lsx(a);
+}
+
+template <>
+EIGEN_STRONG_INLINE bool predux_any(const Packet8us& a) {
+  return predux_any_lsx(a);
+}
+
+template <>
+EIGEN_STRONG_INLINE bool predux_any(const Packet4ui& a) {
+  return predux_any_lsx(a);
+}
+
+template <>
+EIGEN_STRONG_INLINE bool predux_any(const Packet2ul& a) {
+  return predux_any_lsx(a);
+}
+
 template <>
 EIGEN_STRONG_INLINE int8_t predux<Packet16c>(const Packet16c& a) {
   Packet8s tmp1 = __lsx_vhaddw_h_b(a, a);
@@ -2687,18 +2686,7 @@ EIGEN_STRONG_INLINE Packet4f pzero(const Packet4f& /* a */) {
   return v;
 }
 template <>
-EIGEN_STRONG_INLINE Packet4f pabsdiff<Packet4f>(const Packet4f& a, const Packet4f& b) {
-  Packet4f v = psub(a, b);
-  return pabs(v);
-}
-template <>
-EIGEN_STRONG_INLINE Packet4f pmin<PropagateNaN, Packet4f>(const Packet4f& a, const Packet4f& b) {
-  return pmin<Packet4f>(a, b);
-}
-template <>
-EIGEN_STRONG_INLINE Packet4f pmax<PropagateNaN, Packet4f>(const Packet4f& a, const Packet4f& b) {
-  return pmax<Packet4f>(a, b);
-}
+struct pminmax_propagates_nan<Packet4f> : bool_constant<true> {};
 template <>
 EIGEN_STRONG_INLINE Packet4f ploadquad<Packet4f>(const float* from) {
   return (__m128)__lsx_vldrepl_w(from, 0);
@@ -2726,13 +2714,7 @@ EIGEN_STRONG_INLINE Packet2d pzero(const Packet2d& /* a */) {
   return v;
 }
 template <>
-EIGEN_STRONG_INLINE Packet2d pmin<PropagateNaN, Packet2d>(const Packet2d& a, const Packet2d& b) {
-  return pmin<Packet2d>(a, b);
-}
-template <>
-EIGEN_STRONG_INLINE Packet2d pmax<PropagateNaN, Packet2d>(const Packet2d& a, const Packet2d& b) {
-  return pmax<Packet2d>(a, b);
-}
+struct pminmax_propagates_nan<Packet2d> : bool_constant<true> {};
 template <>
 EIGEN_STRONG_INLINE Packet2d psignbit(const Packet2d& a) {
   return (__m128d)(__lsx_vsrai_d((__m128i)a, 63));
@@ -2753,46 +2735,21 @@ template <>
 EIGEN_STRONG_INLINE Packet2d pldexp<Packet2d>(const Packet2d& a, const Packet2d& exponent) {
   return pldexp_generic(a, exponent);
 }
-
-template <>
-EIGEN_STRONG_INLINE Packet16c pabsdiff<Packet16c>(const Packet16c& a, const Packet16c& b) {
-  Packet16c v = psub(a, b);
-  return pabs(v);
-}
-
-template <>
-EIGEN_STRONG_INLINE Packet8s pabsdiff<Packet8s>(const Packet8s& a, const Packet8s& b) {
-  Packet8s v = psub(a, b);
-  return pabs(v);
-}
 template <>
 EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE Packet8s pselect(const Packet8s& mask, const Packet8s& a, const Packet8s& b) {
   return __lsx_vbitsel_v(b, a, mask);
-}
-
-template <>
-EIGEN_STRONG_INLINE Packet4i pabsdiff<Packet4i>(const Packet4i& a, const Packet4i& b) {
-  Packet4i v = psub(a, b);
-  return pabs(v);
 }
 template <>
 EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE Packet4i pselect(const Packet4i& mask, const Packet4i& a, const Packet4i& b) {
   return __lsx_vbitsel_v(b, a, mask);
 }
-
 template <>
 EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE Packet2l pselect(const Packet2l& mask, const Packet2l& a, const Packet2l& b) {
   return __lsx_vbitsel_v(b, a, mask);
 }
-
 template <>
 EIGEN_STRONG_INLINE Packet16uc pdiv<Packet16uc>(const Packet16uc& a, const Packet16uc& b) {
   return __lsx_vdiv_bu(a, b);
-}
-template <>
-EIGEN_STRONG_INLINE Packet16uc pabsdiff<Packet16uc>(const Packet16uc& a, const Packet16uc& b) {
-  Packet16uc v = psub(a, b);
-  return pabs(v);
 }
 template <>
 EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE Packet16uc pselect(const Packet16uc& mask, const Packet16uc& a,
@@ -2811,12 +2768,6 @@ EIGEN_STRONG_INLINE Packet16uc psqrt(const Packet16uc& a) {
   }
   return res;
 }
-
-template <>
-EIGEN_STRONG_INLINE Packet8us pabsdiff<Packet8us>(const Packet8us& a, const Packet8us& b) {
-  Packet8us v = psub(a, b);
-  return pabs(v);
-}
 template <>
 EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE Packet8us pselect(const Packet8us& mask, const Packet8us& a, const Packet8us& b) {
   return __lsx_vbitsel_v(b, a, mask);
@@ -2834,11 +2785,6 @@ EIGEN_STRONG_INLINE Packet8us psqrt(const Packet8us& a) {
   return res;
 }
 
-template <>
-EIGEN_STRONG_INLINE Packet4ui pabsdiff<Packet4ui>(const Packet4ui& a, const Packet4ui& b) {
-  Packet4ui v = psub(a, b);
-  return pabs(v);
-}
 template <>
 EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE Packet4ui pselect(const Packet4ui& mask, const Packet4ui& a, const Packet4ui& b) {
   return __lsx_vbitsel_v(b, a, mask);

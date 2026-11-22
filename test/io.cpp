@@ -6,10 +6,102 @@
 // This Source Code Form is subject to the terms of the Mozilla
 // Public License v. 2.0. If a copy of the MPL was not distributed
 // with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
+// SPDX-License-Identifier: MPL-2.0
 
 #include <sstream>
 
 #include "main.h"
+
+namespace stream_precision_test {
+struct Rational {
+  int numerator;
+  int denominator;
+  Rational(int n = 0, int d = 1) : numerator(n), denominator(d) {}
+};
+
+struct BinaryScalar {
+  double value;
+};
+double log2(const BinaryScalar& value) { return std::log2(value.value); }
+
+struct IncompleteScalar {};
+struct UnsupportedLog {};
+UnsupportedLog log2(const IncompleteScalar&) { return {}; }
+
+struct ExplicitPrecision {};
+
+struct MetadataReal {};
+struct MetadataScalar {
+  double value;
+  MetadataScalar(double x = 0) : value(x) {}
+};
+std::ostream& operator<<(std::ostream& stream, const MetadataScalar& value) { return stream << value.value; }
+
+std::ostream& operator<<(std::ostream& stream, const Rational& value) {
+  return stream << (std::to_string(value.numerator) + '/' + std::to_string(value.denominator));
+}
+}  // namespace stream_precision_test
+
+namespace std {
+template <>
+class numeric_limits<stream_precision_test::MetadataReal> : public numeric_limits<double> {};
+}  // namespace std
+
+namespace Eigen {
+template <>
+struct NumTraits<stream_precision_test::Rational> : GenericNumTraits<stream_precision_test::Rational> {};
+template <>
+struct NumTraits<stream_precision_test::BinaryScalar> : GenericNumTraits<stream_precision_test::BinaryScalar> {
+  static stream_precision_test::BinaryScalar epsilon() { return {1.0 / 1024}; }
+};
+template <>
+struct NumTraits<stream_precision_test::ExplicitPrecision>
+    : GenericNumTraits<stream_precision_test::ExplicitPrecision> {
+  static constexpr int digits() { return 11; }
+  static constexpr int digits10() { return 3; }
+  static constexpr int max_digits10() { return 5; }
+};
+template <>
+struct NumTraits<stream_precision_test::MetadataScalar> : GenericNumTraits<stream_precision_test::MetadataScalar> {
+  using Real = stream_precision_test::MetadataReal;
+};
+}  // namespace Eigen
+
+void check_custom_scalar_precision() {
+  using MetadataScalar = stream_precision_test::MetadataScalar;
+  VERIFY_IS_EQUAL(NumTraits<MetadataScalar>::digits10(), 15);
+  VERIFY_IS_EQUAL(NumTraits<MetadataScalar>::max_digits10(), 17);
+  Matrix<MetadataScalar, 1, 1> decimal;
+  decimal(0) = MetadataScalar(1.2345678901234567);
+  std::ostringstream full_precision;
+  full_precision << decimal.format(IOFormat(FullPrecision));
+  VERIFY(full_precision.str() == "1.2345678901234567");
+  VERIFY_IS_EQUAL(NumTraits<stream_precision_test::BinaryScalar>::digits(), 11);
+  VERIFY_IS_EQUAL(NumTraits<stream_precision_test::BinaryScalar>::digits10(), 3);
+  VERIFY_IS_EQUAL(NumTraits<stream_precision_test::BinaryScalar>::max_digits10(), 5);
+  VERIFY_IS_EQUAL(NumTraits<stream_precision_test::IncompleteScalar>::digits10(), 0);
+  VERIFY_IS_EQUAL(NumTraits<stream_precision_test::IncompleteScalar>::max_digits10(), 0);
+  VERIFY_IS_EQUAL(NumTraits<stream_precision_test::ExplicitPrecision>::digits(), 11);
+  VERIFY_IS_EQUAL(NumTraits<stream_precision_test::ExplicitPrecision>::digits10(), 3);
+  VERIFY_IS_EQUAL(NumTraits<stream_precision_test::ExplicitPrecision>::max_digits10(), 5);
+  VERIFY_IS_EQUAL(NumTraits<double>::max_digits10(), std::numeric_limits<double>::max_digits10);
+  using Scalar = stream_precision_test::Rational;
+  VERIFY_IS_EQUAL(NumTraits<Scalar>::digits10(), 0);
+  VERIFY_IS_EQUAL(NumTraits<Scalar>::max_digits10(), 0);
+  Matrix<Scalar, 2, 1> values;
+  values << Scalar(1, 2), Scalar(3, 4);
+  const int precisions[] = {StreamPrecision, FullPrecision, 4};
+  for (int precision : precisions) {
+    std::ostringstream stream;
+    stream.precision(7);
+    stream << values.format(IOFormat(precision));
+    VERIFY(stream.str() == "1/2\n3/4");
+    VERIFY_IS_EQUAL(stream.precision(), 7);
+  }
+  std::ostringstream stream;
+  stream << values;
+  VERIFY(stream.str() == "1/2\n3/4");
+}
 
 template <typename Scalar>
 struct check_ostream_impl {
@@ -48,7 +140,79 @@ static void check_ostream() {
   check_ostream_impl<Scalar>::run();
 }
 
-EIGEN_DECLARE_TEST(rand) {
+struct IOFormatCase {
+  std::string rowSeparator, rowPrefix, rowSuffix, matPrefix, matSuffix;
+  int flags;
+  std::string expected;
+};
+
+static void check_ioformat() {
+  const IOFormatCase cases[] = {
+      // standard
+      {"\n", "[", "]", "", "", 0,
+       "[ 6473,    27]\n"
+       "[    1, 22334]"},
+      // row separator with newlines
+      {"\nNext\n", "[", "]", "", "", 0,
+       "[ 6473,    27]\n"
+       "Next\n"
+       "[    1, 22334]"},
+      {"\nNext\n  ", "[", "]", "Matrix = [", "]", 0,
+       "Matrix = [[ 6473,    27]\n"
+       "Next\n"
+       "          [    1, 22334]]"},
+      // newline in the row prefix and suffix
+      {"\n", "[\n", "]", "", "", 0,
+       "[\n"
+       " 6473,    27]\n"
+       "[\n"
+       "    1, 22334]"},
+      {"\n", "[", "\n]", "", "", 0,
+       "[ 6473,    27\n"
+       "]\n"
+       "[    1, 22334\n"
+       "]"},
+      // rows on the same line, and a separator that indents the next row
+      {", ", "[", "]", "[", "]", 0, "[[ 6473,    27], [    1, 22334]]"},
+      {",\n  ", "[", "]", "Matrix = [", "]", 0,
+       "Matrix = [[ 6473,    27],\n"
+       "          [    1, 22334]]"},
+      // row prefix that starts with a newline, without a row separator
+      {"", "\n[", "]", "Matrix =", "", 0,
+       "Matrix =\n"
+       "[ 6473,    27]\n"
+       "[    1, 22334]"},
+      // newline in the matrix prefix
+      {"\n", "[", "]", "Matrix =\n [", "].", 0,
+       "Matrix =\n"
+       " [[ 6473,    27]\n"
+       "  [    1, 22334]]."},
+      // row suffix with a newline followed by a row separator
+      {", ", "[", "\n]", "Matrix = [", "]", 0,
+       "Matrix = [[ 6473,    27\n"
+       "],        [    1, 22334\n"
+       "]]"},
+      // DontAlignCols
+      {"\n", "[", "]", "Matrix = [", "].", DontAlignCols,
+       "Matrix = [[6473, 27]\n"
+       "[1, 22334]]."},
+      // a row separator that is longer than the indentation
+      {"\n ---carried--- ", "[", "]", "Matrix [", "]", 0,
+       "Matrix [[ 6473,    27]\n"
+       " ---carried--- [    1, 22334]]"},
+  };
+  const auto matrix = (Matrix2i() << 6473, 27, 1, 22334).finished();
+  for (const IOFormatCase& c : cases) {
+    std::ostringstream ss;
+    const IOFormat fmt(StreamPrecision, c.flags, ", ", c.rowSeparator, c.rowPrefix, c.rowSuffix, c.matPrefix,
+                       c.matSuffix);
+    ss << matrix.format(fmt);
+    VERIFY_IS_EQUAL(ss.str(), c.expected);
+  }
+}
+
+EIGEN_DECLARE_TEST(io) {
+  CALL_SUBTEST(check_custom_scalar_precision());
   CALL_SUBTEST(check_ostream<bool>());
   CALL_SUBTEST(check_ostream<float>());
   CALL_SUBTEST(check_ostream<double>());
@@ -60,4 +224,5 @@ EIGEN_DECLARE_TEST(rand) {
   CALL_SUBTEST(check_ostream<Eigen::numext::uint32_t>());
   CALL_SUBTEST(check_ostream<Eigen::numext::int64_t>());
   CALL_SUBTEST(check_ostream<Eigen::numext::uint64_t>());
+  CALL_SUBTEST(check_ioformat());
 }

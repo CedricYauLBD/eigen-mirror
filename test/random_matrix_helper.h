@@ -8,6 +8,7 @@
 // This Source Code Form is subject to the terms of the Mozilla
 // Public License v. 2.0. If a copy of the MPL was not distributed
 // with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
+// SPDX-License-Identifier: MPL-2.0
 
 #ifndef EIGEN_RANDOM_MATRIX_HELPER
 #define EIGEN_RANDOM_MATRIX_HELPER
@@ -38,6 +39,9 @@ VectorType setupRandomSvs(const Index dim, const RealScalar max);
 template <typename VectorType, typename RealScalar>
 VectorType setupRangeSvs(const Index dim, const RealScalar min, const RealScalar max);
 
+template <typename MatrixType>
+void setRandomWellConditionedDiagonal(MatrixType& m);
+
 }  // end namespace Eigen
 
 #endif  // EIGEN_COMP_ICC
@@ -58,12 +62,12 @@ namespace Eigen {
  */
 template <typename MatrixType>
 void createRandomPIMatrixOfRank(Index desired_rank, Index rows, Index cols, MatrixType& m) {
-  typedef typename internal::traits<MatrixType>::Scalar Scalar;
+  using Scalar = typename internal::traits<MatrixType>::Scalar;
   enum { Rows = MatrixType::RowsAtCompileTime, Cols = MatrixType::ColsAtCompileTime };
 
-  typedef Matrix<Scalar, Dynamic, 1> VectorType;
-  typedef Matrix<Scalar, Rows, Rows> MatrixAType;
-  typedef Matrix<Scalar, Cols, Cols> MatrixBType;
+  using VectorType = Matrix<Scalar, Dynamic, 1>;
+  using MatrixAType = Matrix<Scalar, Rows, Rows>;
+  using MatrixBType = Matrix<Scalar, Cols, Cols>;
 
   if (desired_rank == 0) {
     m.setZero(rows, cols);
@@ -99,7 +103,7 @@ void createRandomPIMatrixOfRank(Index desired_rank, Index rows, Index cols, Matr
  */
 template <typename PermutationVectorType>
 void randomPermutationVector(PermutationVectorType& v, Index size) {
-  typedef typename PermutationVectorType::Scalar Scalar;
+  using Scalar = typename PermutationVectorType::Scalar;
   v.resize(size);
   for (Index i = 0; i < size; ++i) v(i) = Scalar(i);
   if (size == 1) return;
@@ -124,8 +128,8 @@ void randomPermutationVector(PermutationVectorType& v, Index size) {
  */
 template <typename MatrixType>
 MatrixType generateRandomUnitaryMatrix(const Index dim) {
-  typedef typename internal::traits<MatrixType>::Scalar Scalar;
-  typedef Matrix<Scalar, Dynamic, 1> VectorType;
+  using Scalar = typename internal::traits<MatrixType>::Scalar;
+  using VectorType = Matrix<Scalar, Dynamic, 1>;
 
   MatrixType v = MatrixType::Identity(dim, dim);
   VectorType h = VectorType::Zero(dim);
@@ -168,9 +172,9 @@ MatrixType generateRandomUnitaryMatrix(const Index dim) {
 template <typename MatrixType, typename RealScalarVectorType>
 void generateRandomMatrixSvs(const RealScalarVectorType& svs, const Index rows, const Index cols, MatrixType& M) {
   enum { Rows = MatrixType::RowsAtCompileTime, Cols = MatrixType::ColsAtCompileTime };
-  typedef typename internal::traits<MatrixType>::Scalar Scalar;
-  typedef Matrix<Scalar, Rows, Rows> MatrixAType;
-  typedef Matrix<Scalar, Cols, Cols> MatrixBType;
+  using Scalar = typename internal::traits<MatrixType>::Scalar;
+  using MatrixAType = Matrix<Scalar, Rows, Rows>;
+  using MatrixBType = Matrix<Scalar, Cols, Cols>;
 
   const Index min_dim = (std::min)(rows, cols);
 
@@ -237,6 +241,84 @@ VectorType setupRangeSvs(const Index dim, const RealScalar min, const RealScalar
   return min * (VectorType::Ones(dim) - svs) + max * svs;
 }
 
+/**
+ * Overwrites the diagonal of a matrix with random entries of modulus in [1/2, 1],
+ * leaving the other entries untouched.
+ *
+ * For a diagonal matrix built this way the condition number is at most 2 and
+ * `|det| >= 2^-dim`, which is what makes a determinant check against the product of
+ * the entries meaningful. Drawing unconstrained entries instead leaves the
+ * conditioning unbounded. For real scalars, the smallest magnitude among `dim`
+ * uniform draws from [-1, 1) falls below the `4*dim*eps*maxPivot` rank threshold
+ * with probability about `4*dim^2*eps` when `maxPivot` is of order one. Complex
+ * draws use independent real and imaginary components, so their near-zero
+ * probability is quadratic in the threshold, but they can likewise make the
+ * determinant check ill-conditioned.
+ *
+ * @tparam MatrixType type of the matrix whose diagonal is set
+ * @param m matrix whose diagonal is overwritten
+ */
+template <typename MatrixType>
+void setRandomWellConditionedDiagonal(MatrixType& m) {
+  using Scalar = typename MatrixType::Scalar;
+  using RealScalar = typename NumTraits<Scalar>::Real;
+  for (Index i = 0; i < m.diagonalSize(); ++i) {
+    // numext::sign is the unit-modulus phase for complex scalars and +-1 for real ones.
+    const Scalar z = internal::random<Scalar>();
+    const Scalar phase = numext::is_exactly_zero(z) ? Scalar(1) : numext::sign(z);
+    m.diagonal()(i) = phase * internal::random<RealScalar>(RealScalar(0.5), RealScalar(1));
+  }
+}
+
 }  // end namespace Eigen
+
+// Fill in row-major coefficient order, including non-contiguous dense views.
+// The range type determines the draws: real bounds produce real values even in a complex destination.
+template <typename Derived, typename Scalar>
+void setRandomInRange(Eigen::DenseBase<Derived>& matrix, Scalar min_value, Scalar max_value) {
+  for (Eigen::Index i = 0; i < matrix.rows(); ++i) {
+    for (Eigen::Index j = 0; j < matrix.cols(); ++j) {
+      matrix.derived().coeffRef(i, j) = Eigen::internal::random<Scalar>(min_value, max_value);
+    }
+  }
+}
+
+// Requires contiguous storage, as in Tensor and TensorMap.
+template <typename DataContainer>
+void setRandomDataInRange(DataContainer& data_container, typename DataContainer::Scalar min_value,
+                          typename DataContainer::Scalar max_value) {
+  using Scalar = typename DataContainer::Scalar;
+  Eigen::Map<Eigen::Matrix<Scalar, Eigen::Dynamic, 1>> values(data_container.data(), data_container.size());
+  setRandomInRange(values, min_value, max_value);
+}
+
+template <typename MatrixType, typename Scalar = typename MatrixType::Scalar>
+MatrixType RandomMatrix(Eigen::Index rows, Eigen::Index cols, Scalar min, Scalar max) {
+  MatrixType M(rows, cols);
+  setRandomInRange(M, min, max);
+  return M;
+}
+
+// Integer-valued entries in [min_value, max_value], so that sums of products stay exact in any order while they
+// fit the scalar's integers. A complex scalar gets independent integer real and imaginary parts.
+template <typename Scalar>
+std::enable_if_t<!Eigen::NumTraits<Scalar>::IsComplex, Scalar> randomIntegerValued(int min_value, int max_value) {
+  return Scalar(Eigen::internal::random<int>(min_value, max_value));
+}
+template <typename Scalar>
+std::enable_if_t<Eigen::NumTraits<Scalar>::IsComplex, Scalar> randomIntegerValued(int min_value, int max_value) {
+  using Real = typename Eigen::NumTraits<Scalar>::Real;
+  const Real re = Real(Eigen::internal::random<int>(min_value, max_value));
+  return Scalar(re, Real(Eigen::internal::random<int>(min_value, max_value)));
+}
+
+template <typename MatrixType>
+MatrixType RandomIntegerMatrix(Eigen::Index rows, Eigen::Index cols, int min_value, int max_value) {
+  MatrixType M(rows, cols);
+  for (Eigen::Index j = 0; j < cols; ++j)
+    for (Eigen::Index i = 0; i < rows; ++i)
+      M.coeffRef(i, j) = randomIntegerValued<typename MatrixType::Scalar>(min_value, max_value);
+  return M;
+}
 
 #endif  // EIGEN_RANDOM_MATRIX_HELPER

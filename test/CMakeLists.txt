@@ -1,8 +1,12 @@
 # The file split_test_helper.h was generated at first run,
 # it is now included in test/
+# SPDX-FileCopyrightText: The Eigen Authors
+# SPDX-License-Identifier: MPL-2.0
 if(EXISTS ${CMAKE_CURRENT_BINARY_DIR}/split_test_helper.h)
   file(REMOVE ${CMAKE_CURRENT_BINARY_DIR}/split_test_helper.h)
 endif()
+
+find_package(Threads REQUIRED)
 
 # check if we have a Fortran compiler
 include(CheckLanguage)
@@ -18,16 +22,104 @@ endif()
 
 # TODO do the same for EXTERNAL_LAPACK
 option(EIGEN_TEST_EXTERNAL_BLAS "Use external BLAS library for testsuite" OFF)
+option(EIGEN_TEST_EXTERNAL_BLAS_INT64 "Use the 64-bit integer (ILP64) interface of the external BLAS" OFF)
+set(EIGEN_TEST_EXTERNAL_BLAS_SYMBOL_SUFFIX "" CACHE STRING
+    "Symbol suffix of the external BLAS 64-bit interface, e.g. _64 for dgemm_64_")
+# Check that the BLAS integer width Eigen is configured for is the one the linked library actually uses.
+# Fortran BLAS takes every dimension by pointer, so a mismatch is invisible to the compiler and the linker and
+# only shows up as corrupted arguments at run time.
+#
+# The probe calls dgemm passing one 8-byte slot for every integer argument, holding 1 in its low word and -1 in
+# its high word. A 32-bit callee reads 1 and computes 3*5; a 64-bit callee reads a negative extent and bails out
+# through xerbla without touching memory. Detection is by output rather than exit status, because the reference
+# xerbla ends in a Fortran STOP, which skips the rest of main and still exits 0.
+function(eigen_check_external_blas_integer_size)
+  if(CMAKE_CROSSCOMPILING)
+    message(STATUS "External BLAS: cross-compiling, BLAS integer width not checked")
+    return()
+  endif()
+  set(probe_dir "${CMAKE_CURRENT_BINARY_DIR}/eigen_blas_int_probe")
+  set(probe_src "${probe_dir}/probe.cpp")
+  # Bracket argument: the suffix arrives as a compile definition, so nothing here needs escaping.
+  file(WRITE "${probe_src}" [==[
+#include <cstdint>
+#include <cstdio>
+#define EIGEN_PROBE_CAT2(a, b) a##b
+#define EIGEN_PROBE_CAT(a, b) EIGEN_PROBE_CAT2(a, b)
+#define EIGEN_PROBE_DGEMM EIGEN_PROBE_CAT(EIGEN_PROBE_CAT(dgemm, EIGEN_PROBE_SUFFIX), _)
+extern "C" void EIGEN_PROBE_DGEMM(const void*, const void*, const void*, const void*, const void*, const double*,
+                                  const double*, const void*, const double*, const void*, const double*, double*,
+                                  const void*);
+int main() {
+  std::int64_t slot = std::int64_t(1) | (std::int64_t(0xFFFFFFFF) << 32);
+  double alpha = 1.0, beta = 0.0, a[1] = {3.0}, b[1] = {5.0}, c[1] = {-999.0};
+  std::printf("EIGEN_PROBE_RAN\n");
+  std::fflush(stdout);
+  EIGEN_PROBE_DGEMM("N", "N", &slot, &slot, &slot, &alpha, a, &slot, b, &slot, &beta, c, &slot);
+  if (c[0] == 15.0) {
+    std::printf("EIGEN_PROBE_IS32\n");
+    std::fflush(stdout);
+  }
+  return 0;
+}
+]==])
+  try_run(probe_run probe_built "${probe_dir}" "${probe_src}"
+          COMPILE_DEFINITIONS "-DEIGEN_PROBE_SUFFIX=${EIGEN_TEST_EXTERNAL_BLAS_SYMBOL_SUFFIX}"
+          LINK_LIBRARIES ${BLAS_LIBRARIES}
+          COMPILE_OUTPUT_VARIABLE probe_build_output
+          RUN_OUTPUT_VARIABLE probe_output)
+  if(NOT probe_built)
+    message(FATAL_ERROR
+            "External BLAS: could not link dgemm${EIGEN_TEST_EXTERNAL_BLAS_SYMBOL_SUFFIX}_ against "
+            "${BLAS_LIBRARIES}. Check EIGEN_TEST_EXTERNAL_BLAS_SYMBOL_SUFFIX.\n${probe_build_output}")
+  endif()
+  if(NOT probe_output MATCHES "EIGEN_PROBE_RAN")
+    message(WARNING "External BLAS: integer-width probe did not run; BLAS integer width not checked")
+    return()
+  endif()
+  if(probe_output MATCHES "EIGEN_PROBE_IS32")
+    set(library_is_int64 FALSE)
+  else()
+    set(library_is_int64 TRUE)
+  endif()
+  if(library_is_int64 AND NOT EIGEN_TEST_EXTERNAL_BLAS_INT64)
+    message(FATAL_ERROR "External BLAS: ${BLAS_LIBRARIES} uses 64-bit integers. Set "
+                        "EIGEN_TEST_EXTERNAL_BLAS_INT64=ON, or point BLAS_LIBRARIES at an LP64 library.")
+  elseif(NOT library_is_int64 AND EIGEN_TEST_EXTERNAL_BLAS_INT64)
+    message(FATAL_ERROR "External BLAS: ${BLAS_LIBRARIES} uses 32-bit integers. Set "
+                        "EIGEN_TEST_EXTERNAL_BLAS_INT64=OFF, or point BLAS_LIBRARIES at an ILP64 library.")
+  endif()
+  if(library_is_int64)
+    message(STATUS "External BLAS: confirmed 64-bit (ILP64) integer interface")
+  else()
+    message(STATUS "External BLAS: confirmed 32-bit (LP64) integer interface")
+  endif()
+endfunction()
+
 if(EIGEN_TEST_EXTERNAL_BLAS)
   find_package(BLAS REQUIRED)
   message(STATUS "BLAS_COMPILER_FLAGS: ${BLAS_COMPILER_FLAGS}")
   add_definitions("-DEIGEN_USE_BLAS") # is adding  ${BLAS_COMPILER_FLAGS} necessary?
+  if(EIGEN_TEST_EXTERNAL_BLAS_INT64)
+    add_definitions("-DEIGEN_64BIT_BLAS")
+  endif()
+  if(NOT EIGEN_TEST_EXTERNAL_BLAS_SYMBOL_SUFFIX STREQUAL "")
+    add_definitions("-DEIGEN_BLAS_SYMBOL_SUFFIX=${EIGEN_TEST_EXTERNAL_BLAS_SYMBOL_SUFFIX}")
+  endif()
+  eigen_check_external_blas_integer_size()
   list(APPEND EXTERNAL_LIBS "${BLAS_LIBRARIES}")
 endif()
 
 # configure blas/lapack (use Eigen's ones)
-set(EIGEN_BLAS_LIBRARIES eigen_blas)
-set(EIGEN_LAPACK_LIBRARIES eigen_lapack)
+# Without EIGEN_BUILD_SHARED_LIBS only the static libraries exist.  blas/ and lapack/ are added
+# after this directory, so their targets cannot be tested for here.
+if(EIGEN_BUILD_SHARED_LIBS)
+  set(EIGEN_BLAS_LIBRARIES eigen_blas)
+  set(EIGEN_LAPACK_LIBRARIES eigen_lapack)
+else()
+  set(EIGEN_BLAS_LIBRARIES eigen_blas_static)
+  set(EIGEN_LAPACK_LIBRARIES eigen_lapack_static)
+endif()
 
 set(EIGEN_TEST_MATRIX_DIR "" CACHE STRING "Enable testing of realword sparse matrices contained in the specified path")
 if(EIGEN_TEST_MATRIX_DIR)
@@ -38,6 +130,11 @@ if(EIGEN_TEST_MATRIX_DIR)
     message(STATUS "REAL CASES CAN NOT BE CURRENTLY TESTED ON WIN32")
   endif()
 endif()
+
+# Set before the first ei_add_test: a test registered while this is unset gets
+# no label and is not a dependency of BuildOfficial.
+set_property(GLOBAL PROPERTY EIGEN_CURRENT_SUBPROJECT "Official")
+add_custom_target(BuildOfficial)
 
 set(SPARSE_LIBS " ")
 
@@ -94,28 +191,29 @@ else()
 endif()
 
 
-find_package(PASTIX QUIET COMPONENTS METIS SEQ)
-# check that the PASTIX found is a version without MPI
-find_path(PASTIX_pastix_nompi.h_INCLUDE_DIRS
-  NAMES pastix_nompi.h
-  HINTS ${PASTIX_INCLUDE_DIRS}
-)
-if (NOT PASTIX_pastix_nompi.h_INCLUDE_DIRS)
-  message(STATUS "A version of Pastix has been found but pastix_nompi.h does not exist in the include directory."
-                 " Because Eigen tests require a version without MPI, we disable the Pastix backend.")
+find_package(PASTIX QUIET)
+set(PASTIX_NO_MPI FALSE)
+if(PASTIX_FOUND)
+  include(CMakePushCheckState)
+  cmake_push_check_state(RESET)
+  set(CMAKE_REQUIRED_INCLUDES ${PASTIX_INCLUDE_DIRS_DEP})
+  unset(EIGEN_PASTIX_NO_MPI CACHE)
+  check_cxx_source_compiles("
+    #include <pastix/config.h>
+    #ifdef PASTIX_WITH_MPI
+    #error Eigen tests require PaStiX without MPI
+    #endif
+    int main() { return 0; }
+  " EIGEN_PASTIX_NO_MPI)
+  set(PASTIX_NO_MPI ${EIGEN_PASTIX_NO_MPI})
+  cmake_pop_check_state()
 endif()
-if(PASTIX_FOUND AND PASTIX_pastix_nompi.h_INCLUDE_DIRS)
+if(PASTIX_FOUND AND NOT PASTIX_NO_MPI)
+  message(STATUS "Eigen tests require PaStiX compiled without MPI; disabling the PaStiX backend.")
+endif()
+if(PASTIX_FOUND AND PASTIX_NO_MPI)
   add_definitions("-DEIGEN_PASTIX_SUPPORT")
   include_directories(${PASTIX_INCLUDE_DIRS_DEP})
-  if(SCOTCH_FOUND)
-    include_directories(${SCOTCH_INCLUDE_DIRS})
-    set(PASTIX_LIBRARIES ${PASTIX_LIBRARIES} ${SCOTCH_LIBRARIES})
-  elseif(METIS_FOUND)
-    include_directories(${METIS_INCLUDE_DIRS})
-    set(PASTIX_LIBRARIES ${PASTIX_LIBRARIES} ${METIS_LIBRARIES})
-  else()
-    ei_add_property(EIGEN_MISSING_BACKENDS  "PaStiX, ")
-  endif()
   set(SPARSE_LIBS ${SPARSE_LIBS} ${PASTIX_LIBRARIES_DEP} ${ORDERING_LIBRARIES})
   set(PASTIX_ALL_LIBS ${PASTIX_LIBRARIES_DEP})
   ei_add_property(EIGEN_TESTED_BACKENDS  "PaStiX, ")
@@ -123,6 +221,7 @@ else()
   ei_add_property(EIGEN_MISSING_BACKENDS  "PaStiX, ")
 endif()
 
+find_package(METIS QUIET)
 if(METIS_FOUND)
   add_definitions("-DEIGEN_METIS_SUPPORT")
   include_directories(${METIS_INCLUDE_DIRS})
@@ -138,6 +237,8 @@ if(SPQR_FOUND AND CHOLMOD_FOUND AND EIGEN_BUILD_BLAS AND EIGEN_BUILD_LAPACK AND 
   set(SPQR_ALL_LIBS ${SPQR_LIBRARIES} ${CHOLMOD_LIBRARIES} ${EIGEN_LAPACK_LIBRARIES} ${EIGEN_BLAS_LIBRARIES} ${LAPACK_LIBRARIES})
   set(SPARSE_LIBS ${SPARSE_LIBS} ${SPQR_ALL_LIBS})
   ei_add_property(EIGEN_TESTED_BACKENDS "SPQR, ")
+
+  ei_add_test(spqr_support "" "${SPQR_ALL_LIBS}")
 else()
   ei_add_property(EIGEN_MISSING_BACKENDS "SPQR, ")
 endif()
@@ -153,44 +254,123 @@ else()
   ei_add_property(EIGEN_MISSING_BACKENDS "Accelerate, ")
 endif()
 
-option(EIGEN_TEST_NOQT "Disable Qt support in unit tests" OFF)
-if(NOT EIGEN_TEST_NOQT)
-  find_package(Qt4)
-  if(QT4_FOUND)
-    include(${QT_USE_FILE})
-    ei_add_property(EIGEN_TESTED_BACKENDS  "Qt4 support, ")
-  else()
-    ei_add_property(EIGEN_MISSING_BACKENDS  "Qt4 support, ")
-  endif()
-endif()
-
 if(TEST_LIB)
   add_definitions("-DEIGEN_EXTERN_INSTANTIATIONS=1")
 endif()
 
-set_property(GLOBAL PROPERTY EIGEN_CURRENT_SUBPROJECT "Official")
-add_custom_target(BuildOfficial)
+# Not an ei_add_test: this checks values produced by the configure step itself,
+# so it compares what the enclosing project() call left in this scope.
+add_test(NAME cmake_project_version
+         COMMAND ${CMAKE_COMMAND}
+                 "-DEIGEN_EXPECTED_VERSION=${EIGEN_VERSION_NUMBER}"
+                 "-DEIGEN_IS_TOP_LEVEL=${PROJECT_IS_TOP_LEVEL}"
+                 "-DOBSERVED_PROJECT_VERSION=${PROJECT_VERSION}"
+                 "-DOBSERVED_Eigen3_VERSION=${Eigen3_VERSION}"
+                 "-DOBSERVED_CMAKE_PROJECT_VERSION=${CMAKE_PROJECT_VERSION}"
+                 -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake_project_version.cmake")
+set_property(TEST cmake_project_version PROPERTY LABELS "Official")
+
+# Not an ei_add_test either: it compares the Eigen/Version header that the
+# configure step generated, which is the one CMake installs, with the source one.
+add_test(NAME cmake_version_header
+         COMMAND ${CMAKE_COMMAND}
+                 "-DSOURCE_HEADER=${PROJECT_SOURCE_DIR}/Eigen/Version"
+                 "-DGENERATED_HEADER=${PROJECT_BINARY_DIR}/include/Eigen/Version"
+                 -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake_version_header.cmake")
+set_property(TEST cmake_version_header PROPERTY LABELS "Official")
 
 ei_add_test(clz)
 ei_add_test(rand)
+ei_add_test(realview)
+ei_add_test(complex_components)
 ei_add_test(meta)
+ei_add_test(shape_checks)
+ei_add_test(shape_check_messages)
+ei_add_test(shape_checks_no_static_assert)
+ei_add_test(shape_checks_modules)
+ei_add_test(preprocessor_directives)
+ei_add_test(lru_cache)
 ei_add_test(maxsizevector)
-ei_add_test(numext)
+ei_add_test(complex_sqrt)
+# numext.cpp is compiled only through these two, which pin EIGEN_SCALAR_MADD_USE_FMA: a plain build would duplicate
+# whichever one matches EIGEN_VECTORIZE_FMA.
+ei_add_test(numext_fma_off)
+ei_add_test(numext_fma_on)
+# Fused residuals must not depend on optional compiler contraction.
+set(twoprod_test_flags "")
+if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+  set(twoprod_test_flags "-ffp-contract=off")
+endif()
+ei_add_test(twoprod "${twoprod_test_flags}")
+# Reuse the existing GCC AVX2 configuration's -mfma for a small scalar contraction regression.
+if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND EIGEN_TEST_AVX2)
+  ei_add_test(numext_fma_contraction "-ffp-contract=fast -DEIGEN_DONT_VECTORIZE")
+endif()
+ei_add_test(safe_scaling)
 ei_add_test(sizeof)
 ei_add_test(dynalloc)
 ei_add_test(nomalloc)
+ei_add_test(stack_allocation_limit)
 ei_add_test(first_aligned)
+ei_add_test(cache_sizes)
 ei_add_test(type_alias)
 ei_add_test(nullary)
 ei_add_test(mixingtypes)
+ei_add_test(scalar_binary_op_overloads)
 ei_add_test(float_conversion)
 ei_add_test(io)
 ei_add_test(packetmath "-DEIGEN_FAST_MATH=1")
+ei_add_test(packetmath_loaddup)
+ei_add_test(packetmath_gather)
+ei_add_test(packet_madd_dispatch "${twoprod_test_flags}")
+ei_add_test(tanh_no_fast_math)
+# Generic clang vector backend tests for different vector sizes.
+include(CheckCXXSourceCompiles)
+check_cxx_source_compiles("
+  using v4sf __attribute__((ext_vector_type(4))) = float;
+  int main() { return __builtin_vectorelements(v4sf{}); }
+" COMPILER_SUPPORTS_VECTOR_EXTENSIONS)
+if(COMPILER_SUPPORTS_VECTOR_EXTENSIONS)
+  ei_add_test(twoprod_generic "${twoprod_test_flags}")
+  ei_add_test(packetmath_generic_16 "-DEIGEN_FAST_MATH=1")
+  ei_add_test(packetmath_generic_32 "-DEIGEN_FAST_MATH=1")
+  ei_add_test(packetmath_generic_64 "-DEIGEN_FAST_MATH=1")
+  ei_add_test(mixingtypes_generic_32)
+  ei_add_test(mixingtypes_generic_64)
+endif()
 ei_add_test(packet_segment)
 ei_add_test(vectorization_logic)
 ei_add_test(basicstuff)
+ei_add_test(approx_comparisons)
+ei_add_test(numerical_test_helpers)
+ei_add_test(fuzzy_matrix_checks)
 ei_add_test(constexpr)
 ei_add_test(constructor)
+function(eigen_check_std_variant)
+  if(NOT CMAKE_CXX_STANDARD OR CMAKE_CXX_STANDARD LESS 17)
+    set(CMAKE_CXX_STANDARD 17)
+  endif()
+  set(CMAKE_CXX_STANDARD_REQUIRED ON)
+  check_cxx_source_compiles("
+    #include <variant>
+    int main() {
+      std::variant<int, double> value(1);
+      return std::get<int>(value) != 1;
+    }" EIGEN_TEST_HAS_STD_VARIANT)
+endfunction()
+
+if("cxx_std_17" IN_LIST CMAKE_CXX_COMPILE_FEATURES)
+  eigen_check_std_variant()
+  if(EIGEN_TEST_HAS_STD_VARIANT)
+    # Keep constructor_variant unsplit: the C++17 feature applies to this executable target.
+    ei_add_test(constructor_variant)
+    target_compile_features(constructor_variant PRIVATE cxx_std_17)
+  else()
+    message(STATUS "Skipping constructor_variant: std::variant is unavailable")
+  endif()
+else()
+  message(STATUS "Skipping constructor_variant: C++17 is unavailable")
+endif()
 ei_add_test(linearstructure)
 ei_add_test(integer_types)
 ei_add_test(unalignedcount)
@@ -198,21 +378,81 @@ if(NOT EIGEN_TEST_NO_EXCEPTIONS AND NOT EIGEN_TEST_OPENMP)
   ei_add_test(exceptions)
 endif()
 ei_add_test(redux)
+ei_add_test(redux_bounded)
+ei_add_test(redux_unrolling)
+if(CMAKE_COMPILER_IS_GNUCXX)
+  # Check optimized bounds diagnostics: scalar with assertions, vectorized without.
+  add_executable(redux_bounded_compile EXCLUDE_FROM_ALL redux_bounded_compile.cpp)
+  target_link_libraries(redux_bounded_compile PRIVATE Eigen3::Eigen)
+  target_compile_options(redux_bounded_compile PRIVATE -O3 -Werror=array-bounds -UNDEBUG)
+  target_compile_definitions(redux_bounded_compile PRIVATE EIGEN_DONT_VECTORIZE)
+  add_dependencies(redux_bounded redux_bounded_compile)
+  add_executable(redux_bounded_compile_vectorized EXCLUDE_FROM_ALL redux_bounded_compile_vectorized.cpp)
+  # EIGEN_TEST_CUSTOM_LINKER_FLAGS accompanies the custom compile flags below: sanitizer flags need both.
+  target_link_libraries(redux_bounded_compile_vectorized PRIVATE Eigen3::Eigen ${EIGEN_TEST_CUSTOM_LINKER_FLAGS})
+  # The job's ISA flags, as for bug1213 below: without them an SME build defines EIGEN_ARM64_USE_SME with no SME
+  # target and stops at an #error, and other jobs check a packet path they did not select. They go first so that -O3
+  # overrides an optimization level among them.
+  target_compile_options(redux_bounded_compile_vectorized PRIVATE ${EIGEN_TEST_CUSTOM_CXX_FLAGS} -O3 -Werror=array-bounds)
+  target_compile_definitions(redux_bounded_compile_vectorized PRIVATE EIGEN_NO_DEBUG)
+  add_dependencies(redux_bounded redux_bounded_compile_vectorized)
+endif()
 ei_add_test(visitor)
 ei_add_test(block)
+ei_add_test(block_coeffwise)
 ei_add_test(corners)
 ei_add_test(symbolic_index)
 ei_add_test(indexed_view)
 ei_add_test(reshape)
 ei_add_test(swap)
 ei_add_test(resize)
+ei_add_test(no_automatic_resizing)
 ei_add_test(conservative_resize)
 ei_add_test(product_small)
+ei_add_test(gemv_degenerate)
 ei_add_test(product_large)
+ei_add_test(product_cast)
+ei_add_test(gemm_double)
+ei_add_test(gemm_packing)
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_CXX_COMPILER_ID MATCHES "^(GNU|Clang)$")
+  target_compile_definitions(gemm_packing PRIVATE EIGEN_TEST_WRAP_MALLOC)
+  target_link_libraries(gemm_packing "-Wl,--wrap=malloc")
+endif()
+ei_add_test(blas_singleton_stride)
+ei_add_test(blas_sbgemm)
+# Under EIGEN_TEST_EXTERNAL_BLAS every test links that BLAS; otherwise this one links Eigen's own, shared: its hidden
+# visibility keeps the library's Eigen instantiations apart from the test's EIGEN_USE_BLAS ones, which the static
+# library would merge with them. Windows has no rpath to find the DLL from here.
+if(EIGEN_TEST_EXTERNAL_BLAS)
+  ei_add_test(blas_level3)
+elseif(EIGEN_BUILD_BLAS AND EIGEN_BUILD_SHARED_LIBS AND NOT WIN32 AND NOT CYGWIN)
+  ei_add_test(blas_level3 "" "eigen_blas")
+endif()
+ei_add_test(product_assign)
+ei_add_test(product_threshold)
+if(EIGEN_TEST_SME)
+  # EIGEN_TEST_SME defines EIGEN_ARM64_USE_SME (root CMakeLists.txt), which turns
+  # a toolchain without SME2 into a build error rather than a NEON fallback; the
+  # toolchain must still supply an SME2 -march/-mcpu.
+  ei_add_test(product_sme)
+  ei_add_test(vector_sme "-Werror=unknown-pragmas")
+endif()
+if(EIGEN_TEST_SVE)
+  # EIGEN_TEST_SVE defines EIGEN_ARM64_USE_SVE and -msve-vector-bits (root
+  # CMakeLists.txt); the toolchain must still supply an SVE -march/-mcpu.
+  # This guards every other SVE result: if the runner's vector length does not
+  # match the one the packets were built for, the rest of the suite is vacuous.
+  ei_add_test(sve_vector_length)
+endif()
 ei_add_test(product_extra)
+ei_add_test(product_evaluators)
+ei_add_test(product_storage_order)
+ei_add_test(product_mixed_gemv)
 ei_add_test(diagonalmatrices)
+ei_add_test(diagonalview)
 ei_add_test(skew_symmetric_matrix3)
 ei_add_test(adjoint)
+ei_add_test(inner_product_bounded)
 ei_add_test(diagonal)
 ei_add_test(miscmatrices)
 ei_add_test(commainitializer)
@@ -222,14 +462,21 @@ ei_add_test(mapstride)
 ei_add_test(unaryview)
 ei_add_test(mapstaticmethods)
 ei_add_test(array_cwise)
+ei_add_test(unary_pow)
 ei_add_test(matrix_cwise)
 ei_add_test(array_for_matrix)
 ei_add_test(array_replicate)
+ei_add_test(concat)
 ei_add_test(array_reverse)
 ei_add_test(ref)
 ei_add_test(is_same_dense)
 ei_add_test(triangular)
+ei_add_test(trsm_packet)
+ei_add_test(trsm_packet_row_major_default)
+ei_add_test(trsm_packet_cancellation)
+ei_add_test(triangular_in_place)
 ei_add_test(selfadjoint)
+ei_add_test(selfadjoint_permutation)
 ei_add_test(product_selfadjoint)
 ei_add_test(product_symm)
 ei_add_test(product_syrk)
@@ -238,28 +485,41 @@ ei_add_test(product_trmm)
 ei_add_test(product_trsolve)
 ei_add_test(product_mmtr)
 ei_add_test(product_notemporary)
-ei_add_test(product_threaded "-pthread" "${CMAKE_THREAD_LIBS_INIT}")
+ei_add_test(product_threaded "" Threads::Threads)
 ei_add_test(stable_norm)
+ei_add_test(structured_norm)
 ei_add_test(permutationmatrices)
+ei_add_test(scaled_unit_triangular_product)
+ei_add_test(indexed_product_updates)
+ei_add_test(scaled_permutation)
 ei_add_test(bandmatrix)
 ei_add_test(cholesky)
+ei_add_test(bunchkaufman)
+ei_add_test(cholesky_reconstruction)
+ei_add_test(condition_estimator)
 ei_add_test(lu)
 ei_add_test(determinant)
+ei_add_test(determinant_scaling)
 ei_add_test(inverse)
 ei_add_test(qr)
 ei_add_test(qr_colpivoting)
+ei_add_test(qr_rand_colpivoting)
 ei_add_test(qr_fullpivoting)
 ei_add_test(upperbidiagonalization)
 ei_add_test(hessenberg)
 ei_add_test(schur_real)
+ei_add_test(schur_real_nomalloc)
 ei_add_test(schur_complex)
 ei_add_test(eigensolver_selfadjoint)
+ei_add_test(tridiagonal_eigensolver)
 ei_add_test(eigensolver_generic)
 ei_add_test(eigensolver_complex)
 ei_add_test(real_qz)
+ei_add_test(complex_qz)
 ei_add_test(eigensolver_generalized_real)
 ei_add_test(jacobi)
 ei_add_test(jacobisvd)
+ei_add_test(jacobisvd_blocked)
 ei_add_test(bdcsvd)
 ei_add_test(householder)
 ei_add_test(geo_orthomethods)
@@ -270,27 +530,41 @@ ei_add_test(geo_alignedbox)
 ei_add_test(geo_hyperplane)
 ei_add_test(geo_transformations)
 ei_add_test(geo_homogeneous)
+ei_add_test(geo_misc)
 ei_add_test(stdvector)
 ei_add_test(stdvector_overload)
 ei_add_test(stdlist)
 ei_add_test(stdlist_overload)
 ei_add_test(stddeque)
 ei_add_test(stddeque_overload)
+ei_add_test(block_sparse_matrix)
 ei_add_test(sparse_basic)
+ei_add_test(sparse_scatter)
 ei_add_test(sparse_block)
 ei_add_test(sparse_vector)
+ei_add_test(sparse_int_index)
 ei_add_test(sparse_product)
+ei_add_test(sparse_threaded_product "" Threads::Threads)
 ei_add_test(sparse_ref)
 ei_add_test(sparse_solvers)
 ei_add_test(sparse_permutations)
 ei_add_test(simplicial_cholesky)
+ei_add_test(multifrontal_ldlt)
 ei_add_test(conjugate_gradient)
 ei_add_test(incomplete_cholesky)
 ei_add_test(incomplete_LUT)
 ei_add_test(bicgstab)
 ei_add_test(lscg)
+ei_add_test(lsmr)
+ei_add_test(gmres)
+ei_add_test(dgmres)
+ei_add_test(minres)
+ei_add_test(idrs)
+ei_add_test(bicgstabl)
+ei_add_test(idrstabl)
 ei_add_test(sparselu)
 ei_add_test(sparseqr)
+ei_add_test(sparse_ordering)
 ei_add_test(umeyama)
 ei_add_test(nesting_ops "${CMAKE_CXX_FLAGS_DEBUG}")
 ei_add_test(nestbyvalue)
@@ -302,56 +576,97 @@ if(NOT EIGEN_TEST_NO_EXCEPTIONS)
 endif()
 ei_add_test(prec_inverse_4x4)
 ei_add_test(vectorwiseop)
+ei_add_test(vectorwise_norm)
 ei_add_test(special_numbers)
 ei_add_test(rvalue_types)
 ei_add_test(dense_storage)
 ei_add_test(ctorleak)
+ei_add_test(memory_reallocation)
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_CXX_COMPILER_ID MATCHES "^(GNU|Clang)$")
+  target_compile_definitions(memory_reallocation PRIVATE EIGEN_TEST_WRAP_MALLOC)
+  target_link_libraries(memory_reallocation "-Wl,--wrap=malloc" "-Wl,--wrap=realloc")
+endif()
 ei_add_test(inplace_decomposition)
+ei_add_test(inplace_decomposition_lapacke)
+ei_add_test(svd_lapacke)
 ei_add_test(half_float)
 ei_add_test(bfloat16_float)
+ei_add_test(bfloat16_classification)
 ei_add_test(array_of_string)
 ei_add_test(num_dimensions)
 ei_add_test(stl_iterators)
 ei_add_test(blasutil)
+ei_add_test(aocl_vml)
 ei_add_test(random_matrix)
 ei_add_test(initializer_list_construction)
 ei_add_test(diagonal_matrix_variadic_ctor)
 ei_add_test(serializer)
+ei_add_test(special_members)
 ei_add_test(tuple_test)
-ei_add_test(threads_eventcount "-pthread" "${CMAKE_THREAD_LIBS_INIT}")
-ei_add_test(threads_runqueue "-pthread" "${CMAKE_THREAD_LIBS_INIT}")
-ei_add_test(threads_non_blocking_thread_pool "-pthread" "${CMAKE_THREAD_LIBS_INIT}")
-ei_add_test(threads_fork_join "-pthread" "${CMAKE_THREAD_LIBS_INIT}")
+ei_add_test(integer_division)
+ei_add_test(structured_bindings)
+ei_add_test(threads_eventcount "" Threads::Threads)
+ei_add_test(threads_runqueue "" Threads::Threads)
+ei_add_test(threads_non_blocking_thread_pool "" Threads::Threads)
+ei_add_test(threads_non_blocking_thread_pool_avoid_tls "" Threads::Threads)
+ei_add_test(threads_fork_join "" Threads::Threads)
+ei_add_test(assignment_threaded "" Threads::Threads)
 add_executable(bug1213 bug1213.cpp bug1213_main.cpp)
+target_link_libraries(bug1213 Eigen3::Eigen)
+# ei_add_test applies EIGEN_TEST_CUSTOM_CXX_FLAGS to every target it registers;
+# a bare add_executable has to ask. Without it this is the one test target built
+# at the configuration's default -march, which is not what the job selected.
+if(EIGEN_TEST_CUSTOM_CXX_FLAGS)
+  target_compile_options(bug1213 PRIVATE ${EIGEN_TEST_CUSTOM_CXX_FLAGS})
+endif()
 
 check_cxx_compiler_flag("-ffast-math" COMPILER_SUPPORT_FASTMATH)
 if(COMPILER_SUPPORT_FASTMATH)
   set(EIGEN_FASTMATH_FLAGS "-ffast-math")
 else()
-  check_cxx_compiler_flag("/fp:fast" COMPILER_SUPPORT_FPFAST)
+  check_cxx_compiler_flag("-fp:fast" COMPILER_SUPPORT_FPFAST)
   if(COMPILER_SUPPORT_FPFAST)
-    set(EIGEN_FASTMATH_FLAGS "/fp:fast")
+    set(EIGEN_FASTMATH_FLAGS "-fp:fast")
+  endif()
+endif()
+# The fastmath test intentionally uses NaN/infinity under -ffast-math.
+# Suppress the clang warning about this being technically undefined.
+if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+  check_cxx_compiler_flag("-Wno-nan-infinity-disabled" COMPILER_SUPPORT_WNO_NAN_INF)
+  if(COMPILER_SUPPORT_WNO_NAN_INF)
+    set(EIGEN_FASTMATH_FLAGS "${EIGEN_FASTMATH_FLAGS} -Wno-nan-infinity-disabled")
   endif()
 endif()
 
-ei_add_test(fastmath "${EIGEN_FASTMATH_FLAGS}")
-
-# # ei_add_test(denseLM)
-
-if(QT4_FOUND)
-  ei_add_test(qtvector "" "${QT_QTCORE_LIBRARY}")
+if(COMPILER_SUPPORT_FASTMATH)
+  ei_add_test(packetmath_fastmath "-O2 ${EIGEN_FASTMATH_FLAGS}")
+elseif(COMPILER_SUPPORT_FPFAST)
+  ei_add_test(packetmath_fastmath "${EIGEN_FASTMATH_FLAGS}")
 endif()
+if(COMPILER_SUPPORT_FASTMATH AND COMPILER_SUPPORTS_VECTOR_EXTENSIONS)
+  ei_add_test(packetmath_fastmath_generic_16 "-O2 ${EIGEN_FASTMATH_FLAGS} -Werror")
+  ei_add_test(packetmath_fastmath_generic_32 "-O2 ${EIGEN_FASTMATH_FLAGS} -Werror")
+  ei_add_test(packetmath_fastmath_generic_64 "-O2 ${EIGEN_FASTMATH_FLAGS} -Werror")
+endif()
+
+ei_add_test(fastmath "${EIGEN_FASTMATH_FLAGS}")
+ei_add_test(bdcsvd_fastmath "${EIGEN_FASTMATH_FLAGS}")
+ei_add_test(bfloat16_classification_fastmath "${EIGEN_FASTMATH_FLAGS}")
+ei_add_test(eigensolver_selfadjoint_fastmath "${EIGEN_FASTMATH_FLAGS}")
+ei_add_test(stable_norm_fastmath "${EIGEN_FASTMATH_FLAGS}")
+ei_add_test(householder_fastmath "${EIGEN_FASTMATH_FLAGS}")
+ei_add_test(determinant_scaling_fastmath "${EIGEN_FASTMATH_FLAGS}")
+ei_add_test(trsm_packet_cancellation_fastmath "${EIGEN_FASTMATH_FLAGS}")
+ei_add_test(trig_sign_fastmath "${EIGEN_FASTMATH_FLAGS}")
+ei_add_test(trig_reduction_fastmath "${EIGEN_FASTMATH_FLAGS}")
+ei_add_test(optimization_barrier "${EIGEN_FASTMATH_FLAGS}")
 
 if(PARDISO_FOUND)
   ei_add_test(pardiso_support "" "${PARDISO_ALL_LIBS}")
 endif()
 
-if(PASTIX_FOUND AND (SCOTCH_FOUND OR METIS_FOUND))
+if(PASTIX_FOUND AND PASTIX_NO_MPI)
   ei_add_test(pastix_support "" "${PASTIX_ALL_LIBS}")
-endif()
-
-if(SPQR_FOUND AND CHOLMOD_FOUND AND EIGEN_BUILD_BLAS AND EIGEN_BUILD_LAPACK)
-  ei_add_test(spqr_support "" "${SPQR_ALL_LIBS}")
 endif()
 
 if(METIS_FOUND)
@@ -378,12 +693,6 @@ if (EIGEN_TEST_CUSTOM_CXX_FLAGS)
 endif()
 ei_add_property(EIGEN_TESTING_SUMMARY "Sparse lib flags:  ${SPARSE_LIBS}\n")
 
-option(EIGEN_TEST_EIGEN2 "Run whole Eigen2 test suite against EIGEN2_SUPPORT" OFF)
-mark_as_advanced(EIGEN_TEST_EIGEN2)
-if(EIGEN_TEST_EIGEN2)
-  message(WARNING "The Eigen2 test suite has been removed")
-endif()
-
 # boost MP unit test
 find_package(Boost 1.53.0 CONFIG)
 if(Boost_FOUND)
@@ -395,95 +704,26 @@ else()
 endif()
 
 
-# CUDA unit tests
-option(EIGEN_TEST_CUDA "Enable CUDA support in unit tests" OFF)
-option(EIGEN_TEST_CUDA_CLANG "Use clang instead of nvcc to compile the CUDA tests" OFF)
-
-if(EIGEN_TEST_CUDA_CLANG AND NOT CMAKE_CXX_COMPILER MATCHES "clang")
-  message(WARNING "EIGEN_TEST_CUDA_CLANG is set, but CMAKE_CXX_COMPILER does not appear to be clang.")
-endif()
-
-find_package(CUDA 9.0)
-if(CUDA_FOUND AND EIGEN_TEST_CUDA)
-  # Make sure to compile without the -pedantic, -Wundef, -Wnon-virtual-dtor
-  # and -fno-check-new flags since they trigger thousands of compilation warnings
-  # in the CUDA runtime
-  string(REPLACE "-pedantic" "" CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}")
-  string(REPLACE "-Wundef" "" CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}")
-  string(REPLACE "-Wnon-virtual-dtor" "" CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}")
-  string(REPLACE "-fno-check-new" "" CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}")
-
-  if(EIGEN_TEST_CUDA_CLANG)
-    string(APPEND CMAKE_CXX_FLAGS " --cuda-path=${CUDA_TOOLKIT_ROOT_DIR}")
-    foreach(GPU IN LISTS EIGEN_CUDA_COMPUTE_ARCH)
-      string(APPEND CMAKE_CXX_FLAGS " --cuda-gpu-arch=sm_${GPU}")
-    endforeach()
-    string(APPEND CMAKE_CXX_FLAGS " ${EIGEN_CUDA_CXX_FLAGS}")
-  else()
-    set(CUDA_PROPAGATE_HOST_FLAGS OFF)
-    set(NVCC_ARCH_FLAGS)
-    # Define an -arch=sm_<arch>, otherwise if GPU does not exactly match one of
-    # those in the arch list for -gencode, the kernels will fail to run with
-    #    cudaErrorNoKernelImageForDevice
-    # This can happen with newer cards (e.g. sm_75) and compiling with older
-    # versions of nvcc (e.g. 9.2) that do not support their specific arch.
-    list(LENGTH EIGEN_CUDA_COMPUTE_ARCH EIGEN_CUDA_COMPUTE_ARCH_SIZE)
-    if(EIGEN_CUDA_COMPUTE_ARCH_SIZE)
-      list(GET EIGEN_CUDA_COMPUTE_ARCH 0 EIGEN_CUDA_COMPUTE_DEFAULT)
-      set(NVCC_ARCH_FLAGS " -arch=sm_${EIGEN_CUDA_COMPUTE_DEFAULT}")
-    endif()
-    foreach(ARCH IN LISTS EIGEN_CUDA_COMPUTE_ARCH)
-      string(APPEND NVCC_ARCH_FLAGS " -gencode arch=compute_${ARCH},code=sm_${ARCH}")
-    endforeach()
-    set(CUDA_NVCC_FLAGS  "--expt-relaxed-constexpr -Xcudafe \"--display_error_number\" ${NVCC_ARCH_FLAGS} ${CUDA_NVCC_FLAGS} ${EIGEN_CUDA_CXX_FLAGS}")
-    cuda_include_directories("${CMAKE_CURRENT_BINARY_DIR}" "${CUDA_TOOLKIT_ROOT_DIR}/include")
-  endif()
-
-  set(EIGEN_ADD_TEST_FILENAME_EXTENSION  "cu")
+# GPU unit tests, the same set under CUDA and HIP. The options, the toolkit and the CUDA/HIP language are set up
+# once in the top-level CMakeLists through cmake/EigenGpuTesting.cmake, which also decides how a .cu file is
+# compiled.
+if(EIGEN_GPU_TEST_MODE MATCHES "^(cuda|hip)")
+  set(EIGEN_ADD_TEST_FILENAME_EXTENSION "cu")
 
   ei_add_test(gpu_example)
   ei_add_test(gpu_basic)
+  set_property(SOURCE gpu_basic.cu APPEND PROPERTY COMPILE_OPTIONS
+               "$<$<COMPILE_LANG_AND_ID:CUDA,NVIDIA>:--fmad=false>")
+  ei_add_test(packetmath_gpu)
 
   unset(EIGEN_ADD_TEST_FILENAME_EXTENSION)
-
 endif()
 
-
-# HIP unit tests
-option(EIGEN_TEST_HIP "Add HIP support." OFF)
-if (EIGEN_TEST_HIP)
-
-  set(ROCM_PATH "/opt/rocm" CACHE STRING "Path to the ROCm installation.")
-
-  if (EXISTS ${ROCM_PATH}/hip)
-    set(HIP_PATH ${ROCM_PATH}/hip)
-    list(APPEND CMAKE_MODULE_PATH ${HIP_PATH}/cmake)
-  elseif (EXISTS ${ROCM_PATH}/lib/cmake/hip)
-    set(HIP_PATH ${ROCM_PATH})
-    list(APPEND CMAKE_MODULE_PATH ${HIP_PATH}/lib/cmake/hip)
-  else ()
-    message(FATAL_ERROR "EIGEN_TEST_HIP is ON, but could not find the ROCm installation under ${ROCM_PATH}")
-  endif()
-
-  find_package(HIP REQUIRED)
-  if (HIP_FOUND)
-    execute_process(COMMAND ${HIP_PATH}/bin/hipconfig --platform OUTPUT_VARIABLE HIP_PLATFORM)
-
-    if ((${HIP_PLATFORM} STREQUAL "hcc") OR (${HIP_PLATFORM} STREQUAL "amd"))
-
-      include_directories(${HIP_PATH}/include)
-
-      set(EIGEN_ADD_TEST_FILENAME_EXTENSION  "cu")
-      ei_add_test(gpu_basic)
-      ei_add_test(gpu_example)
-      unset(EIGEN_ADD_TEST_FILENAME_EXTENSION)
-
-    elseif ((${HIP_PLATFORM} STREQUAL "nvcc") OR (${HIP_PLATFORM} STREQUAL "nvidia"))
-      message(FATAL_ERROR "HIP_PLATFORM = nvcc is not supported within Eigen")
-    else ()
-      message(FATAL_ERROR "Unknown HIP_PLATFORM = ${HIP_PLATFORM}")
-    endif()
-  endif()
+ei_add_test(sycl_macro_collision)
+# Part 2 simulates a SYCL device pass, whose EIGEN_UNROLL_LOOP expands to _Pragma("unroll"), which GCC does not know.
+# Before GCC 13, #pragma GCC diagnostic cannot silence a warning the C++ preprocessor emits (GCC bug 53431).
+if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND TARGET sycl_macro_collision_2)
+  target_compile_options(sycl_macro_collision_2 PRIVATE -Wno-unknown-pragmas)
 endif()
 
 if(EIGEN_TEST_SYCL)
@@ -491,6 +731,8 @@ if(EIGEN_TEST_SYCL)
   include(SyclConfigureTesting)
 
   ei_add_test(sycl_basic)
+  ei_add_test(sycl_math)
+  ei_add_test(sycl_include_order)
   set(EIGEN_SYCL OFF)
 endif()
 
@@ -499,6 +741,19 @@ if(EIGEN_TEST_BUILD_DOCUMENTATION)
   add_dependencies(buildtests doc)
 endif()
 
-# Register all smoke tests
-include("EigenSmokeTestList")
-ei_add_smoke_tests("${ei_smoke_test_list}")
+# ULP accuracy measurement tool (see test/ulp_accuracy/README.md)
+find_package(MPFR)
+find_package(GMP)
+add_executable(ulp_accuracy ulp_accuracy/ulp_accuracy.cpp)
+# Threads::Threads rather than a literal -pthread and pthread: it carries the
+# right compile and link flags per toolchain and expands to nothing on MSVC,
+# where there is no pthread.lib to open.
+target_link_libraries(ulp_accuracy Eigen3::Eigen Threads::Threads)
+if(EIGEN_TEST_CUSTOM_CXX_FLAGS)
+  target_compile_options(ulp_accuracy PRIVATE ${EIGEN_TEST_CUSTOM_CXX_FLAGS})
+endif()
+if(MPFR_FOUND AND GMP_FOUND)
+  target_include_directories(ulp_accuracy PRIVATE ${MPFR_INCLUDES} ${GMP_INCLUDES})
+  target_link_libraries(ulp_accuracy ${MPFR_LIBRARIES} ${GMP_LIBRARIES})
+  target_compile_definitions(ulp_accuracy PRIVATE EIGEN_HAS_MPFR)
+endif()

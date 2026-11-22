@@ -29,6 +29,7 @@
  *    Singular Value Decomposition - SVD.
  ********************************************************************************
 */
+// SPDX-License-Identifier: BSD-3-Clause
 
 #ifndef EIGEN_JACOBISVD_LAPACKE_H
 #define EIGEN_JACOBISVD_LAPACKE_H
@@ -50,10 +51,17 @@ namespace Eigen {
     /*typedef MatrixType::RealScalar RealScalar;*/                                                                  \
     allocate(matrix.rows(), matrix.cols(), computationOptions);                                                     \
                                                                                                                     \
-    /*const RealScalar precision = RealScalar(2) * NumTraits<Scalar>::epsilon();*/                                  \
     m_nonzeroSingularValues = diagSize();                                                                           \
+    /* LAPACK rejects the zero leading dimensions of an empty input, and given valid ones it returns without */     \
+    /* writing U or VT. Set the identities the native path returns. */                                              \
+    if (diagSize() == 0) {                                                                                          \
+      if (computeU()) m_matrixU.setIdentity();                                                                      \
+      if (computeV()) m_matrixV.setIdentity();                                                                      \
+      m_isInitialized = true;                                                                                       \
+      return *this;                                                                                                 \
+    }                                                                                                               \
                                                                                                                     \
-    lapack_int lda = internal::convert_index<lapack_int>(matrix.outerStride()), ldu, ldvt;                          \
+    lapack_int ldu, ldvt;                                                                                           \
     lapack_int matrix_order = LAPACKE_COLROW;                                                                       \
     char jobu, jobvt;                                                                                               \
     LAPACKE_TYPE *u, *vt, dummy;                                                                                    \
@@ -82,6 +90,8 @@ namespace Eigen {
     superb.resize(diagSize(), 1);                                                                                   \
     MatrixType m_temp;                                                                                              \
     m_temp = matrix;                                                                                                \
+    /* LAPACK reads the copy, whose layout the input expression need not share. */                                  \
+    lapack_int lda = internal::convert_index<lapack_int>(m_temp.outerStride());                                     \
     lapack_int info = LAPACKE_##LAPACKE_PREFIX##gesvd(                                                              \
         matrix_order, jobu, jobvt, internal::convert_index<lapack_int>(rows()),                                     \
         internal::convert_index<lapack_int>(cols()), (LAPACKE_TYPE*)m_temp.data(), lda,                             \
@@ -89,14 +99,15 @@ namespace Eigen {
     /* Check the result of the LAPACK call */                                                                       \
     if (info < 0 || !m_singularValues.allFinite()) {                                                                \
       m_info = InvalidInput;                                                                                        \
+      m_nonzeroSingularValues = 0;                                                                                  \
+      m_singularValues.setZero();                                                                                   \
     } else if (info > 0) {                                                                                          \
       m_info = NoConvergence;                                                                                       \
     } else {                                                                                                        \
       m_info = Success;                                                                                             \
       if (computeV()) m_matrixV = localV.adjoint();                                                                 \
+      m_nonzeroSingularValues = internal::count_nonzero_singular_values(m_singularValues);                          \
     }                                                                                                               \
-    /* for(int i=0;i<diagSize();i++) if (m_singularValues.coeffRef(i) < precision) { m_nonzeroSingularValues--;     \
-     * m_singularValues.coeffRef(i)=RealScalar(0);}*/                                                               \
     m_isInitialized = true;                                                                                         \
     return *this;                                                                                                   \
   }
@@ -121,6 +132,10 @@ EIGEN_LAPACK_SVD_OPTIONS(ComputeThinU | ComputeThinV)
 EIGEN_LAPACK_SVD_OPTIONS(ComputeFullU | ComputeFullV)
 EIGEN_LAPACK_SVD_OPTIONS(ComputeThinU | ComputeFullV)
 EIGEN_LAPACK_SVD_OPTIONS(ComputeFullU | ComputeThinV)
+
+#undef EIGEN_LAPACK_SVD_OPTIONS
+
+#undef EIGEN_LAPACKE_SVD
 
 }  // end namespace Eigen
 

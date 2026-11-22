@@ -6,6 +6,7 @@
 // This Source Code Form is subject to the terms of the Mozilla
 // Public License v. 2.0. If a copy of the MPL was not distributed
 // with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
+// SPDX-License-Identifier: MPL-2.0
 
 #ifndef EIGEN_MATH_FUNCTIONS_GPU_H
 #define EIGEN_MATH_FUNCTIONS_GPU_H
@@ -60,7 +61,7 @@ EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE float4 pexp2<float4>(const float4& a) {
 
 template <>
 EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE double2 pexp2<double2>(const double2& a) {
-  using ::exp;
+  using ::exp2;
   return make_double2(exp2(a.x), exp2(a.y));
 }
 

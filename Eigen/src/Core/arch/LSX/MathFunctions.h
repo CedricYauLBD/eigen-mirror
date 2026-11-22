@@ -6,6 +6,7 @@
 // This Source Code Form is subject to the terms of the Mozilla
 // Public License v. 2.0. If a copy of the MPL was not distributed
 // with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
+// SPDX-License-Identifier: MPL-2.0
 
 #ifndef EIGEN_MATH_FUNCTIONS_LSX_H
 #define EIGEN_MATH_FUNCTIONS_LSX_H
@@ -35,6 +36,8 @@ EIGEN_GENERIC_PACKET_FUNCTION(atan, Packet2d)
 EIGEN_GENERIC_PACKET_FUNCTION(atan, Packet4f)
 EIGEN_GENERIC_PACKET_FUNCTION(exp2, Packet2d)
 EIGEN_GENERIC_PACKET_FUNCTION(exp2, Packet4f)
+EIGEN_GENERIC_PACKET_FUNCTION(expm1, Packet2d)
+EIGEN_GENERIC_PACKET_FUNCTION(expm1, Packet4f)
 
 }  // end namespace internal
 

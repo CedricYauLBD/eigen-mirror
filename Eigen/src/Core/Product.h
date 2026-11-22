@@ -6,6 +6,7 @@
 // This Source Code Form is subject to the terms of the Mozilla
 // Public License v. 2.0. If a copy of the MPL was not distributed
 // with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
+// SPDX-License-Identifier: MPL-2.0
 
 #ifndef EIGEN_PRODUCT_H
 #define EIGEN_PRODUCT_H
@@ -22,19 +23,19 @@ namespace internal {
 
 template <typename Lhs, typename Rhs, int Option>
 struct traits<Product<Lhs, Rhs, Option>> {
-  typedef remove_all_t<Lhs> LhsCleaned;
-  typedef remove_all_t<Rhs> RhsCleaned;
-  typedef traits<LhsCleaned> LhsTraits;
-  typedef traits<RhsCleaned> RhsTraits;
+  using LhsCleaned = remove_all_t<Lhs>;
+  using RhsCleaned = remove_all_t<Rhs>;
+  using LhsTraits = traits<LhsCleaned>;
+  using RhsTraits = traits<RhsCleaned>;
 
-  typedef MatrixXpr XprKind;
+  using XprKind = MatrixXpr;
 
-  typedef typename ScalarBinaryOpTraits<typename traits<LhsCleaned>::Scalar,
-                                        typename traits<RhsCleaned>::Scalar>::ReturnType Scalar;
-  typedef typename product_promote_storage_type<typename LhsTraits::StorageKind, typename RhsTraits::StorageKind,
-                                                internal::product_type<Lhs, Rhs>::ret>::ret StorageKind;
-  typedef typename promote_index_type<typename LhsTraits::StorageIndex, typename RhsTraits::StorageIndex>::type
-      StorageIndex;
+  using Scalar = typename ScalarBinaryOpTraits<typename LhsTraits::Scalar, typename RhsTraits::Scalar>::ReturnType;
+  using StorageKind =
+      typename product_promote_storage_type<typename LhsTraits::StorageKind, typename RhsTraits::StorageKind,
+                                            internal::product_type<Lhs, Rhs>::value>::ret;
+  using StorageIndex =
+      typename promote_index_type<typename LhsTraits::StorageIndex, typename RhsTraits::StorageIndex>::type;
 
   enum {
     RowsAtCompileTime = LhsTraits::RowsAtCompileTime,
@@ -45,11 +46,19 @@ struct traits<Product<Lhs, Rhs, Option>> {
     // FIXME: only needed by GeneralMatrixMatrixTriangular
     InnerSize = min_size_prefer_fixed(LhsTraits::ColsAtCompileTime, RhsTraits::RowsAtCompileTime),
 
-    // The storage order is somewhat arbitrary here. The correct one will be determined through the evaluator.
+    // Products served by the coefficient-based evaluator are evaluated in the storage order reported below, which
+    // Reverse, Redux, Block, FindCoeff and others use to index their packets and coefficients. Row-major * row-major
+    // is row-major there, so that the rhs rows can be vectorized. A dense product of inner size 1 is served by it in
+    // LazyCoeffBasedProductMode, and materialized otherwise; unlike product_type, this test agrees between host and
+    // device code.
+    CoeffBasedEval = Option == LazyProduct || (std::is_same<StorageKind, Dense>::value && InnerSize == 1),
+
+    // For other products the storage order is somewhat arbitrary: their evaluators materialize a PlainObject of it.
     Flags = (MaxRowsAtCompileTime == 1 && MaxColsAtCompileTime != 1)   ? RowMajorBit
             : (MaxColsAtCompileTime == 1 && MaxRowsAtCompileTime != 1) ? 0
             : (((LhsTraits::Flags & NoPreferredStorageOrderBit) && (RhsTraits::Flags & RowMajorBit)) ||
-               ((RhsTraits::Flags & NoPreferredStorageOrderBit) && (LhsTraits::Flags & RowMajorBit)))
+               ((RhsTraits::Flags & NoPreferredStorageOrderBit) && (LhsTraits::Flags & RowMajorBit)) ||
+               (CoeffBasedEval && (LhsTraits::Flags & RowMajorBit) && (RhsTraits::Flags & RowMajorBit)))
                 ? RowMajorBit
                 : NoPreferredStorageOrderBit
   };
@@ -73,9 +82,23 @@ struct TransposeKind {
                                                                     : TransposeProductEnum::Default;
 };
 
+// (A * B)^T = B^T * A^T and (A * B)^H = B^H * A^H sum b * a instead of a * b, which needs a commutative scalar product.
+// Without it the transposed matrix-matrix product is not expanded.
+template <typename Lhs, typename Rhs, int RawKind>
+struct transpose_product_is_expandable : std::true_type {};
+
+template <typename Lhs, typename Rhs>
+struct transpose_product_is_expandable<Lhs, Rhs, TransposeProductEnum::MatrixMatrix>
+    : bool_constant<functor_is_commutative<
+                        scalar_product_op<typename traits<Lhs>::Scalar, typename traits<Rhs>::Scalar>>::value &&
+                    functor_is_commutative<
+                        scalar_product_op<typename traits<Rhs>::Scalar, typename traits<Lhs>::Scalar>>::value> {};
+
 template <typename Lhs, typename Rhs>
 struct TransposeProductKind {
-  static constexpr int Kind = (TransposeKind<Lhs>::Kind << 8) | TransposeKind<Rhs>::Kind;
+  static constexpr int RawKind = (TransposeKind<Lhs>::Kind << 8) | TransposeKind<Rhs>::Kind;
+  static constexpr int Kind =
+      transpose_product_is_expandable<Lhs, Rhs, RawKind>::value ? RawKind : int(TransposeProductEnum::Default);
 };
 
 template <typename Lhs, typename Rhs, int Option, int Kind = TransposeProductKind<Lhs, Rhs>::Kind>
@@ -199,36 +222,35 @@ class Product
     : public ProductImpl<Lhs_, Rhs_, Option,
                          typename internal::product_promote_storage_type<
                              typename internal::traits<Lhs_>::StorageKind, typename internal::traits<Rhs_>::StorageKind,
-                             internal::product_type<Lhs_, Rhs_>::ret>::ret> {
+                             internal::product_type<Lhs_, Rhs_>::value>::ret> {
  public:
-  typedef Lhs_ Lhs;
-  typedef Rhs_ Rhs;
+  using Lhs = Lhs_;
+  using Rhs = Rhs_;
 
-  typedef
+  using Base =
       typename ProductImpl<Lhs, Rhs, Option,
                            typename internal::product_promote_storage_type<
                                typename internal::traits<Lhs>::StorageKind, typename internal::traits<Rhs>::StorageKind,
-                               internal::product_type<Lhs, Rhs>::ret>::ret>::Base Base;
+                               internal::product_type<Lhs, Rhs>::value>::ret>::Base;
   EIGEN_GENERIC_PUBLIC_INTERFACE(Product)
 
-  typedef typename internal::ref_selector<Lhs>::type LhsNested;
-  typedef typename internal::ref_selector<Rhs>::type RhsNested;
-  typedef internal::remove_all_t<LhsNested> LhsNestedCleaned;
-  typedef internal::remove_all_t<RhsNested> RhsNestedCleaned;
+  using LhsNested = typename internal::ref_selector<Lhs>::type;
+  using RhsNested = typename internal::ref_selector<Rhs>::type;
+  using LhsNestedCleaned = internal::remove_all_t<LhsNested>;
+  using RhsNestedCleaned = internal::remove_all_t<RhsNested>;
 
   using TransposeReturnType = typename internal::product_transpose_helper<Lhs, Rhs, Option>::TransposeType;
   using AdjointReturnType = typename internal::product_transpose_helper<Lhs, Rhs, Option>::AdjointType;
 
-  EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE Product(const Lhs& lhs, const Rhs& rhs) : m_lhs(lhs), m_rhs(rhs) {
-    eigen_assert(lhs.cols() == rhs.rows() && "invalid matrix product" &&
-                 "if you wanted a coeff-wise or a dot product use the respective explicit functions");
+  EIGEN_DEVICE_FUNC constexpr EIGEN_STRONG_INLINE Product(const Lhs& lhs, const Rhs& rhs) : m_lhs(lhs), m_rhs(rhs) {
+    EIGEN_INTERNAL_ASSERT_PRODUCT_SHAPE(lhs, rhs);
   }
 
-  EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE constexpr Index rows() const noexcept { return m_lhs.rows(); }
-  EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE constexpr Index cols() const noexcept { return m_rhs.cols(); }
+  EIGEN_DEVICE_FUNC constexpr Index rows() const noexcept { return m_lhs.rows(); }
+  EIGEN_DEVICE_FUNC constexpr Index cols() const noexcept { return m_rhs.cols(); }
 
-  EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE const LhsNestedCleaned& lhs() const { return m_lhs; }
-  EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE const RhsNestedCleaned& rhs() const { return m_rhs; }
+  EIGEN_DEVICE_FUNC constexpr EIGEN_STRONG_INLINE const LhsNestedCleaned& lhs() const { return m_lhs; }
+  EIGEN_DEVICE_FUNC constexpr EIGEN_STRONG_INLINE const RhsNestedCleaned& rhs() const { return m_rhs; }
 
   EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE TransposeReturnType transpose() const {
     return internal::product_transpose_helper<Lhs, Rhs, Option>::run_transpose(*this);
@@ -244,19 +266,19 @@ class Product
 
 namespace internal {
 
-template <typename Lhs, typename Rhs, int Option, int ProductTag = internal::product_type<Lhs, Rhs>::ret>
+template <typename Lhs, typename Rhs, int Option, int ProductTag = internal::product_type<Lhs, Rhs>::value>
 class dense_product_base : public internal::dense_xpr_base<Product<Lhs, Rhs, Option>>::type {};
 
 /** Conversion to scalar for inner-products */
 template <typename Lhs, typename Rhs, int Option>
 class dense_product_base<Lhs, Rhs, Option, InnerProduct>
     : public internal::dense_xpr_base<Product<Lhs, Rhs, Option>>::type {
-  typedef Product<Lhs, Rhs, Option> ProductXpr;
-  typedef typename internal::dense_xpr_base<ProductXpr>::type Base;
+  using ProductXpr = Product<Lhs, Rhs, Option>;
+  using Base = typename internal::dense_xpr_base<ProductXpr>::type;
 
  public:
   using Base::derived;
-  typedef typename Base::Scalar Scalar;
+  using Scalar = typename Base::Scalar;
 
   EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE operator const Scalar() const {
     return internal::evaluator<ProductXpr>(derived()).coeff(0, 0);
@@ -269,15 +291,15 @@ class dense_product_base<Lhs, Rhs, Option, InnerProduct>
 template <typename Lhs, typename Rhs, int Option, typename StorageKind>
 class ProductImpl : public internal::generic_xpr_base<Product<Lhs, Rhs, Option>, MatrixXpr, StorageKind>::type {
  public:
-  typedef typename internal::generic_xpr_base<Product<Lhs, Rhs, Option>, MatrixXpr, StorageKind>::type Base;
+  using Base = typename internal::generic_xpr_base<Product<Lhs, Rhs, Option>, MatrixXpr, StorageKind>::type;
 };
 
 template <typename Lhs, typename Rhs, int Option>
 class ProductImpl<Lhs, Rhs, Option, Dense> : public internal::dense_product_base<Lhs, Rhs, Option> {
-  typedef Product<Lhs, Rhs, Option> Derived;
+  using Derived = Product<Lhs, Rhs, Option>;
 
  public:
-  typedef typename internal::dense_product_base<Lhs, Rhs, Option> Base;
+  using Base = typename internal::dense_product_base<Lhs, Rhs, Option>;
   EIGEN_DENSE_PUBLIC_INTERFACE(Derived)
  protected:
   enum {
@@ -288,15 +310,19 @@ class ProductImpl<Lhs, Rhs, Option, Dense> : public internal::dense_product_base
 
  public:
   EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE Scalar coeff(Index row, Index col) const {
-    EIGEN_STATIC_ASSERT(EnableCoeff, THIS_METHOD_IS_ONLY_FOR_INNER_OR_LAZY_PRODUCTS);
-    eigen_assert((Option == LazyProduct) || (this->rows() == 1 && this->cols() == 1));
+    EIGEN_INTERNAL_CHECK_SHAPE((Option == LazyProduct) || (this->rows() == 1 && this->cols() == 1),
+                               THIS_METHOD_IS_ONLY_FOR_INNER_OR_LAZY_PRODUCTS,
+                               std::conditional_t<Option == LazyProduct, internal::dimension_relation<1, 1>,
+                                                  internal::fixed_dimensions<Derived, 1, 1>>);
 
     return internal::evaluator<Derived>(derived()).coeff(row, col);
   }
 
   EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE Scalar coeff(Index i) const {
-    EIGEN_STATIC_ASSERT(EnableCoeff, THIS_METHOD_IS_ONLY_FOR_INNER_OR_LAZY_PRODUCTS);
-    eigen_assert((Option == LazyProduct) || (this->rows() == 1 && this->cols() == 1));
+    EIGEN_INTERNAL_CHECK_SHAPE((Option == LazyProduct) || (this->rows() == 1 && this->cols() == 1),
+                               THIS_METHOD_IS_ONLY_FOR_INNER_OR_LAZY_PRODUCTS,
+                               std::conditional_t<Option == LazyProduct, internal::dimension_relation<1, 1>,
+                                                  internal::fixed_dimensions<Derived, 1, 1>>);
 
     return internal::evaluator<Derived>(derived()).coeff(i);
   }

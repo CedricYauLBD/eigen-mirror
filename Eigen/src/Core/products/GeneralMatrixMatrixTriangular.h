@@ -6,6 +6,7 @@
 // This Source Code Form is subject to the terms of the Mozilla
 // Public License v. 2.0. If a copy of the MPL was not distributed
 // with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
+// SPDX-License-Identifier: MPL-2.0
 
 #ifndef EIGEN_GENERAL_MATRIX_MATRIX_TRIANGULAR_H
 #define EIGEN_GENERAL_MATRIX_MATRIX_TRIANGULAR_H
@@ -44,7 +45,7 @@ template <typename Index, typename LhsScalar, int LhsStorageOrder, bool Conjugat
 struct general_matrix_matrix_triangular_product<Index, LhsScalar, LhsStorageOrder, ConjugateLhs, RhsScalar,
                                                 RhsStorageOrder, ConjugateRhs, RowMajor, ResInnerStride, UpLo,
                                                 Version> {
-  typedef typename ScalarBinaryOpTraits<LhsScalar, RhsScalar>::ReturnType ResScalar;
+  using ResScalar = typename ScalarBinaryOpTraits<LhsScalar, RhsScalar>::ReturnType;
   static EIGEN_STRONG_INLINE void run(Index size, Index depth, const LhsScalar* lhs, Index lhsStride,
                                       const RhsScalar* rhs, Index rhsStride, ResScalar* res, Index resIncr,
                                       Index resStride, const ResScalar& alpha,
@@ -63,20 +64,21 @@ template <typename Index, typename LhsScalar, int LhsStorageOrder, bool Conjugat
 struct general_matrix_matrix_triangular_product<Index, LhsScalar, LhsStorageOrder, ConjugateLhs, RhsScalar,
                                                 RhsStorageOrder, ConjugateRhs, ColMajor, ResInnerStride, UpLo,
                                                 Version> {
-  typedef typename ScalarBinaryOpTraits<LhsScalar, RhsScalar>::ReturnType ResScalar;
-  static EIGEN_STRONG_INLINE void run(Index size, Index depth, const LhsScalar* lhs_, Index lhsStride,
-                                      const RhsScalar* rhs_, Index rhsStride, ResScalar* res_, Index resIncr,
-                                      Index resStride, const ResScalar& alpha,
-                                      level3_blocking<LhsScalar, RhsScalar>& blocking) {
+  using ResScalar = typename ScalarBinaryOpTraits<LhsScalar, RhsScalar>::ReturnType;
+  // Inlining into callers' loops can accumulate the packing buffers' stack allocations.
+  static EIGEN_DONT_INLINE void run(Index size, Index depth, const LhsScalar* lhs_, Index lhsStride,
+                                    const RhsScalar* rhs_, Index rhsStride, ResScalar* res_, Index resIncr,
+                                    Index resStride, const ResScalar& alpha,
+                                    level3_blocking<LhsScalar, RhsScalar>& blocking) {
     if (size == 0) {
       return;
     }
 
-    typedef gebp_traits<LhsScalar, RhsScalar> Traits;
+    using Traits = gebp_traits<LhsScalar, RhsScalar>;
 
-    typedef const_blas_data_mapper<LhsScalar, Index, LhsStorageOrder> LhsMapper;
-    typedef const_blas_data_mapper<RhsScalar, Index, RhsStorageOrder> RhsMapper;
-    typedef blas_data_mapper<typename Traits::ResScalar, Index, ColMajor, Unaligned, ResInnerStride> ResMapper;
+    using LhsMapper = const_blas_data_mapper<LhsScalar, Index, LhsStorageOrder>;
+    using RhsMapper = const_blas_data_mapper<RhsScalar, Index, RhsStorageOrder>;
+    using ResMapper = blas_data_mapper<typename Traits::ResScalar, Index, ColMajor, Unaligned, ResInnerStride>;
     LhsMapper lhs(lhs_, lhsStride);
     RhsMapper rhs(rhs_, rhsStride);
     ResMapper res(res_, resStride, resIncr);
@@ -87,15 +89,16 @@ struct general_matrix_matrix_triangular_product<Index, LhsScalar, LhsStorageOrde
 
     // !!! mc must be a multiple of nr
     if (mc > Traits::nr) {
-      using UnsignedIndex = typename make_unsigned<Index>::type;
+      using UnsignedIndex = std::make_unsigned_t<Index>;
       mc = (UnsignedIndex(mc) / Traits::nr) * Traits::nr;
     }
 
     std::size_t sizeA = kc * mc;
     std::size_t sizeB = kc * size;
 
-    ei_declare_aligned_stack_constructed_variable(LhsScalar, blockA, sizeA, blocking.blockA());
-    ei_declare_aligned_stack_constructed_variable(RhsScalar, blockB, sizeB, blocking.blockB());
+    gemm_packing_space<LhsScalar, RhsScalar> packing(sizeA, sizeB, blocking.blockA(), blocking.blockB());
+    ei_declare_aligned_stack_constructed_variable(LhsScalar, blockA, sizeA, packing.blockA());
+    ei_declare_aligned_stack_constructed_variable(RhsScalar, blockB, sizeB, packing.blockB());
 
     gemm_pack_lhs<LhsScalar, Index, LhsMapper, Traits::mr, Traits::LhsProgress, typename Traits::LhsPacket4Packing,
                   LhsStorageOrder>
@@ -116,18 +119,19 @@ struct general_matrix_matrix_triangular_product<Index, LhsScalar, LhsStorageOrde
 
         pack_lhs(blockA, lhs.getSubMapper(i2, k2), actual_kc, actual_mc);
 
-        // the selected actual_mc * size panel of res is split into three different part:
+        // the selected actual_mc * size panel of res is split into three different parts:
         //  1 - before the diagonal => processed with gebp or skipped
         //  2 - the actual_mc x actual_mc symmetric block => processed with a special kernel
         //  3 - after the diagonal => processed with gebp or skipped
-        if (UpLo == Lower)
+        EIGEN_IF_CONSTEXPR (UpLo == Lower) {
           gebp(res.getSubMapper(i2, 0), blockA, blockB, actual_mc, actual_kc, (std::min)(size, i2), alpha, -1, -1, 0,
                0);
+        }
 
         sybb(res_ + resStride * i2 + resIncr * i2, resIncr, resStride, blockA, blockB + actual_kc * i2, actual_mc,
              actual_kc, alpha);
 
-        if (UpLo == Upper) {
+        EIGEN_IF_CONSTEXPR (UpLo == Upper) {
           Index j2 = i2 + actual_mc;
           gebp(res.getSubMapper(i2, j2), blockA, blockB + actual_kc * j2, actual_mc, actual_kc,
                (std::max)(Index(0), size - j2), alpha, -1, -1, 0, 0);
@@ -149,19 +153,23 @@ struct general_matrix_matrix_triangular_product<Index, LhsScalar, LhsStorageOrde
 template <typename LhsScalar, typename RhsScalar, typename Index, int mr, int nr, bool ConjLhs, bool ConjRhs,
           int ResInnerStride, int UpLo>
 struct tribb_kernel {
-  typedef gebp_traits<LhsScalar, RhsScalar, ConjLhs, ConjRhs> Traits;
-  typedef typename Traits::ResScalar ResScalar;
+  using Traits = gebp_traits<LhsScalar, RhsScalar, ConjLhs, ConjRhs>;
+  using ResScalar = typename Traits::ResScalar;
 
-  enum { BlockSize = meta_least_common_multiple<plain_enum_max(mr, nr), plain_enum_min(mr, nr)>::ret };
+  enum { BlockSize = meta_least_common_multiple<plain_enum_max(mr, nr), plain_enum_min(mr, nr)>::value };
   void operator()(ResScalar* res_, Index resIncr, Index resStride, const LhsScalar* blockA, const RhsScalar* blockB,
-                  Index size, Index depth, const ResScalar& alpha) {
-    typedef blas_data_mapper<ResScalar, Index, ColMajor, Unaligned, ResInnerStride> ResMapper;
-    typedef blas_data_mapper<ResScalar, Index, ColMajor, Unaligned> BufferMapper;
+                  Index size, Index depth, const ResScalar& alpha) const {
+    using ResMapper = blas_data_mapper<ResScalar, Index, ColMajor, Unaligned, ResInnerStride>;
+    using BufferMapper = blas_data_mapper<ResScalar, Index, ColMajor, Unaligned>;
     ResMapper res(res_, resStride, resIncr);
     gebp_kernel<LhsScalar, RhsScalar, Index, ResMapper, mr, nr, ConjLhs, ConjRhs> gebp_kernel1;
     gebp_kernel<LhsScalar, RhsScalar, Index, BufferMapper, mr, nr, ConjLhs, ConjRhs> gebp_kernel2;
 
-    Matrix<ResScalar, BlockSize, BlockSize, ColMajor> buffer;
+    static constexpr int BufferCapacity =
+        (EIGEN_STACK_ALLOCATION_LIMIT == 0 || BlockSize * BlockSize * sizeof(ResScalar) <= EIGEN_STACK_ALLOCATION_LIMIT)
+            ? int(BlockSize)
+            : Dynamic;
+    Matrix<ResScalar, BufferCapacity, BufferCapacity, ColMajor> buffer(BlockSize, BlockSize);
 
     // let's process the block per panel of actual_mc x BlockSize,
     // again, each is split into three parts, etc.
@@ -169,8 +177,9 @@ struct tribb_kernel {
       Index actualBlockSize = std::min<Index>(BlockSize, size - j);
       const RhsScalar* actual_b = blockB + j * depth;
 
-      if (UpLo == Upper)
+      EIGEN_IF_CONSTEXPR (UpLo == Upper) {
         gebp_kernel1(res.getSubMapper(0, j), blockA, actual_b, j, depth, actualBlockSize, alpha, -1, -1, 0, 0);
+      }
 
       // selfadjoint micro block
       {
@@ -188,7 +197,7 @@ struct tribb_kernel {
         }
       }
 
-      if (UpLo == Lower) {
+      EIGEN_IF_CONSTEXPR (UpLo == Lower) {
         Index i = j + actualBlockSize;
         gebp_kernel1(res.getSubMapper(i, j), blockA + depth * i, actual_b, size - i, depth, actualBlockSize, alpha, -1,
                      -1, 0, 0);
@@ -207,24 +216,30 @@ struct general_product_to_triangular_selector;
 template <typename MatrixType, typename ProductType, int UpLo>
 struct general_product_to_triangular_selector<MatrixType, ProductType, UpLo, true> {
   static void run(MatrixType& mat, const ProductType& prod, const typename MatrixType::Scalar& alpha, bool beta) {
-    typedef typename MatrixType::Scalar Scalar;
+    using Scalar = typename MatrixType::Scalar;
 
-    typedef internal::remove_all_t<typename ProductType::LhsNested> Lhs;
-    typedef internal::blas_traits<Lhs> LhsBlasTraits;
-    typedef typename LhsBlasTraits::DirectLinearAccessType ActualLhs;
-    typedef internal::remove_all_t<ActualLhs> ActualLhs_;
+    using Lhs = internal::remove_all_t<typename ProductType::LhsNested>;
+    using LhsBlasTraits = internal::blas_traits<Lhs>;
+    using ActualLhs = typename LhsBlasTraits::DirectLinearAccessType;
+    using ActualLhs_ = internal::remove_all_t<ActualLhs>;
     internal::add_const_on_value_type_t<ActualLhs> actualLhs = LhsBlasTraits::extract(prod.lhs());
 
-    typedef internal::remove_all_t<typename ProductType::RhsNested> Rhs;
-    typedef internal::blas_traits<Rhs> RhsBlasTraits;
-    typedef typename RhsBlasTraits::DirectLinearAccessType ActualRhs;
-    typedef internal::remove_all_t<ActualRhs> ActualRhs_;
+    using Rhs = internal::remove_all_t<typename ProductType::RhsNested>;
+    using RhsBlasTraits = internal::blas_traits<Rhs>;
+    using ActualRhs = typename RhsBlasTraits::DirectLinearAccessType;
+    using ActualRhs_ = internal::remove_all_t<ActualRhs>;
     internal::add_const_on_value_type_t<ActualRhs> actualRhs = RhsBlasTraits::extract(prod.rhs());
 
     Scalar actualAlpha = alpha * LhsBlasTraits::extractScalarFactor(prod.lhs().derived()) *
                          RhsBlasTraits::extractScalarFactor(prod.rhs().derived());
 
     if (!beta) mat.template triangularView<UpLo>().setZero();
+
+    // The rank-1 kernel below addresses mat with a unit inner stride.
+    if (MatrixType::InnerStrideAtCompileTime != 1 && mat.innerStride() != 1) {
+      mat.template triangularView<UpLo>() += typename ProductType::PlainObject(alpha * prod);
+      return;
+    }
 
     enum {
       StorageOrder = (internal::traits<MatrixType>::Flags & RowMajorBit) ? RowMajor : ColMajor,
@@ -237,36 +252,46 @@ struct general_product_to_triangular_selector<MatrixType, ProductType, UpLo, tru
     ei_declare_aligned_stack_constructed_variable(
         Scalar, actualLhsPtr, actualLhs.size(),
         (UseLhsDirectly ? const_cast<Scalar*>(actualLhs.data()) : static_lhs.data()));
-    if (!UseLhsDirectly) Map<typename ActualLhs_::PlainObject>(actualLhsPtr, actualLhs.size()) = actualLhs;
+    EIGEN_IF_CONSTEXPR (!UseLhsDirectly) {
+      Map<typename ActualLhs_::PlainObject>(actualLhsPtr, actualLhs.size()) = actualLhs;
+    }
 
     internal::gemv_static_vector_if<Scalar, Rhs::SizeAtCompileTime, Rhs::MaxSizeAtCompileTime, !UseRhsDirectly>
         static_rhs;
     ei_declare_aligned_stack_constructed_variable(
         Scalar, actualRhsPtr, actualRhs.size(),
         (UseRhsDirectly ? const_cast<Scalar*>(actualRhs.data()) : static_rhs.data()));
-    if (!UseRhsDirectly) Map<typename ActualRhs_::PlainObject>(actualRhsPtr, actualRhs.size()) = actualRhs;
+    EIGEN_IF_CONSTEXPR (!UseRhsDirectly) {
+      Map<typename ActualRhs_::PlainObject>(actualRhsPtr, actualRhs.size()) = actualRhs;
+    }
 
-    selfadjoint_rank1_update<
-        Scalar, Index, StorageOrder, UpLo, LhsBlasTraits::NeedToConjugate && NumTraits<Scalar>::IsComplex,
-        RhsBlasTraits::NeedToConjugate && NumTraits<Scalar>::IsComplex>::run(actualLhs.size(), mat.data(),
-                                                                             mat.outerStride(), actualLhsPtr,
-                                                                             actualRhsPtr, actualAlpha);
+    // A strictly triangular part is the triangle of the trailing (size-1) block one step off the diagonal.
+    const bool skipDiag = (UpLo & ZeroDiag) != 0, isLower = (UpLo & Lower) != 0;
+    const Index size = actualLhs.size() - skipDiag;
+    if (size <= 0) return;
+    Scalar* res = mat.data() + (!skipDiag ? 0 : (int(StorageOrder) == RowMajor) != isLower ? 1 : mat.outerStride());
+    selfadjoint_rank1_update<Scalar, Index, StorageOrder, UpLo&(Lower | Upper),
+                             LhsBlasTraits::NeedToConjugate && NumTraits<Scalar>::IsComplex,
+                             RhsBlasTraits::NeedToConjugate &&
+                                 NumTraits<Scalar>::IsComplex>::run(size, res, mat.outerStride(),
+                                                                    actualLhsPtr + (skipDiag && isLower),
+                                                                    actualRhsPtr + (skipDiag && !isLower), actualAlpha);
   }
 };
 
 template <typename MatrixType, typename ProductType, int UpLo>
 struct general_product_to_triangular_selector<MatrixType, ProductType, UpLo, false> {
   static void run(MatrixType& mat, const ProductType& prod, const typename MatrixType::Scalar& alpha, bool beta) {
-    typedef internal::remove_all_t<typename ProductType::LhsNested> Lhs;
-    typedef internal::blas_traits<Lhs> LhsBlasTraits;
-    typedef typename LhsBlasTraits::DirectLinearAccessType ActualLhs;
-    typedef internal::remove_all_t<ActualLhs> ActualLhs_;
+    using Lhs = internal::remove_all_t<typename ProductType::LhsNested>;
+    using LhsBlasTraits = internal::blas_traits<Lhs>;
+    using ActualLhs = typename LhsBlasTraits::DirectLinearAccessType;
+    using ActualLhs_ = internal::remove_all_t<ActualLhs>;
     internal::add_const_on_value_type_t<ActualLhs> actualLhs = LhsBlasTraits::extract(prod.lhs());
 
-    typedef internal::remove_all_t<typename ProductType::RhsNested> Rhs;
-    typedef internal::blas_traits<Rhs> RhsBlasTraits;
-    typedef typename RhsBlasTraits::DirectLinearAccessType ActualRhs;
-    typedef internal::remove_all_t<ActualRhs> ActualRhs_;
+    using Rhs = internal::remove_all_t<typename ProductType::RhsNested>;
+    using RhsBlasTraits = internal::blas_traits<Rhs>;
+    using ActualRhs = typename RhsBlasTraits::DirectLinearAccessType;
+    using ActualRhs_ = internal::remove_all_t<ActualRhs>;
     internal::add_const_on_value_type_t<ActualRhs> actualRhs = RhsBlasTraits::extract(prod.rhs());
 
     typename ProductType::Scalar actualAlpha = alpha * LhsBlasTraits::extractScalarFactor(prod.lhs().derived()) *
@@ -282,13 +307,17 @@ struct general_product_to_triangular_selector<MatrixType, ProductType, UpLo, fal
     };
 
     Index size = mat.cols();
-    if (SkipDiag) size--;
+    EIGEN_IF_CONSTEXPR (SkipDiag) size--;
     Index depth = actualLhs.cols();
+    EIGEN_INTERNAL_ASSERT_SAME_ROWS(actualLhs, mat);
+    EIGEN_INTERNAL_ASSERT_SAME_COLS(actualRhs, mat);
+    EIGEN_INTERNAL_ASSERT_PRODUCT_SHAPE(actualLhs, actualRhs);
+    if (size <= 0 || depth == 0) return;
 
-    typedef internal::gemm_blocking_space<IsRowMajor ? RowMajor : ColMajor, typename Lhs::Scalar, typename Rhs::Scalar,
-                                          MatrixType::MaxColsAtCompileTime, MatrixType::MaxColsAtCompileTime,
-                                          ActualRhs_::MaxColsAtCompileTime>
-        BlockingType;
+    using BlockingType =
+        internal::gemm_blocking_space<IsRowMajor ? RowMajor : ColMajor, typename Lhs::Scalar, typename Rhs::Scalar,
+                                      MatrixType::MaxColsAtCompileTime, MatrixType::MaxColsAtCompileTime,
+                                      ActualRhs_::MaxColsAtCompileTime>;
 
     BlockingType blocking(size, size, depth, 1, false);
 
@@ -314,7 +343,17 @@ EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE typename TriangularViewImpl<MatrixType_, M
 TriangularViewImpl<MatrixType_, Mode_, Dense>::_assignProduct(
     const ProductType& prod, const typename TriangularViewImpl<MatrixType_, Mode_, Dense>::Scalar& alpha, bool beta) {
   EIGEN_STATIC_ASSERT((Mode_ & UnitDiag) == 0, WRITING_TO_TRIANGULAR_PART_WITH_UNIT_DIAGONAL_IS_NOT_SUPPORTED);
-  eigen_assert(derived().nestedExpression().rows() == prod.rows() && derived().cols() == prod.cols());
+  EIGEN_INTERNAL_ASSERT_SAME_SHAPE(derived(), prod);
+
+  // The rank-k and rank-1 kernels below update a square triangle.
+  if (derived().rows() != derived().cols()) {
+    typename ProductType::PlainObject tmp(alpha * prod);
+    if (beta)
+      derived() += tmp;
+    else
+      derived() = tmp;
+    return derived();
+  }
 
   general_product_to_triangular_selector<MatrixType_, ProductType, Mode_,
                                          internal::traits<ProductType>::InnerSize == 1>::run(derived()

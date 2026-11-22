@@ -6,6 +6,7 @@
 // This Source Code Form is subject to the terms of the Mozilla
 // Public License v. 2.0. If a copy of the MPL was not distributed
 // with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
+// SPDX-License-Identifier: MPL-2.0
 
 #define EIGEN_USE_THREADS
 #include "main.h"
@@ -26,7 +27,7 @@ static void test_parallel_for(int granularity) {
   TestData test_data = make_test_data(/*num_threads=*/4, kNumTasks);
   std::atomic<uint64_t> sum(0);
   std::function<void(Index, Index)> binary_do_fn = [&](Index i, Index j) {
-    for (int k = i; k < j; ++k)
+    for (Index k = i; k < j; ++k)
       for (uint64_t new_sum = sum; !sum.compare_exchange_weak(new_sum, new_sum + test_data.data[k]);) {
       };
   };
@@ -60,6 +61,9 @@ static void test_async_parallel_for() {
 }
 
 EIGEN_DECLARE_TEST(fork_join) {
+  // A granularity below 1 is treated as 1.
+  CALL_SUBTEST(test_parallel_for(0));
+  CALL_SUBTEST(test_parallel_for(-3));
   CALL_SUBTEST(test_parallel_for(1));
   CALL_SUBTEST(test_parallel_for(2));
   CALL_SUBTEST(test_async_parallel_for());

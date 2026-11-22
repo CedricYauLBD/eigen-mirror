@@ -6,6 +6,7 @@
 // This Source Code Form is subject to the terms of the Mozilla
 // Public License v. 2.0. If a copy of the MPL was not distributed
 // with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
+// SPDX-License-Identifier: MPL-2.0
 
 #ifndef EIGEN_SCALING_H
 #define EIGEN_SCALING_H
@@ -23,7 +24,7 @@ namespace Eigen {
  *
  * \tparam Scalar_ the scalar type, i.e., the type of the coefficients.
  *
- * This class represent a uniform scaling transformation. It is the return
+ * This class represents a uniform scaling transformation. It is the return
  * type of Scaling(Scalar), and most of the time this is the only way it
  * is used. In particular, this class is not aimed to be used to store a scaling transformation,
  * but rather to make easier the constructions and updates of Transform objects.
@@ -39,7 +40,7 @@ namespace internal {
 template <typename Scalar, int Dim, int Mode>
 struct uniformscaling_times_affine_returntype {
   enum { NewMode = int(Mode) == int(Isometry) ? Affine : Mode };
-  typedef Transform<Scalar, Dim, NewMode> type;
+  using type = Transform<Scalar, Dim, NewMode>;
 };
 }  // namespace internal
 
@@ -47,32 +48,32 @@ template <typename Scalar_>
 class UniformScaling {
  public:
   /** the scalar type of the coefficients */
-  typedef Scalar_ Scalar;
+  using Scalar = Scalar_;
 
  protected:
   Scalar m_factor;
 
  public:
   /** Default constructor without initialization. */
-  UniformScaling() {}
+  EIGEN_DEVICE_FUNC UniformScaling() {}
   /** Constructs and initialize a uniform scaling transformation */
-  explicit inline UniformScaling(const Scalar& s) : m_factor(s) {}
+  EIGEN_DEVICE_FUNC explicit inline UniformScaling(const Scalar& s) : m_factor(s) {}
 
-  inline const Scalar& factor() const { return m_factor; }
-  inline Scalar& factor() { return m_factor; }
+  EIGEN_DEVICE_FUNC inline const Scalar& factor() const { return m_factor; }
+  EIGEN_DEVICE_FUNC inline Scalar& factor() { return m_factor; }
 
   /** Concatenates two uniform scaling */
-  inline UniformScaling operator*(const UniformScaling& other) const {
+  EIGEN_DEVICE_FUNC inline UniformScaling operator*(const UniformScaling& other) const {
     return UniformScaling(m_factor * other.factor());
   }
 
   /** Concatenates a uniform scaling and a translation */
   template <int Dim>
-  inline Transform<Scalar, Dim, Affine> operator*(const Translation<Scalar, Dim>& t) const;
+  EIGEN_DEVICE_FUNC inline Transform<Scalar, Dim, Affine> operator*(const Translation<Scalar, Dim>& t) const;
 
   /** Concatenates a uniform scaling and an affine transformation */
   template <int Dim, int Mode, int Options>
-  inline typename internal::uniformscaling_times_affine_returntype<Scalar, Dim, Mode>::type operator*(
+  EIGEN_DEVICE_FUNC inline typename internal::uniformscaling_times_affine_returntype<Scalar, Dim, Mode>::type operator*(
       const Transform<Scalar, Dim, Mode, Options>& t) const {
     typename internal::uniformscaling_times_affine_returntype<Scalar, Dim, Mode>::type res = t;
     res.prescale(factor());
@@ -80,19 +81,20 @@ class UniformScaling {
   }
 
   /** Concatenates a uniform scaling and a linear transformation matrix */
-  // TODO returns an expression
+  // TODO: return an expression instead of a dense matrix.
   template <typename Derived>
-  inline typename Eigen::internal::plain_matrix_type<Derived>::type operator*(const MatrixBase<Derived>& other) const {
+  EIGEN_DEVICE_FUNC inline typename Eigen::internal::plain_matrix_type<Derived>::type operator*(
+      const MatrixBase<Derived>& other) const {
     return other * m_factor;
   }
 
   template <typename Derived, int Dim>
-  inline Matrix<Scalar, Dim, Dim> operator*(const RotationBase<Derived, Dim>& r) const {
+  EIGEN_DEVICE_FUNC inline Matrix<Scalar, Dim, Dim> operator*(const RotationBase<Derived, Dim>& r) const {
     return r.toRotationMatrix() * m_factor;
   }
 
   /** \returns the inverse scaling */
-  inline UniformScaling inverse() const { return UniformScaling(Scalar(1) / m_factor); }
+  EIGEN_DEVICE_FUNC inline UniformScaling inverse() const { return UniformScaling(Scalar(1) / m_factor); }
 
   /** \returns \c *this with scalar type casted to \a NewScalarType
    *
@@ -100,13 +102,13 @@ class UniformScaling {
    * then this function smartly returns a const reference to \c *this.
    */
   template <typename NewScalarType>
-  inline UniformScaling<NewScalarType> cast() const {
+  EIGEN_DEVICE_FUNC inline UniformScaling<NewScalarType> cast() const {
     return UniformScaling<NewScalarType>(NewScalarType(m_factor));
   }
 
   /** Copy constructor with scalar type conversion */
   template <typename OtherScalarType>
-  inline explicit UniformScaling(const UniformScaling<OtherScalarType>& other) {
+  EIGEN_DEVICE_FUNC inline explicit UniformScaling(const UniformScaling<OtherScalarType>& other) {
     m_factor = Scalar(other.factor());
   }
 
@@ -129,29 +131,29 @@ class UniformScaling {
 // NOTE this operator is defined in MatrixBase and not as a friend function
 // of UniformScaling to fix an internal crash of Intel's ICC
 template <typename Derived, typename Scalar>
-EIGEN_EXPR_BINARYOP_SCALAR_RETURN_TYPE(Derived, Scalar, product)
-operator*(const MatrixBase<Derived>& matrix, const UniformScaling<Scalar>& s) {
+EIGEN_DEVICE_FUNC EIGEN_EXPR_BINARYOP_SCALAR_RETURN_TYPE(Derived, Scalar, internal::scalar_product_op) operator*(
+    const MatrixBase<Derived>& matrix, const UniformScaling<Scalar>& s) {
   return matrix.derived() * s.factor();
 }
 
 /** Constructs a uniform scaling from scale factor \a s */
-inline UniformScaling<float> Scaling(float s) { return UniformScaling<float>(s); }
+EIGEN_DEVICE_FUNC inline UniformScaling<float> Scaling(float s) { return UniformScaling<float>(s); }
 /** Constructs a uniform scaling from scale factor \a s */
-inline UniformScaling<double> Scaling(double s) { return UniformScaling<double>(s); }
+EIGEN_DEVICE_FUNC inline UniformScaling<double> Scaling(double s) { return UniformScaling<double>(s); }
 /** Constructs a uniform scaling from scale factor \a s */
 template <typename RealScalar>
-inline UniformScaling<std::complex<RealScalar> > Scaling(const std::complex<RealScalar>& s) {
+EIGEN_DEVICE_FUNC inline UniformScaling<std::complex<RealScalar> > Scaling(const std::complex<RealScalar>& s) {
   return UniformScaling<std::complex<RealScalar> >(s);
 }
 
 /** Constructs a 2D axis aligned scaling */
 template <typename Scalar>
-inline DiagonalMatrix<Scalar, 2> Scaling(const Scalar& sx, const Scalar& sy) {
+EIGEN_DEVICE_FUNC inline DiagonalMatrix<Scalar, 2> Scaling(const Scalar& sx, const Scalar& sy) {
   return DiagonalMatrix<Scalar, 2>(sx, sy);
 }
 /** Constructs a 3D axis aligned scaling */
 template <typename Scalar>
-inline DiagonalMatrix<Scalar, 3> Scaling(const Scalar& sx, const Scalar& sy, const Scalar& sz) {
+EIGEN_DEVICE_FUNC inline DiagonalMatrix<Scalar, 3> Scaling(const Scalar& sx, const Scalar& sy, const Scalar& sz) {
   return DiagonalMatrix<Scalar, 3>(sx, sy, sz);
 }
 
@@ -159,29 +161,30 @@ inline DiagonalMatrix<Scalar, 3> Scaling(const Scalar& sx, const Scalar& sy, con
  * This is an alias for coeffs.asDiagonal()
  */
 template <typename Derived>
-inline const DiagonalWrapper<const Derived> Scaling(const MatrixBase<Derived>& coeffs) {
+EIGEN_DEVICE_FUNC inline const DiagonalWrapper<const Derived> Scaling(const MatrixBase<Derived>& coeffs) {
   return coeffs.asDiagonal();
 }
 
 /** Constructs an axis aligned scaling expression from vector \a coeffs when passed as an rvalue reference */
 template <typename Derived>
-inline typename DiagonalWrapper<const Derived>::PlainObject Scaling(MatrixBase<Derived>&& coeffs) {
+EIGEN_DEVICE_FUNC inline typename DiagonalWrapper<const Derived>::PlainObject Scaling(MatrixBase<Derived>&& coeffs) {
   return typename DiagonalWrapper<const Derived>::PlainObject(std::move(coeffs.derived()));
 }
 
 /** \deprecated */
-typedef DiagonalMatrix<float, 2> AlignedScaling2f;
+using AlignedScaling2f = DiagonalMatrix<float, 2>;
 /** \deprecated */
-typedef DiagonalMatrix<double, 2> AlignedScaling2d;
+using AlignedScaling2d = DiagonalMatrix<double, 2>;
 /** \deprecated */
-typedef DiagonalMatrix<float, 3> AlignedScaling3f;
+using AlignedScaling3f = DiagonalMatrix<float, 3>;
 /** \deprecated */
-typedef DiagonalMatrix<double, 3> AlignedScaling3d;
+using AlignedScaling3d = DiagonalMatrix<double, 3>;
 //@}
 
 template <typename Scalar>
 template <int Dim>
-inline Transform<Scalar, Dim, Affine> UniformScaling<Scalar>::operator*(const Translation<Scalar, Dim>& t) const {
+EIGEN_DEVICE_FUNC inline Transform<Scalar, Dim, Affine> UniformScaling<Scalar>::operator*(
+    const Translation<Scalar, Dim>& t) const {
   Transform<Scalar, Dim, Affine> res;
   res.matrix().setZero();
   res.linear().diagonal().fill(factor());

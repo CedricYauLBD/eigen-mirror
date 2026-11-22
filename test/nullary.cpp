@@ -7,6 +7,7 @@
 // This Source Code Form is subject to the terms of the Mozilla
 // Public License v. 2.0. If a copy of the MPL was not distributed
 // with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
+// SPDX-License-Identifier: MPL-2.0
 
 #include "main.h"
 
@@ -31,11 +32,11 @@ bool equalsIdentity(const MatrixType& A) {
 template <typename VectorType>
 void check_extremity_accuracy(const VectorType& v, const typename VectorType::Scalar& low,
                               const typename VectorType::Scalar& high) {
-  typedef typename VectorType::Scalar Scalar;
-  typedef typename VectorType::RealScalar RealScalar;
+  using Scalar = typename VectorType::Scalar;
+  using RealScalar = typename VectorType::RealScalar;
 
-  RealScalar prec = internal::is_same<RealScalar, float>::value ? NumTraits<RealScalar>::dummy_precision() * 10
-                                                                : NumTraits<RealScalar>::dummy_precision() / 10;
+  RealScalar prec = std::is_same<RealScalar, float>::value ? NumTraits<RealScalar>::dummy_precision() * 10
+                                                           : NumTraits<RealScalar>::dummy_precision() / 10;
   Index size = v.size();
 
   if (size < 20) return;
@@ -60,8 +61,8 @@ void check_extremity_accuracy(const VectorType& v, const typename VectorType::Sc
 
 template <typename VectorType>
 void testVectorType(const VectorType& base) {
-  typedef typename VectorType::Scalar Scalar;
-  typedef typename VectorType::RealScalar RealScalar;
+  using Scalar = typename VectorType::Scalar;
+  using RealScalar = typename VectorType::RealScalar;
 
   const Index size = base.size();
 
@@ -106,19 +107,13 @@ void testVectorType(const VectorType& base) {
     // random access version
     m = VectorType::LinSpaced(size, low, high);
     VERIFY_IS_APPROX(m, n);
-    VERIFY(internal::isApprox(m(m.size() - 1), high));
-    VERIFY(size == 1 || internal::isApprox(m(0), low));
     VERIFY_IS_EQUAL(m(m.size() - 1), high);
     if (!NumTraits<Scalar>::IsInteger) CALL_SUBTEST(check_extremity_accuracy(m, low, high));
   }
 
-  VERIFY(numext::real(m(m.size() - 1)) <= numext::real(high));
   VERIFY((m.array().real() <= numext::real(high)).all());
   VERIFY((m.array().real() >= numext::real(low)).all());
-
-  VERIFY(numext::real(m(m.size() - 1)) >= numext::real(low));
   if (size >= 1) {
-    VERIFY(internal::isApprox(m(0), low));
     VERIFY_IS_EQUAL(m(0), low);
   }
 
@@ -135,7 +130,7 @@ void testVectorType(const VectorType& base) {
   size_changer.setLinSpaced(size, low, high);
   VERIFY(size_changer.size() == size);
 
-  typedef Matrix<Scalar, 1, 1> ScalarMatrix;
+  using ScalarMatrix = Matrix<Scalar, 1, 1>;
   ScalarMatrix scalar;
   scalar.setLinSpaced(1, low, high);
   VERIFY_IS_APPROX(scalar, ScalarMatrix::Constant(high));
@@ -155,11 +150,11 @@ void testVectorType(const VectorType& base) {
     VERIFY(m.size() == n0);
 
     if (VectorType::SizeAtCompileTime == Dynamic) {
-      VERIFY_IS_EQUAL(VectorType::LinSpaced(n0, 0, Scalar(n0 - 1)).sum(), Scalar(0));
+      VERIFY_IS_EQUAL(VectorType::LinSpaced(n0, 0, Scalar(RealScalar(n0 - 1))).sum(), Scalar(0));
       VERIFY_IS_EQUAL(VectorType::LinSpaced(n0, low, low - RealScalar(1)).sum(), Scalar(0));
     }
 
-    m.setLinSpaced(n0, 0, Scalar(n0 - 1));
+    m.setLinSpaced(n0, 0, Scalar(RealScalar(n0 - 1)));
     VERIFY(m.size() == n0);
     m.setLinSpaced(n0, low, low - RealScalar(1));
     VERIFY(m.size() == n0);
@@ -170,18 +165,18 @@ void testVectorType(const VectorType& base) {
     VERIFY_IS_APPROX(m, VectorType::Constant(size, low));
 
     if (NumTraits<Scalar>::IsInteger) {
-      VERIFY_IS_APPROX(VectorType::LinSpaced(size, low, low + Scalar(size - 1)),
-                       VectorType::LinSpaced(size, low + Scalar(size - 1), low).reverse());
+      VERIFY_IS_APPROX(VectorType::LinSpaced(size, low, low + Scalar(RealScalar(size - 1))),
+                       VectorType::LinSpaced(size, low + Scalar(RealScalar(size - 1)), low).reverse());
 
       if (VectorType::SizeAtCompileTime == Dynamic) {
         // Check negative multiplicator path:
         for (Index k = 1; k < 5; ++k)
-          VERIFY_IS_APPROX(VectorType::LinSpaced(size, low, low + Scalar((size - 1) * k)),
-                           VectorType::LinSpaced(size, low + Scalar((size - 1) * k), low).reverse());
+          VERIFY_IS_APPROX(VectorType::LinSpaced(size, low, low + Scalar(RealScalar((size - 1) * k))),
+                           VectorType::LinSpaced(size, low + Scalar(RealScalar((size - 1) * k)), low).reverse());
         // Check negative divisor path:
         for (Index k = 1; k < 5; ++k)
-          VERIFY_IS_APPROX(VectorType::LinSpaced(size * k, low, low + Scalar(size - 1)),
-                           VectorType::LinSpaced(size * k, low + Scalar(size - 1), low).reverse());
+          VERIFY_IS_APPROX(VectorType::LinSpaced(size * k, low, low + Scalar(RealScalar(size - 1))),
+                           VectorType::LinSpaced(size * k, low + Scalar(RealScalar(size - 1)), low).reverse());
       }
     }
   }
@@ -206,13 +201,9 @@ void testMatrixType(const MatrixType& m) {
   using std::abs;
   const Index rows = m.rows();
   const Index cols = m.cols();
-  typedef typename MatrixType::Scalar Scalar;
-  typedef typename MatrixType::RealScalar RealScalar;
+  using Scalar = typename MatrixType::Scalar;
 
-  Scalar s1;
-  do {
-    s1 = internal::random<Scalar>();
-  } while (abs(s1) < RealScalar(1e-5) && (!NumTraits<Scalar>::IsInteger));
+  Scalar s1 = internal::random<Scalar>();
 
   MatrixType A;
   A.setIdentity(rows, cols);
@@ -259,19 +250,19 @@ void nullary_internal_logic() {
   VERIFY((internal::has_nullary_operator<internal::scalar_constant_op<double> >::value));
   VERIFY((!internal::has_unary_operator<internal::scalar_constant_op<double> >::value));
   VERIFY((!internal::has_binary_operator<internal::scalar_constant_op<double> >::value));
-  VERIFY((internal::functor_has_linear_access<internal::scalar_constant_op<double> >::ret));
+  VERIFY((internal::functor_has_linear_access<internal::scalar_constant_op<double> >::value));
 
   VERIFY((!internal::has_nullary_operator<internal::scalar_identity_op<double> >::value));
   VERIFY((!internal::has_unary_operator<internal::scalar_identity_op<double> >::value));
   VERIFY((internal::has_binary_operator<internal::scalar_identity_op<double> >::value));
-  VERIFY((!internal::functor_has_linear_access<internal::scalar_identity_op<double> >::ret));
+  VERIFY((!internal::functor_has_linear_access<internal::scalar_identity_op<double> >::value));
 
   VERIFY((!internal::has_nullary_operator<internal::linspaced_op<float> >::value));
   VERIFY((internal::has_unary_operator<internal::linspaced_op<float> >::value));
   VERIFY((!internal::has_binary_operator<internal::linspaced_op<float> >::value));
-  VERIFY((internal::functor_has_linear_access<internal::linspaced_op<float> >::ret));
+  VERIFY((internal::functor_has_linear_access<internal::linspaced_op<float> >::value));
 
-  // Regression unit test for a weird MSVC bug.
+  // Regression unit test for an MSVC bug.
   // Search "nullary_wrapper_workaround_msvc" in CoreEvaluators.h for the details.
   // See also traits<Ref>::match.
   {
@@ -288,13 +279,332 @@ void nullary_internal_logic() {
     VERIFY((internal::has_nullary_operator<internal::scalar_constant_op<float> >::value));
     VERIFY((!internal::has_unary_operator<internal::scalar_constant_op<float> >::value));
     VERIFY((!internal::has_binary_operator<internal::scalar_constant_op<float> >::value));
-    VERIFY((internal::functor_has_linear_access<internal::scalar_constant_op<float> >::ret));
+    VERIFY((internal::functor_has_linear_access<internal::scalar_constant_op<float> >::value));
 
     VERIFY((!internal::has_nullary_operator<internal::linspaced_op<int> >::value));
     VERIFY((internal::has_unary_operator<internal::linspaced_op<int> >::value));
     VERIFY((!internal::has_binary_operator<internal::linspaced_op<int> >::value));
-    VERIFY((internal::functor_has_linear_access<internal::linspaced_op<int> >::ret));
+    VERIFY((internal::functor_has_linear_access<internal::linspaced_op<int> >::value));
   }
+}
+
+// Test LinSpaced at vectorization boundary sizes.
+// The packetOp in linspaced_op_impl uses mask/select logic to handle
+// the last partial packet (when vector size is not a multiple of PacketSize).
+// This exercises those boundaries with element-by-element verification.
+template <typename Scalar>
+void linspaced_boundary() {
+  using RealScalar = typename NumTraits<Scalar>::Real;
+  const Index PS = internal::packet_traits<Scalar>::size;
+  const Index sizes[] = {1, 2, 3, PS - 1, PS, PS + 1, 2 * PS - 1, 2 * PS, 2 * PS + 1, 4 * PS, 4 * PS + 1};
+  using Vec = Matrix<Scalar, Dynamic, 1>;
+
+  for (int si = 0; si < 11; ++si) {
+    Index n = sizes[si];
+    if (n <= 0) continue;
+
+    Scalar low(1), high(100);
+    Vec v = Vec::LinSpaced(n, low, high);
+
+    // With n==1, LinSpaced returns [high] by design.
+    if (n == 1) {
+      VERIFY_IS_EQUAL(v(0), high);
+    } else {
+      VERIFY_IS_EQUAL(v(0), low);
+      VERIFY_IS_EQUAL(v(n - 1), high);
+
+      // Verify monotonicity.
+      for (Index k = 1; k < n; ++k) {
+        VERIFY(numext::real(v(k)) >= numext::real(v(k - 1)));
+      }
+
+      // Verify against scalar reference computation.
+      for (Index k = 0; k < n; ++k) {
+        Scalar ref = Scalar(low + (high - low) * RealScalar(k) / RealScalar(n - 1));
+        VERIFY_IS_APPROX(v(k), ref);
+      }
+    }
+  }
+
+  // Test the "flip" path: when |high| < |low|, the implementation uses
+  // a reversed computation for better precision. Verify at packet boundaries.
+  for (int si = 0; si < 11; ++si) {
+    Index n = sizes[si];
+    if (n <= 0 || n == 1) continue;  // skip n=1, flip irrelevant for single element
+
+    Scalar low(1000), high(1);  // |high| < |low| triggers flip
+    Vec v = Vec::LinSpaced(n, low, high);
+
+    VERIFY_IS_EQUAL(v(0), low);
+    VERIFY_IS_EQUAL(v(n - 1), high);
+
+    // Verify monotonicity (decreasing).
+    for (Index k = 1; k < n; ++k) {
+      VERIFY(numext::real(v(k)) <= numext::real(v(k - 1)));
+    }
+
+    // Verify against scalar reference.
+    for (Index k = 0; k < n; ++k) {
+      Scalar ref = Scalar(low + (high - low) * RealScalar(k) / RealScalar(n - 1));
+      VERIFY_IS_APPROX(v(k), ref);
+    }
+  }
+}
+
+// A custom integer scalar, which integer LinSpaced computes in rather than in Index.
+struct CustomInt {
+  long long v;
+  CustomInt(long long x = 0) : v(x) {}
+  friend CustomInt operator+(CustomInt a, CustomInt b) { return a.v + b.v; }
+  friend CustomInt operator-(CustomInt a, CustomInt b) { return a.v - b.v; }
+  friend CustomInt operator*(CustomInt a, CustomInt b) { return a.v * b.v; }
+  friend CustomInt operator/(CustomInt a, CustomInt b) { return a.v / b.v; }
+  friend bool operator<(CustomInt a, CustomInt b) { return a.v < b.v; }
+  friend bool operator<=(CustomInt a, CustomInt b) { return a.v <= b.v; }
+  friend bool operator>=(CustomInt a, CustomInt b) { return a.v >= b.v; }
+  friend bool operator==(CustomInt a, CustomInt b) { return a.v == b.v; }
+  friend CustomInt abs(CustomInt a) { return a.v < 0 ? -a.v : a.v; }
+};
+
+namespace Eigen {
+template <>
+struct NumTraits<CustomInt> : GenericNumTraits<long long> {
+  using Real = CustomInt;
+  using NonInteger = double;
+  using Literal = CustomInt;
+  using Nested = CustomInt;
+  static constexpr int RequireInitialization = 1;
+  static CustomInt highest() { return GenericNumTraits<long long>::highest(); }
+  static CustomInt lowest() { return GenericNumTraits<long long>::lowest(); }
+};
+}  // namespace Eigen
+
+// Test integer LinSpaced divisor path.
+// When (abs(high - low) + 1) < num_steps, the integer LinSpaced uses
+// a divisor-based formula instead of multiplication. This path is
+// barely covered by existing tests which use random ranges.
+template <int>
+void linspaced_integer_divisor() {
+  using VecI = Matrix<int, Dynamic, 1>;
+
+  // Case: num_steps much larger than range → triggers divisor path.
+  // LinSpaced(12, 0, 5): 12 steps over range [0,5], so range+1=6, 6 < 12.
+  {
+    VecI v = VecI::LinSpaced(12, 0, 5);
+    VERIFY_IS_EQUAL(v(0), 0);
+    // All values must be in [0, 5].
+    for (Index k = 0; k < 12; ++k) {
+      VERIFY(v(k) >= 0 && v(k) <= 5);
+    }
+    // Must be non-decreasing.
+    for (Index k = 1; k < 12; ++k) {
+      VERIFY(v(k) >= v(k - 1));
+    }
+    // Each integer 0-5 should appear at least once.
+    for (int val = 0; val <= 5; ++val) {
+      bool found = false;
+      for (Index k = 0; k < 12; ++k) {
+        if (v(k) == val) {
+          found = true;
+          break;
+        }
+      }
+      VERIFY(found);
+    }
+  }
+
+  // Case: range exactly divides steps → each value should appear equally.
+  // LinSpaced(20, 0, 3): range+1=4, 20%4==0, so each of 0,1,2,3 appears 5 times.
+  {
+    VecI v = VecI::LinSpaced(20, 0, 3);
+    VERIFY_IS_EQUAL(v(0), 0);
+    for (Index k = 0; k < 20; ++k) {
+      VERIFY(v(k) >= 0 && v(k) <= 3);
+    }
+    for (Index k = 1; k < 20; ++k) {
+      VERIFY(v(k) >= v(k - 1));
+    }
+  }
+
+  // Reverse: LinSpaced(12, 5, 0) should be reverse of LinSpaced(12, 0, 5).
+  {
+    VecI fwd = VecI::LinSpaced(12, 0, 5);
+    VecI rev = VecI::LinSpaced(12, 5, 0);
+    VERIFY_IS_APPROX(fwd, rev.reverse());
+  }
+
+  // Single step: always returns high.
+  {
+    VecI v = VecI::LinSpaced(1, 3, 7);
+    VERIFY_IS_EQUAL(v(0), 7);
+  }
+
+  // More steps than a narrow Scalar can count: num_steps and the index i do not fit in uint8_t.
+  {
+    using VecU8 = Matrix<uint8_t, Dynamic, 1>;
+    VecU8 v = VecU8::LinSpaced(300, 0, 10);
+    VERIFY_IS_EQUAL(v(0), uint8_t(0));
+    VERIFY_IS_EQUAL(v(299), uint8_t(10));
+    for (Index k = 1; k < 300; ++k) VERIFY(v(k) >= v(k - 1) && v(k) <= v(k - 1) + 1);
+  }
+
+  // The offset from low need not fit in the Scalar: k / 2 reaches 149 and k reaches 255, in both the divisor and
+  // the multiplier path.
+  {
+    using VecI8 = Matrix<int8_t, Dynamic, 1>;
+    VecI8 v = VecI8::LinSpaced(300, -100, 100), w = VecI8::LinSpaced(256, -128, 127);
+    for (Index k = 0; k < 300; ++k) VERIFY_IS_EQUAL(int(v(k)), -100 + int(k / 2));
+    for (Index k = 0; k < 256; ++k) VERIFY_IS_EQUAL(int(w(k)), -128 + int(k));
+    using VecU8 = Matrix<uint8_t, Dynamic, 1>;
+    VecU8 u = VecU8::LinSpaced(256, 255, 0);
+    for (Index k = 0; k < 256; ++k) VERIFY_IS_EQUAL(int(u(k)), 255 - int(k));
+  }
+
+  // 64-bit integers, where high - low wraps for unsigned decreasing sequences or overflows the signed type.
+  {
+    using VecU64 = Matrix<uint64_t, Dynamic, 1>;
+    VecU64 u = VecU64::LinSpaced(4, 9, 0), w = VecU64::LinSpaced(10, 3, 0);
+    for (Index k = 0; k < 4; ++k) VERIFY_IS_EQUAL(u(k), uint64_t(9 - 3 * k));
+    for (Index k = 0; k < 10; ++k) VERIFY_IS_EQUAL(w(k), uint64_t(3 - k / 3));
+    const uint64_t umax = (std::numeric_limits<uint64_t>::max)();
+    VecU64 x = VecU64::LinSpaced(2, umax, 0);
+    VERIFY_IS_EQUAL(x(0), umax);
+    VERIFY_IS_EQUAL(x(1), uint64_t(0));
+    using VecI64 = Matrix<int64_t, Dynamic, 1>;
+    const int64_t imin = (std::numeric_limits<int64_t>::min)(), imax = (std::numeric_limits<int64_t>::max)();
+    VecI64 y = VecI64::LinSpaced(2, imin, imax), z = VecI64::LinSpaced(3, imax, imin);
+    VERIFY_IS_EQUAL(y(0), imin);
+    VERIFY_IS_EQUAL(y(1), imax);
+    // The step is (2^64 - 1) / 2 = imax.
+    VERIFY_IS_EQUAL(z(0), imax);
+    VERIFY_IS_EQUAL(z(1), int64_t(0));
+    VERIFY_IS_EQUAL(z(2), -imax);
+  }
+
+  // Custom integer scalars.
+  {
+    using VecC = Matrix<CustomInt, Dynamic, 1>;
+    VecC v = VecC::LinSpaced(10, CustomInt(0), CustomInt(3)), w = VecC::LinSpaced(4, CustomInt(9), CustomInt(0));
+    for (Index k = 0; k < 10; ++k) VERIFY_IS_EQUAL(v(k).v, k / 3);
+    for (Index k = 0; k < 4; ++k) VERIFY_IS_EQUAL(w(k).v, 9 - 3 * k);
+  }
+}
+
+// Constant fills of small fixed-size complex objects with a complex product computed in the same function. GCC 15.1
+// and 15.2 with FMA SLP-vectorized the unrolled fill_n stores into wrong code, e.g. (1,70),(8,42) instead of
+// (-5,10),(-5,10) for Vector2cd::Constant((1+2i) * (3+4i)); see EIGEN_GCC15_SLP_BUG. Each case is a function of its
+// own, as in user code.
+template <int Case, typename XprType>
+EIGEN_DONT_INLINE void complex_constant_fill_case(const typename XprType::Scalar* a, XprType& x) {
+  switch (Case) {
+    case 0:
+      x = XprType::Constant(a[0] * a[1]);
+      break;
+    case 1:
+      x.setConstant(a[0] * a[1]);
+      break;
+    case 2:
+      x.fill(a[0] * a[1]);
+      break;
+    case 3:
+      for (Index j = 0; j < x.cols(); ++j) x.col(j).setConstant(a[0] * a[1]);
+      break;
+    default:
+      Map<XprType>(x.data()).setConstant(a[0] * a[1]);
+  }
+}
+
+template <typename XprType>
+void complex_constant_fill() {
+  using Scalar = typename XprType::Scalar;
+  using RealScalar = typename NumTraits<Scalar>::Real;
+  // Small integers make the product exact however it is evaluated.
+  const auto small_int = [] { return RealScalar(internal::random<int>(-8, 8)); };
+  const Scalar a[2] = {Scalar(small_int(), small_int()), Scalar(small_int(), small_int())};
+  const Scalar expected = a[0] * a[1];
+  XprType x;
+  // Coefficient-wise scalar compares, so the check does not broadcast expected the way the code under test does.
+  const auto check = [&](int which) {
+    for (Index j = 0; j < x.cols(); ++j)
+      for (Index i = 0; i < x.rows(); ++i)
+        if (!(x.coeff(i, j) == expected)) {
+          std::cerr << "case " << which << " coefficient (" << i << ", " << j << "): " << x.coeff(i, j)
+                    << " != " << expected << "\n";
+          VERIFY(false);
+        }
+  };
+  x.setZero();
+  complex_constant_fill_case<0>(a, x);
+  check(0);
+  x.setZero();
+  complex_constant_fill_case<1>(a, x);
+  check(1);
+  x.setZero();
+  complex_constant_fill_case<2>(a, x);
+  check(2);
+  x.setZero();
+  complex_constant_fill_case<3>(a, x);
+  check(3);
+  x.setZero();
+  complex_constant_fill_case<4>(a, x);
+  check(4);
+}
+
+// The same for dynamic-size objects whose size the compiler sees in the filling function.
+template <int Case, int N, typename XprType>
+EIGEN_DONT_INLINE void complex_constant_fill_dynamic_case(const typename XprType::Scalar* a, XprType& x) {
+  const Index cols = XprType::ColsAtCompileTime == 1 ? 1 : N;
+  switch (Case) {
+    case 0:
+      x.resize(N, cols);
+      x.setConstant(a[0] * a[1]);
+      break;
+    case 1: {
+      const Index n = N;
+      XprType y(n, XprType::ColsAtCompileTime == 1 ? 1 : n);
+      y.setConstant(a[0] * a[1]);
+      x = y;
+      break;
+    }
+    case 2:
+      x = XprType::Constant(N, cols, a[0] * a[1]);
+      break;
+    default:
+      x.setConstant(N, cols, a[0] * a[1]);
+  }
+}
+
+template <typename XprType, int N>
+void complex_constant_fill_dynamic() {
+  using Scalar = typename XprType::Scalar;
+  using RealScalar = typename NumTraits<Scalar>::Real;
+  const auto small_int = [] { return RealScalar(internal::random<int>(-8, 8)); };
+  const Scalar a[2] = {Scalar(small_int(), small_int()), Scalar(small_int(), small_int())};
+  const Scalar expected = a[0] * a[1];
+  const Index size = XprType::ColsAtCompileTime == 1 ? N : N * N;
+  XprType x;
+  const Index empty_cols = XprType::ColsAtCompileTime == 1 ? 1 : 0;
+  const auto check = [&](int which) {
+    VERIFY_IS_EQUAL(x.size(), size);
+    for (Index i = 0; i < x.size(); ++i)
+      if (!(x.data()[i] == expected)) {
+        std::cerr << "case " << which << " size " << N << " coefficient " << i << ": " << x.data()[i]
+                  << " != " << expected << "\n";
+        VERIFY(false);
+      }
+  };
+  x.resize(0, empty_cols);
+  complex_constant_fill_dynamic_case<0, N>(a, x);
+  check(0);
+  x.resize(0, empty_cols);
+  complex_constant_fill_dynamic_case<1, N>(a, x);
+  check(1);
+  x.resize(0, empty_cols);
+  complex_constant_fill_dynamic_case<2, N>(a, x);
+  check(2);
+  x.resize(0, empty_cols);
+  complex_constant_fill_dynamic_case<3, N>(a, x);
+  check(3);
 }
 
 EIGEN_DECLARE_TEST(nullary) {
@@ -322,4 +632,33 @@ EIGEN_DECLARE_TEST(nullary) {
   CALL_SUBTEST_6(bug1630<0>());
   CALL_SUBTEST_9(nullary_overflow<0>());
   CALL_SUBTEST_10(nullary_internal_logic<0>());
+
+  // LinSpaced at vectorization boundaries (deterministic, outside g_repeat).
+  CALL_SUBTEST_11(linspaced_boundary<float>());
+  CALL_SUBTEST_11(linspaced_boundary<double>());
+
+  // Integer LinSpaced divisor path tests.
+  CALL_SUBTEST_12(linspaced_integer_divisor<0>());
+
+  for (int i = 0; i < g_repeat; i++) {
+    CALL_SUBTEST_13(complex_constant_fill<Vector2cf>());
+    CALL_SUBTEST_13(complex_constant_fill<RowVector2cf>());
+    CALL_SUBTEST_13(complex_constant_fill<Array2cf>());
+    CALL_SUBTEST_13(complex_constant_fill<Matrix2cf>());
+    CALL_SUBTEST_13(complex_constant_fill<Vector2cd>());
+    CALL_SUBTEST_13(complex_constant_fill<Vector3cd>());
+    CALL_SUBTEST_13(complex_constant_fill<Vector4cd>());
+    CALL_SUBTEST_13(complex_constant_fill<Matrix2cd>());
+    CALL_SUBTEST_13(complex_constant_fill<Matrix3cd>());
+    CALL_SUBTEST_13(complex_constant_fill<Matrix4cd>());
+    CALL_SUBTEST_13(complex_constant_fill<Array2cd>());
+    CALL_SUBTEST_13((complex_constant_fill_dynamic<VectorXcf, 2>()));
+    CALL_SUBTEST_13((complex_constant_fill_dynamic<VectorXcf, 4>()));
+    CALL_SUBTEST_13((complex_constant_fill_dynamic<ArrayXcf, 2>()));
+    CALL_SUBTEST_13((complex_constant_fill_dynamic<VectorXcd, 2>()));
+    CALL_SUBTEST_13((complex_constant_fill_dynamic<VectorXcd, 4>()));
+    CALL_SUBTEST_13((complex_constant_fill_dynamic<VectorXcd, 8>()));
+    CALL_SUBTEST_13((complex_constant_fill_dynamic<MatrixXcd, 2>()));
+    CALL_SUBTEST_13((complex_constant_fill_dynamic<MatrixXcd, 4>()));
+  }
 }

@@ -6,9 +6,10 @@
 // This Source Code Form is subject to the terms of the Mozilla
 // Public License v. 2.0. If a copy of the MPL was not distributed
 // with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
+// SPDX-License-Identifier: MPL-2.0
 
-#ifndef EIGEN_CXX11_THREADPOOL_THREAD_POOL_INTERFACE_H
-#define EIGEN_CXX11_THREADPOOL_THREAD_POOL_INTERFACE_H
+#ifndef EIGEN_THREADPOOL_THREAD_POOL_INTERFACE_H
+#define EIGEN_THREADPOOL_THREAD_POOL_INTERFACE_H
 
 // IWYU pragma: private
 #include "./InternalHeaderCheck.h"
@@ -27,7 +28,7 @@ class ThreadPoolInterface {
   virtual void ScheduleWithHint(std::function<void()> fn, int /*start*/, int /*end*/) {
     // Just defer to Schedule in case sub-classes aren't interested in
     // overriding this functionality.
-    Schedule(fn);
+    Schedule(std::move(fn));
   }
 
   // If implemented, stop processing the closures that have been enqueued.
@@ -42,9 +43,9 @@ class ThreadPoolInterface {
   // from one of the threads in the pool. Returns -1 otherwise.
   virtual int CurrentThreadId() const = 0;
 
-  virtual ~ThreadPoolInterface() {}
+  virtual ~ThreadPoolInterface() = default;
 };
 
 }  // namespace Eigen
 
-#endif  // EIGEN_CXX11_THREADPOOL_THREAD_POOL_INTERFACE_H
+#endif  // EIGEN_THREADPOOL_THREAD_POOL_INTERFACE_H

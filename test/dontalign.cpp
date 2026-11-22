@@ -6,6 +6,7 @@
 // This Source Code Form is subject to the terms of the Mozilla
 // Public License v. 2.0. If a copy of the MPL was not distributed
 // with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
+// SPDX-License-Identifier: MPL-2.0
 
 #if defined EIGEN_TEST_PART_1 || defined EIGEN_TEST_PART_2 || defined EIGEN_TEST_PART_3 || defined EIGEN_TEST_PART_4
 #define EIGEN_DONT_ALIGN
@@ -18,9 +19,10 @@
 
 template <typename MatrixType>
 void dontalign(const MatrixType& m) {
-  typedef typename MatrixType::Scalar Scalar;
-  typedef Matrix<Scalar, MatrixType::RowsAtCompileTime, 1> VectorType;
-  typedef Matrix<Scalar, MatrixType::RowsAtCompileTime, MatrixType::RowsAtCompileTime> SquareMatrixType;
+  using Scalar = typename MatrixType::Scalar;
+  using RealScalar = typename MatrixType::RealScalar;
+  using VectorType = Matrix<Scalar, MatrixType::RowsAtCompileTime, 1>;
+  using SquareMatrixType = Matrix<Scalar, MatrixType::RowsAtCompileTime, MatrixType::RowsAtCompileTime>;
 
   Index rows = m.rows();
   Index cols = m.cols();
@@ -29,7 +31,12 @@ void dontalign(const MatrixType& m) {
   SquareMatrixType square = SquareMatrixType::Random(rows, rows);
   VectorType v = VectorType::Random(rows);
 
-  VERIFY_IS_APPROX(v, square * square.colPivHouseholderQr().solve(v));
+  const VectorType solution = square.colPivHouseholderQr().solve(v);
+  // Bound the normwise backward error ||Ax-b||_2 / (||A||_F * ||x||_2 + ||b||_2) by 10*n*epsilon.
+  const RealScalar scale = square.norm() * solution.norm() + v.norm();
+  const RealScalar bound = RealScalar(10 * rows) * NumTraits<RealScalar>::epsilon() * scale;
+  VERIFY((numext::isfinite)(bound));
+  VERIFY((square * solution - v).norm() <= bound);
   square = square.inverse().eval();
   a = square * a;
   square = square * square;
