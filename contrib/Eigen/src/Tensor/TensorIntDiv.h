@@ -22,11 +22,11 @@ namespace tensor_int_div {
 
 // floor(m n / 2^(k-1+l)) for n < 2^(k-1). shift is l for k = 64, where 2 n < 2^64, and k - 1 + l for k < 64.
 template <typename Unsigned, std::enable_if_t<sizeof(Unsigned) == 8, int> = 0>
-EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE Unsigned quotient(Unsigned n, Unsigned m, int shift) {
+EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE constexpr Unsigned quotient(Unsigned n, Unsigned m, int shift) {
   return int_div::umulhi(m, static_cast<Unsigned>(n << 1)) >> shift;
 }
 template <typename Unsigned, std::enable_if_t<(sizeof(Unsigned) < 8), int> = 0>
-EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE Unsigned quotient(Unsigned n, Unsigned m, int shift) {
+EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE constexpr Unsigned quotient(Unsigned n, Unsigned m, int shift) {
   using Wide = int_div::double_width_t<Unsigned>;
   return static_cast<Unsigned>((static_cast<Wide>(m) * static_cast<Wide>(n)) >> shift);
 }
@@ -55,10 +55,10 @@ EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE Unsigned quotient(Unsigned n, Unsigned m, 
 template <typename T, bool div_gt_one = false>
 struct TensorIntDivisor {
  public:
-  EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE TensorIntDivisor() = default;
+  EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE constexpr TensorIntDivisor() = default;
 
   // Must have 0 < divider < 2^(k-1).
-  EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE TensorIntDivisor(const T divider) {
+  EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE constexpr TensorIntDivisor(const T divider) {
     eigen_assert(divider > 0 && in_range(divider));
     const UnsignedType d = static_cast<UnsignedType>(divider);
     const int l = log_2_impl<UnsignedType>::run_ceil(d);
@@ -71,7 +71,7 @@ struct TensorIntDivisor {
   }
 
   // Must have 0 <= numerator < 2^(k-1).
-  EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE T divide(const T numerator) const {
+  EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE constexpr T divide(const T numerator) const {
     eigen_assert(in_range(numerator));
     return static_cast<T>(tensor_int_div::quotient(static_cast<UnsignedType>(numerator), m_multiplier, m_shift));
   }
@@ -90,7 +90,8 @@ struct TensorIntDivisor {
 };
 
 template <typename T, bool div_gt_one>
-EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE T operator/(const T& numerator, const TensorIntDivisor<T, div_gt_one>& divisor) {
+EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE constexpr T operator/(const T& numerator,
+                                                            const TensorIntDivisor<T, div_gt_one>& divisor) {
   return divisor.divide(numerator);
 }
 

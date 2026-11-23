@@ -31,7 +31,7 @@ struct BunchKaufman_Traits;
 // Panel width for the blocked factorization (defined below); forward-declared so the size
 // constructor can pre-allocate the panel workspace.
 template <typename Scalar>
-inline Index bunch_kaufman_blocksize();
+constexpr Index bunch_kaufman_blocksize();
 
 // prod_k x_k = mantissa 2^exponent with frexp() keeping the mantissa in [1/2, 1), for the real scalars whose
 // scaled_product multiplies directly (half, bfloat16, custom types): only the result has to be representable.
@@ -128,7 +128,7 @@ class BunchKaufman : public SolverBase<BunchKaufman<MatrixType_, UpLo_> > {
    * The default constructor is useful in cases in which the user intends to
    * perform decompositions via BunchKaufman::compute(const MatrixType&).
    */
-  BunchKaufman()
+  constexpr BunchKaufman()
       : m_matrix(),
         m_l1_norm(0),
         m_transpositions(),
@@ -145,7 +145,7 @@ class BunchKaufman : public SolverBase<BunchKaufman<MatrixType_, UpLo_> > {
    * according to the specified problem \a size.
    * \sa BunchKaufman()
    */
-  explicit BunchKaufman(Index size)
+  explicit constexpr BunchKaufman(Index size)
       : m_matrix(size, size),
         m_l1_norm(0),
         m_transpositions(size),
@@ -167,7 +167,7 @@ class BunchKaufman : public SolverBase<BunchKaufman<MatrixType_, UpLo_> > {
    * \sa BunchKaufman(Index size)
    */
   template <typename InputType>
-  explicit BunchKaufman(const EigenBase<InputType>& matrix)
+  explicit constexpr BunchKaufman(const EigenBase<InputType>& matrix)
       : m_matrix(matrix.rows(), matrix.cols()),
         m_l1_norm(0),
         m_transpositions(matrix.rows()),
@@ -188,7 +188,7 @@ class BunchKaufman : public SolverBase<BunchKaufman<MatrixType_, UpLo_> > {
    * \sa BunchKaufman(const EigenBase&)
    */
   template <typename InputType>
-  explicit BunchKaufman(EigenBase<InputType>& matrix)
+  explicit constexpr BunchKaufman(EigenBase<InputType>& matrix)
       : m_matrix(matrix.derived()),
         m_l1_norm(0),
         m_transpositions(matrix.rows()),
@@ -202,20 +202,20 @@ class BunchKaufman : public SolverBase<BunchKaufman<MatrixType_, UpLo_> > {
   }
 
   /** \returns a view of the unit upper triangular matrix U */
-  inline typename Traits::MatrixU matrixU() const {
+  constexpr typename Traits::MatrixU matrixU() const {
     eigen_assert(m_isInitialized && "BunchKaufman is not initialized.");
     return Traits::getU(m_matrix);
   }
 
   /** \returns a view of the unit lower triangular matrix L */
-  inline typename Traits::MatrixL matrixL() const {
+  constexpr typename Traits::MatrixL matrixL() const {
     eigen_assert(m_isInitialized && "BunchKaufman is not initialized.");
     return Traits::getL(m_matrix);
   }
 
   /** \returns the permutation matrix P as a transposition sequence.
    */
-  inline const TranspositionType& transpositionsP() const {
+  constexpr const TranspositionType& transpositionsP() const {
     eigen_assert(m_isInitialized && "BunchKaufman is not initialized.");
     return m_transpositions;
   }
@@ -225,7 +225,7 @@ class BunchKaufman : public SolverBase<BunchKaufman<MatrixType_, UpLo_> > {
    * The block-diagonal matrix D is fully described by vectorD() (its main diagonal) together with
    * subDiagonal() (the sub-diagonal entries of its 2x2 blocks).
    */
-  inline Diagonal<const MatrixType> vectorD() const {
+  constexpr Diagonal<const MatrixType> vectorD() const {
     eigen_assert(m_isInitialized && "BunchKaufman is not initialized.");
     return m_matrix.diagonal();
   }
@@ -235,7 +235,7 @@ class BunchKaufman : public SolverBase<BunchKaufman<MatrixType_, UpLo_> > {
    * Entry \c k is non-zero if and only if a 2x2 diagonal block of D occupies rows/columns \c k and
    * \c k+1; it then holds \f$ D_{k+1,k} \f$. All other entries are zero. \sa vectorD()
    */
-  inline const TmpVectorType& subDiagonal() const {
+  constexpr const TmpVectorType& subDiagonal() const {
     eigen_assert(m_isInitialized && "BunchKaufman is not initialized.");
     return m_subdiag;
   }
@@ -248,13 +248,13 @@ class BunchKaufman : public SolverBase<BunchKaufman<MatrixType_, UpLo_> > {
    *
    * \sa numNegative(), numZero()
    */
-  Index numPositive() const {
+  constexpr Index numPositive() const {
     eigen_assert(m_isInitialized && "BunchKaufman is not initialized.");
     return m_n_pos;
   }
 
   /** \returns the number of negative eigenvalues. \sa numPositive() */
-  Index numNegative() const {
+  constexpr Index numNegative() const {
     eigen_assert(m_isInitialized && "BunchKaufman is not initialized.");
     return m_n_neg;
   }
@@ -266,7 +266,7 @@ class BunchKaufman : public SolverBase<BunchKaufman<MatrixType_, UpLo_> > {
    *
    * \sa numPositive()
    */
-  Index numZero() const {
+  constexpr Index numZero() const {
     eigen_assert(m_isInitialized && "BunchKaufman is not initialized.");
     return m_n_zero;
   }
@@ -274,12 +274,12 @@ class BunchKaufman : public SolverBase<BunchKaufman<MatrixType_, UpLo_> > {
   /** \returns true if the matrix is positive semidefinite: every pivot is finite and no eigenvalue is strictly
    * negative.
    */
-  bool isPositive() const { return numNegative() == 0 && numPositive() + numZero() == rows(); }
+  constexpr bool isPositive() const { return numNegative() == 0 && numPositive() + numZero() == rows(); }
 
   /** \returns true if the matrix is negative semidefinite: every pivot is finite and no eigenvalue is strictly
    * positive.
    */
-  bool isNegative() const { return numPositive() == 0 && numNegative() + numZero() == rows(); }
+  constexpr bool isNegative() const { return numPositive() == 0 && numNegative() + numZero() == rows(); }
 
 #ifdef EIGEN_PARSED_BY_DOXYGEN
   /** \returns a solution x of \f$ A x = b \f$ using the current decomposition of A.
@@ -291,19 +291,19 @@ class BunchKaufman : public SolverBase<BunchKaufman<MatrixType_, UpLo_> > {
    * \sa MatrixBase::bunchKaufman(), SelfAdjointView::bunchKaufman()
    */
   template <typename Rhs>
-  inline Solve<BunchKaufman, Rhs> solve(const MatrixBase<Rhs>& b) const;
+  constexpr Solve<BunchKaufman, Rhs> solve(const MatrixBase<Rhs>& b) const;
 #endif
 
   template <typename Derived>
-  bool solveInPlace(MatrixBase<Derived>& bAndX) const;
+  constexpr bool solveInPlace(MatrixBase<Derived>& bAndX) const;
 
   template <typename InputType>
-  BunchKaufman& compute(const EigenBase<InputType>& matrix);
+  constexpr BunchKaufman& compute(const EigenBase<InputType>& matrix);
 
   /** \returns an estimate of the reciprocal condition number of the matrix of
    *  which \c *this is the Bunch-Kaufman decomposition.
    */
-  RealScalar rcond() const {
+  constexpr RealScalar rcond() const {
     eigen_assert(m_isInitialized && "BunchKaufman is not initialized.");
     return internal::rcond_estimate_helper(m_l1_norm, *this);
   }
@@ -314,12 +314,12 @@ class BunchKaufman : public SolverBase<BunchKaufman<MatrixType_, UpLo_> > {
    * diagonal holds the main diagonal of D. The sub/super-diagonal entries of the 2x2 blocks of D are
    * stored separately, in subDiagonal().
    */
-  inline const MatrixType& matrixLDLT() const {
+  constexpr const MatrixType& matrixLDLT() const {
     eigen_assert(m_isInitialized && "BunchKaufman is not initialized.");
     return m_matrix;
   }
 
-  MatrixType reconstructedMatrix() const;
+  constexpr MatrixType reconstructedMatrix() const;
 
   /** \returns the determinant of the matrix of which *this is the Bunch-Kaufman decomposition.
    *
@@ -334,7 +334,7 @@ class BunchKaufman : public SolverBase<BunchKaufman<MatrixType_, UpLo_> > {
    *
    * \sa absDeterminant(), logAbsDeterminant(), signDeterminant(), MatrixBase::determinant()
    */
-  Scalar determinant() const;
+  constexpr Scalar determinant() const;
 
   /** \returns the absolute value of the determinant of the matrix of which *this is the Bunch-Kaufman
    * decomposition.
@@ -348,7 +348,7 @@ class BunchKaufman : public SolverBase<BunchKaufman<MatrixType_, UpLo_> > {
    *
    * \sa determinant(), logAbsDeterminant(), signDeterminant(), MatrixBase::determinant()
    */
-  RealScalar absDeterminant() const;
+  constexpr RealScalar absDeterminant() const;
 
   /** \returns the natural log of the absolute value of the determinant of the matrix of which *this is the
    * Bunch-Kaufman decomposition.
@@ -363,7 +363,7 @@ class BunchKaufman : public SolverBase<BunchKaufman<MatrixType_, UpLo_> > {
    *
    * \sa determinant(), absDeterminant(), signDeterminant(), MatrixBase::determinant()
    */
-  RealScalar logAbsDeterminant() const;
+  constexpr RealScalar logAbsDeterminant() const;
 
   /** \returns the sign of the determinant of the matrix of which *this is the Bunch-Kaufman decomposition,
    * that is, \c 1, \c -1, or \c 0 if the matrix is singular or has a non-finite pivot.
@@ -374,7 +374,7 @@ class BunchKaufman : public SolverBase<BunchKaufman<MatrixType_, UpLo_> > {
    *
    * \sa determinant(), absDeterminant(), logAbsDeterminant(), MatrixBase::determinant()
    */
-  Scalar signDeterminant() const;
+  constexpr Scalar signDeterminant() const;
 
   /** \returns the adjoint of \c *this, that is, a const reference to the decomposition itself as the underlying matrix
    * is self-adjoint.
@@ -382,7 +382,7 @@ class BunchKaufman : public SolverBase<BunchKaufman<MatrixType_, UpLo_> > {
    * This method is provided for compatibility with other matrix decompositions, thus enabling generic code such as:
    * \code x = decomposition.adjoint().solve(b) \endcode
    */
-  const BunchKaufman& adjoint() const { return *this; }
+  constexpr const BunchKaufman& adjoint() const { return *this; }
 
   EIGEN_DEVICE_FUNC constexpr Index rows() const noexcept { return m_matrix.rows(); }
   EIGEN_DEVICE_FUNC constexpr Index cols() const noexcept { return m_matrix.cols(); }
@@ -395,17 +395,17 @@ class BunchKaufman : public SolverBase<BunchKaufman<MatrixType_, UpLo_> > {
    *          or a 2x2 pivot block has no representable inverse (an off-diagonal so much smaller than the
    *          diagonal that the scaled inverse overflows).
    */
-  ComputationInfo info() const {
+  constexpr ComputationInfo info() const {
     eigen_assert(m_isInitialized && "BunchKaufman is not initialized.");
     return m_info;
   }
 
 #ifndef EIGEN_PARSED_BY_DOXYGEN
   template <typename RhsType, typename DstType>
-  void _solve_impl(const RhsType& rhs, DstType& dst) const;
+  constexpr void _solve_impl(const RhsType& rhs, DstType& dst) const;
 
   template <bool Conjugate, typename RhsType, typename DstType>
-  void _solve_impl_transposed(const RhsType& rhs, DstType& dst) const;
+  constexpr void _solve_impl_transposed(const RhsType& rhs, DstType& dst) const;
 #endif
 
  protected:
@@ -413,21 +413,22 @@ class BunchKaufman : public SolverBase<BunchKaufman<MatrixType_, UpLo_> > {
 
   /** \internal Apply the block-diagonal matrix D in place: \c x <- D x. */
   template <typename Derived>
-  void applyD(MatrixBase<Derived>& x) const;
+  constexpr void applyD(MatrixBase<Derived>& x) const;
 
   /** \internal Apply the inverse of the block-diagonal matrix D in place: \c x <- D^{-1} x.
    * For \c Conjugate == false the transpose of D is used instead (relevant for the complex case). */
   template <bool Conjugate, typename Derived>
-  void solveInPlaceD(MatrixBase<Derived>& x) const;
+  constexpr void solveInPlaceD(MatrixBase<Derived>& x) const;
 
-  BunchKaufman& computeInPlace();
+  constexpr BunchKaufman& computeInPlace();
 
   /** \internal Compute the inertia (counts of positive / negative / zero eigenvalues) from D. */
-  void computeInertia();
+  constexpr void computeInertia();
 
   /** \internal \returns \f$ \det(D_k)/|d_{21}|^2 \f$ for a 2x2 block of D, which is real and shares the
    * sign of \f$ \det(D_k) \f$ since \f$ |d_{21}| > 0 \f$ there. */
-  static RealScalar scaledBlockDeterminant(const RealScalar& d11, const RealScalar& d22, const RealScalar& d21);
+  static constexpr RealScalar scaledBlockDeterminant(const RealScalar& d11, const RealScalar& d22,
+                                                     const RealScalar& d21);
 
   /** \internal \returns \f$ \det(D) \f$, the product over the 1x1 and 2x2 diagonal blocks of D. D is
    * Hermitian, so a block determinant is real: \f$ d_{11} \f$ for a 1x1 block and
@@ -436,7 +437,7 @@ class BunchKaufman : public SolverBase<BunchKaufman<MatrixType_, UpLo_> > {
   using DeterminantProduct =
       std::conditional_t<internal::has_scaled_product<RealScalar>::value, internal::scaled_product<RealScalar>,
                          internal::bunch_kaufman_balanced_product<RealScalar>>;
-  DeterminantProduct determinantD() const;
+  constexpr DeterminantProduct determinantD() const;
 
   MatrixType m_matrix;
   RealScalar m_l1_norm;
@@ -456,14 +457,14 @@ namespace internal {
  * It minimizes the bound on element growth across a 1x1 followed by a 1x1 step versus a single 2x2 step
  * (Bunch & Kaufman, 1977). */
 template <typename RealScalar>
-EIGEN_DEVICE_FUNC inline RealScalar bunch_kaufman_alpha() {
+EIGEN_DEVICE_FUNC constexpr RealScalar bunch_kaufman_alpha() {
   return (RealScalar(1) + numext::sqrt(RealScalar(17))) / RealScalar(8);
 }
 
 /** \internal Panel width for the blocked (level-3) Bunch-Kaufman factorization. Can be overridden (mainly
  * for testing the panel logic at small sizes) by defining EIGEN_BUNCHKAUFMAN_BLOCKSIZE. */
 template <typename Scalar>
-inline Index bunch_kaufman_blocksize() {
+constexpr Index bunch_kaufman_blocksize() {
 #ifdef EIGEN_BUNCHKAUFMAN_BLOCKSIZE
   return Index(EIGEN_BUNCHKAUFMAN_BLOCKSIZE);
 #else
@@ -477,14 +478,14 @@ inline Index bunch_kaufman_blocksize() {
 template <bool IsComplex>
 struct bunch_kaufman_magnitude {
   template <typename VectorType>
-  static auto run(const VectorType& v) -> decltype(v.cwiseAbs()) {
+  static constexpr auto run(const VectorType& v) -> decltype(v.cwiseAbs()) {
     return v.cwiseAbs();
   }
 };
 template <>
 struct bunch_kaufman_magnitude<true> {
   template <typename VectorType>
-  static auto run(const VectorType& v) -> decltype(v.real().cwiseAbs() + v.imag().cwiseAbs()) {
+  static constexpr auto run(const VectorType& v) -> decltype(v.real().cwiseAbs() + v.imag().cwiseAbs()) {
     return v.real().cwiseAbs() + v.imag().cwiseAbs();
   }
 };
@@ -493,7 +494,8 @@ struct bunch_kaufman_magnitude<true> {
  * with LastOnTies. Eigen's LAPACK library computes xSYTRF with UPLO = 'U' as the lower factorization of the reversed
  * matrix J A J, where IxAMAX's first of equal candidates is the last. */
 template <bool LastOnTies = false, typename VectorType>
-typename NumTraits<typename VectorType::Scalar>::Real bunch_kaufman_max(const VectorType& v, Index* index = nullptr) {
+constexpr typename NumTraits<typename VectorType::Scalar>::Real bunch_kaufman_max(const VectorType& v,
+                                                                                  Index* index = nullptr) {
   using Magnitude = bunch_kaufman_magnitude<NumTraits<typename VectorType::Scalar>::IsComplex>;
   if (index == nullptr) return Magnitude::run(v).maxCoeff();
   EIGEN_IF_CONSTEXPR (LastOnTies) {
@@ -519,7 +521,8 @@ struct bunch_kaufman<Lower> {
   // Returns 0 on success, or the (1-based) index of the first exactly-zero pivot encountered.
   // LastOnTies takes the last of equal pivot candidates rather than the first; see bunch_kaufman_max.
   template <bool LastOnTies = false, typename MatrixType, typename TranspositionType, typename SubDiagType>
-  static Index unblocked(MatrixType& mat, TranspositionType& transpositions, SubDiagType& subdiag, Index k0 = 0) {
+  static constexpr Index unblocked(MatrixType& mat, TranspositionType& transpositions, SubDiagType& subdiag,
+                                   Index k0 = 0) {
     using Scalar = typename MatrixType::Scalar;
     using RealScalar = typename MatrixType::RealScalar;
     using StorageIndex = typename TranspositionType::StorageIndex;
@@ -670,8 +673,8 @@ struct bunch_kaufman<Lower> {
   // a single level-3 (triangular) matrix product. Returns the number kb (<= nb) of columns factorized.
   template <bool LastOnTies = false, typename MatrixType, typename WorkspaceType, typename TranspositionType,
             typename SubDiagType>
-  static Index partial_factor(MatrixType& mat, Index k0, Index nb, WorkspaceType& W, TranspositionType& transpositions,
-                              SubDiagType& subdiag, Index& info) {
+  static constexpr Index partial_factor(MatrixType& mat, Index k0, Index nb, WorkspaceType& W,
+                                        TranspositionType& transpositions, SubDiagType& subdiag, Index& info) {
     using Scalar = typename MatrixType::Scalar;
     using RealScalar = typename MatrixType::RealScalar;
     using StorageIndex = typename TranspositionType::StorageIndex;
@@ -807,8 +810,8 @@ struct bunch_kaufman<Lower> {
   // Blocked (level-3 BLAS) Bunch-Kaufman factorization of the lower triangle of `mat`, in place.
   template <bool LastOnTies = false, typename MatrixType, typename TranspositionType, typename SubDiagType,
             typename WorkspaceType>
-  static Index blocked(MatrixType& mat, TranspositionType& transpositions, SubDiagType& subdiag,
-                       WorkspaceType& workspace) {
+  static constexpr Index blocked(MatrixType& mat, TranspositionType& transpositions, SubDiagType& subdiag,
+                                 WorkspaceType& workspace) {
     const Index n = mat.rows();
     const Index nb = bunch_kaufman_blocksize<typename MatrixType::Scalar>();
     if (nb < 2 || n <= nb) return unblocked<LastOnTies>(mat, transpositions, subdiag, 0);
@@ -844,15 +847,15 @@ struct bunch_kaufman<Lower> {
 template <>
 struct bunch_kaufman<Upper> {
   template <typename MatrixType, typename TranspositionType, typename SubDiagType>
-  static EIGEN_STRONG_INLINE Index unblocked(MatrixType& mat, TranspositionType& transpositions, SubDiagType& subdiag,
-                                             Index k0 = 0) {
+  static EIGEN_STRONG_INLINE constexpr Index unblocked(MatrixType& mat, TranspositionType& transpositions,
+                                                       SubDiagType& subdiag, Index k0 = 0) {
     Transpose<MatrixType> matt(mat);
     return bunch_kaufman<Lower>::unblocked(matt, transpositions, subdiag, k0);
   }
 
   template <typename MatrixType, typename TranspositionType, typename SubDiagType, typename WorkspaceType>
-  static EIGEN_STRONG_INLINE Index blocked(MatrixType& mat, TranspositionType& transpositions, SubDiagType& subdiag,
-                                           WorkspaceType& workspace) {
+  static EIGEN_STRONG_INLINE constexpr Index blocked(MatrixType& mat, TranspositionType& transpositions,
+                                                     SubDiagType& subdiag, WorkspaceType& workspace) {
     Transpose<MatrixType> matt(mat);
     return bunch_kaufman<Lower>::blocked(matt, transpositions, subdiag, workspace);
   }
@@ -862,23 +865,23 @@ template <typename MatrixType>
 struct BunchKaufman_Traits<MatrixType, Lower> {
   using MatrixL = const TriangularView<const MatrixType, UnitLower>;
   using MatrixU = const TriangularView<const typename MatrixType::AdjointReturnType, UnitUpper>;
-  static inline MatrixL getL(const MatrixType& m) { return MatrixL(m); }
-  static inline MatrixU getU(const MatrixType& m) { return MatrixU(m.adjoint()); }
+  static constexpr MatrixL getL(const MatrixType& m) { return MatrixL(m); }
+  static constexpr MatrixU getU(const MatrixType& m) { return MatrixU(m.adjoint()); }
 };
 
 template <typename MatrixType>
 struct BunchKaufman_Traits<MatrixType, Upper> {
   using MatrixL = const TriangularView<const typename MatrixType::AdjointReturnType, UnitLower>;
   using MatrixU = const TriangularView<const MatrixType, UnitUpper>;
-  static inline MatrixL getL(const MatrixType& m) { return MatrixL(m.adjoint()); }
-  static inline MatrixU getU(const MatrixType& m) { return MatrixU(m); }
+  static constexpr MatrixL getL(const MatrixType& m) { return MatrixL(m.adjoint()); }
+  static constexpr MatrixU getU(const MatrixType& m) { return MatrixU(m); }
 };
 
 }  // end namespace internal
 
 template <typename MatrixType, int UpLo_>
 template <typename Derived>
-void BunchKaufman<MatrixType, UpLo_>::applyD(MatrixBase<Derived>& x) const {
+constexpr void BunchKaufman<MatrixType, UpLo_>::applyD(MatrixBase<Derived>& x) const {
   const Index n = m_matrix.rows();
   Index k = 0;
   while (k < n) {
@@ -902,7 +905,7 @@ void BunchKaufman<MatrixType, UpLo_>::applyD(MatrixBase<Derived>& x) const {
 
 template <typename MatrixType, int UpLo_>
 template <bool Conjugate, typename Derived>
-void BunchKaufman<MatrixType, UpLo_>::solveInPlaceD(MatrixBase<Derived>& x) const {
+constexpr void BunchKaufman<MatrixType, UpLo_>::solveInPlaceD(MatrixBase<Derived>& x) const {
   const Index n = m_matrix.rows();
   // Use the pseudo-inverse of singular 1x1 blocks (see Eigen bug 241 for LDLT). The 2x2 blocks
   // produced by Bunch-Kaufman pivoting are non-singular by construction.
@@ -946,14 +949,14 @@ void BunchKaufman<MatrixType, UpLo_>::solveInPlaceD(MatrixBase<Derived>& x) cons
 // artifact of d22/d21 overflowing -- the criterion bounds |d22| only against its own row -- and
 // det(D_k) = -|d21|^2 to within that same bound there.
 template <typename MatrixType, int UpLo_>
-typename BunchKaufman<MatrixType, UpLo_>::RealScalar BunchKaufman<MatrixType, UpLo_>::scaledBlockDeterminant(
+constexpr typename BunchKaufman<MatrixType, UpLo_>::RealScalar BunchKaufman<MatrixType, UpLo_>::scaledBlockDeterminant(
     const RealScalar& d11, const RealScalar& d22, const RealScalar& d21) {
   const RealScalar q = (d11 / d21) * (d22 / d21);
   return (q > RealScalar(-1) && q < RealScalar(1)) ? q - RealScalar(1) : RealScalar(-1);
 }
 
 template <typename MatrixType, int UpLo_>
-void BunchKaufman<MatrixType, UpLo_>::computeInertia() {
+constexpr void BunchKaufman<MatrixType, UpLo_>::computeInertia() {
   const Index n = m_matrix.rows();
   m_n_pos = m_n_neg = m_n_zero = 0;
   Index k = 0;
@@ -987,7 +990,7 @@ void BunchKaufman<MatrixType, UpLo_>::computeInertia() {
  * upper variant) of \a a. */
 template <typename MatrixType, int UpLo_>
 template <typename InputType>
-BunchKaufman<MatrixType, UpLo_>& BunchKaufman<MatrixType, UpLo_>::compute(const EigenBase<InputType>& a) {
+constexpr BunchKaufman<MatrixType, UpLo_>& BunchKaufman<MatrixType, UpLo_>::compute(const EigenBase<InputType>& a) {
   EIGEN_INTERNAL_ASSERT_SQUARE(a);
   m_matrix = a.derived();
   return computeInPlace();
@@ -995,7 +998,7 @@ BunchKaufman<MatrixType, UpLo_>& BunchKaufman<MatrixType, UpLo_>::compute(const 
 
 /** \internal Factorizes the matrix held in m_matrix, which is overwritten by the packed factors. */
 template <typename MatrixType, int UpLo_>
-BunchKaufman<MatrixType, UpLo_>& BunchKaufman<MatrixType, UpLo_>::computeInPlace() {
+constexpr BunchKaufman<MatrixType, UpLo_>& BunchKaufman<MatrixType, UpLo_>::computeInPlace() {
   EIGEN_INTERNAL_ASSERT_SQUARE(m_matrix);
   const Index size = m_matrix.rows();
 
@@ -1028,13 +1031,13 @@ BunchKaufman<MatrixType, UpLo_>& BunchKaufman<MatrixType, UpLo_>::computeInPlace
 #ifndef EIGEN_PARSED_BY_DOXYGEN
 template <typename MatrixType_, int UpLo_>
 template <typename RhsType, typename DstType>
-void BunchKaufman<MatrixType_, UpLo_>::_solve_impl(const RhsType& rhs, DstType& dst) const {
+constexpr void BunchKaufman<MatrixType_, UpLo_>::_solve_impl(const RhsType& rhs, DstType& dst) const {
   _solve_impl_transposed<true>(rhs, dst);
 }
 
 template <typename MatrixType_, int UpLo_>
 template <bool Conjugate, typename RhsType, typename DstType>
-void BunchKaufman<MatrixType_, UpLo_>::_solve_impl_transposed(const RhsType& rhs, DstType& dst) const {
+constexpr void BunchKaufman<MatrixType_, UpLo_>::_solve_impl_transposed(const RhsType& rhs, DstType& dst) const {
   // A^{-1} b = P^T L^{-*} D^{-1} L^{-1} P b   (and the conjugated variants for transpose / adjoint solves).
   dst = m_transpositions * rhs;
   matrixL().template conjugateIf<!Conjugate>().solveInPlace(dst);
@@ -1052,7 +1055,7 @@ void BunchKaufman<MatrixType_, UpLo_>::_solve_impl_transposed(const RhsType& rhs
  */
 template <typename MatrixType, int UpLo_>
 template <typename Derived>
-bool BunchKaufman<MatrixType, UpLo_>::solveInPlace(MatrixBase<Derived>& bAndX) const {
+constexpr bool BunchKaufman<MatrixType, UpLo_>::solveInPlace(MatrixBase<Derived>& bAndX) const {
   eigen_assert(m_isInitialized && "BunchKaufman is not initialized.");
   EIGEN_INTERNAL_ASSERT_SAME_ROWS(m_matrix, bAndX);
   bAndX = this->solve(bAndX);
@@ -1060,7 +1063,8 @@ bool BunchKaufman<MatrixType, UpLo_>::solveInPlace(MatrixBase<Derived>& bAndX) c
 }
 
 template <typename MatrixType, int UpLo_>
-typename BunchKaufman<MatrixType, UpLo_>::DeterminantProduct BunchKaufman<MatrixType, UpLo_>::determinantD() const {
+constexpr typename BunchKaufman<MatrixType, UpLo_>::DeterminantProduct BunchKaufman<MatrixType, UpLo_>::determinantD()
+    const {
   const Index n = m_matrix.rows();
   DeterminantProduct product;
   Index k = 0;
@@ -1085,19 +1089,20 @@ typename BunchKaufman<MatrixType, UpLo_>::DeterminantProduct BunchKaufman<Matrix
 // A = P^T L D L^* P with L unit triangular, so det(A) = det(D) = prod over the 1x1 and 2x2 blocks of D.
 
 template <typename MatrixType, int UpLo_>
-typename BunchKaufman<MatrixType, UpLo_>::Scalar BunchKaufman<MatrixType, UpLo_>::determinant() const {
+constexpr typename BunchKaufman<MatrixType, UpLo_>::Scalar BunchKaufman<MatrixType, UpLo_>::determinant() const {
   eigen_assert(m_isInitialized && "BunchKaufman is not initialized.");
   return Scalar(determinantD().value());
 }
 
 template <typename MatrixType, int UpLo_>
-typename BunchKaufman<MatrixType, UpLo_>::RealScalar BunchKaufman<MatrixType, UpLo_>::absDeterminant() const {
+constexpr typename BunchKaufman<MatrixType, UpLo_>::RealScalar BunchKaufman<MatrixType, UpLo_>::absDeterminant() const {
   eigen_assert(m_isInitialized && "BunchKaufman is not initialized.");
   return determinantD().abs();
 }
 
 template <typename MatrixType, int UpLo_>
-typename BunchKaufman<MatrixType, UpLo_>::RealScalar BunchKaufman<MatrixType, UpLo_>::logAbsDeterminant() const {
+constexpr typename BunchKaufman<MatrixType, UpLo_>::RealScalar BunchKaufman<MatrixType, UpLo_>::logAbsDeterminant()
+    const {
   eigen_assert(m_isInitialized && "BunchKaufman is not initialized.");
   EIGEN_IF_CONSTEXPR (internal::has_scaled_product<RealScalar>::value) return determinantD().logAbs();
   const Index n = m_matrix.rows();
@@ -1121,7 +1126,7 @@ typename BunchKaufman<MatrixType, UpLo_>::RealScalar BunchKaufman<MatrixType, Up
 }
 
 template <typename MatrixType, int UpLo_>
-typename BunchKaufman<MatrixType, UpLo_>::Scalar BunchKaufman<MatrixType, UpLo_>::signDeterminant() const {
+constexpr typename BunchKaufman<MatrixType, UpLo_>::Scalar BunchKaufman<MatrixType, UpLo_>::signDeterminant() const {
   eigen_assert(m_isInitialized && "BunchKaufman is not initialized.");
   if (m_n_zero > 0 || m_n_pos + m_n_neg + m_n_zero < rows()) return Scalar(0);
   return Scalar((m_n_neg % 2 == 0) ? 1 : -1);
@@ -1130,7 +1135,7 @@ typename BunchKaufman<MatrixType, UpLo_>::Scalar BunchKaufman<MatrixType, UpLo_>
 /** \returns the matrix represented by the decomposition, i.e., the product \f$ P^T L D L^* P \f$.
  * This function is provided for debug purposes. */
 template <typename MatrixType, int UpLo_>
-MatrixType BunchKaufman<MatrixType, UpLo_>::reconstructedMatrix() const {
+constexpr MatrixType BunchKaufman<MatrixType, UpLo_>::reconstructedMatrix() const {
   eigen_assert(m_isInitialized && "BunchKaufman is not initialized.");
   MatrixType res = matrixU();
   applyD(res);
@@ -1148,7 +1153,7 @@ MatrixType BunchKaufman<MatrixType, UpLo_>::reconstructedMatrix() const {
  * \sa SelfAdjointView::bunchKaufman()
  */
 template <typename MatrixType, unsigned int UpLo>
-inline BunchKaufman<typename SelfAdjointView<MatrixType, UpLo>::PlainObject, UpLo>
+constexpr BunchKaufman<typename SelfAdjointView<MatrixType, UpLo>::PlainObject, UpLo>
 SelfAdjointView<MatrixType, UpLo>::bunchKaufman() const {
   return BunchKaufman<PlainObject, UpLo>(m_matrix);
 }
@@ -1158,7 +1163,7 @@ SelfAdjointView<MatrixType, UpLo>::bunchKaufman() const {
  * \sa SelfAdjointView::bunchKaufman()
  */
 template <typename Derived>
-inline BunchKaufman<typename MatrixBase<Derived>::PlainObject> MatrixBase<Derived>::bunchKaufman() const {
+constexpr BunchKaufman<typename MatrixBase<Derived>::PlainObject> MatrixBase<Derived>::bunchKaufman() const {
   return BunchKaufman<PlainObject>(derived());
 }
 

@@ -26,7 +26,9 @@ namespace internal {
  */
 template <typename Scalar>
 struct scalar_bessel_i0_op {
-  EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE const Scalar operator()(const Scalar& x) const { return numext::bessel_i0(x); }
+  EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE constexpr const Scalar operator()(const Scalar& x) const {
+    return numext::bessel_i0(x);
+  }
   using Packet = typename packet_traits<Scalar>::type;
   EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE Packet packetOp(const Packet& x) const { return internal::pbessel_i0(x); }
 };
@@ -48,7 +50,9 @@ struct functor_traits<scalar_bessel_i0_op<Scalar> > {
  */
 template <typename Scalar>
 struct scalar_bessel_i0e_op {
-  EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE const Scalar operator()(const Scalar& x) const { return numext::bessel_i0e(x); }
+  EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE constexpr const Scalar operator()(const Scalar& x) const {
+    return numext::bessel_i0e(x);
+  }
   using Packet = typename packet_traits<Scalar>::type;
   EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE Packet packetOp(const Packet& x) const { return internal::pbessel_i0e(x); }
 };
@@ -69,7 +73,9 @@ struct functor_traits<scalar_bessel_i0e_op<Scalar> > {
  */
 template <typename Scalar>
 struct scalar_bessel_i1_op {
-  EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE const Scalar operator()(const Scalar& x) const { return numext::bessel_i1(x); }
+  EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE constexpr const Scalar operator()(const Scalar& x) const {
+    return numext::bessel_i1(x);
+  }
   using Packet = typename packet_traits<Scalar>::type;
   EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE Packet packetOp(const Packet& x) const { return internal::pbessel_i1(x); }
 };
@@ -91,7 +97,9 @@ struct functor_traits<scalar_bessel_i1_op<Scalar> > {
  */
 template <typename Scalar>
 struct scalar_bessel_i1e_op {
-  EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE const Scalar operator()(const Scalar& x) const { return numext::bessel_i1e(x); }
+  EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE constexpr const Scalar operator()(const Scalar& x) const {
+    return numext::bessel_i1e(x);
+  }
   using Packet = typename packet_traits<Scalar>::type;
   EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE Packet packetOp(const Packet& x) const { return internal::pbessel_i1e(x); }
 };
@@ -112,7 +120,9 @@ struct functor_traits<scalar_bessel_i1e_op<Scalar> > {
  */
 template <typename Scalar>
 struct scalar_bessel_j0_op {
-  EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE const Scalar operator()(const Scalar& x) const { return numext::bessel_j0(x); }
+  EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE constexpr const Scalar operator()(const Scalar& x) const {
+    return numext::bessel_j0(x);
+  }
   using Packet = typename packet_traits<Scalar>::type;
   EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE Packet packetOp(const Packet& x) const { return internal::pbessel_j0(x); }
 };
@@ -134,7 +144,9 @@ struct functor_traits<scalar_bessel_j0_op<Scalar> > {
  */
 template <typename Scalar>
 struct scalar_bessel_y0_op {
-  EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE const Scalar operator()(const Scalar& x) const { return numext::bessel_y0(x); }
+  EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE constexpr const Scalar operator()(const Scalar& x) const {
+    return numext::bessel_y0(x);
+  }
   using Packet = typename packet_traits<Scalar>::type;
   EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE Packet packetOp(const Packet& x) const { return internal::pbessel_y0(x); }
 };
@@ -156,7 +168,9 @@ struct functor_traits<scalar_bessel_y0_op<Scalar> > {
  */
 template <typename Scalar>
 struct scalar_bessel_j1_op {
-  EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE const Scalar operator()(const Scalar& x) const { return numext::bessel_j1(x); }
+  EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE constexpr const Scalar operator()(const Scalar& x) const {
+    return numext::bessel_j1(x);
+  }
   using Packet = typename packet_traits<Scalar>::type;
   EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE Packet packetOp(const Packet& x) const { return internal::pbessel_j1(x); }
 };
@@ -178,7 +192,9 @@ struct functor_traits<scalar_bessel_j1_op<Scalar> > {
  */
 template <typename Scalar>
 struct scalar_bessel_y1_op {
-  EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE const Scalar operator()(const Scalar& x) const { return numext::bessel_y1(x); }
+  EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE constexpr const Scalar operator()(const Scalar& x) const {
+    return numext::bessel_y1(x);
+  }
   using Packet = typename packet_traits<Scalar>::type;
   EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE Packet packetOp(const Packet& x) const { return internal::pbessel_y1(x); }
 };
@@ -200,7 +216,9 @@ struct functor_traits<scalar_bessel_y1_op<Scalar> > {
  */
 template <typename Scalar>
 struct scalar_bessel_k0_op {
-  EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE const Scalar operator()(const Scalar& x) const { return numext::bessel_k0(x); }
+  EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE constexpr const Scalar operator()(const Scalar& x) const {
+    return numext::bessel_k0(x);
+  }
   using Packet = typename packet_traits<Scalar>::type;
   EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE Packet packetOp(const Packet& x) const { return internal::pbessel_k0(x); }
 };
@@ -222,7 +240,9 @@ struct functor_traits<scalar_bessel_k0_op<Scalar> > {
  */
 template <typename Scalar>
 struct scalar_bessel_k0e_op {
-  EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE const Scalar operator()(const Scalar& x) const { return numext::bessel_k0e(x); }
+  EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE constexpr const Scalar operator()(const Scalar& x) const {
+    return numext::bessel_k0e(x);
+  }
   using Packet = typename packet_traits<Scalar>::type;
   EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE Packet packetOp(const Packet& x) const { return internal::pbessel_k0e(x); }
 };
@@ -244,7 +264,9 @@ struct functor_traits<scalar_bessel_k0e_op<Scalar> > {
  */
 template <typename Scalar>
 struct scalar_bessel_k1_op {
-  EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE const Scalar operator()(const Scalar& x) const { return numext::bessel_k1(x); }
+  EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE constexpr const Scalar operator()(const Scalar& x) const {
+    return numext::bessel_k1(x);
+  }
   using Packet = typename packet_traits<Scalar>::type;
   EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE Packet packetOp(const Packet& x) const { return internal::pbessel_k1(x); }
 };
@@ -266,7 +288,9 @@ struct functor_traits<scalar_bessel_k1_op<Scalar> > {
  */
 template <typename Scalar>
 struct scalar_bessel_k1e_op {
-  EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE const Scalar operator()(const Scalar& x) const { return numext::bessel_k1e(x); }
+  EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE constexpr const Scalar operator()(const Scalar& x) const {
+    return numext::bessel_k1e(x);
+  }
   using Packet = typename packet_traits<Scalar>::type;
   EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE Packet packetOp(const Packet& x) const { return internal::pbessel_k1e(x); }
 };

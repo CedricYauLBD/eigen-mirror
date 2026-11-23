@@ -140,19 +140,25 @@ struct selfadjoint_product_selector;
 
 template <typename MatrixType, typename OtherType, int UpLo>
 struct selfadjoint_product_selector<MatrixType, OtherType, UpLo, true> {
-  static void run(MatrixType& mat, const OtherType& other, const typename MatrixType::Scalar& alpha) {
+  static constexpr void run(MatrixType& mat, const OtherType& other, const typename MatrixType::Scalar& alpha) {
     using Scalar = typename MatrixType::Scalar;
-    if (internal::is_identically_zero(alpha)) return;
+    if (internal::is_identically_zero(alpha) || internal::blas_traits<OtherType>::hasZeroScalarFactor(other.derived()))
+      return;
+    // The rank-1 kernel addresses mat with a unit inner stride, and is unavailable in constant evaluation.
+    if (internal::is_constant_evaluated() || (MatrixType::InnerStrideAtCompileTime != 1 && mat.innerStride() != 1)) {
+      const Matrix<Scalar, Dynamic, 1> u = other.reshaped();
+      mat.template triangularView<UpLo>() += typename MatrixType::PlainObject(alpha * u * u.adjoint());
+    } else {
+      run_kernel(mat, other, alpha);
+    }
+  }
+
+ private:
+  static void run_kernel(MatrixType& mat, const OtherType& other, const typename MatrixType::Scalar& alpha) {
+    using Scalar = typename MatrixType::Scalar;
     using OtherBlasTraits = internal::blas_traits<OtherType>;
     // (s w) (s w)^* = s conj(s) w w^*
     const Scalar otherFactor = OtherBlasTraits::extractScalarFactor(other.derived());
-    if (OtherBlasTraits::hasZeroScalarFactor(other.derived())) return;
-    // The rank-1 kernel below addresses mat with a unit inner stride.
-    if (MatrixType::InnerStrideAtCompileTime != 1 && mat.innerStride() != 1) {
-      const Matrix<Scalar, Dynamic, 1> u = other.reshaped();
-      mat.template triangularView<UpLo>() += typename MatrixType::PlainObject(alpha * u * u.adjoint());
-      return;
-    }
     Scalar actualAlpha = alpha * otherFactor * numext::conj(otherFactor);
     using ActualOtherType = typename OtherBlasTraits::DirectLinearAccessType;
     using ActualOtherType_ = internal::remove_all_t<ActualOtherType>;
@@ -184,14 +190,24 @@ struct selfadjoint_product_selector<MatrixType, OtherType, UpLo, true> {
 
 template <typename MatrixType, typename OtherType, int UpLo>
 struct selfadjoint_product_selector<MatrixType, OtherType, UpLo, false> {
-  static void run(MatrixType& mat, const OtherType& other, const typename MatrixType::Scalar& alpha) {
+  static constexpr void run(MatrixType& mat, const OtherType& other, const typename MatrixType::Scalar& alpha) {
+    if (internal::is_identically_zero(alpha) || internal::blas_traits<OtherType>::hasZeroScalarFactor(other.derived()))
+      return;
+    // The packed GEMM kernel is unavailable in constant evaluation.
+    if (internal::is_constant_evaluated())
+      mat.template triangularView<UpLo>() += typename MatrixType::PlainObject(alpha * other * other.adjoint());
+    else
+      run_kernel(mat, other, alpha);
+  }
+
+ private:
+  static void run_kernel(MatrixType& mat, const OtherType& other, const typename MatrixType::Scalar& alpha) {
     using Scalar = typename MatrixType::Scalar;
     using OtherBlasTraits = internal::blas_traits<OtherType>;
     using ActualOtherType = typename OtherBlasTraits::DirectLinearAccessType;
     using ActualOtherType_ = internal::remove_all_t<ActualOtherType>;
 
     // (s W) (s W)^* = s conj(s) W W^*
-    if (internal::is_identically_zero(alpha) || OtherBlasTraits::hasZeroScalarFactor(other.derived())) return;
     const Scalar otherFactor = OtherBlasTraits::extractScalarFactor(other.derived());
     Scalar actualAlpha = alpha * otherFactor * numext::conj(otherFactor);
     internal::add_const_on_value_type_t<ActualOtherType> actualOther = OtherBlasTraits::extract(other.derived());
@@ -227,7 +243,7 @@ struct selfadjoint_product_selector<MatrixType, OtherType, UpLo, false> {
 
 template <typename MatrixType, unsigned int UpLo>
 template <typename DerivedU>
-EIGEN_DEVICE_FUNC SelfAdjointView<MatrixType, UpLo>& SelfAdjointView<MatrixType, UpLo>::rankUpdate(
+EIGEN_DEVICE_FUNC constexpr SelfAdjointView<MatrixType, UpLo>& SelfAdjointView<MatrixType, UpLo>::rankUpdate(
     const MatrixBase<DerivedU>& u, const Scalar& alpha) {
   selfadjoint_product_selector<MatrixType, DerivedU, UpLo>::run(nestedExpression(), u.derived(), alpha);
 

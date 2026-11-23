@@ -100,10 +100,10 @@ class MultifrontalLDLT : public SparseSolverBase<MultifrontalLDLT<MatrixType_, U
   static constexpr int MaxColsAtCompileTime = Dynamic;
 
   /** Default constructor */
-  MultifrontalLDLT() = default;
+  constexpr MultifrontalLDLT() = default;
 
   /** Constructs the factorization of \a matrix. */
-  explicit MultifrontalLDLT(const MatrixType& matrix) { compute(matrix); }
+  constexpr explicit MultifrontalLDLT(const MatrixType& matrix) { compute(matrix); }
 
   /** Sets the threshold \f$ u \f$ for accepting a pivot. It must be in (0, 1/2]. The default is 0.01.
    *
@@ -111,20 +111,20 @@ class MultifrontalLDLT : public SparseSolverBase<MultifrontalLDLT<MatrixType_, U
    *
    * \returns a reference to \c *this.
    */
-  MultifrontalLDLT& setPivotThreshold(const RealScalar& threshold) {
+  constexpr MultifrontalLDLT& setPivotThreshold(const RealScalar& threshold) {
     eigen_assert(threshold > RealScalar(0) && threshold <= RealScalar(0.5));
     m_threshold = threshold;
     return *this;
   }
 
   /** \returns the pivot threshold. \sa setPivotThreshold() */
-  const RealScalar& pivotThreshold() const { return m_threshold; }
+  constexpr const RealScalar& pivotThreshold() const { return m_threshold; }
 
   /** Computes the symbolic analysis and the factorization of \a matrix.
    *
    * \returns a reference to \c *this.
    */
-  MultifrontalLDLT& compute(const MatrixType& matrix) {
+  constexpr MultifrontalLDLT& compute(const MatrixType& matrix) {
     analyzePattern(matrix);
     factorize(matrix);
     return *this;
@@ -134,13 +134,13 @@ class MultifrontalLDLT : public SparseSolverBase<MultifrontalLDLT<MatrixType_, U
    *
    * \sa factorize(), compute()
    */
-  void analyzePattern(const MatrixType& matrix);
+  EIGEN_CONSTEXPR20 void analyzePattern(const MatrixType& matrix);
 
   /** Performs the numeric factorization of \a matrix, which must have the sparsity pattern given to analyzePattern().
    *
    * \sa analyzePattern(), compute()
    */
-  void factorize(const MatrixType& matrix);
+  constexpr void factorize(const MatrixType& matrix);
 
   /** \brief Reports whether the previous factorization was successful.
    *
@@ -151,23 +151,23 @@ class MultifrontalLDLT : public SparseSolverBase<MultifrontalLDLT<MatrixType_, U
    *          pivot gets a zero solution, so solve() still returns the solution of the remaining blocks if every pivot
    *          is finite. If a pivot isn't finite, the result of solve() isn't meaningful.
    */
-  ComputationInfo info() const {
+  constexpr ComputationInfo info() const {
     eigen_assert(m_isInitialized && "Decomposition is not initialized.");
     return m_info;
   }
 
-  Index rows() const { return m_P.rows(); }
-  Index cols() const { return m_P.cols(); }
+  constexpr Index rows() const { return m_P.rows(); }
+  constexpr Index cols() const { return m_P.cols(); }
 
   /** \returns the diagonal of D, in pivot order. */
-  const RealVectorType& vectorD() const {
+  constexpr const RealVectorType& vectorD() const {
     eigen_assert(m_info != InvalidInput && "factorize() must be called before reading D.");
     return m_D;
   }
 
   /** \returns the subdiagonal of D, in pivot order. Entry \c k is nonzero if and only if pivots \c k and \c k+1 form a
    * 2x2 block. */
-  const VectorType& subDiagonal() const {
+  constexpr const VectorType& subDiagonal() const {
     eigen_assert(m_info != InvalidInput && "factorize() must be called before reading D.");
     return m_subdiagonal;
   }
@@ -179,14 +179,14 @@ class MultifrontalLDLT : public SparseSolverBase<MultifrontalLDLT<MatrixType_, U
    *
    * \sa matrixU(), vectorD(), subDiagonal(), permutationP()
    */
-  FactorType matrixL() const;
+  constexpr FactorType matrixL() const;
 
   /** \returns the unit upper triangular factor \f$ U = L^* \f$ of the previous factorization. Like matrixL(), it is
    * assembled on each call.
    *
    * \sa matrixL()
    */
-  FactorType matrixU() const { return matrixL().adjoint(); }
+  constexpr FactorType matrixU() const { return matrixL().adjoint(); }
 
   /** \returns the permutation \f$ P \f$ of the previous factorization. It combines the fill-reducing ordering, the
    * reordering of the elimination tree, and the delayed pivots, so unlike in SimplicialLDLT, it depends on the matrix's
@@ -194,7 +194,7 @@ class MultifrontalLDLT : public SparseSolverBase<MultifrontalLDLT<MatrixType_, U
    *
    * \sa permutationPinv()
    */
-  const PermutationType& permutationP() const {
+  constexpr const PermutationType& permutationP() const {
     eigen_assert(m_info != InvalidInput && "factorize() must be called before reading the permutation.");
     return m_P;
   }
@@ -204,7 +204,7 @@ class MultifrontalLDLT : public SparseSolverBase<MultifrontalLDLT<MatrixType_, U
    *
    * \sa permutationP()
    */
-  const PermutationType& permutationPinv() const {
+  constexpr const PermutationType& permutationPinv() const {
     eigen_assert(m_info != InvalidInput && "factorize() must be called before reading the permutation.");
     return m_Pinv;
   }
@@ -218,7 +218,7 @@ class MultifrontalLDLT : public SparseSolverBase<MultifrontalLDLT<MatrixType_, U
    *
    * \sa absDeterminant(), logAbsDeterminant(), signDeterminant()
    */
-  Scalar determinant() const { return Scalar(absDeterminant()) * signDeterminant(); }
+  constexpr Scalar determinant() const { return Scalar(absDeterminant()) * signDeterminant(); }
 
   /** \returns the absolute value of the determinant of the matrix.
    *
@@ -226,7 +226,7 @@ class MultifrontalLDLT : public SparseSolverBase<MultifrontalLDLT<MatrixType_, U
    *
    * \sa determinant(), logAbsDeterminant()
    */
-  RealScalar absDeterminant() const { return numext::exp(logAbsDeterminant()); }
+  constexpr RealScalar absDeterminant() const { return numext::exp(logAbsDeterminant()); }
 
   /** \returns the natural log of the absolute value of the determinant of the matrix,
    * \f[ \log|\det A| = \sum_{1 \times 1} \log|d_k| + \sum_{2 \times 2} \left( 2 \log s_k + \log|\delta_k| \right), \f]
@@ -235,14 +235,14 @@ class MultifrontalLDLT : public SparseSolverBase<MultifrontalLDLT<MatrixType_, U
    *
    * \sa determinant(), signDeterminant()
    */
-  RealScalar logAbsDeterminant() const;
+  constexpr RealScalar logAbsDeterminant() const;
 
   /** \returns the sign of the determinant of the matrix: \c 1, \c -1, or \c 0 if a pivot is zero or not finite. It is
    * \f$ (-1)^{n_-} \f$ for the inertia numNegative() = \f$ n_- \f$, so it doesn't overflow.
    *
    * \sa determinant(), logAbsDeterminant(), numNegative()
    */
-  Scalar signDeterminant() const {
+  constexpr Scalar signDeterminant() const {
     if (numZero() > 0 || numPositive() + numNegative() < rows()) return Scalar(0);
     return Scalar(numNegative() % 2 == 0 ? 1 : -1);
   }
@@ -255,13 +255,13 @@ class MultifrontalLDLT : public SparseSolverBase<MultifrontalLDLT<MatrixType_, U
    *
    * \sa numNegative(), numZero()
    */
-  Index numPositive() const {
+  constexpr Index numPositive() const {
     eigen_assert(m_info != InvalidInput && "factorize() must be called before reading the inertia.");
     return m_numPositive;
   }
 
   /** \returns the number of negative eigenvalues. \sa numPositive() */
-  Index numNegative() const {
+  constexpr Index numNegative() const {
     eigen_assert(m_info != InvalidInput && "factorize() must be called before reading the inertia.");
     return m_numNegative;
   }
@@ -273,21 +273,21 @@ class MultifrontalLDLT : public SparseSolverBase<MultifrontalLDLT<MatrixType_, U
    *
    * \sa numPositive()
    */
-  Index numZero() const {
+  constexpr Index numZero() const {
     eigen_assert(m_info != InvalidInput && "factorize() must be called before reading the inertia.");
     return m_numZero;
   }
 
   /** \returns true if the matrix is positive semidefinite: every pivot is finite and no eigenvalue is negative. */
-  bool isPositive() const { return numNegative() == 0 && numPositive() + numZero() == rows(); }
+  constexpr bool isPositive() const { return numNegative() == 0 && numPositive() + numZero() == rows(); }
 
   /** \returns true if the matrix is negative semidefinite: every pivot is finite and no eigenvalue is positive. */
-  bool isNegative() const { return numPositive() == 0 && numNegative() + numZero() == rows(); }
+  constexpr bool isNegative() const { return numPositive() == 0 && numNegative() + numZero() == rows(); }
 
   /** \returns the number of entries of L stored below its unit diagonal in the previous factorization. This includes
    * the explicit zeros of merged fronts, so it can exceed the fill of an unmerged factorization such as SimplicialLDLT.
    */
-  Index nonZeros() const {
+  constexpr Index nonZeros() const {
     eigen_assert(m_info != InvalidInput && "factorize() must be called before reading the size of L.");
     return m_LNonZeros;
   }
@@ -295,7 +295,7 @@ class MultifrontalLDLT : public SparseSolverBase<MultifrontalLDLT<MatrixType_, U
 #ifndef EIGEN_PARSED_BY_DOXYGEN
   /** \internal */
   template <typename Rhs, typename Dest>
-  void _solve_impl(const MatrixBase<Rhs>& rhs, MatrixBase<Dest>& dest) const;
+  constexpr void _solve_impl(const MatrixBase<Rhs>& rhs, MatrixBase<Dest>& dest) const;
 #endif  // EIGEN_PARSED_BY_DOXYGEN
 
  private:
@@ -333,7 +333,7 @@ class MultifrontalLDLT : public SparseSolverBase<MultifrontalLDLT<MatrixType_, U
     std::size_t size = 0;
 
     // Returns where to write count new elements. This can invalidate earlier pointers into the array.
-    T* push(std::size_t count) {
+    constexpr T* push(std::size_t count) {
       if (storage.size() < size + count) storage.resize(numext::maxi(size + count, 2 * storage.size()));
       T* end = storage.data() + size;
       size += count;
@@ -341,13 +341,13 @@ class MultifrontalLDLT : public SparseSolverBase<MultifrontalLDLT<MatrixType_, U
     }
 
     // Returns the last count elements.
-    T* top(std::size_t count) { return storage.data() + (size - count); }
+    constexpr T* top(std::size_t count) { return storage.data() + (size - count); }
 
-    void pop(std::size_t count) { size -= count; }
-    void reserve(std::size_t count) {
+    constexpr void pop(std::size_t count) { size -= count; }
+    constexpr void reserve(std::size_t count) {
       if (storage.size() < count) storage.resize(count);
     }
-    void clear() { size = 0; }
+    constexpr void clear() { size = 0; }
   };
 
   // An entry of the input matrix and where it's assembled in its front. value is the entry's index in the values of the
@@ -371,22 +371,27 @@ class MultifrontalLDLT : public SparseSolverBase<MultifrontalLDLT<MatrixType_, U
   };
 
   // The sizes are computed in std::size_t because Index can be narrower than the product.
-  static std::size_t rectangleSize(Index rows, Index cols) {
+  static constexpr std::size_t rectangleSize(Index rows, Index cols) {
     return static_cast<std::size_t>(rows) * static_cast<std::size_t>(cols);
   }
 
   // Entries in the lower triangle of an n x n matrix, including its diagonal.
-  static std::size_t packedSize(Index n) { return static_cast<std::size_t>(n) * (static_cast<std::size_t>(n) + 1) / 2; }
+  static constexpr std::size_t packedSize(Index n) {
+    return static_cast<std::size_t>(n) * (static_cast<std::size_t>(n) + 1) / 2;
+  }
 
   // Entries strictly below the diagonal in the first numPivots columns of an order x order matrix.
-  static std::size_t factorSize(Index numPivots, Index order) {
+  static constexpr std::size_t factorSize(Index numPivots, Index order) {
     return rectangleSize(numPivots, order) - packedSize(numPivots);
   }
 
+  // Constant evaluation takes the loops in these: they compute the same coefficients as the expressions in fewer
+  // evaluation steps.
+
   // dst -= alpha * src, where the arrays don't overlap.
-  static void subtractScaled(Scalar* EIGEN_RESTRICT dst, const Scalar* EIGEN_RESTRICT src, const Scalar& alpha,
-                             Index length) {
-    if (length < kVectorizedMinLength) {
+  static constexpr void subtractScaled(Scalar* EIGEN_RESTRICT dst, const Scalar* EIGEN_RESTRICT src,
+                                       const Scalar& alpha, Index length) {
+    if (length < kVectorizedMinLength || internal::is_constant_evaluated()) {
       for (Index i = 0; i < length; ++i) dst[i] -= src[i] * alpha;
     } else {
       VectorMap(dst, length).noalias() -= ConstVectorMap(src, length) * alpha;
@@ -394,9 +399,10 @@ class MultifrontalLDLT : public SparseSolverBase<MultifrontalLDLT<MatrixType_, U
   }
 
   // dst -= alpha1 * src1 + alpha2 * src2, where dst doesn't overlap the others.
-  static void subtractScaled(Scalar* EIGEN_RESTRICT dst, const Scalar* EIGEN_RESTRICT src1, const Scalar& alpha1,
-                             const Scalar* EIGEN_RESTRICT src2, const Scalar& alpha2, Index length) {
-    if (length < kVectorizedMinLength) {
+  static constexpr void subtractScaled(Scalar* EIGEN_RESTRICT dst, const Scalar* EIGEN_RESTRICT src1,
+                                       const Scalar& alpha1, const Scalar* EIGEN_RESTRICT src2, const Scalar& alpha2,
+                                       Index length) {
+    if (length < kVectorizedMinLength || internal::is_constant_evaluated()) {
       for (Index i = 0; i < length; ++i) dst[i] -= src1[i] * alpha1 + src2[i] * alpha2;
     } else {
       VectorMap(dst, length).noalias() -= ConstVectorMap(src1, length) * alpha1 + ConstVectorMap(src2, length) * alpha2;
@@ -404,8 +410,8 @@ class MultifrontalLDLT : public SparseSolverBase<MultifrontalLDLT<MatrixType_, U
   }
 
   // dst += src, where the arrays don't overlap.
-  static void addTo(Scalar* EIGEN_RESTRICT dst, const Scalar* EIGEN_RESTRICT src, Index length) {
-    if (length < kVectorizedMinLength) {
+  static constexpr void addTo(Scalar* EIGEN_RESTRICT dst, const Scalar* EIGEN_RESTRICT src, Index length) {
+    if (length < kVectorizedMinLength || internal::is_constant_evaluated()) {
       for (Index i = 0; i < length; ++i) dst[i] += src[i];
     } else {
       VectorMap(dst, length).noalias() += ConstVectorMap(src, length);
@@ -413,15 +419,16 @@ class MultifrontalLDLT : public SparseSolverBase<MultifrontalLDLT<MatrixType_, U
   }
 
   // Returns the largest magnitude of a column segment, or zero if it's empty.
-  static RealScalar largestMagnitude(const Scalar* column, Index length) {
-    if (length >= kVectorizedMinLength) return ConstVectorMap(column, length).cwiseAbs().maxCoeff();
+  static constexpr RealScalar largestMagnitude(const Scalar* column, Index length) {
+    if (length >= kVectorizedMinLength && !internal::is_constant_evaluated())
+      return ConstVectorMap(column, length).cwiseAbs().maxCoeff();
     RealScalar result(0);
     for (Index i = 0; i < length; ++i) result = numext::maxi(result, RealScalar(numext::abs(column[i])));
     return result;
   }
 
   // The rows of the order x order front being factored.
-  StorageIndex* frontRows(Index order) { return m_factorRows.top(static_cast<std::size_t>(order)); }
+  constexpr StorageIndex* frontRows(Index order) { return m_factorRows.top(static_cast<std::size_t>(order)); }
 
   // The 2x2 block [d1 conj(d21); d21 d2] = scale [a conj(b); b c], where scale is its largest magnitude. det = a c -
   // |b|^2 is in [-2, 1].
@@ -432,7 +439,7 @@ class MultifrontalLDLT : public SparseSolverBase<MultifrontalLDLT<MatrixType_, U
     RealScalar absB;
     RealScalar det;
 
-    ScaledBlock(const RealScalar& d1, const RealScalar& d2, const RealScalar& absD21)
+    constexpr ScaledBlock(const RealScalar& d1, const RealScalar& d2, const RealScalar& absD21)
         : scale(numext::maxi(numext::maxi(RealScalar(numext::abs(d1)), RealScalar(numext::abs(d2))), absD21)),
           a(d1 / scale),
           c(d2 / scale),
@@ -444,7 +451,7 @@ class MultifrontalLDLT : public SparseSolverBase<MultifrontalLDLT<MatrixType_, U
   // counts all of the matrix's entries before this one in storage order. That's the entry's index in the values of the
   // matrix once it's compressed.
   template <typename Function>
-  static void visitTriangle(const MatrixType& matrix, Function&& function) {
+  static constexpr void visitTriangle(const MatrixType& matrix, Function&& function) {
     Index position = 0;
     const Index outerSize = matrix.outerSize();
     for (Index outer = 0; outer < outerSize; ++outer) {
@@ -459,17 +466,21 @@ class MultifrontalLDLT : public SparseSolverBase<MultifrontalLDLT<MatrixType_, U
   // Largest fraction of explicit zeros allowed in a merged front's L, including its diagonal. An explicit zero costs
   // more in a larger front, while a smaller one gains more from losing an extend-add and from gaining fully summed
   // columns.
-  static double maxExplicitZeroFraction(Index pivots) { return pivots < 4 ? 0.3 : (pivots < 32 ? 0.1 : 0.02); }
+  static constexpr double maxExplicitZeroFraction(Index pivots) {
+    return pivots < 4 ? 0.3 : (pivots < 32 ? 0.1 : 0.02);
+  }
 
   // Merges fronts into their parents if the result has few enough explicit zeros, then renumbers the columns so that
   // each merged front's are contiguous. frontParent and frontBelow hold each front's parent, or -1 for a root, and its
   // number of rows below its pivots. Updates columnFront, m_frontColumns, m_perm and m_invPerm, and sets newColumn to
   // each column's new index.
-  void mergeRelaxedFronts(const std::vector<StorageIndex>& frontParent, const std::vector<StorageIndex>& frontBelow,
-                          std::vector<StorageIndex>& columnFront, std::vector<StorageIndex>& newColumn);
+  EIGEN_CONSTEXPR20 void mergeRelaxedFronts(const std::vector<StorageIndex>& frontParent,
+                                            const std::vector<StorageIndex>& frontBelow,
+                                            std::vector<StorageIndex>& columnFront,
+                                            std::vector<StorageIndex>& newColumn);
 
   // Records a factored front and returns where to write its order x numPivots columns of L.
-  Scalar* appendFactor(Index s, Index numPivots, Index order);
+  constexpr Scalar* appendFactor(Index s, Index numPivots, Index order);
 
   // Returns the largest off-diagonal magnitude of column j in the front's active part, which starts at row active,
   // leaving out row skip (or -1 for none).
@@ -477,51 +488,52 @@ class MultifrontalLDLT : public SparseSolverBase<MultifrontalLDLT<MatrixType_, U
   // This, largestFullySummed() and largestMagnitude() skip NaN entries, so a pivot can pass its test against a column
   // holding a NaN. The update carries the NaN to the diagonal of a later pivot, and factorize() reports a non-finite
   // pivot as NumericalIssue.
-  RealScalar frontColumnMax(Index order, Index active, Index j, Index skip) const;
+  constexpr RealScalar frontColumnMax(Index order, Index active, Index j, Index skip) const;
 
   // Returns whether column j is exactly zero off its diagonal in the front's active part, which starts at row active. A
   // NaN entry counts as nonzero.
-  bool frontColumnIsZero(Index order, Index active, Index j) const;
+  constexpr bool frontColumnIsZero(Index order, Index active, Index j) const;
 
   // Returns the row r in [active, fullySummed) other than j with the largest magnitude in column j, or -1 if they're
   // all zero, and sets rest to frontColumnMax(order, active, j, r).
-  Index largestFullySummed(Index order, Index active, Index fullySummed, Index j, RealScalar& rest) const;
+  constexpr Index largestFullySummed(Index order, Index active, Index fullySummed, Index j, RealScalar& rest) const;
 
   // These add a child's packed lower triangle to the order x order front, where map gives each of its childOrder rows'
   // row in the front. extendAdd() adds the rows that stay adjacent in the front as vectorized segments, if there are
   // enough of them. A call is too expensive for the short children of a tree of small fronts, so they scatter inline.
-  EIGEN_ALWAYS_INLINE void scatterAdd(Index order, const Scalar* block, const StorageIndex* map, Index childOrder) {
+  EIGEN_ALWAYS_INLINE constexpr void scatterAdd(Index order, const Scalar* block, const StorageIndex* map,
+                                                Index childOrder) {
     FrontMap front(m_front.data(), order, order);
     for (Index j = 0; j < childOrder; ++j) {
       Scalar* column = &front.coeffRef(0, map[j]);
       for (Index i = j; i < childOrder; ++i) column[map[i]] += *block++;
     }
   }
-  void extendAdd(Index order, const Scalar* block, const StorageIndex* map, Index childOrder);
+  constexpr void extendAdd(Index order, const Scalar* block, const StorageIndex* map, Index childOrder);
 
   // Eliminates pivots from the fully summed columns of m_front and returns how many. Pivots end up at the front's start
   // and delayed columns between them and the rows that aren't fully summed, with the front's rows permuted to match.
-  Index factorFront(Index order, Index fullySummed, bool isRoot);
+  constexpr Index factorFront(Index order, Index fullySummed, bool isRoot);
 
   // Factors a front with one fully summed column in a single pass, without updating the front in place and then copying
   // its results, or delays the column if it fails the 1x1 test. Returns false, leaving the front unchanged, if the
   // pivot is zero.
-  EIGEN_ALWAYS_INLINE bool factorOnePivotFront(Index s, Index order, bool isRoot);
+  EIGEN_ALWAYS_INLINE constexpr bool factorOnePivotFront(Index s, Index order, bool isRoot);
 
   // Records the factored front's fullySummed - numPivots delayed columns and pushes the packed lower triangle of its
   // trailing order - numPivots rows and columns onto m_stack, for its parent's extend-add to pop. The parent reads the
   // delayed rows from m_factorRows, after the front's pivots.
-  void pushToParent(Index s, Index order, Index fullySummed, Index numPivots);
+  constexpr void pushToParent(Index s, Index order, Index fullySummed, Index numPivots);
 
   // Swaps two rows and columns of the front.
-  void swapFront(Index order, Index a, Index b);
+  constexpr void swapFront(Index order, Index a, Index b);
 
   // These eliminate the pivot at column k from the columns before panelEnd. updateTrailing() applies it to the others.
-  void eliminate1x1(Index order, Index k, Index panelEnd);
-  void eliminate2x2(Index order, Index k, Index panelEnd);
+  constexpr void eliminate1x1(Index order, Index k, Index panelEnd);
+  constexpr void eliminate2x2(Index order, Index k, Index panelEnd);
 
   // Applies the last numPivots pivots to the columns from panelEnd on.
-  void updateTrailing(Index order, Index firstPivot, Index numPivots, Index panelEnd);
+  constexpr void updateTrailing(Index order, Index firstPivot, Index numPivots, Index panelEnd);
 
   // The pivot tests bound |L| by 1/u, so a smaller u trades backward error for fill.
   RealScalar m_threshold = RealScalar(0.01);
@@ -604,10 +616,9 @@ template <typename MatrixType_, int UpLo_, typename Ordering_>
 constexpr int MultifrontalLDLT<MatrixType_, UpLo_, Ordering_>::MaxColsAtCompileTime;
 
 template <typename MatrixType_, int UpLo_, typename Ordering_>
-void MultifrontalLDLT<MatrixType_, UpLo_, Ordering_>::mergeRelaxedFronts(const std::vector<StorageIndex>& frontParent,
-                                                                         const std::vector<StorageIndex>& frontBelow,
-                                                                         std::vector<StorageIndex>& columnFront,
-                                                                         std::vector<StorageIndex>& newColumn) {
+EIGEN_CONSTEXPR20 void MultifrontalLDLT<MatrixType_, UpLo_, Ordering_>::mergeRelaxedFronts(
+    const std::vector<StorageIndex>& frontParent, const std::vector<StorageIndex>& frontBelow,
+    std::vector<StorageIndex>& columnFront, std::vector<StorageIndex>& newColumn) {
   const auto toStorageIndex = [](auto value) { return internal::convert_index<StorageIndex>(value); };
   constexpr StorageIndex none(-1);
   const Index size = static_cast<Index>(columnFront.size());
@@ -696,7 +707,7 @@ void MultifrontalLDLT<MatrixType_, UpLo_, Ordering_>::mergeRelaxedFronts(const s
 }
 
 template <typename MatrixType_, int UpLo_, typename Ordering_>
-void MultifrontalLDLT<MatrixType_, UpLo_, Ordering_>::analyzePattern(const MatrixType& matrix) {
+EIGEN_CONSTEXPR20 void MultifrontalLDLT<MatrixType_, UpLo_, Ordering_>::analyzePattern(const MatrixType& matrix) {
   eigen_assert(matrix.rows() == matrix.cols() && "The matrix must be square.");
 
   const Index size = matrix.rows();
@@ -972,7 +983,7 @@ void MultifrontalLDLT<MatrixType_, UpLo_, Ordering_>::analyzePattern(const Matri
 }
 
 template <typename MatrixType_, int UpLo_, typename Ordering_>
-void MultifrontalLDLT<MatrixType_, UpLo_, Ordering_>::factorize(const MatrixType& matrix) {
+constexpr void MultifrontalLDLT<MatrixType_, UpLo_, Ordering_>::factorize(const MatrixType& matrix) {
   eigen_assert(m_isInitialized && "analyzePattern() must be called first.");
   eigen_assert(matrix.rows() == rows() && matrix.cols() == rows());
 
@@ -1149,7 +1160,7 @@ void MultifrontalLDLT<MatrixType_, UpLo_, Ordering_>::factorize(const MatrixType
 }
 
 template <typename MatrixType_, int UpLo_, typename Ordering_>
-typename MultifrontalLDLT<MatrixType_, UpLo_, Ordering_>::RealScalar
+constexpr typename MultifrontalLDLT<MatrixType_, UpLo_, Ordering_>::RealScalar
 MultifrontalLDLT<MatrixType_, UpLo_, Ordering_>::logAbsDeterminant() const {
   eigen_assert(m_isInitialized && "Decomposition is not initialized.");
   eigen_assert(m_info != InvalidInput && "factorize() must be called before logAbsDeterminant().");
@@ -1169,7 +1180,7 @@ MultifrontalLDLT<MatrixType_, UpLo_, Ordering_>::logAbsDeterminant() const {
 }
 
 template <typename MatrixType_, int UpLo_, typename Ordering_>
-typename MultifrontalLDLT<MatrixType_, UpLo_, Ordering_>::Scalar*
+constexpr typename MultifrontalLDLT<MatrixType_, UpLo_, Ordering_>::Scalar*
 MultifrontalLDLT<MatrixType_, UpLo_, Ordering_>::appendFactor(Index s, Index numPivots, Index order) {
   m_factoredFronts[s] =
       FactoredFront{internal::convert_index<StorageIndex>(numPivots), internal::convert_index<StorageIndex>(order),
@@ -1179,8 +1190,8 @@ MultifrontalLDLT<MatrixType_, UpLo_, Ordering_>::appendFactor(Index s, Index num
 }
 
 template <typename MatrixType_, int UpLo_, typename Ordering_>
-void MultifrontalLDLT<MatrixType_, UpLo_, Ordering_>::extendAdd(Index order, const Scalar* block,
-                                                                const StorageIndex* map, Index childOrder) {
+constexpr void MultifrontalLDLT<MatrixType_, UpLo_, Ordering_>::extendAdd(Index order, const Scalar* block,
+                                                                          const StorageIndex* map, Index childOrder) {
   if (m_childRunEnd.size() < static_cast<std::size_t>(childOrder)) m_childRunEnd.resize(childOrder);
   Index numRuns = 1;
   Index runEnd = childOrder;
@@ -1211,7 +1222,7 @@ void MultifrontalLDLT<MatrixType_, UpLo_, Ordering_>::extendAdd(Index order, con
 }
 
 template <typename MatrixType_, int UpLo_, typename Ordering_>
-typename MultifrontalLDLT<MatrixType_, UpLo_, Ordering_>::RealScalar
+constexpr typename MultifrontalLDLT<MatrixType_, UpLo_, Ordering_>::RealScalar
 MultifrontalLDLT<MatrixType_, UpLo_, Ordering_>::frontColumnMax(Index order, Index active, Index j, Index skip) const {
   ConstFrontMap front(m_front.data(), order, order);
   RealScalar result(0);
@@ -1226,15 +1237,17 @@ MultifrontalLDLT<MatrixType_, UpLo_, Ordering_>::frontColumnMax(Index order, Ind
 }
 
 template <typename MatrixType_, int UpLo_, typename Ordering_>
-bool MultifrontalLDLT<MatrixType_, UpLo_, Ordering_>::frontColumnIsZero(Index order, Index active, Index j) const {
+constexpr bool MultifrontalLDLT<MatrixType_, UpLo_, Ordering_>::frontColumnIsZero(Index order, Index active,
+                                                                                  Index j) const {
   ConstFrontMap front(m_front.data(), order, order);
   return (front.row(j).segment(active, j - active).array() == Scalar(0)).all() &&
          (front.col(j).tail(order - j - 1).array() == Scalar(0)).all();
 }
 
 template <typename MatrixType_, int UpLo_, typename Ordering_>
-Index MultifrontalLDLT<MatrixType_, UpLo_, Ordering_>::largestFullySummed(Index order, Index active, Index fullySummed,
-                                                                          Index j, RealScalar& rest) const {
+constexpr Index MultifrontalLDLT<MatrixType_, UpLo_, Ordering_>::largestFullySummed(Index order, Index active,
+                                                                                    Index fullySummed, Index j,
+                                                                                    RealScalar& rest) const {
   ConstFrontMap front(m_front.data(), order, order);
   Index r = -1;
   RealScalar largest(0);
@@ -1255,8 +1268,9 @@ Index MultifrontalLDLT<MatrixType_, UpLo_, Ordering_>::largestFullySummed(Index 
 }
 
 template <typename MatrixType_, int UpLo_, typename Ordering_>
-EIGEN_ALWAYS_INLINE bool MultifrontalLDLT<MatrixType_, UpLo_, Ordering_>::factorOnePivotFront(Index s, Index order,
-                                                                                              bool isRoot) {
+EIGEN_ALWAYS_INLINE constexpr bool MultifrontalLDLT<MatrixType_, UpLo_, Ordering_>::factorOnePivotFront(Index s,
+                                                                                                        Index order,
+                                                                                                        bool isRoot) {
   ConstFrontMap front(m_front.data(), order, order);
   const RealScalar d = numext::real(front(0, 0));
   if (d == RealScalar(0)) return false;
@@ -1296,8 +1310,8 @@ EIGEN_ALWAYS_INLINE bool MultifrontalLDLT<MatrixType_, UpLo_, Ordering_>::factor
 }
 
 template <typename MatrixType_, int UpLo_, typename Ordering_>
-void MultifrontalLDLT<MatrixType_, UpLo_, Ordering_>::pushToParent(Index s, Index order, Index fullySummed,
-                                                                   Index numPivots) {
+constexpr void MultifrontalLDLT<MatrixType_, UpLo_, Ordering_>::pushToParent(Index s, Index order, Index fullySummed,
+                                                                             Index numPivots) {
   const Index numDelayed = fullySummed - numPivots;
   m_numDelayed[s] = internal::convert_index<StorageIndex>(numDelayed);
 
@@ -1317,7 +1331,7 @@ void MultifrontalLDLT<MatrixType_, UpLo_, Ordering_>::pushToParent(Index s, Inde
 }
 
 template <typename MatrixType_, int UpLo_, typename Ordering_>
-void MultifrontalLDLT<MatrixType_, UpLo_, Ordering_>::swapFront(Index order, Index a, Index b) {
+constexpr void MultifrontalLDLT<MatrixType_, UpLo_, Ordering_>::swapFront(Index order, Index a, Index b) {
   if (a == b) return;
   if (a > b) std::swap(a, b);
 
@@ -1327,7 +1341,7 @@ void MultifrontalLDLT<MatrixType_, UpLo_, Ordering_>::swapFront(Index order, Ind
 }
 
 template <typename MatrixType_, int UpLo_, typename Ordering_>
-void MultifrontalLDLT<MatrixType_, UpLo_, Ordering_>::eliminate1x1(Index order, Index k, Index panelEnd) {
+constexpr void MultifrontalLDLT<MatrixType_, UpLo_, Ordering_>::eliminate1x1(Index order, Index k, Index panelEnd) {
   FrontMap front(m_front.data(), order, order);
   const RealScalar d = numext::real(front(k, k));
   m_D[m_numPivots] = d;
@@ -1362,7 +1376,7 @@ void MultifrontalLDLT<MatrixType_, UpLo_, Ordering_>::eliminate1x1(Index order, 
 }
 
 template <typename MatrixType_, int UpLo_, typename Ordering_>
-void MultifrontalLDLT<MatrixType_, UpLo_, Ordering_>::eliminate2x2(Index order, Index k, Index panelEnd) {
+constexpr void MultifrontalLDLT<MatrixType_, UpLo_, Ordering_>::eliminate2x2(Index order, Index k, Index panelEnd) {
   FrontMap front(m_front.data(), order, order);
   const RealScalar d11 = numext::real(front(k, k));
   const Scalar d21 = front(k + 1, k);
@@ -1433,8 +1447,8 @@ void MultifrontalLDLT<MatrixType_, UpLo_, Ordering_>::eliminate2x2(Index order, 
 }
 
 template <typename MatrixType_, int UpLo_, typename Ordering_>
-void MultifrontalLDLT<MatrixType_, UpLo_, Ordering_>::updateTrailing(Index order, Index firstPivot, Index numPivots,
-                                                                     Index panelEnd) {
+constexpr void MultifrontalLDLT<MatrixType_, UpLo_, Ordering_>::updateTrailing(Index order, Index firstPivot,
+                                                                               Index numPivots, Index panelEnd) {
   const Index trailing = order - panelEnd;
   if (trailing == 0 || numPivots == 0) return;
 
@@ -1462,7 +1476,8 @@ void MultifrontalLDLT<MatrixType_, UpLo_, Ordering_>::updateTrailing(Index order
 }
 
 template <typename MatrixType_, int UpLo_, typename Ordering_>
-Index MultifrontalLDLT<MatrixType_, UpLo_, Ordering_>::factorFront(Index order, Index fullySummed, bool isRoot) {
+constexpr Index MultifrontalLDLT<MatrixType_, UpLo_, Ordering_>::factorFront(Index order, Index fullySummed,
+                                                                             bool isRoot) {
   FrontMap front(m_front.data(), order, order);
 
   // Pivots [0, k) have been applied to the columns before panelEnd, and pivots [applied, k) have yet to be applied to
@@ -1504,7 +1519,7 @@ Index MultifrontalLDLT<MatrixType_, UpLo_, Ordering_>::factorFront(Index order, 
 
       // The pivot tests guarantee a pivot at the root, so only rounding error or a non-finite entry gets here. Take the
       // largest diagonal instead of leaving the column unfactored.
-      Index largest;
+      Index largest = 0;
       front.diagonal().segment(k, fullySummed - k).real().cwiseAbs().template maxCoeff<PropagateNumbers>(&largest);
       largest += k;
       swapFront(order, k, largest);
@@ -1513,7 +1528,7 @@ Index MultifrontalLDLT<MatrixType_, UpLo_, Ordering_>::factorFront(Index order, 
       // the 2x2 test, so some entry's magnitude isn't finite, and the pivot is NaN.
       if (numext::real(front(k, k)) == RealScalar(0)) {
         RealScalar nan = NumTraits<RealScalar>::quiet_NaN();
-        EIGEN_FAST_MATH_CONSTANT_BARRIER(nan);
+        if (!internal::is_constant_evaluated()) internal::fast_math_constant_barrier_function(nan);
         front(k, k) = Scalar(nan);
       }
 
@@ -1593,7 +1608,7 @@ Index MultifrontalLDLT<MatrixType_, UpLo_, Ordering_>::factorFront(Index order, 
 }
 
 template <typename MatrixType_, int UpLo_, typename Ordering_>
-typename MultifrontalLDLT<MatrixType_, UpLo_, Ordering_>::FactorType
+constexpr typename MultifrontalLDLT<MatrixType_, UpLo_, Ordering_>::FactorType
 MultifrontalLDLT<MatrixType_, UpLo_, Ordering_>::matrixL() const {
   eigen_assert(m_info != InvalidInput && "factorize() must be called before reading L.");
 
@@ -1623,8 +1638,8 @@ MultifrontalLDLT<MatrixType_, UpLo_, Ordering_>::matrixL() const {
 #ifndef EIGEN_PARSED_BY_DOXYGEN
 template <typename MatrixType_, int UpLo_, typename Ordering_>
 template <typename Rhs, typename Dest>
-void MultifrontalLDLT<MatrixType_, UpLo_, Ordering_>::_solve_impl(const MatrixBase<Rhs>& rhs,
-                                                                  MatrixBase<Dest>& dest) const {
+constexpr void MultifrontalLDLT<MatrixType_, UpLo_, Ordering_>::_solve_impl(const MatrixBase<Rhs>& rhs,
+                                                                            MatrixBase<Dest>& dest) const {
   eigen_assert(m_isInitialized && "Decomposition is not initialized.");
   eigen_assert(m_info != InvalidInput && "factorize() must be called before solve().");
   eigen_assert(rhs.rows() == rows());
