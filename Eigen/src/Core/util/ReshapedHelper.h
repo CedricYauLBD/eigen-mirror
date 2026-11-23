@@ -25,7 +25,7 @@ template <typename SizeType, typename OtherSize, int TotalSize>
 struct get_compiletime_reshape_size : get_fixed_value<SizeType> {};
 
 template <typename SizeType>
-Index get_runtime_reshape_size(SizeType size, Index /*other*/, Index /*total*/) {
+constexpr Index get_runtime_reshape_size(SizeType size, Index /*other*/, Index /*total*/) {
   return internal::get_runtime_value(size);
 }
 
@@ -40,7 +40,7 @@ struct get_compiletime_reshape_size<AutoSize_t, OtherSize, TotalSize> {
   };
 };
 
-inline Index get_runtime_reshape_size(AutoSize_t /*size*/, Index other, Index total) {
+constexpr Index get_runtime_reshape_size(AutoSize_t /*size*/, Index other, Index total) {
   // total == 0 and other == 0: any size is consistent, choose 0. (total != 0 is rejected by Reshaped's size assertion.)
   return other == 0 ? Index(0) : total / other;
 }

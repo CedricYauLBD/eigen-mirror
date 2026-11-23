@@ -1545,6 +1545,80 @@ struct check_sqrt_impl {
   }
 };
 
+// Constant evaluation computes real sqrt exactly. Its result must be the correctly rounded one, which the double sqrt
+// gives for T = double and, rounded once more, for every T whose precision p satisfies 2p + 2 <= 53.
+template <typename T>
+void check_constant_evaluated_sqrt() {
+  // Without a constexpr bit_cast (e.g., GCC 10), constant evaluation falls back to Newton's iteration.
+  if (!internal::has_exact_constexpr_sqrt<T>::value) return;
+  using Binary = internal::binary_floating_point_traits<T>;
+  using Bits = typename Binary::Bits;
+  const auto check = [](Bits bits) {
+    const T x = numext::bit_cast<T>(bits);
+    const T expected = static_cast<T>(std::sqrt(static_cast<double>(x)));
+    VERIFY_IS_EQUAL(numext::bit_cast<Bits>(internal::real_sqrt(x)), numext::bit_cast<Bits>(expected));
+  };
+  const Bits infinityBits = Binary::kExponentMask;
+  for (Bits bits = 1; bits < 4096; ++bits) check(bits);
+  for (Bits bits = Binary::kExponentUnit - 2048; bits < Binary::kExponentUnit + 2048; ++bits) check(bits);
+  for (int i = 0; i < 100000; ++i) check(internal::random<Bits>(1, infinityBits - 1));
+  for (int k = 1; k < 4096; ++k) VERIFY_IS_EQUAL(internal::real_sqrt(T(k) * T(k)), T(k));
+}
+
+// The Newton fallback scales x by powers of 4 into [1/4, 4], so it stays within 1 ulp across the whole range.
+template <typename T>
+void check_newton_sqrt() {
+  using Binary = internal::binary_floating_point_traits<T>;
+  using Bits = typename Binary::Bits;
+  const auto check = [](Bits bits) {
+    const T x = numext::bit_cast<T>(bits);
+    const Bits expected = numext::bit_cast<Bits>(static_cast<T>(std::sqrt(static_cast<double>(x))));
+    const Bits actual = numext::bit_cast<Bits>(internal::real_sqrt_newton(x));
+    VERIFY(numext::maxi(actual, expected) - numext::mini(actual, expected) <= 1);
+  };
+  const Bits infinityBits = Binary::kExponentMask;
+  if (sizeof(T) <= 2) {
+    for (Bits bits = 1; bits < infinityBits; ++bits) check(bits);
+    return;
+  }
+  for (Bits bits = 1; bits < 4096; ++bits) check(bits);
+  for (Bits bits = infinityBits - 4096; bits < infinityBits; ++bits) check(bits);
+  for (int i = 0; i < 100000; ++i) check(internal::random<Bits>(1, infinityBits - 1));
+}
+
+// Constant evaluation computes fma exactly in integers, which must give std::fma's correctly rounded result: on
+// operands of every class, on the residual of the rounded product, where the sum cancels, and on products near the
+// subnormal range, where a third operand far below them is reduced to a sticky bit.
+template <typename T>
+void check_constexpr_fma() {
+  using Bits = typename internal::binary_floating_point_traits<T>::Bits;
+  using Limits = std::numeric_limits<T>;
+  const auto check = [](const T& x, const T& y, const T& z) {
+    const T expected = std::fma(x, y, z), actual = internal::constexpr_fma(x, y, z);
+    if ((numext::isnan)(expected))
+      VERIFY((numext::isnan)(actual));
+    else
+      VERIFY_IS_EQUAL(numext::bit_cast<Bits>(actual), numext::bit_cast<Bits>(expected));
+  };
+  const auto random_bits = []() { return numext::bit_cast<T>(internal::random<Bits>()); };
+  for (int i = 0; i < 100000; ++i) {
+    const T x = random_bits(), y = random_bits(), z = random_bits();
+    check(x, y, z);
+    // Nearby exponents make the product and the addend cancel.
+    const T a = std::ldexp(internal::random<T>(T(0.5), T(1)), internal::random<int>(-30, 30));
+    const T b = std::ldexp(internal::random<T>(T(-1), T(1)), internal::random<int>(-30, 30));
+    check(a, b, -(a * b));
+    check(a, b, std::nextafter(-(a * b), T(0)));
+    check(a, b, std::ldexp(internal::random<T>(T(-1), T(1)), internal::random<int>(-90, 90)));
+    // Products around the smallest normal and below the smallest subnormal.
+    const int e = internal::random<int>(Limits::min_exponent - Limits::digits - 4, Limits::min_exponent + 2);
+    const T c = std::ldexp(internal::random<T>(T(0.5), T(1)), e / 2), d = std::ldexp(b, e - e / 2);
+    check(c, d, T(0));
+    check(c, d, std::ldexp(z, e - Limits::digits));
+    check(c, d, (Limits::min)());
+  }
+}
+
 template <typename T>
 struct check_sqrt_impl<std::complex<T>> {
   static void run() {
@@ -2175,6 +2249,14 @@ EIGEN_DECLARE_TEST(numext) {
     CALL_SUBTEST_1(check_sqrt<double>());
     CALL_SUBTEST_1(check_sqrt<std::complex<float>>());
     CALL_SUBTEST_1(check_sqrt<std::complex<double>>());
+    CALL_SUBTEST_1(check_constant_evaluated_sqrt<float>());
+    CALL_SUBTEST_1(check_constant_evaluated_sqrt<double>());
+    CALL_SUBTEST_1(check_newton_sqrt<half>());
+    CALL_SUBTEST_1(check_newton_sqrt<bfloat16>());
+    CALL_SUBTEST_1(check_newton_sqrt<float>());
+    CALL_SUBTEST_1(check_newton_sqrt<double>());
+    CALL_SUBTEST_1(check_constexpr_fma<float>());
+    CALL_SUBTEST_1(check_constexpr_fma<double>());
 
     CALL_SUBTEST_1(check_rsqrt<float>());
     CALL_SUBTEST_1(check_rsqrt<double>());
