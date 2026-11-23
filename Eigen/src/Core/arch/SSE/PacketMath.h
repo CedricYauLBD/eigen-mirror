@@ -1927,35 +1927,35 @@ EIGEN_STRONG_INLINE void ptranspose(PacketBlock<Packet16b, 16>& kernel) {
 // Scalar path for pmadd with FMA to ensure consistency with vectorized path.
 #if defined(EIGEN_VECTORIZE_FMA)
 template <>
-EIGEN_STRONG_INLINE float pmadd(const float& a, const float& b, const float& c) {
+EIGEN_STRONG_INLINE constexpr float pmadd(const float& a, const float& b, const float& c) {
   return numext::fma(a, b, c);
 }
 template <>
-EIGEN_STRONG_INLINE double pmadd(const double& a, const double& b, const double& c) {
+EIGEN_STRONG_INLINE constexpr double pmadd(const double& a, const double& b, const double& c) {
   return numext::fma(a, b, c);
 }
 template <>
-EIGEN_STRONG_INLINE float pmsub(const float& a, const float& b, const float& c) {
+EIGEN_STRONG_INLINE constexpr float pmsub(const float& a, const float& b, const float& c) {
   return numext::fma(a, b, -c);
 }
 template <>
-EIGEN_STRONG_INLINE double pmsub(const double& a, const double& b, const double& c) {
+EIGEN_STRONG_INLINE constexpr double pmsub(const double& a, const double& b, const double& c) {
   return numext::fma(a, b, -c);
 }
 template <>
-EIGEN_STRONG_INLINE float pnmadd(const float& a, const float& b, const float& c) {
+EIGEN_STRONG_INLINE constexpr float pnmadd(const float& a, const float& b, const float& c) {
   return numext::fma(-a, b, c);
 }
 template <>
-EIGEN_STRONG_INLINE double pnmadd(const double& a, const double& b, const double& c) {
+EIGEN_STRONG_INLINE constexpr double pnmadd(const double& a, const double& b, const double& c) {
   return numext::fma(-a, b, c);
 }
 template <>
-EIGEN_STRONG_INLINE float pnmsub(const float& a, const float& b, const float& c) {
+EIGEN_STRONG_INLINE constexpr float pnmsub(const float& a, const float& b, const float& c) {
   return numext::fma(-a, b, -c);
 }
 template <>
-EIGEN_STRONG_INLINE double pnmsub(const double& a, const double& b, const double& c) {
+EIGEN_STRONG_INLINE constexpr double pnmsub(const double& a, const double& b, const double& c) {
   return numext::fma(-a, b, -c);
 }
 #endif

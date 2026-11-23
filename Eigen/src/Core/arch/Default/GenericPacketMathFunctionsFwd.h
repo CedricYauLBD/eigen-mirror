@@ -67,9 +67,9 @@ namespace unary_pow {
 template <typename Packet, typename = void>
 struct has_exponent_bit_ops;
 template <typename Packet>
-EIGEN_DEVICE_FUNC EIGEN_ALWAYS_INLINE Packet exponent_bits_shift_right(const Packet& bits);
+EIGEN_DEVICE_FUNC EIGEN_ALWAYS_INLINE constexpr Packet exponent_bits_shift_right(const Packet& bits);
 template <typename Packet>
-EIGEN_DEVICE_FUNC EIGEN_ALWAYS_INLINE Packet exponent_bits_sub(const Packet& a_bits, const Packet& b_bits);
+EIGEN_DEVICE_FUNC EIGEN_ALWAYS_INLINE constexpr Packet exponent_bits_sub(const Packet& a_bits, const Packet& b_bits);
 }  // namespace unary_pow
 
 /** \internal \returns cbrt(x) for single precision float */

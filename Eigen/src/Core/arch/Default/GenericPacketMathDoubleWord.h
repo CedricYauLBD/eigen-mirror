@@ -27,7 +27,8 @@ EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE void absolute_split(const Packet& x, Packe
 
 // Knuth two-sum: x + y = s_hi + s_lo exactly, with no magnitude ordering required.
 template <typename Packet>
-EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE void twosum(const Packet& x, const Packet& y, Packet& s_hi, Packet& s_lo) {
+EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE constexpr void twosum(const Packet& x, const Packet& y, Packet& s_hi,
+                                                            Packet& s_lo) {
   s_hi = padd(x, y);
   pbarrier(s_hi);
   Packet y_part = psub(s_hi, x);
@@ -44,7 +45,8 @@ EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE void twosum(const Packet& x, const Packet&
 // This function computes the sum {s_hi, s_lo}, such that x + y = s_hi + s_lo
 // holds exactly, and s_hi = fl(x+y), if |x| >= |y|.
 template <typename Packet>
-EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE void fast_twosum(const Packet& x, const Packet& y, Packet& s_hi, Packet& s_lo) {
+EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE constexpr void fast_twosum(const Packet& x, const Packet& y, Packet& s_hi,
+                                                                 Packet& s_lo) {
   s_hi = padd(x, y);
   const Packet t = psub(s_hi, x);
   s_lo = psub(y, t);
@@ -53,12 +55,12 @@ EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE void fast_twosum(const Packet& x, const Pa
 #ifdef EIGEN_VECTORIZE_FMA
 // Given x, y, and xy = fl(x*y), return the residual such that x*y = xy + residual exactly.
 template <typename Packet, std::enable_if_t<!is_scalar<Packet>::value, int> = 0>
-EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE Packet twoprod_low(const Packet& x, const Packet& y, const Packet& xy) {
+EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE constexpr Packet twoprod_low(const Packet& x, const Packet& y, const Packet& xy) {
   return pmsub(x, y, xy);
 }
 
 template <typename Scalar, std::enable_if_t<is_scalar<Scalar>::value, int> = 0>
-EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE Scalar twoprod_low(const Scalar& x, const Scalar& y, const Scalar& xy) {
+EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE constexpr Scalar twoprod_low(const Scalar& x, const Scalar& y, const Scalar& xy) {
   // Error-free products require FMA even when EIGEN_SCALAR_MADD_USE_FMA disables fusion in scalar madd.
   return twoprod_low_fma(x, y, xy);
 }
@@ -68,7 +70,8 @@ EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE Scalar twoprod_low(const Scalar& x, const 
 // {p_hi, p_lo} such that x * y = p_hi + p_lo holds exactly and
 // p_hi = fl(x * y). PreventReassociation preserves the separately rounded non-FMA operations.
 template <typename Packet, bool PreventReassociation = false>
-EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE void twoprod(const Packet& x, const Packet& y, Packet& p_hi, Packet& p_lo) {
+EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE constexpr void twoprod(const Packet& x, const Packet& y, Packet& p_hi,
+                                                             Packet& p_lo) {
   p_hi = pmul(x, y);
   p_lo = twoprod_low(x, y, p_hi);
 }
@@ -79,12 +82,13 @@ EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE void twoprod(const Packet& x, const Packet
 // fl(x*y) into its consumers, so use fma for scalar types where it is an instruction (has_fast_fma).
 // This does not prevent contraction in the remaining scalar or packet fallback paths.
 template <typename Scalar, std::enable_if_t<has_fast_fma<Scalar>::value, int> = 0>
-EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE Scalar twoprod_low(const Scalar& x, const Scalar& y, const Scalar& xy) {
+EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE constexpr Scalar twoprod_low(const Scalar& x, const Scalar& y, const Scalar& xy) {
   return twoprod_low_fma(x, y, xy);
 }
 
 template <typename Scalar, bool PreventReassociation = false, std::enable_if_t<has_fast_fma<Scalar>::value, int> = 0>
-EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE void twoprod(const Scalar& x, const Scalar& y, Scalar& p_hi, Scalar& p_lo) {
+EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE constexpr void twoprod(const Scalar& x, const Scalar& y, Scalar& p_hi,
+                                                             Scalar& p_lo) {
   p_hi = x * y;
   p_lo = twoprod_low(x, y, p_hi);
 }
@@ -95,7 +99,7 @@ EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE void twoprod(const Scalar& x, const Scalar
 // This is Algorithm 3 from Jean-Michel Muller, "Elementary Functions",
 // 3rd edition, Birkh\"auser, 2016.
 template <typename Packet, bool PreventReassociation = false>
-EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE void veltkamp_splitting(const Packet& x, Packet& x_hi, Packet& x_lo) {
+EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE constexpr void veltkamp_splitting(const Packet& x, Packet& x_hi, Packet& x_lo) {
   using Scalar = typename unpacket_traits<Packet>::type;
   constexpr int shift = (NumTraits<Scalar>::digits() + 1) / 2;
   const Scalar shift_scale = Scalar(uint64_t(1) << shift);  // Scalar constructor not necessarily constexpr.
@@ -111,8 +115,8 @@ EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE void veltkamp_splitting(const Packet& x, P
 // A version of twoprod that takes x, y, and fl(x*y) as input and returns the p_lo such that
 // x * y = xy + p_lo holds exactly. PreventReassociation preserves the separately rounded operations.
 template <typename Packet, bool PreventReassociation = false, std::enable_if_t<!has_fast_fma<Packet>::value, int> = 0>
-EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE Packet twoprod_low(const Packet& x, const Packet& y, const Packet& xy) {
-  Packet x_hi, x_lo, y_hi, y_lo;
+EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE constexpr Packet twoprod_low(const Packet& x, const Packet& y, const Packet& xy) {
+  Packet x_hi{}, x_lo{}, y_hi{}, y_lo{};
   veltkamp_splitting<Packet, PreventReassociation>(x, x_hi, x_lo);
   veltkamp_splitting<Packet, PreventReassociation>(y, y_hi, y_lo);
 
@@ -130,7 +134,8 @@ EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE Packet twoprod_low(const Packet& x, const 
 // Given floating point numbers {x, y}, it computes {p_hi, p_lo} such that
 // x * y = p_hi + p_lo exactly and p_hi = fl(x * y).
 template <typename Packet, bool PreventReassociation = false, std::enable_if_t<!has_fast_fma<Packet>::value, int> = 0>
-EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE void twoprod(const Packet& x, const Packet& y, Packet& p_hi, Packet& p_lo) {
+EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE constexpr void twoprod(const Packet& x, const Packet& y, Packet& p_hi,
+                                                             Packet& p_lo) {
   Packet hi = pmul(x, y);
   EIGEN_IF_CONSTEXPR (PreventReassociation) pbarrier(hi);
   const Packet lo = twoprod_low<Packet, PreventReassociation>(x, y, hi);
@@ -200,8 +205,8 @@ EIGEN_DEVICE_FUNC void twoprod_full_range(const Scalar& x, const Scalar& y, Scal
 // arithmetic", https://hal.science/hal-01351529: the error is a few u^2
 // relative to |x| + |y|, not to the sum, which may cancel.
 template <typename Packet>
-EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE void twosum(const Packet& x_hi, const Packet& x_lo, const Packet& y_hi,
-                                                  const Packet& y_lo, Packet& s_hi, Packet& s_lo) {
+EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE constexpr void twosum(const Packet& x_hi, const Packet& x_lo, const Packet& y_hi,
+                                                            const Packet& y_lo, Packet& s_hi, Packet& s_lo) {
   Packet s = padd(x_hi, y_hi);
   Packet y_part = psub(s, x_hi);
   Packet err = padd(psub(x_hi, psub(s, y_part)), psub(y_hi, y_part));
@@ -211,8 +216,8 @@ EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE void twosum(const Packet& x_hi, const Pack
 // The difference {x_hi, x_lo} - {y_hi, y_lo} of two double word numbers,
 // the same algorithm as twosum with the sign of y folded into the operations.
 template <typename Packet>
-EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE void twodiff(const Packet& x_hi, const Packet& x_lo, const Packet& y_hi,
-                                                   const Packet& y_lo, Packet& s_hi, Packet& s_lo) {
+EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE constexpr void twodiff(const Packet& x_hi, const Packet& x_lo, const Packet& y_hi,
+                                                             const Packet& y_lo, Packet& s_hi, Packet& s_lo) {
   Packet s = psub(x_hi, y_hi);
   Packet y_part = psub(x_hi, s);
   Packet err = psub(psub(x_hi, padd(s, y_part)), psub(y_hi, y_part));
@@ -222,9 +227,10 @@ EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE void twodiff(const Packet& x_hi, const Pac
 // This is a version of twosum for double word numbers,
 // which assumes that |x_hi| >= |y_hi|.
 template <typename Packet>
-EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE void fast_twosum(const Packet& x_hi, const Packet& x_lo, const Packet& y_hi,
-                                                       const Packet& y_lo, Packet& s_hi, Packet& s_lo) {
-  Packet r_hi, r_lo;
+EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE constexpr void fast_twosum(const Packet& x_hi, const Packet& x_lo,
+                                                                 const Packet& y_hi, const Packet& y_lo, Packet& s_hi,
+                                                                 Packet& s_lo) {
+  Packet r_hi{}, r_lo{};
   fast_twosum(x_hi, y_hi, r_hi, r_lo);
   const Packet s = padd(padd(y_lo, r_lo), x_lo);
   fast_twosum(r_hi, s, s_hi, s_lo);
@@ -234,9 +240,9 @@ EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE void fast_twosum(const Packet& x_hi, const
 // double word number {y_hi, y_lo} number, with the assumption
 // that |x| >= |y_hi|.
 template <typename Packet>
-EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE void fast_twosum(const Packet& x, const Packet& y_hi, const Packet& y_lo,
-                                                       Packet& s_hi, Packet& s_lo) {
-  Packet r_hi, r_lo;
+EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE constexpr void fast_twosum(const Packet& x, const Packet& y_hi,
+                                                                 const Packet& y_lo, Packet& s_hi, Packet& s_lo) {
+  Packet r_hi{}, r_lo{};
   fast_twosum(x, y_hi, r_hi, r_lo);
   const Packet s = padd(y_lo, r_lo);
   fast_twosum(r_hi, s, s_hi, s_lo);
@@ -251,12 +257,12 @@ EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE void fast_twosum(const Packet& x, const Pa
 // This is Algorithm 7 from Jean-Michel Muller, "Elementary Functions",
 // 3rd edition, Birkh\"auser, 2016.
 template <typename Packet>
-EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE void twoprod(const Packet& x_hi, const Packet& x_lo, const Packet& y,
-                                                   Packet& p_hi, Packet& p_lo) {
-  Packet c_hi, c_lo1;
+EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE constexpr void twoprod(const Packet& x_hi, const Packet& x_lo, const Packet& y,
+                                                             Packet& p_hi, Packet& p_lo) {
+  Packet c_hi{}, c_lo1{};
   twoprod(x_hi, y, c_hi, c_lo1);
   const Packet c_lo2 = pmul(x_lo, y);
-  Packet t_hi, t_lo1;
+  Packet t_hi{}, t_lo1{};
   fast_twosum(c_hi, c_lo2, t_hi, t_lo1);
   const Packet t_lo2 = padd(t_lo1, c_lo1);
   fast_twosum(t_hi, t_lo2, p_hi, p_lo);
@@ -274,11 +280,11 @@ EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE void twoprod(const Packet& x_hi, const Pac
 // The final sum adds absolute error <= u^2*((3+3*u+u^2)*abs(p_hi_hi)
 // + (4+3*u+u^2)*abs(p_lo_hi)); using abs(y_lo) <= u*abs(y_hi) gives the bound above.
 template <typename Packet>
-EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE void twoprod(const Packet& x_hi, const Packet& x_lo, const Packet& y_hi,
-                                                   const Packet& y_lo, Packet& p_hi, Packet& p_lo) {
-  Packet p_hi_hi, p_hi_lo;
+EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE constexpr void twoprod(const Packet& x_hi, const Packet& x_lo, const Packet& y_hi,
+                                                             const Packet& y_lo, Packet& p_hi, Packet& p_lo) {
+  Packet p_hi_hi{}, p_hi_lo{};
   twoprod(x_hi, x_lo, y_hi, p_hi_hi, p_hi_lo);
-  Packet p_lo_hi, p_lo_lo;
+  Packet p_lo_hi{}, p_lo_lo{};
   twoprod(x_hi, x_lo, y_lo, p_lo_hi, p_lo_lo);
   fast_twosum(p_hi_hi, p_hi_lo, p_lo_hi, p_lo_lo, p_hi, p_lo);
 }
@@ -302,9 +308,10 @@ EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE void twoprod(const Packet& x_hi, const Pac
 // Measured against an exact reference over 5*10^7 normalized operand pairs per
 // case plus a hill-climb search; round-to-nearest, no overflow or underflow.
 template <typename Packet>
-EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE void fast_twoprod(const Packet& x_hi, const Packet& x_lo, const Packet& y_hi,
-                                                        const Packet& y_lo, Packet& p_hi, Packet& p_lo) {
-  Packet c_hi, c_lo;
+EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE constexpr void fast_twoprod(const Packet& x_hi, const Packet& x_lo,
+                                                                  const Packet& y_hi, const Packet& y_lo, Packet& p_hi,
+                                                                  Packet& p_lo) {
+  Packet c_hi{}, c_lo{};
   twoprod(x_hi, y_hi, c_hi, c_lo);
 #ifdef EIGEN_VECTORIZE_FMA
   // Scalar float and double pmadd are numext::fma here, so scalars round like the packets.
