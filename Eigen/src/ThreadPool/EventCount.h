@@ -6,9 +6,10 @@
 // This Source Code Form is subject to the terms of the Mozilla
 // Public License v. 2.0. If a copy of the MPL was not distributed
 // with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
+// SPDX-License-Identifier: MPL-2.0
 
-#ifndef EIGEN_CXX11_THREADPOOL_EVENTCOUNT_H
-#define EIGEN_CXX11_THREADPOOL_EVENTCOUNT_H
+#ifndef EIGEN_THREADPOOL_EVENTCOUNT_H
+#define EIGEN_THREADPOOL_EVENTCOUNT_H
 
 // IWYU pragma: private
 #include "./InternalHeaderCheck.h"
@@ -45,7 +46,7 @@ namespace Eigen {
 // https://en.wikipedia.org/wiki/Dekker%27s_algorithm
 // Waiting thread sets state_ then checks predicate, Notifying thread sets
 // predicate then checks state_. Due to seq_cst fences in between these
-// operations it is guaranteed than either waiter will see predicate change
+// operations it is guaranteed that either waiter will see predicate change
 // and won't block, or notifying thread will see state_ change and will unblock
 // the waiter, or both. But it can't happen that both threads don't see each
 // other changes, which would lead to deadlock.
@@ -115,10 +116,19 @@ class EventCount {
       // We don't know if the thread was also notified or not,
       // so we should not consume a signal unconditionally.
       // Only if number of waiters is equal to number of signals,
-      // we know that the thread was notified and we must take away the signal.
-      if (((state & kWaiterMask) >> kWaiterShift) == ((state & kSignalMask) >> kSignalShift)) newstate -= kSignalInc;
+      // we know that the thread was notified and we must take away the signal
+      // and forward it to any other waiting thread.
+      const bool notify = (((state & kWaiterMask) >> kWaiterShift) == ((state & kSignalMask) >> kSignalShift));
+      if (notify) {
+        newstate -= kSignalInc;
+      }
       CheckState(newstate);
-      if (state_.compare_exchange_weak(state, newstate, std::memory_order_acq_rel)) return;
+      if (state_.compare_exchange_weak(state, newstate, std::memory_order_acq_rel)) {
+        if (notify) {
+          Notify(false);
+        }
+        return;
+      }
     }
   }
 
@@ -205,6 +215,7 @@ class EventCount {
     eigen_plain_assert(waiters >= signals);
     eigen_plain_assert(waiters < (1 << kWaiterBits) - 1);
     eigen_plain_assert(!waiter || waiters > 0);
+    (void)waiter;
     (void)waiters;
     (void)signals;
   }
@@ -238,4 +249,4 @@ class EventCount {
 
 }  // namespace Eigen
 
-#endif  // EIGEN_CXX11_THREADPOOL_EVENTCOUNT_H
+#endif  // EIGEN_THREADPOOL_EVENTCOUNT_H

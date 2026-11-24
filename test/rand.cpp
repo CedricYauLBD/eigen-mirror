@@ -6,6 +6,7 @@
 // This Source Code Form is subject to the terms of the Mozilla
 // Public License v. 2.0. If a copy of the MPL was not distributed
 // with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
+// SPDX-License-Identifier: MPL-2.0
 
 #include <cstdlib>
 #include "main.h"
@@ -14,7 +15,7 @@
 // SafeScalar<T> is used to simulate custom Scalar types, which use a more generalized approach to generate random
 // numbers
 
-// For GCC-6, if this function is inlined then there seems to be an optimization
+// For GCC-6, if this function is inlined then there is an optimization
 // bug that triggers a failure.  This failure goes away if you access `r` in
 // in any way, and for any other compiler.
 template <typename Scalar>
@@ -83,9 +84,11 @@ class HistogramHelper {
 
 // helper class to avoid extending std:: namespace
 template <typename T>
-struct get_range_type : internal::make_unsigned<T> {};
+struct get_range_type {
+  using type = std::conditional_t<(sizeof(T) < sizeof(int)), unsigned int, std::make_unsigned_t<T>>;
+};
 template <typename T>
-struct get_range_type<SafeScalar<T>> : internal::make_unsigned<T> {};
+struct get_range_type<SafeScalar<T>> : std::make_unsigned<T> {};
 
 template <typename Scalar>
 class HistogramHelper<Scalar, std::enable_if_t<Eigen::NumTraits<Scalar>::IsInteger>> {
@@ -128,6 +131,24 @@ class HistogramHelper<Scalar, std::enable_if_t<Eigen::NumTraits<Scalar>::IsInteg
   RangeType bin_width_;
 };
 
+// A bin of probability p receives Binomial(count, p) samples, so the normalized hist(i) has
+// standard deviation sqrt((1 - p) / (count * p)) about 1. Bonferroni over the bins: k solving
+// erfc(k / sqrt(2)) = kFalseFailureRate / bins caps at kFalseFailureRate the probability that
+// any bin strays past k sigma.
+inline double histogram_k_sigma(int bins) {
+  constexpr double kFalseFailureRate = 1e-9;
+  const double target = kFalseFailureRate / double(bins);
+  double lo = 0.0, hi = 40.0;
+  for (int iter = 0; iter < 100; ++iter) {
+    const double mid = 0.5 * (lo + hi);
+    if (std::erfc(mid / std::sqrt(2.0)) > target)
+      lo = mid;
+    else
+      hi = mid;
+  }
+  return hi;
+}
+
 template <typename Scalar>
 void check_histogram(Scalar x, Scalar y, int bins) {
   constexpr int repeats = 10000;
@@ -140,12 +161,16 @@ void check_histogram(Scalar x, Scalar y, int bins) {
       int bin = hist_helper.bin(r);
       hist(bin)++;
     }
-  //  Normalize bins by probability.
+  //  Normalize bins by probability, and bound each by its own sampling standard deviation.
   hist /= count;
+  const double k = histogram_k_sigma(bins);
+  Eigen::VectorXd tol(bins);
   for (int i = 0; i < bins; ++i) {
-    hist(i) = hist(i) / hist_helper.uniform_bin_probability(i);
+    const double p = hist_helper.uniform_bin_probability(i);
+    hist(i) = hist(i) / p;
+    tol(i) = k * std::sqrt((1.0 - p) / (count * p));
   }
-  VERIFY(((hist.array() - 1.0).abs() < 0.05).all());
+  VERIFY(((hist.array() - 1.0).abs() < tol.array()).all());
 }
 
 template <typename Scalar>
@@ -160,12 +185,16 @@ void check_histogram(int bins) {
       int bin = hist_helper.bin(r);
       hist(bin)++;
     }
-  //  Normalize bins by probability.
+  //  Normalize bins by probability, and bound each by its own sampling standard deviation.
   hist /= count;
+  const double k = histogram_k_sigma(bins);
+  Eigen::VectorXd tol(bins);
   for (int i = 0; i < bins; ++i) {
-    hist(i) = hist(i) / hist_helper.uniform_bin_probability(i);
+    const double p = hist_helper.uniform_bin_probability(i);
+    hist(i) = hist(i) / p;
+    tol(i) = k * std::sqrt((1.0 - p) / (count * p));
   }
-  VERIFY(((hist.array() - 1.0).abs() < 0.05).all());
+  VERIFY(((hist.array() - 1.0).abs() < tol.array()).all());
 }
 
 template <>
@@ -260,7 +289,7 @@ EIGEN_DECLARE_TEST(rand) {
 
   CALL_SUBTEST_11(check_histogram<int32_t>(-5, 5, 11));
   int bins = 100;
-  EIGEN_UNUSED_VARIABLE(bins)
+  EIGEN_UNUSED_VARIABLE(bins);
   CALL_SUBTEST_11(check_histogram<int32_t>(-3333, -3333 + bins * (3333 / bins) - 1, bins));
   bins = 1000;
   CALL_SUBTEST_11(check_histogram<int32_t>(-RAND_MAX + 10, -RAND_MAX + 10 + bins * (RAND_MAX / bins) - 1, bins));

@@ -6,10 +6,10 @@
 // This Source Code Form is subject to the terms of the Mozilla
 // Public License v. 2.0. If a copy of the MPL was not distributed
 // with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
+// SPDX-License-Identifier: MPL-2.0
 
 #include "main.h"
 
-using Eigen::placeholders::all;
 using Eigen::placeholders::last;
 using Eigen::placeholders::lastp1;
 
@@ -70,4 +70,12 @@ void check_symbolic_index() {
   }
 }
 
-EIGEN_DECLARE_TEST(symbolic_index) { CALL_SUBTEST_1(check_symbolic_index()); }
+void check_fixed_int_odr_use() {
+  VERIFY_IS_EQUAL(read_through_address(internal::FixedInt<3>::value), 3);
+  VERIFY_IS_EQUAL(read_through_address(internal::FixedInt<-3>::value), -3);
+}
+
+EIGEN_DECLARE_TEST(symbolic_index) {
+  CALL_SUBTEST_1(check_symbolic_index());
+  CALL_SUBTEST_1(check_fixed_int_odr_use());
+}

@@ -6,6 +6,7 @@
 // This Source Code Form is subject to the terms of the Mozilla
 // Public License v. 2.0. If a copy of the MPL was not distributed
 // with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
+// SPDX-License-Identifier: MPL-2.0
 
 #ifndef EIGEN_SPARSECHOLESKY_MODULE_H
 #define EIGEN_SPARSECHOLESKY_MODULE_H
@@ -13,17 +14,23 @@
 #include "SparseCore"
 #include "OrderingMethods"
 
+#include <vector>
+
 #include "src/Core/util/DisableStupidWarnings.h"
 
 /**
  * \defgroup SparseCholesky_Module SparseCholesky module
  *
  * This module currently provides two variants of the direct sparse Cholesky decomposition for selfadjoint (hermitian)
- * matrices. Those decompositions are accessible via the following classes:
- *  - SimplicialLLt,
- *  - SimplicialLDLt
+ * positive definite matrices. They are not intended for general selfadjoint or positive semidefinite matrices.
+ * Those decompositions are accessible via the following classes:
+ *  - SimplicialLLT,
+ *  - SimplicialLDLT
  *
  * Such problems can also be solved using the ConjugateGradient solver from the IterativeLinearSolvers module.
+ *
+ * For symmetric or Hermitian indefinite matrices, such as KKT systems, this module also provides MultifrontalLDLT, a
+ * factorization with 1x1 and 2x2 pivots that also reveals the matrix's inertia.
  *
  * \code
  * #include <Eigen/SparseCholesky>
@@ -31,8 +38,10 @@
  */
 
 // IWYU pragma: begin_exports
+#include "src/SparseCore/SparseColEtree.h"
 #include "src/SparseCholesky/SimplicialCholesky.h"
 #include "src/SparseCholesky/SimplicialCholesky_impl.h"
+#include "src/SparseCholesky/MultifrontalLDLT.h"
 // IWYU pragma: end_exports
 
 #include "src/Core/util/ReenableStupidWarnings.h"

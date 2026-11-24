@@ -1,0 +1,616 @@
+// SPDX-FileCopyrightText: The Eigen Authors
+// SPDX-License-Identifier: MPL-2.0
+
+#include <cstring>
+
+#include "main.h"
+#include "fp_control.h"
+
+template <typename Scalar, typename Packet>
+EIGEN_DONT_INLINE void store_ptrue(Scalar* output) {
+  const Packet zero = Eigen::internal::pset1<Packet>(Scalar(0));
+  Eigen::internal::pstoreu<Scalar, Packet>(output, Eigen::internal::ptrue(zero));
+}
+
+// The out-of-line boundary keeps the mask opaque at the packet-op call site, so
+// the compiler must emit the mask test instead of folding it against the known
+// lane values.
+template <typename Scalar, typename Packet>
+EIGEN_DONT_INLINE void select_with_mask(const Scalar* mask, const Scalar* a, const Scalar* b, Scalar* output) {
+  const Packet selected = Eigen::internal::pselect(
+      Eigen::internal::ploadu<Packet>(mask), Eigen::internal::ploadu<Packet>(a), Eigen::internal::ploadu<Packet>(b));
+  Eigen::internal::pstoreu<Scalar, Packet>(output, selected);
+}
+
+template <typename Scalar, typename Packet>
+EIGEN_DONT_INLINE bool mask_any(const Scalar* mask) {
+  return Eigen::internal::predux_any(Eigen::internal::ploadu<Packet>(mask));
+}
+
+template <typename Scalar, typename Packet>
+EIGEN_DONT_INLINE bool mask_all(const Scalar* mask) {
+  return Eigen::internal::predux_all(Eigen::internal::ploadu<Packet>(mask));
+}
+
+template <typename Scalar, typename Packet>
+EIGEN_DONT_INLINE Index mask_count(const Scalar* mask) {
+  return Eigen::internal::predux_count(Eigen::internal::ploadu<Packet>(mask));
+}
+
+template <typename Scalar, typename Packet>
+void verify_mask_reduction_impl() {
+  constexpr int packet_size = Eigen::internal::unpacket_traits<Packet>::size;
+  Scalar mask[packet_size];
+
+  std::memset(static_cast<void*>(mask), 0, sizeof(mask));
+  VERIFY(!(mask_any<Scalar, Packet>(mask)));
+  VERIFY(!(mask_all<Scalar, Packet>(mask)));
+  VERIFY_IS_EQUAL((mask_count<Scalar, Packet>(mask)), 0);
+
+  for (int lane = 0; lane < packet_size; ++lane) {
+    std::memset(static_cast<void*>(mask), 0, sizeof(mask));
+    std::memset(static_cast<void*>(mask + lane), 0xff, sizeof(Scalar));
+    VERIFY((mask_any<Scalar, Packet>(mask)));
+    VERIFY_IS_EQUAL((mask_all<Scalar, Packet>(mask)), packet_size == 1);
+    VERIFY_IS_EQUAL((mask_count<Scalar, Packet>(mask)), 1);
+  }
+
+  std::memset(static_cast<void*>(mask), 0xff, sizeof(mask));
+  VERIFY((mask_all<Scalar, Packet>(mask)));
+  VERIFY_IS_EQUAL((mask_count<Scalar, Packet>(mask)), packet_size);
+}
+
+template <typename Scalar, typename Packet>
+void verify_mask_reduction() {
+  verify_mask_reduction_impl<Scalar, Packet>();
+  const Eigen::ScopedFlushToZero flush_to_zero;
+  if (flush_to_zero.isSupported()) verify_mask_reduction_impl<Scalar, Packet>();
+}
+
+template <typename Scalar, typename Packet>
+void verify_16bit_reductions() {
+  using Bits = Eigen::numext::uint16_t;
+  static_assert(sizeof(Scalar) == sizeof(Bits), "requires 16-bit scalars");
+  constexpr int packet_size = Eigen::internal::unpacket_traits<Packet>::size;
+  Scalar values[packet_size];
+  for (unsigned int bits = 0; bits < 65536; ++bits) {
+    for (int lane = 0; lane < packet_size; ++lane) {
+      for (int i = 0; i < packet_size; ++i) {
+        const Bits value = i == lane ? static_cast<Bits>(bits) : Bits(i % 2 ? 0x8000 : 0);
+        std::memcpy(static_cast<void*>(values + i), &value, sizeof(value));
+      }
+      VERIFY_IS_EQUAL((mask_count<Scalar, Packet>(values)), Index((bits & 0x7fff) != 0));
+      VERIFY(!(mask_all<Scalar, Packet>(values)));
+      for (int i = 0; i < packet_size; ++i) {
+        const Bits value = i == lane ? static_cast<Bits>(bits) : Bits(0xffff);
+        std::memcpy(static_cast<void*>(values + i), &value, sizeof(value));
+      }
+      VERIFY_IS_EQUAL((mask_all<Scalar, Packet>(values)), (bits & 0x7fff) != 0);
+      VERIFY_IS_EQUAL((mask_count<Scalar, Packet>(values)), Index(packet_size - 1 + ((bits & 0x7fff) != 0)));
+    }
+  }
+}
+
+// For bit-test backends, a low-bit truth mask must survive FTZ even though its floating-point encoding is subnormal.
+// Do not apply this to backends that consume only the sign bits of canonical comparison masks.
+template <typename Scalar, typename Packet>
+void verify_low_bit_mask_any_ftz() {
+  const Eigen::ScopedFlushToZero flush_to_zero;
+  VERIFY(flush_to_zero.isSupported());
+  constexpr int packet_size = Eigen::internal::unpacket_traits<Packet>::size;
+  using Bits = typename Eigen::numext::get_integer_by_size<sizeof(Scalar)>::unsigned_type;
+  const Bits true_bits = 1;
+  Scalar mask[packet_size];
+  std::memset(static_cast<void*>(mask), 0, sizeof(mask));
+  VERIFY(!(mask_any<Scalar, Packet>(mask)));
+  for (int lane = 0; lane < packet_size; ++lane) {
+    std::memset(static_cast<void*>(mask), 0, sizeof(mask));
+    std::memcpy(static_cast<void*>(mask + lane), &true_bits, sizeof(Scalar));
+    VERIFY((mask_any<Scalar, Packet>(mask)));
+  }
+  for (int lane = 0; lane < packet_size; ++lane) {
+    std::memcpy(static_cast<void*>(mask + lane), &true_bits, sizeof(Scalar));
+  }
+  VERIFY((mask_any<Scalar, Packet>(mask)));
+}
+
+// Keep the finite inputs opaque while compiling the reduction itself with fast-math optimizations.
+template <typename Scalar, typename Packet>
+EIGEN_DONT_INLINE void reduce_minmax(const Scalar* input, Scalar* output) {
+  const Packet packet = Eigen::internal::ploadu<Packet>(input);
+  output[0] = Eigen::internal::predux_min(packet);
+  output[1] = Eigen::internal::predux_max(packet);
+}
+
+template <typename Scalar, typename Packet>
+void verify_minmax_reduction() {
+  constexpr int packet_size = Eigen::internal::unpacket_traits<Packet>::size;
+  Scalar input[packet_size];
+  for (int i = 0; i < packet_size; ++i) {
+    input[i] = Scalar(i + 1);
+  }
+
+  Scalar output[2];
+  reduce_minmax<Scalar, Packet>(input, output);
+  VERIFY_IS_EQUAL(output[0], Scalar(1));
+  VERIFY_IS_EQUAL(output[1], Scalar(packet_size));
+}
+
+template <typename Scalar, typename Packet>
+EIGEN_DONT_INLINE void minmax_packets(const Scalar* a, const Scalar* b, Scalar* min_output, Scalar* max_output) {
+  const Packet pa = Eigen::internal::ploadu<Packet>(a);
+  const Packet pb = Eigen::internal::ploadu<Packet>(b);
+  Eigen::internal::pstoreu<Scalar, Packet>(min_output, Eigen::internal::pmin<Packet>(pa, pb));
+  Eigen::internal::pstoreu<Scalar, Packet>(max_output, Eigen::internal::pmax<Packet>(pa, pb));
+}
+
+// pmin and pmax return a quiet NaN in the lanes where an operand is NaN, and the exact minimum or maximum elsewhere.
+// The NaN operands are built from runtime bits and the lanes are classified by their bits, since -ffast-math folds
+// isnan; a NaN constant inside pmin or pmax that the compiler treats as poison shows up as a garbage lane.
+template <typename Scalar, typename Packet>
+void verify_minmax_nan_propagation() {
+  using Binary = Eigen::internal::binary_floating_point_traits<Scalar>;
+  using Bits = typename Binary::Bits;
+  constexpr int packet_size = Eigen::internal::unpacket_traits<Packet>::size;
+  volatile Bits nan_bits = Binary::kExponentMask | (Binary::kExponentUnit >> 1);
+  Scalar a[packet_size], b[packet_size], min_output[packet_size], max_output[packet_size];
+  for (int i = 0; i < packet_size; ++i) {
+    a[i] = Scalar(i + 1);
+    b[i] = Scalar(packet_size - i);
+    const Bits bits = nan_bits;
+    if (i % 3 == 0) std::memcpy(&a[i], &bits, sizeof(Bits));
+    if (i % 5 == 1) std::memcpy(&b[i], &bits, sizeof(Bits));
+  }
+  minmax_packets<Scalar, Packet>(a, b, min_output, max_output);
+  for (int i = 0; i < packet_size; ++i) {
+    const Bits min_bits = Binary::bits(min_output[i]);
+    const Bits max_bits = Binary::bits(max_output[i]);
+    if (i % 3 == 0 || i % 5 == 1) {
+      const Bits quiet_nan = Binary::kExponentMask | (Binary::kExponentUnit >> 1);
+      VERIFY_IS_EQUAL(Bits(min_bits & quiet_nan), quiet_nan);
+      VERIFY_IS_EQUAL(Bits(max_bits & quiet_nan), quiet_nan);
+    } else {
+      VERIFY_IS_EQUAL(min_bits, Binary::bits(a[i] < b[i] ? a[i] : b[i]));
+      VERIFY_IS_EQUAL(max_bits, Binary::bits(a[i] < b[i] ? b[i] : a[i]));
+    }
+  }
+}
+
+// Complementary to the opaque-mask calls: the all-ones mask flows straight
+// from ptrue into the packet op, the way comparison-mask producers feed it,
+// which gives constant folding under -ffinite-math-only a chance to see the
+// NaN bit pattern.
+template <typename Scalar, typename Packet>
+EIGEN_DONT_INLINE bool ptrue_mask_any() {
+  const Packet zero = Eigen::internal::pset1<Packet>(Scalar(0));
+  return Eigen::internal::predux_any(Eigen::internal::ptrue(zero));
+}
+
+template <typename Scalar, typename Packet>
+EIGEN_DONT_INLINE void select_with_ptrue_mask(const Scalar* a, const Scalar* b, Scalar* output) {
+  const Packet zero = Eigen::internal::pset1<Packet>(Scalar(0));
+  const Packet selected = Eigen::internal::pselect(Eigen::internal::ptrue(zero), Eigen::internal::ploadu<Packet>(a),
+                                                   Eigen::internal::ploadu<Packet>(b));
+  Eigen::internal::pstoreu<Scalar, Packet>(output, selected);
+}
+
+template <typename Scalar>
+EIGEN_DONT_INLINE void store_extended_scalar_constants(Scalar* output) {
+  output[0] = Eigen::internal::psignmask<Scalar>();
+  output[1] = Eigen::internal::pinf<Scalar>();
+  output[2] = Eigen::internal::pnan<Scalar>();
+}
+
+template <typename Scalar>
+EIGEN_DONT_INLINE Eigen::numext::uint32_t extended_to_float_bits(const volatile Scalar* input) {
+  const float narrowed = static_cast<float>(*input);
+  return Eigen::numext::bit_cast<Eigen::numext::uint32_t>(narrowed);
+}
+
+template <typename Scalar>
+EIGEN_DONT_INLINE void sign_array(const Scalar* input, Scalar* output, Index size) {
+  Map<Array<Scalar, Dynamic, 1>>(output, size) = Map<const Array<Scalar, Dynamic, 1>>(input, size).sign();
+}
+
+template <typename Scalar>
+void verify_binary_sign_fastmath() {
+  using Binary = Eigen::internal::binary_floating_point_traits<Scalar>;
+  using Bits = typename Binary::Bits;
+  constexpr int count = 2 * Eigen::internal::packet_traits<Scalar>::size + 1;
+  const Bits sign = Binary::kSignBit;
+  const Bits min_normal = Binary::kExponentUnit;
+  const Bits infinity = Binary::kExponentMask;
+  const Bits one = Binary::bits(Scalar(1));
+  const Bits nan = infinity | (min_normal >> 1) | Bits(0x12345);
+  const Bits samples[] = {Bits(0),
+                          sign,
+                          Bits(1),
+                          sign | Bits(1),
+                          min_normal - 1,
+                          sign | (min_normal - 1),
+                          one,
+                          sign | one,
+                          infinity,
+                          sign | infinity,
+                          nan,
+                          sign | nan};
+  Scalar input[count], output[count];
+  for (int offset = 0; offset < 12; ++offset) {
+    for (int lane = 0; lane < count; ++lane) {
+      const Bits bits = samples[(offset + lane) % 12];
+      std::memcpy(static_cast<void*>(input + lane), &bits, sizeof(bits));
+    }
+    // Runtime inputs keep fast-math constant folding out of the operation under test.
+    sign_array(input, output, count);
+    for (int lane = 0; lane < count; ++lane) {
+      const Bits bits = samples[(offset + lane) % 12];
+      const Bits magnitude = bits & ~sign;
+      const Bits expected = magnitude > infinity ? bits : magnitude == 0 ? Bits(0) : (bits & sign) | one;
+      VERIFY_IS_EQUAL(Eigen::numext::bit_cast<Bits>(output[lane]), expected);
+    }
+  }
+}
+
+template <typename Scalar, bool Vectorizable = Eigen::internal::packet_traits<Scalar>::Vectorizable>
+struct packetmath_fastmath_runner {
+  static void run() {}
+};
+
+template <typename Scalar>
+struct packetmath_fastmath_runner<Scalar, true> {
+  static void run() {
+    using Packet = typename Eigen::internal::packet_traits<Scalar>::type;
+    const int packet_size = Eigen::internal::packet_traits<Scalar>::size;
+    Scalar output[packet_size];
+    for (int i = 0; i < packet_size; ++i) {
+      output[i] = Scalar(0);
+    }
+
+    store_ptrue<Scalar, Packet>(output);
+
+    for (int i = 0; i < packet_size; ++i) {
+      const unsigned char* lane_bytes = reinterpret_cast<const unsigned char*>(output + i);
+      bool has_nonzero_byte = false;
+      for (std::size_t j = 0; j < sizeof(Scalar); ++j) {
+        has_nonzero_byte = has_nonzero_byte || lane_bytes[j] != 0;
+      }
+      VERIFY(has_nonzero_byte);
+    }
+
+    // pselect and predux_any consume comparison masks whose "true" lanes are
+    // all-ones bit patterns, i.e. NaN when reinterpreted as floating point. An
+    // implementation that tests such a mask with a floating-point compare
+    // invites -ffinite-math-only to drop the unordered case and mishandle the
+    // "true" lanes, so exercise all-zero, all-ones, and single-lane masks here.
+    Scalar mask[packet_size];
+    Scalar a[packet_size];
+    Scalar b[packet_size];
+    Scalar selected[packet_size];
+    for (int i = 0; i < packet_size; ++i) {
+      a[i] = Scalar(i + 1);
+      b[i] = Scalar(-(i + 1));
+    }
+
+    std::memset(static_cast<void*>(mask), 0, sizeof(mask));
+    select_with_mask<Scalar, Packet>(mask, a, b, selected);
+    for (int i = 0; i < packet_size; ++i) {
+      VERIFY_IS_EQUAL(selected[i], b[i]);
+    }
+    VERIFY(!(mask_any<Scalar, Packet>(mask)));
+
+    std::memset(static_cast<void*>(mask), 0xff, sizeof(mask));
+    select_with_mask<Scalar, Packet>(mask, a, b, selected);
+    for (int i = 0; i < packet_size; ++i) {
+      VERIFY_IS_EQUAL(selected[i], a[i]);
+    }
+    VERIFY((mask_any<Scalar, Packet>(mask)));
+
+    select_with_ptrue_mask<Scalar, Packet>(a, b, selected);
+    for (int i = 0; i < packet_size; ++i) {
+      VERIFY_IS_EQUAL(selected[i], a[i]);
+    }
+    VERIFY((ptrue_mask_any<Scalar, Packet>()));
+
+    for (int lane = 0; lane < packet_size; ++lane) {
+      std::memset(static_cast<void*>(mask), 0, sizeof(mask));
+      std::memset(static_cast<void*>(mask + lane), 0xff, sizeof(Scalar));
+      select_with_mask<Scalar, Packet>(mask, a, b, selected);
+      for (int i = 0; i < packet_size; ++i) {
+        VERIFY_IS_EQUAL(selected[i], i == lane ? a[i] : b[i]);
+      }
+      VERIFY((mask_any<Scalar, Packet>(mask)));
+    }
+
+    verify_mask_reduction<Scalar, Packet>();
+    verify_minmax_reduction<Scalar, Packet>();
+  }
+};
+
+template <typename Scalar, typename Packet>
+EIGEN_DONT_INLINE void ldexp_packet(const Scalar* a, const Scalar* exponent, Scalar* output) {
+  Eigen::internal::pstoreu<Scalar, Packet>(
+      output, Eigen::internal::pldexp(Eigen::internal::ploadu<Packet>(a), Eigen::internal::ploadu<Packet>(exponent)));
+}
+
+// pldexp scales by 2^e in three factors, 2^(t/2) twice and 2^(e - t) once. A product of two factors overflows or
+// underflows for |e| beyond the exponent range although a * 2^e is normal, so they must not be reassociated.
+template <typename Scalar>
+void verify_ldexp_beyond_exponent_range() {
+  using Packet = typename Eigen::internal::packet_traits<Scalar>::type;
+  constexpr int packet_size = Eigen::internal::packet_traits<Scalar>::size;
+  constexpr int max_exponent = std::numeric_limits<Scalar>::max_exponent;
+  Scalar a[packet_size], exponent[packet_size], output[packet_size];
+  for (int sign : {1, -1}) {
+    // a * 2^e = 1.5 * 2^(+-(max_exponent - 4)), normal, with |e| = max_exponent + 50.
+    for (int i = 0; i < packet_size; ++i) {
+      a[i] = std::ldexp(Scalar(i % 2 ? -1.5 : 1.5), -sign * 54);
+      exponent[i] = Scalar(sign * (max_exponent + 50));
+    }
+    ldexp_packet<Scalar, Packet>(a, exponent, output);
+    for (int i = 0; i < packet_size; ++i) {
+      VERIFY_IS_EQUAL(output[i], std::ldexp(a[i], sign * (max_exponent + 50)));
+    }
+  }
+}
+
+template <typename Scalar, typename Packet>
+EIGEN_DONT_INLINE void expm1_packet(const Scalar* a, Scalar* output) {
+  Eigen::internal::pstoreu<Scalar, Packet>(output, Eigen::internal::pexpm1(Eigen::internal::ploadu<Packet>(a)));
+}
+
+// expm1 scales by 2^(n - 1) and then by 2, because 2^n overflows for n = max_exponent although the result is finite;
+// the two factors must not be reassociated. Arguments with rint(x / ln(2)) = max_exponent and their correctly rounded
+// expm1 (MPFR). The ulp distance is taken on the bits, since -ffinite-math-only folds a test for inf, and bounded by
+// 1024: reassociation elsewhere costs accuracy, as in pexp (161 ulps for double with GCC 15 for SSE2), while an inf is
+// more than 10^5 ulps away.
+template <typename Scalar>
+struct expm1_near_overflow_cases;
+template <>
+struct expm1_near_overflow_cases<float> {
+  static float x(int i) { return i == 0 ? 88.4000015f : 88.6999969f; }
+  static float ref(int i) { return i == 0 ? 2.46395559e+38f : 3.32597686e+38f; }
+};
+template <>
+struct expm1_near_overflow_cases<double> {
+  static double x(int i) { return i == 0 ? 709.5 : 709.7; }
+  static double ref(int i) { return i == 0 ? 1.3549863193146328e+308 : 1.6549840276802644e+308; }
+};
+
+// A backend without HasExpm1 has no pexpm1 for its packets: the generic one passes the packet to numext::expm1.
+template <typename Scalar, bool HasExpm1 = Eigen::internal::packet_traits<Scalar>::HasExpm1>
+struct expm1_near_overflow_runner {
+  static void run() {
+    using Packet = typename Eigen::internal::packet_traits<Scalar>::type;
+    using Cases = expm1_near_overflow_cases<Scalar>;
+    using Bits = typename Eigen::numext::get_integer_by_size<sizeof(Scalar)>::unsigned_type;
+    constexpr int packet_size = Eigen::internal::packet_traits<Scalar>::size;
+    const Scalar x[2] = {Cases::x(0), Cases::x(1)};
+    const Scalar ref[2] = {Cases::ref(0), Cases::ref(1)};
+    Scalar a[packet_size], output[packet_size];
+    for (int i = 0; i < packet_size; ++i) a[i] = x[i % 2];
+    expm1_packet<Scalar, Packet>(a, output);
+    for (int i = 0; i < packet_size; ++i) {
+      const Bits actual = Eigen::numext::bit_cast<Bits>(output[i]);
+      const Bits expected = Eigen::numext::bit_cast<Bits>(ref[i % 2]);
+      VERIFY((actual > expected ? actual - expected : expected - actual) <= Bits(1024));
+    }
+  }
+};
+
+template <typename Scalar>
+struct expm1_near_overflow_runner<Scalar, false> {
+  static void run() {}
+};
+
+template <typename Scalar, typename Packet>
+EIGEN_DONT_INLINE void sqrt_packet(const Scalar* a, Scalar* output) {
+  Eigen::internal::pstoreu<Scalar, Packet>(output, Eigen::internal::psqrt(Eigen::internal::ploadu<Packet>(a)));
+}
+
+// psqrt of +-0, +inf and positive subnormals beside normal lanes. A subnormal is flushed to zero when the process runs
+// with DAZ, as the startup code of -ffast-math programs arranges, and then the lane may be returned unchanged or as a
+// zero, but not NaN. The special lanes are classified on their bits, since -ffinite-math-only folds float tests.
+template <typename Scalar, typename Packet>
+void verify_sqrt_special_lanes() {
+  using Bits = typename Eigen::numext::get_integer_by_size<sizeof(Scalar)>::unsigned_type;
+  constexpr int packet_size = Eigen::internal::unpacket_traits<Packet>::size;
+  constexpr int mantissa_bits = std::numeric_limits<Scalar>::digits - 1;
+  const Bits sign = Bits(1) << (8 * sizeof(Scalar) - 1);
+  const Bits infinity = static_cast<Bits>(((Bits(1) << (8 * sizeof(Scalar) - 1 - mantissa_bits)) - 1) << mantissa_bits);
+  const Bits cases[] = {
+      Bits(0), sign, infinity, Bits(1), Bits(3), (Bits(1) << (mantissa_bits - 1)), (Bits(1) << mantissa_bits) - 1};
+  Scalar input[packet_size], output[packet_size];
+  for (const Bits bits : cases) {
+    for (int i = 0; i < packet_size; ++i) {
+      input[i] = i % 2 == 0 ? Eigen::numext::bit_cast<Scalar>(bits) : Scalar(4);
+    }
+    sqrt_packet<Scalar, Packet>(input, output);
+    for (int i = 0; i < packet_size; ++i) {
+      const Bits actual = Eigen::numext::bit_cast<Bits>(output[i]);
+      if (i % 2 == 1) {
+        VERIFY(Eigen::numext::abs(output[i] - Scalar(2)) <= Scalar(16) * Eigen::NumTraits<Scalar>::epsilon());
+      } else if (bits == Bits(0) || bits == sign || bits == infinity) {
+        VERIFY_IS_EQUAL(actual, bits);
+      } else {
+        VERIFY((actual & infinity) != infinity);  // not NaN or inf
+      }
+    }
+  }
+}
+
+template <typename Packet>
+EIGEN_DONT_INLINE void finite_sqrt_packet(const float* a, float* output) {
+  Eigen::internal::pstoreu<float, Packet>(output, Eigen::internal::psqrt(Eigen::internal::ploadu<Packet>(a)));
+}
+
+template <typename Packet>
+EIGEN_DONT_INLINE void finite_rsqrt_packet(const float* a, float* output) {
+  Eigen::internal::pstoreu<float, Packet>(output, Eigen::internal::prsqrt(Eigen::internal::ploadu<Packet>(a)));
+}
+
+EIGEN_DONT_INLINE void finite_sqrt_array(const float* input, float* output, Index size) {
+  Map<Array<float, Dynamic, 1>>(output, size) = Map<const Array<float, Dynamic, 1>>(input, size).sqrt();
+}
+
+EIGEN_DONT_INLINE void finite_rsqrt_array(const float* input, float* output, Index size) {
+  Map<Array<float, Dynamic, 1>>(output, size) = Map<const Array<float, Dynamic, 1>>(input, size).rsqrt();
+}
+
+// Distance in ulps, taken on the bits since -ffinite-math-only folds floating-point classification.
+inline Eigen::numext::uint32_t float_ulp_distance(float a, float b) {
+  const Eigen::numext::uint32_t x = Eigen::numext::bit_cast<Eigen::numext::uint32_t>(a);
+  const Eigen::numext::uint32_t y = Eigen::numext::bit_cast<Eigen::numext::uint32_t>(b);
+  return x > y ? x - y : y - x;
+}
+
+// sqrt and rsqrt of finite positive normal values. The NEON implementations guard the zero and infinity inputs with
+// an infinity constant; clang >= 19 under -ffinite-math-only folds that constant to poison and used to delete the
+// guarded computation, so every finite input returned 0 (rsqrt) or garbage (sqrt on ARMv7). The references are
+// computed in double and compared on the bits; the tolerance only has to separate the Newton iterations from a
+// deleted computation.
+template <typename Packet>
+void verify_sqrt_rsqrt_finite_packet() {
+  constexpr int packet_size = Eigen::internal::unpacket_traits<Packet>::size;
+  constexpr Eigen::numext::uint32_t max_ulps = 64;
+  float input[packet_size], output[packet_size];
+  for (int offset = 0; offset < 64; ++offset) {
+    for (int i = 0; i < packet_size; ++i) {
+      input[i] = std::ldexp(1.0f + 0.37f * float(i), (offset + 5 * i) % 61 - 30);
+    }
+    finite_sqrt_packet<Packet>(input, output);
+    for (int i = 0; i < packet_size; ++i) {
+      VERIFY(float_ulp_distance(output[i], float(std::sqrt(double(input[i])))) <= max_ulps);
+    }
+    finite_rsqrt_packet<Packet>(input, output);
+    for (int i = 0; i < packet_size; ++i) {
+      VERIFY(float_ulp_distance(output[i], float(1.0 / std::sqrt(double(input[i])))) <= max_ulps);
+    }
+  }
+}
+
+void verify_sqrt_rsqrt_finite_array() {
+  constexpr Eigen::numext::uint32_t max_ulps = 64;
+  constexpr Index size = 67;
+  float input[size], output[size];
+  for (Index i = 0; i < size; ++i) {
+    input[i] = std::ldexp(1.0f + 0.37f * float(i % 11), int(i % 61) - 30);
+  }
+  finite_sqrt_array(input, output, size);
+  for (Index i = 0; i < size; ++i) {
+    VERIFY(float_ulp_distance(output[i], float(std::sqrt(double(input[i])))) <= max_ulps);
+  }
+  finite_rsqrt_array(input, output, size);
+  for (Index i = 0; i < size; ++i) {
+    VERIFY(float_ulp_distance(output[i], float(1.0 / std::sqrt(double(input[i])))) <= max_ulps);
+  }
+}
+
+template <typename Scalar,
+          bool HasIntegerBits =
+              !std::is_void<typename Eigen::numext::get_integer_by_size<sizeof(Scalar)>::unsigned_type>::value>
+struct extended_scalar_constant_runner {
+  static void run() {}
+};
+
+template <typename Scalar>
+struct extended_scalar_constant_runner<Scalar, false> {
+  static void run() {
+    Scalar actual[3];
+    store_extended_scalar_constants(actual);
+
+    // Floating-point classification is optimized away under -ffinite-math-only. Narrow through a volatile pointer and
+    // inspect the resulting integer bits instead; this also avoids indeterminate padding in x87 long double objects.
+    using Bits = Eigen::numext::uint32_t;
+    const Bits sign_bits = extended_to_float_bits(actual + 0);
+    const Bits inf_bits = extended_to_float_bits(actual + 1);
+    const Bits nan_bits = extended_to_float_bits(actual + 2);
+    VERIFY_IS_EQUAL(sign_bits, Bits(0x80000000u));
+    VERIFY_IS_EQUAL(inf_bits, Bits(0x7f800000u));
+    VERIFY_IS_EQUAL(nan_bits & Bits(0x7fc00000u), Bits(0x7fc00000u));
+  }
+};
+
+EIGEN_DECLARE_TEST(packetmath_fastmath) {
+  CALL_SUBTEST(verify_binary_sign_fastmath<float>());
+  CALL_SUBTEST(verify_binary_sign_fastmath<double>());
+  CALL_SUBTEST(packetmath_fastmath_runner<float>::run());
+  CALL_SUBTEST(packetmath_fastmath_runner<double>::run());
+  CALL_SUBTEST(packetmath_fastmath_runner<Eigen::half>::run());
+  CALL_SUBTEST(packetmath_fastmath_runner<Eigen::bfloat16>::run());
+  CALL_SUBTEST(extended_scalar_constant_runner<long double>::run());
+  CALL_SUBTEST(verify_ldexp_beyond_exponent_range<float>());
+  CALL_SUBTEST(verify_ldexp_beyond_exponent_range<double>());
+  CALL_SUBTEST(expm1_near_overflow_runner<float>::run());
+  CALL_SUBTEST(expm1_near_overflow_runner<double>::run());
+  CALL_SUBTEST(verify_sqrt_rsqrt_finite_array());
+
+#if defined(EIGEN_VECTORIZE_AVX512)
+  CALL_SUBTEST((verify_sqrt_special_lanes<float, Eigen::internal::Packet16f>()));
+  CALL_SUBTEST((verify_sqrt_special_lanes<double, Eigen::internal::Packet8d>()));
+#if !defined(EIGEN_VECTORIZE_AVX512FP16)
+  CALL_SUBTEST((verify_16bit_reductions<Eigen::half, Eigen::internal::Packet16h>()));
+#endif
+  CALL_SUBTEST((verify_16bit_reductions<Eigen::bfloat16, Eigen::internal::Packet16bf>()));
+#endif
+
+#if defined(EIGEN_VECTORIZE_RVV10)
+  CALL_SUBTEST((verify_mask_reduction<float, Eigen::internal::Packet1Xf>()));
+  CALL_SUBTEST((verify_mask_reduction<float, Eigen::internal::Packet2Xf>()));
+  CALL_SUBTEST((verify_mask_reduction<float, Eigen::internal::Packet4Xf>()));
+  CALL_SUBTEST((verify_mask_reduction<double, Eigen::internal::Packet1Xd>()));
+  CALL_SUBTEST((verify_mask_reduction<double, Eigen::internal::Packet2Xd>()));
+  CALL_SUBTEST((verify_mask_reduction<double, Eigen::internal::Packet4Xd>()));
+  CALL_SUBTEST((verify_minmax_reduction<float, Eigen::internal::Packet1Xf>()));
+  CALL_SUBTEST((verify_minmax_reduction<float, Eigen::internal::Packet2Xf>()));
+  CALL_SUBTEST((verify_minmax_reduction<float, Eigen::internal::Packet4Xf>()));
+  CALL_SUBTEST((verify_minmax_reduction<double, Eigen::internal::Packet1Xd>()));
+  CALL_SUBTEST((verify_minmax_reduction<double, Eigen::internal::Packet2Xd>()));
+  CALL_SUBTEST((verify_minmax_reduction<double, Eigen::internal::Packet4Xd>()));
+#if EIGEN_COMP_CLANG  // GCC folds the NaN self-comparison inside pmin and pmax under -ffinite-math-only
+  CALL_SUBTEST((verify_minmax_nan_propagation<float, Eigen::internal::Packet1Xf>()));
+  CALL_SUBTEST((verify_minmax_nan_propagation<float, Eigen::internal::Packet2Xf>()));
+  CALL_SUBTEST((verify_minmax_nan_propagation<float, Eigen::internal::Packet4Xf>()));
+  CALL_SUBTEST((verify_minmax_nan_propagation<double, Eigen::internal::Packet1Xd>()));
+  CALL_SUBTEST((verify_minmax_nan_propagation<double, Eigen::internal::Packet2Xd>()));
+  CALL_SUBTEST((verify_minmax_nan_propagation<double, Eigen::internal::Packet4Xd>()));
+#endif
+#endif
+
+#if defined(EIGEN_VECTORIZE_RVV10FP16)
+  CALL_SUBTEST((verify_mask_reduction<Eigen::half, Eigen::internal::Packet1Xh>()));
+  CALL_SUBTEST((verify_mask_reduction<Eigen::half, Eigen::internal::Packet2Xh>()));
+  CALL_SUBTEST((verify_minmax_reduction<Eigen::half, Eigen::internal::Packet1Xh>()));
+  CALL_SUBTEST((verify_minmax_reduction<Eigen::half, Eigen::internal::Packet2Xh>()));
+#if EIGEN_COMP_CLANG
+  CALL_SUBTEST((verify_minmax_nan_propagation<Eigen::half, Eigen::internal::Packet1Xh>()));
+  CALL_SUBTEST((verify_minmax_nan_propagation<Eigen::half, Eigen::internal::Packet2Xh>()));
+#endif
+#endif
+
+#if defined(EIGEN_VECTORIZE_RVV10BF16)
+  CALL_SUBTEST((verify_mask_reduction<Eigen::bfloat16, Eigen::internal::Packet1Xbf>()));
+  CALL_SUBTEST((verify_mask_reduction<Eigen::bfloat16, Eigen::internal::Packet2Xbf>()));
+#endif
+
+#if defined(EIGEN_VECTORIZE_NEON)
+  CALL_SUBTEST((verify_sqrt_rsqrt_finite_packet<Eigen::internal::Packet4f>()));
+  CALL_SUBTEST((verify_sqrt_rsqrt_finite_packet<Eigen::internal::Packet2f>()));
+  CALL_SUBTEST((verify_mask_reduction<float, Eigen::internal::Packet2f>()));
+  CALL_SUBTEST((verify_low_bit_mask_any_ftz<float, Eigen::internal::Packet2f>()));
+  CALL_SUBTEST((verify_low_bit_mask_any_ftz<Eigen::bfloat16, Eigen::internal::Packet4bf>()));
+  CALL_SUBTEST((verify_low_bit_mask_any_ftz<Eigen::bfloat16, Eigen::internal::Packet8bf>()));
+#if EIGEN_ARCH_ARM64
+  CALL_SUBTEST((verify_low_bit_mask_any_ftz<double, Eigen::internal::Packet2d>()));
+#endif
+#endif
+
+#if defined(EIGEN_VECTORIZE_AVX512FP16)
+  CALL_SUBTEST((verify_mask_reduction<Eigen::half, Eigen::internal::Packet16h>()));
+  CALL_SUBTEST((verify_mask_reduction<Eigen::half, Eigen::internal::Packet8h>()));
+  VERIFY((ptrue_mask_any<Eigen::half, Eigen::internal::Packet16h>()));
+  VERIFY((ptrue_mask_any<Eigen::half, Eigen::internal::Packet8h>()));
+  CALL_SUBTEST((verify_low_bit_mask_any_ftz<Eigen::half, Eigen::internal::Packet32h>()));
+  CALL_SUBTEST((verify_low_bit_mask_any_ftz<Eigen::half, Eigen::internal::Packet16h>()));
+  CALL_SUBTEST((verify_low_bit_mask_any_ftz<Eigen::half, Eigen::internal::Packet8h>()));
+#endif
+}

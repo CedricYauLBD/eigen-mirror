@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: The Eigen Authors
+// SPDX-License-Identifier: MPL-2.0
+
 #ifndef EIGEN_TEST_GPU_COMMON_H
 #define EIGEN_TEST_GPU_COMMON_H
 
@@ -51,9 +54,9 @@ void run_on_gpu(const Kernel& ker, int n, const Input& in, Output& out) {
   gpuDeviceSynchronize();
 
 #ifdef EIGEN_USE_HIP
-  hipLaunchKernelGGL(HIP_KERNEL_NAME(run_on_gpu_meta_kernel<Kernel, typename std::decay<decltype(*d_in)>::type,
-                                                            typename std::decay<decltype(*d_out)>::type>),
-                     dim3(Grids), dim3(Blocks), 0, 0, ker, n, d_in, d_out);
+  hipLaunchKernelGGL(
+      HIP_KERNEL_NAME(run_on_gpu_meta_kernel<Kernel, std::decay_t<decltype(*d_in)>, std::decay_t<decltype(*d_out)>>),
+      dim3(Grids), dim3(Blocks), 0, 0, ker, n, d_in, d_out);
 #else
   // Various versions of clang-format incorrectly add spaces to the kernel launch brackets.
   // clang-format off
@@ -104,7 +107,7 @@ void run_and_compare_to_gpu(const Kernel& ker, int n, const Input& in, Output& o
 struct compile_time_device_info {
   EIGEN_DEVICE_FUNC void operator()(int i, const int* /*in*/, int* info) const {
     if (i == 0) {
-      EIGEN_UNUSED_VARIABLE(info)
+      EIGEN_UNUSED_VARIABLE(info);
 #if defined(__CUDA_ARCH__)
       info[0] = int(__CUDA_ARCH__ + 0);
 #endif
@@ -130,7 +133,7 @@ void ei_test_init_gpu() {
   std::cout << "  EIGEN_CUDACC:                 " << int(EIGEN_CUDACC) << "\n";
 #endif
 
-#ifdef EIGEN_CUDA_SDK_VER
+#if EIGEN_CUDA_SDK_VER
   std::cout << "  EIGEN_CUDA_SDK_VER:             " << int(EIGEN_CUDA_SDK_VER) << "\n";
 #endif
 
@@ -153,9 +156,7 @@ void ei_test_init_gpu() {
   std::cout << "  warpSize:                    " << deviceProp.warpSize << "\n";
   std::cout << "  regsPerBlock:                " << deviceProp.regsPerBlock << "\n";
   std::cout << "  concurrentKernels:           " << deviceProp.concurrentKernels << "\n";
-  std::cout << "  clockRate:                   " << deviceProp.clockRate << "\n";
   std::cout << "  canMapHostMemory:            " << deviceProp.canMapHostMemory << "\n";
-  std::cout << "  computeMode:                 " << deviceProp.computeMode << "\n";
 }
 
 #endif  // EIGEN_TEST_GPU_COMMON_H

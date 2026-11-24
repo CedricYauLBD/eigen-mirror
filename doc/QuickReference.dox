@@ -9,7 +9,7 @@ namespace Eigen {
 <a href="#" class="top">top</a>
 \section QuickRef_Headers Modules and Header files
 
-The Eigen library is divided in a Core module and several additional modules. Each module has a corresponding header file which has to be included in order to use the module. The \c %Dense and \c Eigen header files are provided to conveniently gain access to several modules at once.
+The Eigen library is divided into a Core module and several additional modules. Each module has a corresponding header file which has to be included in order to use the module. The \c %Dense and \c Eigen header files are provided to conveniently gain access to several modules at once.
 
 <table class="manual">
 <tr><th>Module</th><th>Header file</th><th>Contents</th></tr>
@@ -19,7 +19,7 @@ The Eigen library is divided in a Core module and several additional modules. Ea
 <tr class="alt"><td>\link Cholesky_Module Cholesky \endlink</td><td>\code#include <Eigen/Cholesky>\endcode</td><td>LLT and LDLT Cholesky factorization with solver</td></tr>
 <tr            ><td>\link Householder_Module Householder \endlink</td><td>\code#include <Eigen/Householder>\endcode</td><td>Householder transformations; this module is used by several linear algebra modules</td></tr>
 <tr class="alt"><td>\link SVD_Module SVD \endlink</td><td>\code#include <Eigen/SVD>\endcode</td><td>SVD decompositions with least-squares solver (JacobiSVD, BDCSVD)</td></tr>
-<tr            ><td>\link QR_Module QR \endlink</td><td>\code#include <Eigen/QR>\endcode</td><td>QR decomposition with solver (HouseholderQR, ColPivHouseholderQR, FullPivHouseholderQR)</td></tr>
+<tr            ><td>\link QR_Module QR \endlink</td><td>\code#include <Eigen/QR>\endcode</td><td>QR decompositions with solver (HouseholderQR, ColPivHouseholderQR, RandColPivHouseholderQR, FullPivHouseholderQR) and the complete orthogonal decompositions (CompleteOrthogonalDecomposition, RandCompleteOrthogonalDecomposition)</td></tr>
 <tr class="alt"><td>\link Eigenvalues_Module Eigenvalues \endlink</td><td>\code#include <Eigen/Eigenvalues>\endcode</td><td>Eigenvalue, eigenvector decompositions (EigenSolver, SelfAdjointEigenSolver, ComplexEigenSolver)</td></tr>
 <tr            ><td>\link Sparse_Module Sparse \endlink</td><td>\code#include <Eigen/Sparse>\endcode</td><td>%Sparse matrix storage and related basic linear algebra (SparseMatrix, SparseVector) \n (see \ref SparseQuickRefPage for details on sparse modules)</td></tr>
 <tr class="alt"><td></td><td>\code#include <Eigen/Dense>\endcode</td><td>Includes Core, Geometry, LU, Cholesky, SVD, QR, and Eigenvalues header files</td></tr>
@@ -32,8 +32,8 @@ The Eigen library is divided in a Core module and several additional modules. Ea
 
 \b Recall: Eigen provides two kinds of dense objects: mathematical matrices and vectors which are both represented by the template class Matrix, and general 1D and 2D arrays represented by the template class Array:
 \code
-typedef Matrix<Scalar, RowsAtCompileTime, ColsAtCompileTime, Options> MyMatrixType;
-typedef Array<Scalar, RowsAtCompileTime, ColsAtCompileTime, Options> MyArrayType;
+using MyMatrixType = Matrix<Scalar, RowsAtCompileTime, ColsAtCompileTime, Options>;
+using MyArrayType = Array<Scalar, RowsAtCompileTime, ColsAtCompileTime, Options>;
 \endcode
 
 \li \c Scalar is the scalar type of the coefficients (e.g., \c float, \c double, \c bool, \c int, etc.).
@@ -142,7 +142,7 @@ matrix.data();
 <td colspan="2">\code
 ObjectType::Scalar              ObjectType::RowsAtCompileTime
 ObjectType::RealScalar          ObjectType::ColsAtCompileTime
-ObjectType::Index               ObjectType::SizeAtCompileTime
+Eigen::Index                    ObjectType::SizeAtCompileTime
 \endcode</td><td></td></tr>
 <tr class="alt"><td>Resizing</td>
 <td>\code
@@ -197,7 +197,7 @@ object_of_float = expression_of_double.cast<float>();
 <tr style="border-bottom-style: none;">
   <td>
 \code
-typedef {Matrix3f|Array33f} FixedXD;
+using FixedXD = {Matrix3f|Array33f};
 FixedXD x;
 
 x = FixedXD::Zero();
@@ -215,7 +215,7 @@ x.setLinSpaced(size, low, high);
   </td>
   <td>
 \code
-typedef {MatrixXf|ArrayXXf} Dynamic2D;
+using Dynamic2D = {MatrixXf|ArrayXXf};
 Dynamic2D x;
 
 x = Dynamic2D::Zero(rows, cols);
@@ -233,7 +233,7 @@ N/A
   </td>
   <td>
 \code
-typedef {VectorXf|ArrayXf} Dynamic1D;
+using Dynamic1D = {VectorXf|ArrayXf};
 Dynamic1D x;
 
 x = Dynamic1D::Zero(size);
@@ -416,7 +416,7 @@ array1.arg()                  arg(array1)
 
 array1.floor()                floor(array1)
 array1.ceil()                 ceil(array1)
-array1.round()                round(aray1)
+array1.round()                round(array1)
 
 array1.isFinite()             isfinite(array1)
 array1.isInf()                isinf(array1)
@@ -483,14 +483,17 @@ The main difference between the two API is that the one based on cwise* methods 
 while the second one (based on .array()) returns an array expression.
 Recall that .array() has no cost, it only changes the available API and interpretation of the data.
 
-It is also very simple to apply any user defined function \c foo using DenseBase::unaryExpr together with <a href="http://en.cppreference.com/w/cpp/utility/functional/ptr_fun">std::ptr_fun</a> (c++03, deprecated or removed in newer C++ versions), <a href="http://en.cppreference.com/w/cpp/utility/functional/ref">std::ref</a> (c++11), or <a href="http://en.cppreference.com/w/cpp/language/lambda">lambdas</a> (c++11):
+It is also very simple to apply any user defined function \c foo using DenseBase::unaryExpr with function pointers,
+<a href="http://en.cppreference.com/w/cpp/utility/functional/ref">std::ref</a>, or
+<a href="http://en.cppreference.com/w/cpp/language/lambda">lambdas</a>:
 \code
-mat1.unaryExpr(std::ptr_fun(foo));
+mat1.unaryExpr(&foo);
 mat1.unaryExpr(std::ref(foo));
 mat1.unaryExpr([](double x) { return foo(x); });
 \endcode
 
-Please note that it's not possible to pass a raw function pointer to \c unaryExpr, so please warp it as shown above.
+Please note that a function name such as \c foo cannot be passed directly to \c unaryExpr, so pass a function pointer
+or wrap it as shown above.
 
 <a href="#" class="top">top</a>
 \section QuickRef_Reductions Reductions
@@ -533,11 +536,8 @@ if((array1 < array2).any()) ... // if there exist a pair i,j such that array1(i,
 
 <a href="#" class="top">top</a>\section QuickRef_Blocks Sub-matrices
 
-<div class="warningbox">
-<strong>PLEASE HELP US IMPROVING THIS SECTION.</strong>
-%Eigen 3.4 supports a much improved API for sub-matrices, including,
-slicing and indexing from arrays: \ref TutorialSlicingIndexing
-</div>
+\note %Eigen also supports a more powerful `operator()` API for sub-matrices, including slicing
+with arithmetic sequences and indexing from arrays of indices; see \ref TutorialSlicingIndexing.
 
 Read-write access to a \link DenseBase::col(Index) column \endlink
 or a \link DenseBase::row(Index) row \endlink of a matrix (or array):
@@ -593,10 +593,13 @@ Read-write access to sub-matrices:</td></tr>
 
 <a href="#" class="top">top</a>\section QuickRef_Misc Miscellaneous operations
 
-<div class="warningbox">
-<strong>PLEASE HELP US IMPROVING THIS SECTION.</strong>
-%Eigen 3.4 supports a new API for reshaping: \ref TutorialReshape
-</div>
+\subsection QuickRef_ReshapeRef Reshape
+Matrices and arrays can be viewed with different dimensions through `reshaped()` (see \ref TutorialReshape):
+\code
+mat.reshaped(nrows, ncols)      // 2D view with the given dimensions
+mat.reshaped()                  // 1D linear (column-vector) view
+mat.reshaped<AutoOrder>()       // 1D view following the storage order of mat
+\endcode
 
 \subsection QuickRef_Reverse Reverse
 Vectors, rows, and/or columns of a matrix can be reversed (see DenseBase::reverse(), DenseBase::reverseInPlace(), VectorwiseOp::reverse()).
@@ -608,10 +611,10 @@ vec.reverseInPlace()
 \subsection QuickRef_Replicate Replicate
 Vectors, matrices, rows, and/or columns can be replicated in any direction (see DenseBase::replicate(), VectorwiseOp::replicate())
 \code
-vec.replicate(times)                                          vec.replicate<Times>
+vec.replicate(times, 1)                                       vec.replicate<Times, 1>()
 mat.replicate(vertical_times, horizontal_times)               mat.replicate<VerticalTimes, HorizontalTimes>()
-mat.colwise().replicate(vertical_times, horizontal_times)     mat.colwise().replicate<VerticalTimes, HorizontalTimes>()
-mat.rowwise().replicate(vertical_times, horizontal_times)     mat.rowwise().replicate<VerticalTimes, HorizontalTimes>()
+mat.colwise().replicate(times)                                mat.colwise().replicate<Times>()
+mat.rowwise().replicate(times)                                mat.rowwise().replicate<Times>()
 \endcode
 
 
@@ -650,6 +653,14 @@ mat3 = mat1 * diag1.inverse()
 \endcode</td>
 </tr>
 
+<tr><td>Lazy sums with dense matrices and with triangular views (no dense copy of the diagonal is formed)</td>
+ <td>\code
+mat3 = mat1 + diag1;
+mat3 = vec1.asDiagonal() - mat1;
+mat3 = mat1.triangularView<Eigen::Lower>() + diag1;  // still a triangular view
+\endcode</td>
+</tr>
+
 </table>
 
 \subsection QuickRef_TriangularView Triangular views
@@ -683,7 +694,8 @@ m2 = m1.triangularView<Eigen::UnitUpper>()\endcode
 Products:
 </td><td>\code
 m3 += s1 * m1.adjoint().triangularView<Eigen::UnitUpper>() * m2
-m3 -= s1 * m2.conjugate() * m1.adjoint().triangularView<Eigen::Lower>() \endcode
+m3 -= s1 * m2.conjugate() * m1.adjoint().triangularView<Eigen::Lower>()
+m3  = m1.triangularView<Eigen::Upper>() * m2.triangularView<Eigen::Lower>()  // dense result \endcode
 </td></tr>
 <tr><td>
 Solving linear equations:\n
@@ -720,6 +732,15 @@ m3  = s1 * m1.conjugate().selfadjointView<Eigen::Upper>() * m3;
 m3 -= s1 * m3.adjoint() * m1.selfadjointView<Eigen::Lower>();\endcode
 </td></tr>
 <tr><td>
+Symmetric permutation in place: \n
+\f$ S := P S P^T \f$ (only the selected triangle is accessed)
+</td><td>\code
+M.selfadjointView<Eigen::Lower>().applyPermutation(P);
+M.selfadjointView<Eigen::Upper>().applyPermutation(P.inverse());
+// P can also be a Transpositions sequence.
+M.selfadjointView<Eigen::Lower>().applyTransposition(i,j);\endcode
+</td></tr>
+<tr><td>
 Rank 1 and rank K update: \n
 \f$ upper(M_1) \mathrel{{+}{=}} s_1 M_2 M_2^* \f$ \n
 \f$ lower(M_1) \mathbin{{-}{=}} M_2^* M_2 \f$
@@ -743,65 +764,6 @@ m2 = m1.selfadjointView<Eigen::Lower>().ldlt().solve(m2);
 \endcode
 </td></tr>
 </table>
-
-*/
-
-/*
-<table class="tutorial_code">
-<tr><td>
-\link MatrixBase::asDiagonal() make a diagonal matrix \endlink \n from a vector </td><td>\code
-mat1 = vec1.asDiagonal();\endcode
-</td></tr>
-<tr><td>
-Declare a diagonal matrix</td><td>\code
-DiagonalMatrix<Scalar,SizeAtCompileTime> diag1(size);
-diag1.diagonal() = vector;\endcode
-</td></tr>
-<tr><td>Access \link MatrixBase::diagonal() the diagonal and super/sub diagonals of a matrix \endlink as a vector (read/write)</td>
- <td>\code
-vec1 = mat1.diagonal();            mat1.diagonal() = vec1;      // main diagonal
-vec1 = mat1.diagonal(+n);          mat1.diagonal(+n) = vec1;    // n-th super diagonal
-vec1 = mat1.diagonal(-n);          mat1.diagonal(-n) = vec1;    // n-th sub diagonal
-vec1 = mat1.diagonal<1>();         mat1.diagonal<1>() = vec1;   // first super diagonal
-vec1 = mat1.diagonal<-2>();        mat1.diagonal<-2>() = vec1;  // second sub diagonal
-\endcode</td>
-</tr>
-
-<tr><td>View on a triangular part of a matrix (read/write)</td>
- <td>\code
-mat2 = mat1.triangularView<Xxx>();
-// Xxx = Upper, Lower, StrictlyUpper, StrictlyLower, UnitUpper, UnitLower
-mat1.triangularView<Upper>() = mat2 + mat3; // only the upper part is evaluated and referenced
-\endcode</td></tr>
-
-<tr><td>View a triangular part as a symmetric/self-adjoint matrix (read/write)</td>
- <td>\code
-mat2 = mat1.selfadjointView<Xxx>();     // Xxx = Upper or Lower
-mat1.selfadjointView<Upper>() = mat2 + mat2.adjoint();  // evaluated and write to the upper triangular part only
-\endcode</td></tr>
-
-</table>
-
-Optimized products:
-\code
-mat3 += scalar * vec1.asDiagonal() * mat1
-mat3 += scalar * mat1 * vec1.asDiagonal()
-mat3.noalias() += scalar * mat1.triangularView<Xxx>() * mat2
-mat3.noalias() += scalar * mat2 * mat1.triangularView<Xxx>()
-mat3.noalias() += scalar * mat1.selfadjointView<Upper or Lower>() * mat2
-mat3.noalias() += scalar * mat2 * mat1.selfadjointView<Upper or Lower>()
-mat1.selfadjointView<Upper or Lower>().rankUpdate(mat2);
-mat1.selfadjointView<Upper or Lower>().rankUpdate(mat2.adjoint(), scalar);
-\endcode
-
-Inverse products: (all are optimized)
-\code
-mat3 = vec1.asDiagonal().inverse() * mat1
-mat3 = mat1 * diag1.inverse()
-mat1.triangularView<Xxx>().solveInPlace(mat2)
-mat1.triangularView<Xxx>().solveInPlace<OnTheRight>(mat2)
-mat2 = mat1.selfadjointView<Upper or Lower>().llt().solve(mat2)
-\endcode
 
 */
 }

@@ -6,6 +6,7 @@
 // This Source Code Form is subject to the terms of the Mozilla
 // Public License v. 2.0. If a copy of the MPL was not distributed
 // with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
+// SPDX-License-Identifier: MPL-2.0
 
 #ifndef EIGEN_TEST_CUSTOM_COMPLEX_H
 #define EIGEN_TEST_CUSTOM_COMPLEX_H
@@ -128,5 +129,14 @@ EIGEN_DEVICE_FUNC EIGEN_ALWAYS_INLINE bool(isfinite)(const CustomComplex<Real>& 
 
 }  // namespace numext
 }  // namespace Eigen
+
+namespace custom_complex {
+// Scalar comparison for the test macros; the coefficient-wise helpers reach it through ADL.
+template <typename Real>
+bool test_isApprox(const CustomComplex<Real>& a, const CustomComplex<Real>& b) {
+  using Vector = Eigen::Matrix<CustomComplex<Real>, 1, 1>;
+  return Vector::Constant(a).isApprox(Vector::Constant(b), Eigen::test_precision<Real>());
+}
+}  // namespace custom_complex
 
 #endif  // EIGEN_TEST_CUSTOM_COMPLEX_H

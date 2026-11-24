@@ -7,6 +7,7 @@
 // This Source Code Form is subject to the terms of the Mozilla
 // Public License v. 2.0. If a copy of the MPL was not distributed
 // with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
+// SPDX-License-Identifier: MPL-2.0
 
 #define TEST_ENABLE_TEMPORARY_TRACKING
 
@@ -23,8 +24,8 @@ void use_n_times(const XprType& xpr) {
 
 template <int N, typename ReferenceType, typename XprType>
 bool verify_eval_type(const XprType&, const ReferenceType&) {
-  typedef typename internal::nested_eval<XprType, N>::type EvalType;
-  return internal::is_same<internal::remove_all_t<EvalType>, internal::remove_all_t<ReferenceType>>::value;
+  using EvalType = typename internal::nested_eval<XprType, N>::type;
+  return std::is_same<internal::remove_all_t<EvalType>, internal::remove_all_t<ReferenceType>>::value;
 }
 
 template <typename MatrixType>
@@ -45,7 +46,7 @@ void run_nesting_ops_1(const MatrixType& _m) {
 
 template <typename MatrixType>
 void run_nesting_ops_2(const MatrixType& _m) {
-  typedef typename MatrixType::Scalar Scalar;
+  using Scalar = typename MatrixType::Scalar;
   Index rows = _m.rows();
   Index cols = _m.cols();
   MatrixType m1 = MatrixType::Random(rows, cols);
@@ -97,5 +98,5 @@ EIGEN_DECLARE_TEST(nesting_ops) {
   CALL_SUBTEST_2(run_nesting_ops_2(MatrixXcd(s, s)));
   CALL_SUBTEST_3(run_nesting_ops_2(Matrix4f()));
   CALL_SUBTEST_4(run_nesting_ops_2(Matrix2d()));
-  TEST_SET_BUT_UNUSED_VARIABLE(s)
+  TEST_SET_BUT_UNUSED_VARIABLE(s);
 }

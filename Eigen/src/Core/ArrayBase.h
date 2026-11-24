@@ -6,6 +6,7 @@
 // This Source Code Form is subject to the terms of the Mozilla
 // Public License v. 2.0. If a copy of the MPL was not distributed
 // with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
+// SPDX-License-Identifier: MPL-2.0
 
 #ifndef EIGEN_ARRAYBASE_H
 #define EIGEN_ARRAYBASE_H
@@ -45,16 +46,16 @@ class ArrayBase : public DenseBase<Derived> {
  public:
 #ifndef EIGEN_PARSED_BY_DOXYGEN
   /** The base class for a given storage type. */
-  typedef ArrayBase StorageBaseType;
+  using StorageBaseType = ArrayBase;
 
-  typedef ArrayBase Eigen_BaseClassForSpecializationOfGlobalMathFuncImpl;
+  using Eigen_BaseClassForSpecializationOfGlobalMathFuncImpl = ArrayBase;
 
-  typedef typename internal::traits<Derived>::StorageKind StorageKind;
-  typedef typename internal::traits<Derived>::Scalar Scalar;
-  typedef typename internal::packet_traits<Scalar>::type PacketScalar;
-  typedef typename NumTraits<Scalar>::Real RealScalar;
+  using StorageKind = typename internal::traits<Derived>::StorageKind;
+  using Scalar = typename internal::traits<Derived>::Scalar;
+  using PacketScalar = typename internal::packet_traits<Scalar>::type;
+  using RealScalar = typename NumTraits<Scalar>::Real;
 
-  typedef DenseBase<Derived> Base;
+  using Base = DenseBase<Derived>;
   using Base::ColsAtCompileTime;
   using Base::Flags;
   using Base::IsVectorAtCompileTime;
@@ -79,12 +80,12 @@ class ArrayBase : public DenseBase<Derived> {
   using Base::operator*=;
   using Base::operator/=;
 
-  typedef typename Base::CoeffReturnType CoeffReturnType;
+  using CoeffReturnType = typename Base::CoeffReturnType;
 
-  typedef typename Base::PlainObject PlainObject;
+  using PlainObject = typename Base::PlainObject;
 
   /** \internal Represents a matrix with all coefficients equal to one another*/
-  typedef CwiseNullaryOp<internal::scalar_constant_op<Scalar>, PlainObject> ConstantReturnType;
+  using ConstantReturnType = CwiseNullaryOp<internal::scalar_constant_op<Scalar>, PlainObject>;
 #endif  // not EIGEN_PARSED_BY_DOXYGEN
 
 #define EIGEN_CURRENT_STORAGE_BASE_CLASS Eigen::ArrayBase
@@ -168,18 +169,15 @@ class ArrayBase : public DenseBase<Derived> {
   }
 
  public:
-  EIGEN_DEVICE_FUNC ArrayBase<Derived>& array() { return *this; }
-  EIGEN_DEVICE_FUNC const ArrayBase<Derived>& array() const { return *this; }
+  EIGEN_DEVICE_FUNC constexpr ArrayBase<Derived>& array() { return *this; }
+  EIGEN_DEVICE_FUNC constexpr const ArrayBase<Derived>& array() const { return *this; }
 
   /** \returns an \link Eigen::MatrixBase Matrix \endlink expression of this array
    * \sa MatrixBase::array() */
-  EIGEN_DEVICE_FUNC MatrixWrapper<Derived> matrix() { return MatrixWrapper<Derived>(derived()); }
-  EIGEN_DEVICE_FUNC const MatrixWrapper<const Derived> matrix() const {
+  EIGEN_DEVICE_FUNC constexpr MatrixWrapper<Derived> matrix() { return MatrixWrapper<Derived>(derived()); }
+  EIGEN_DEVICE_FUNC constexpr const MatrixWrapper<const Derived> matrix() const {
     return MatrixWrapper<const Derived>(derived());
   }
-
-  //     template<typename Dest>
-  //     inline void evalTo(Dest& dst) const { dst = matrix(); }
 
  protected:
   EIGEN_DEFAULT_COPY_CONSTRUCTOR(ArrayBase)

@@ -4,6 +4,8 @@
 // This Source Code Form is subject to the terms of the Mozilla
 // Public License v. 2.0. If a copy of the MPL was not distributed
 // with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
+// SPDX-FileCopyrightText: The Eigen Authors
+// SPDX-License-Identifier: MPL-2.0
 
 #include "main.h"
 #include <Eigen/LU>
@@ -11,7 +13,7 @@
 namespace {
 template <typename Scalar>
 void constructors() {
-  typedef Matrix<Scalar, 3, 1> Vector;
+  using Vector = Matrix<Scalar, 3, 1>;
   const Vector v = Vector::Random();
   // l-value
   const SkewSymmetricMatrix3<Scalar> s1(v);
@@ -29,6 +31,11 @@ void constructors() {
   SkewSymmetricMatrix3<Scalar> s4(v1(0), v1(1), v1(2));
   VERIFY_IS_APPROX(v1, s4.vector());
 
+  // zero
+  const SkewSymmetricMatrix3<Scalar> s5 = SkewSymmetricMatrix3<Scalar>::Zero();
+  VERIFY(s5.vector().isZero(0));
+  VERIFY(s5.toDenseMatrix().isZero(0));
+
   // constructors with four vectors do not compile
   // Matrix<Scalar, 4, 1> vector4 = Matrix<Scalar, 4, 1>::Random();
   // SkewSymmetricMatrix3<Scalar> s5(vector4);
@@ -36,8 +43,8 @@ void constructors() {
 
 template <typename Scalar>
 void assignments() {
-  typedef Matrix<Scalar, 3, 1> Vector;
-  typedef Matrix<Scalar, 3, 3> SquareMatrix;
+  using Vector = Matrix<Scalar, 3, 1>;
+  using SquareMatrix = Matrix<Scalar, 3, 3>;
 
   const Vector v = Vector::Random();
 
@@ -50,12 +57,18 @@ void assignments() {
   SkewSymmetricMatrix3<Scalar> sk;
   sk = v.asSkewSymmetric();
   VERIFY_IS_APPROX(v, sk.vector());
+
+  // the vector is read from the destination
+  SquareMatrix aliased = SquareMatrix::Random();
+  const SquareMatrix expected = Vector(aliased.col(0)).asSkewSymmetric();
+  aliased = aliased.col(0).asSkewSymmetric();
+  VERIFY_IS_EQUAL(aliased, expected);
 }
 
 template <typename Scalar>
 void plusMinus() {
-  typedef Matrix<Scalar, 3, 1> Vector;
-  typedef Matrix<Scalar, 3, 3> SquareMatrix;
+  using Vector = Matrix<Scalar, 3, 1>;
+  using SquareMatrix = Matrix<Scalar, 3, 3>;
 
   const Vector v1 = Vector::Random();
   const Vector v2 = Vector::Random();
@@ -81,12 +94,65 @@ void plusMinus() {
   VERIFY_IS_APPROX((sk1 + sk1).vector(), 2 * v1);
   VERIFY((sk1 - sk1).vector().isZero());
   VERIFY((sk1 - sk1).toDenseMatrix().isZero());
+
+  // dense ?= skew
+  {
+    const SquareMatrix A = SquareMatrix::Random();
+    SquareMatrix acc = A;
+    acc += v1.asSkewSymmetric();
+    VERIFY_IS_APPROX(acc, A + sq1);
+    acc -= sk2;
+    VERIFY_IS_APPROX(acc, A + sq1 - sq2);
+    Matrix<Scalar, Dynamic, Dynamic> dyn = A;
+    dyn -= sk1;
+    VERIFY_IS_APPROX(dyn, A - sq1);
+    dyn.resize(2, 2);
+    VERIFY_RAISES_ASSERT(dyn += sk1);
+  }
+
+  // Mixed dense / skew-symmetric +/- operators (see issue #2925, MR !2308).
+  // Cases c1/c2/c3 below are exactly the three expressions from the issue.
+  {
+    const SquareMatrix A = SquareMatrix::Random();
+    const Vector b = Vector::Random();
+
+    const SquareMatrix skA = (A * b).asSkewSymmetric().toDenseMatrix();
+    const SquareMatrix skB = v1.asSkewSymmetric().toDenseMatrix();
+    const SquareMatrix skB_times_A = v1.asSkewSymmetric().toDenseMatrix() * A;
+    const SquareMatrix A_times_skB = A * v1.asSkewSymmetric().toDenseMatrix();
+
+    // c1: dense - skew
+    const SquareMatrix c1 = A - SkewSymmetricMatrix3<Scalar>(A * b);
+    VERIFY_IS_APPROX(c1, A - skA);
+
+    // c2: Product<dense,skew> - skew
+    const SquareMatrix c2 = A * SkewSymmetricMatrix3<Scalar>(v1) - SkewSymmetricMatrix3<Scalar>(A * b);
+    VERIFY_IS_APPROX(c2, A_times_skB - skA);
+
+    // c3: Product<skew,dense> - skew
+    const SquareMatrix c3 = SkewSymmetricMatrix3<Scalar>(v1) * A - SkewSymmetricMatrix3<Scalar>(A * b);
+    VERIFY_IS_APPROX(c3, skB_times_A - skA);
+
+    // M + S and S + M (commutativity check).
+    VERIFY_IS_APPROX(SquareMatrix(A + sk1), A + skB);
+    VERIFY_IS_APPROX(SquareMatrix(sk1 + A), skB + A);
+    VERIFY_IS_APPROX(SquareMatrix(A + sk1), SquareMatrix(sk1 + A));
+
+    // M - S and S - M (anti-commutativity sanity).
+    VERIFY_IS_APPROX(SquareMatrix(A - sk1), A - skB);
+    VERIFY_IS_APPROX(SquareMatrix(sk1 - A), skB - A);
+    VERIFY_IS_APPROX(SquareMatrix(A - sk1), -SquareMatrix(sk1 - A));
+
+    // Product expression on the LHS should still fuse (no explicit
+    // .toDenseMatrix() needed on the dense side).
+    VERIFY_IS_APPROX(SquareMatrix(A * A - sk1), (A * A).eval() - skB);
+  }
 }
 
 template <typename Scalar>
 void multiplyScale() {
-  typedef Matrix<Scalar, 3, 1> Vector;
-  typedef Matrix<Scalar, 3, 3> SquareMatrix;
+  using Vector = Matrix<Scalar, 3, 1>;
+  using SquareMatrix = Matrix<Scalar, 3, 3>;
 
   const Vector v1 = Vector::Random();
   SquareMatrix sq1;
@@ -111,9 +177,37 @@ void multiplyScale() {
   VERIFY((sk2 * v2).isZero());
 }
 
+template <typename Scalar>
+void skewSymmetricDiagonalProducts() {
+  using Vector = Matrix<Scalar, 3, 1>;
+  using SquareMatrix = Matrix<Scalar, 3, 3>;
+
+  const Vector v = Vector::Random();
+  const Vector d = Vector::Random();
+  const SkewSymmetricMatrix3<Scalar> sk = v.asSkewSymmetric();
+  const DiagonalMatrix<Scalar, 3> dm(d);
+  const SquareMatrix skDense = sk.toDenseMatrix();
+  const SquareMatrix dmDense = dm.toDenseMatrix();
+
+  SquareMatrix result = sk * dm;
+  VERIFY_IS_APPROX(result, skDense * dmDense);
+  result = dm * sk;
+  VERIFY_IS_APPROX(result, dmDense * skDense);
+  result = v.asSkewSymmetric() * d.asDiagonal();
+  VERIFY_IS_APPROX(result, skDense * dmDense);
+  result = d.asDiagonal() * v.asSkewSymmetric();
+  VERIFY_IS_APPROX(result, dmDense * skDense);
+
+  result.setZero();
+  result += sk * dm;
+  result -= dm * sk;
+  VERIFY_IS_APPROX(result, skDense * dmDense - dmDense * skDense);
+  VERIFY_IS_APPROX((sk * dm) * v, skDense * (dmDense * v));
+}
+
 template <typename Matrix>
 void skewSymmetricMultiplication(const Matrix& m) {
-  typedef Eigen::Matrix<typename Matrix::Scalar, 3, 1> Vector;
+  using Vector = Eigen::Matrix<typename Matrix::Scalar, 3, 1>;
   const Vector v = Vector::Random();
   const Matrix m1 = Matrix::Random(m.rows(), m.cols());
   const SkewSymmetricMatrix3<typename Matrix::Scalar> sk = v.asSkewSymmetric();
@@ -123,7 +217,7 @@ void skewSymmetricMultiplication(const Matrix& m) {
 
 template <typename Scalar>
 void traceAndDet() {
-  typedef Matrix<Scalar, 3, 1> Vector;
+  using Vector = Matrix<Scalar, 3, 1>;
   const Vector v = Vector::Random();
   // this does not work, values larger than 1.e-08 can be seen
   // VERIFY_IS_APPROX(sq.determinant(), static_cast<Scalar>(0));
@@ -133,7 +227,7 @@ void traceAndDet() {
 
 template <typename Scalar>
 void transpose() {
-  typedef Matrix<Scalar, 3, 1> Vector;
+  using Vector = Matrix<Scalar, 3, 1>;
   const Vector v = Vector::Random();
   // By definition of a skew symmetric matrix: A^T = -A
   VERIFY_IS_APPROX(v.asSkewSymmetric().toDenseMatrix().transpose(), v.asSkewSymmetric().transpose().toDenseMatrix());
@@ -142,7 +236,7 @@ void transpose() {
 
 template <typename Scalar>
 void exponentialIdentity() {
-  typedef Matrix<Scalar, 3, 1> Vector;
+  using Vector = Matrix<Scalar, 3, 1>;
   const Vector v1 = Vector::Zero();
   VERIFY(v1.asSkewSymmetric().exponential().isIdentity());
 
@@ -154,12 +248,20 @@ void exponentialIdentity() {
   const auto precision = static_cast<Scalar>(1.1) * NumTraits<Scalar>::dummy_precision();
   v3 << 0, 0, precision;
   VERIFY(v3.asSkewSymmetric().exponential().isIdentity(precision));
+
+  // a small rotation is I + K(v) + O(|v|^2), not the identity
+  using SquareMatrix = Matrix<Scalar, 3, 3>;
+  const Scalar angle = Scalar(0.5) * NumTraits<Scalar>::dummy_precision();
+  const Vector v4(0, 0, angle);
+  const SquareMatrix r4 = v4.asSkewSymmetric().exponential();
+  VERIFY_IS_APPROX(r4(1, 0), angle);
+  VERIFY_IS_APPROX(r4(0, 1), -angle);
 }
 
 template <typename Scalar>
 void exponentialOrthogonality() {
-  typedef Matrix<Scalar, 3, 1> Vector;
-  typedef Matrix<Scalar, 3, 3> SquareMatrix;
+  using Vector = Matrix<Scalar, 3, 1>;
+  using SquareMatrix = Matrix<Scalar, 3, 3>;
   const Vector v = Vector::Random();
   SquareMatrix sq = v.asSkewSymmetric().exponential();
   VERIFY(sq.isUnitary());
@@ -167,8 +269,8 @@ void exponentialOrthogonality() {
 
 template <typename Scalar>
 void exponentialRotation() {
-  typedef Matrix<Scalar, 3, 1> Vector;
-  typedef Matrix<Scalar, 3, 3> SquareMatrix;
+  using Vector = Matrix<Scalar, 3, 1>;
+  using SquareMatrix = Matrix<Scalar, 3, 3>;
 
   // rotation axis is invariant
   const Vector v1 = Vector::Random();
@@ -198,6 +300,8 @@ EIGEN_DECLARE_TEST(skew_symmetric_matrix3) {
     CALL_SUBTEST_2(multiplyScale<double>());
     CALL_SUBTEST_2(skewSymmetricMultiplication(MatrixXf(3, internal::random<int>(3, EIGEN_TEST_MAX_SIZE))));
     CALL_SUBTEST_2(skewSymmetricMultiplication(MatrixXd(3, internal::random<int>(3, EIGEN_TEST_MAX_SIZE))));
+    CALL_SUBTEST_2(skewSymmetricDiagonalProducts<float>());
+    CALL_SUBTEST_2(skewSymmetricDiagonalProducts<double>());
     CALL_SUBTEST_2(traceAndDet<float>());
     CALL_SUBTEST_2(traceAndDet<double>());
     CALL_SUBTEST_2(transpose<float>());

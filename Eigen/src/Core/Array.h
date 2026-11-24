@@ -6,6 +6,7 @@
 // This Source Code Form is subject to the terms of the Mozilla
 // Public License v. 2.0. If a copy of the MPL was not distributed
 // with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
+// SPDX-License-Identifier: MPL-2.0
 
 #ifndef EIGEN_ARRAY_H
 #define EIGEN_ARRAY_H
@@ -16,11 +17,17 @@
 namespace Eigen {
 
 namespace internal {
+// Preserve Array's scalar-conversion gate for non-dense expressions such as permutations.
+template <typename Scalar, typename OtherDerived>
+using is_valid_array_conversion = std::conditional_t<std::is_base_of<DenseBase<OtherDerived>, OtherDerived>::value,
+                                                     is_valid_dense_conversion<Scalar, OtherDerived>,
+                                                     std::is_convertible<typename OtherDerived::Scalar, Scalar>>;
+
 template <typename Scalar_, int Rows_, int Cols_, int Options_, int MaxRows_, int MaxCols_>
 struct traits<Array<Scalar_, Rows_, Cols_, Options_, MaxRows_, MaxCols_>>
     : traits<Matrix<Scalar_, Rows_, Cols_, Options_, MaxRows_, MaxCols_>> {
-  typedef ArrayXpr XprKind;
-  typedef ArrayBase<Array<Scalar_, Rows_, Cols_, Options_, MaxRows_, MaxCols_>> XprBase;
+  using XprKind = ArrayXpr;
+  using XprBase = ArrayBase<Array<Scalar_, Rows_, Cols_, Options_, MaxRows_, MaxCols_>>;
 };
 }  // namespace internal
 
@@ -47,11 +54,11 @@ struct traits<Array<Scalar_, Rows_, Cols_, Options_, MaxRows_, MaxCols_>>
 template <typename Scalar_, int Rows_, int Cols_, int Options_, int MaxRows_, int MaxCols_>
 class Array : public PlainObjectBase<Array<Scalar_, Rows_, Cols_, Options_, MaxRows_, MaxCols_>> {
  public:
-  typedef PlainObjectBase<Array> Base;
+  using Base = PlainObjectBase<Array>;
   EIGEN_DENSE_PUBLIC_INTERFACE(Array)
 
   enum { Options = Options_ };
-  typedef typename Base::PlainObject PlainObject;
+  using PlainObject = typename Base::PlainObject;
 
  protected:
   template <typename Derived, typename OtherDerived, bool IsVector>
@@ -63,30 +70,6 @@ class Array : public PlainObjectBase<Array<Scalar_, Rows_, Cols_, Options_, MaxR
   using Base::base;
   using Base::coeff;
   using Base::coeffRef;
-
-  /**
-   * The usage of
-   *   using Base::operator=;
-   * fails on MSVC. Since the code below is working with GCC and MSVC, we skipped
-   * the usage of 'using'. This should be done only for operator=.
-   */
-  template <typename OtherDerived>
-  EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE Array& operator=(const EigenBase<OtherDerived>& other) {
-    return Base::operator=(other);
-  }
-
-  /** Set all the entries to \a value.
-   * \sa DenseBase::setConstant(), DenseBase::fill()
-   */
-  /* This overload is needed because the usage of
-   *   using Base::operator=;
-   * fails on MSVC. Since the code below is working with GCC and MSVC, we skipped
-   * the usage of 'using'. This should be done only for operator=.
-   */
-  EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE Array& operator=(const Scalar& value) {
-    Base::setConstant(value);
-    return *this;
-  }
 
   /** Copies the value of the expression \a other into \c *this with automatic resizing.
    *
@@ -102,6 +85,14 @@ class Array : public PlainObjectBase<Array<Scalar_, Rows_, Cols_, Options_, MaxR
     return Base::_set(other);
   }
 
+  /** Set all the entries to \a value.
+   * \sa DenseBase::setConstant(), DenseBase::fill()
+   */
+  EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE Array& operator=(const Scalar& value) {
+    Base::setConstant(value);
+    return *this;
+  }
+
   /**
    * \brief Assigns arrays to each other.
    *
@@ -110,42 +101,46 @@ class Array : public PlainObjectBase<Array<Scalar_, Rows_, Cols_, Options_, MaxR
    *
    * \callgraph
    */
-  EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE Array& operator=(const Array& other) { return Base::_set(other); }
+  EIGEN_DEVICE_FUNC constexpr EIGEN_STRONG_INLINE Array& operator=(const Array& other) { return Base::_set(other); }
 
   /** Default constructor.
    *
    * For fixed-size matrices, does nothing.
    *
    * For dynamic-size matrices, creates an empty matrix of size 0. Does not allocate any array. Such a matrix
-   * is called a null matrix. This constructor is the unique way to create null matrices: resizing
-   * a matrix to 0 is not supported.
+   * is called a null matrix. An existing matrix can also be turned into a null matrix by resizing it to 0.
+   *
+   * Unless \c EIGEN_INITIALIZE_MATRICES_BY_ZERO or \c EIGEN_INITIALIZE_MATRICES_BY_NAN is defined, this constructor is
+   * defaulted, so value-initialization (<tt>Array a{};</tt>, <tt>Array()</tt>, or <tt>a()</tt> in a member
+   * initializer list) zero-initializes the whole object first, including the unused part of a fixed-maximum-size
+   * inline buffer. Default-initialization (<tt>Array a;</tt>) only default-initializes the coefficients.
    *
    * \sa resize(Index,Index)
    */
 #ifdef EIGEN_INITIALIZE_COEFFS
-  EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE constexpr Array() : Base() { EIGEN_INITIALIZE_COEFFS_IF_THAT_OPTION_IS_ENABLED }
+  EIGEN_DEVICE_FUNC constexpr Array() { EIGEN_INITIALIZE_COEFFS_IF_THAT_OPTION_IS_ENABLED }
 #else
-  EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE constexpr Array() = default;
+  EIGEN_DEVICE_FUNC constexpr Array() = default;
 #endif
   /** \brief Move constructor */
-  EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE constexpr Array(Array&&) = default;
-  EIGEN_DEVICE_FUNC Array& operator=(Array&& other) noexcept(std::is_nothrow_move_assignable<Scalar>::value) {
-    Base::operator=(std::move(other));
+  EIGEN_DEVICE_FUNC constexpr Array(Array&&) = default;
+  EIGEN_DEVICE_FUNC constexpr Array& operator=(Array&& other) noexcept(std::is_nothrow_move_assignable<Scalar>::value) {
+    this->m_storage = std::move(other.m_storage);
     return *this;
   }
 
-  /** \brief Construct a row of column vector with fixed size from an arbitrary number of coefficients.
+  /** \brief Construct a row or column vector with fixed size from an arbitrary number of coefficients.
    *
    * \only_for_vectors
    *
    * This constructor is for 1D array or vectors with more than 4 coefficients.
    *
    * \warning To construct a column (resp. row) vector of fixed length, the number of values passed to this
-   * constructor must match the the fixed number of rows (resp. columns) of \c *this.
+   * constructor must match the fixed number of rows (resp. columns) of \c *this.
    *
    *
-   * Example: \include Array_variadic_ctor_cxx11.cpp
-   * Output: \verbinclude Array_variadic_ctor_cxx11.out
+   * Example: \include Array_variadic_ctor.cpp
+   * Output: \verbinclude Array_variadic_ctor.out
    *
    * \sa Array(const std::initializer_list<std::initializer_list<Scalar>>&)
    * \sa Array(const Scalar&), Array(const Scalar&,const Scalar&)
@@ -156,12 +151,11 @@ class Array : public PlainObjectBase<Array<Scalar_, Rows_, Cols_, Options_, MaxR
       : Base(a0, a1, a2, a3, args...) {}
 
   /** \brief Constructs an array and initializes it from the coefficients given as initializer-lists grouped by row.
-   * \cpp11
    *
    * In the general case, the constructor takes a list of rows, each row being represented as a list of coefficients:
    *
-   * Example: \include Array_initializer_list_23_cxx11.cpp
-   * Output: \verbinclude Array_initializer_list_23_cxx11.out
+   * Example: \include Array_initializer_list_23.cpp
+   * Output: \verbinclude Array_initializer_list_23.out
    *
    * Each of the inner initializer lists must contain the exact same number of elements, otherwise an assertion is
    * triggered.
@@ -170,17 +164,15 @@ class Array : public PlainObjectBase<Array<Scalar_, Rows_, Cols_, Options_, MaxR
    * Therefore <code> Array<int,Dynamic,1>{{1,2,3,4,5}}</code> is legal and the more verbose syntax
    * <code>Array<int,Dynamic,1>{{1},{2},{3},{4},{5}}</code> can be avoided:
    *
-   * Example: \include Array_initializer_list_vector_cxx11.cpp
-   * Output: \verbinclude Array_initializer_list_vector_cxx11.out
+   * Example: \include Array_initializer_list_vector.cpp
+   * Output: \verbinclude Array_initializer_list_vector.out
    *
    * In the case of fixed-sized arrays, the initializer list sizes must exactly match the array sizes,
    * and implicit transposition is allowed for compile-time 1D arrays only.
    *
    * \sa  Array(const Scalar& a0, const Scalar& a1, const Scalar& a2, const Scalar& a3, const ArgTypes&... args)
    */
-  EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE constexpr Array(
-      const std::initializer_list<std::initializer_list<Scalar>>& list)
-      : Base(list) {}
+  EIGEN_DEVICE_FUNC constexpr Array(const std::initializer_list<std::initializer_list<Scalar>>& list) : Base(list) {}
 
 #ifndef EIGEN_PARSED_BY_DOXYGEN
   template <typename T>
@@ -204,7 +196,7 @@ class Array : public PlainObjectBase<Array<Scalar_, Rows_, Cols_, Options_, MaxR
    */
   EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE explicit Array(Index dim);
   /** constructs an initialized 1x1 Array with the given coefficient
-   * \sa const Scalar& a0, const Scalar& a1, const Scalar& a2, const Scalar& a3, const ArgTypes&... args */
+   * \sa Array(const Scalar& a0, const Scalar& a1, const Scalar& a2, const Scalar& a3, const ArgTypes&... args) */
   Array(const Scalar& value);
   /** constructs an uninitialized array with \a rows rows and \a cols columns.
    *
@@ -239,19 +231,26 @@ class Array : public PlainObjectBase<Array<Scalar_, Rows_, Cols_, Options_, MaxR
   }
 
   /** Copy constructor */
-  EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE constexpr Array(const Array&) = default;
+  EIGEN_DEVICE_FUNC constexpr Array(const Array&) = default;
 
  private:
   struct PrivateType {};
 
  public:
-  /** \sa MatrixBase::operator=(const EigenBase<OtherDerived>&) */
+  /** Constructs an array from an expression with compatible scalar types.
+   * Use \c .cast<NewScalar>() to convert between scalar types.
+   * \sa MatrixBase::operator=(const EigenBase<OtherDerived>&)
+   */
+  template <typename OtherDerived,
+            std::enable_if_t<internal::is_valid_array_conversion<Scalar, OtherDerived>::value, int> = 0>
+  EIGEN_DEVICE_FUNC constexpr EIGEN_STRONG_INLINE Array(const EigenBase<OtherDerived>& other) : Base(other.derived()) {}
+
   template <typename OtherDerived>
-  EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE Array(
+  EIGEN_DEPRECATED_WITH_REASON("Omit the implementation-only second argument.")
+  EIGEN_DEVICE_FUNC constexpr EIGEN_STRONG_INLINE Array(
       const EigenBase<OtherDerived>& other,
-      std::enable_if_t<internal::is_convertible<typename OtherDerived::Scalar, Scalar>::value, PrivateType> =
-          PrivateType())
-      : Base(other.derived()) {}
+      std::enable_if_t<internal::is_valid_array_conversion<Scalar, OtherDerived>::value, PrivateType>)
+      : Array(other) {}
 
   EIGEN_DEVICE_FUNC constexpr Index innerStride() const noexcept { return 1; }
   EIGEN_DEVICE_FUNC constexpr Index outerStride() const noexcept { return this->innerSize(); }
@@ -259,6 +258,15 @@ class Array : public PlainObjectBase<Array<Scalar_, Rows_, Cols_, Options_, MaxR
 #ifdef EIGEN_ARRAY_PLUGIN
 #include EIGEN_ARRAY_PLUGIN
 #endif
+  template <typename OtherDerived>
+  EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE Array& operator=(const EigenBase<OtherDerived>& other) {
+    return Base::operator=(other);
+  }
+
+  template <typename OtherDerived>
+  EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE Array& operator=(const ReturnByValue<OtherDerived>& func) {
+    return Base::operator=(func);
+  }
 
  private:
   template <typename MatrixType, typename OtherDerived, bool SwapPointers>
@@ -282,7 +290,7 @@ class Array : public PlainObjectBase<Array<Scalar_, Rows_, Cols_, Options_, MaxR
  * There are also \c ArraySizeType which are self-explanatory. For example, \c Array4cf is
  * a fixed-size 1D array of 4 complex floats.
  *
- * With \cpp11, template alias are also defined for common sizes.
+ * Template alias are also defined for common sizes.
  * They follow the same pattern as above except that the scalar type suffix is replaced by a
  * template parameter, i.e.:
  *   - `ArrayRowsCols<Type>` where `Rows` and `Cols` can be \c 2,\c 3,\c 4, or \c X for fixed or dynamic size.
@@ -293,15 +301,15 @@ class Array : public PlainObjectBase<Array<Scalar_, Rows_, Cols_, Options_, MaxR
 
 #define EIGEN_MAKE_ARRAY_TYPEDEFS(Type, TypeSuffix, Size, SizeSuffix)        \
   /** \ingroup arraytypedefs */                                              \
-  typedef Array<Type, Size, Size> Array##SizeSuffix##SizeSuffix##TypeSuffix; \
+  using Array##SizeSuffix##SizeSuffix##TypeSuffix = Array<Type, Size, Size>; \
   /** \ingroup arraytypedefs */                                              \
-  typedef Array<Type, Size, 1> Array##SizeSuffix##TypeSuffix;
+  using Array##SizeSuffix##TypeSuffix = Array<Type, Size, 1>;
 
 #define EIGEN_MAKE_ARRAY_FIXED_TYPEDEFS(Type, TypeSuffix, Size)  \
   /** \ingroup arraytypedefs */                                  \
-  typedef Array<Type, Size, Dynamic> Array##Size##X##TypeSuffix; \
+  using Array##Size##X##TypeSuffix = Array<Type, Size, Dynamic>; \
   /** \ingroup arraytypedefs */                                  \
-  typedef Array<Type, Dynamic, Size> Array##X##Size##TypeSuffix;
+  using Array##X##Size##TypeSuffix = Array<Type, Dynamic, Size>;
 
 #define EIGEN_MAKE_ARRAY_TYPEDEFS_ALL_SIZES(Type, TypeSuffix) \
   EIGEN_MAKE_ARRAY_TYPEDEFS(Type, TypeSuffix, 2, 2)           \
@@ -324,21 +332,17 @@ EIGEN_MAKE_ARRAY_TYPEDEFS_ALL_SIZES(std::complex<double>, cd)
 
 #define EIGEN_MAKE_ARRAY_TYPEDEFS(Size, SizeSuffix)              \
   /** \ingroup arraytypedefs */                                  \
-  /** \brief \cpp11 */                                           \
   template <typename Type>                                       \
   using Array##SizeSuffix##SizeSuffix = Array<Type, Size, Size>; \
   /** \ingroup arraytypedefs */                                  \
-  /** \brief \cpp11 */                                           \
   template <typename Type>                                       \
   using Array##SizeSuffix = Array<Type, Size, 1>;
 
 #define EIGEN_MAKE_ARRAY_FIXED_TYPEDEFS(Size)        \
   /** \ingroup arraytypedefs */                      \
-  /** \brief \cpp11 */                               \
   template <typename Type>                           \
   using Array##Size##X = Array<Type, Size, Dynamic>; \
   /** \ingroup arraytypedefs */                      \
-  /** \brief \cpp11 */                               \
   template <typename Type>                           \
   using Array##X##Size = Array<Type, Dynamic, Size>;
 

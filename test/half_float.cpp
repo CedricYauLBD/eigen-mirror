@@ -4,6 +4,8 @@
 // This Source Code Form is subject to the terms of the Mozilla
 // Public License v. 2.0. If a copy of the MPL was not distributed
 // with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
+// SPDX-FileCopyrightText: The Eigen Authors
+// SPDX-License-Identifier: MPL-2.0
 
 #include <sstream>
 
@@ -103,6 +105,27 @@ void test_conversion() {
   VERIFY(static_cast<bool>(half(1.0)));
   VERIFY(static_cast<bool>(half(-1.0)));
   VERIFY(static_cast<bool>(half(-5.96046e-08f)));
+
+  // A double rounds to half once: just above the midpoint 1 + 2^-11 it rounds up, although its float rounding is
+  // the midpoint itself, which ties down. The same holds below the midpoint and for tiny values.
+  VERIFY_IS_EQUAL(numext::bit_cast<numext::uint16_t>(half(1.0 + std::ldexp(1.0, -11) + std::ldexp(1.0, -40))), 0x3c01);
+  VERIFY_IS_EQUAL(numext::bit_cast<numext::uint16_t>(
+                      half(-(1.0 + std::ldexp(1.0, -10) + std::ldexp(1.0, -11) - std::ldexp(1.0, -40)))),
+                  0xbc01);
+  VERIFY_IS_EQUAL(numext::bit_cast<numext::uint16_t>(half(std::ldexp(1.0, -25) + std::ldexp(1.0, -60))), 0x0001);
+  VERIFY_IS_EQUAL(
+      numext::bit_cast<numext::uint16_t>(half(std::complex<double>(std::ldexp(1.0, -25) + std::ldexp(1.0, -60)))),
+      0x0001);
+  // Beyond float's range a double overflows to infinity or underflows to zero, keeping its sign.
+  VERIFY_IS_EQUAL(numext::bit_cast<numext::uint16_t>(half(1e39)), 0x7c00);
+  VERIFY_IS_EQUAL(numext::bit_cast<numext::uint16_t>(half(-1e39)), 0xfc00);
+  VERIFY_IS_EQUAL(numext::bit_cast<numext::uint16_t>(half(1e-300)), 0x0000);
+  VERIFY_IS_EQUAL(numext::bit_cast<numext::uint16_t>(half(-1e-300)), 0x8000);
+  VERIFY((numext::isnan)(half(std::numeric_limits<double>::quiet_NaN())));
+  // Integers convert through float directly: those it rounds overflow half anyway.
+  VERIFY_IS_EQUAL(numext::bit_cast<numext::uint16_t>(half(int32_t(65519))), 0x7bff);
+  VERIFY_IS_EQUAL(numext::bit_cast<numext::uint16_t>(half(-int64_t(65520))), 0xfc00);
+  VERIFY_IS_EQUAL(numext::bit_cast<numext::uint16_t>(half((std::numeric_limits<uint64_t>::max)())), 0x7c00);
 }
 
 void test_numtraits() {
@@ -124,6 +147,14 @@ void test_numtraits() {
             << numext::bit_cast<numext::uint16_t>(std::numeric_limits<half>::signaling_NaN()) << ")" << std::endl;
 
   VERIFY(NumTraits<half>::IsSigned);
+
+  // The fp16 machine epsilon is 2^-10 = 0x1400, and NumTraits must agree with
+  // std::numeric_limits (NumTraits used to return 2^-13, making every
+  // epsilon-based threshold 8x too tight).
+  VERIFY_HALF_BITS_EQUAL(NumTraits<half>::epsilon(), 0x1400);
+  VERIFY_HALF_BITS_EQUAL(std::numeric_limits<half>::epsilon(), 0x1400);
+  VERIFY_IS_EQUAL(numext::bit_cast<numext::uint16_t>(NumTraits<half>::epsilon()),
+                  numext::bit_cast<numext::uint16_t>(std::numeric_limits<half>::epsilon()));
 
   VERIFY_IS_EQUAL(numext::bit_cast<numext::uint16_t>(std::numeric_limits<half>::infinity()),
                   numext::bit_cast<numext::uint16_t>(half(std::numeric_limits<float>::infinity())));
@@ -163,6 +194,12 @@ void test_arithmetic() {
   VERIFY_IS_EQUAL(float(-half(4096.0f)), -4096.0f);
   VERIFY_IS_EQUAL(float(-half(-4096.0f)), 4096.0f);
 
+  // fma rounds once: a * b = 2145/2048 is a midpoint of half, and c = 2^-24 rounds the sum up, not to even. A float
+  // fma rounds the sum to that midpoint first.
+  const half tiny = half(std::ldexp(1.0f, -24));
+  VERIFY_IS_EQUAL(float(numext::fma(half(33.f / 32), half(65.f / 64), tiny)), 1.f + 49.f / 1024);
+  VERIFY_IS_EQUAL(float(numext::fma(half(-33.f / 32), half(65.f / 64), -tiny)), -1.f - 49.f / 1024);
+
   half x(3);
   half y = ++x;
   VERIFY_IS_EQUAL(x, half(4));
@@ -191,6 +228,10 @@ void test_comparison() {
   VERIFY(!(half(-0.0f) < half(0.0f)));
   VERIFY(!(half(0.0f) > half(-0.0f)));
   VERIFY(!(half(-0.0f) > half(0.0f)));
+#if EIGEN_HAS_STD_HASH
+  // Equal values hash alike.
+  VERIFY_IS_EQUAL(std::hash<half>()(half(0.0f)), std::hash<half>()(half(-0.0f)));
+#endif
 
   VERIFY(half(0.2f) > half(-1.0f));
   VERIFY(half(-1.0f) < half(0.2f));
@@ -300,7 +341,7 @@ void test_trigonometric_functions() {
 }
 
 void test_array() {
-  typedef Array<half, 1, Dynamic> ArrayXh;
+  using ArrayXh = Array<half, 1, Dynamic>;
   Index size = internal::random<Index>(1, 10);
   Index i = internal::random<Index>(0, size - 1);
   ArrayXh a1 = ArrayXh::Random(size), a2 = ArrayXh::Random(size);
@@ -319,7 +360,7 @@ void test_array() {
 }
 
 void test_product() {
-  typedef Matrix<half, Dynamic, Dynamic> MatrixXh;
+  using MatrixXh = Matrix<half, Dynamic, Dynamic>;
   Index rows = internal::random<Index>(1, EIGEN_TEST_MAX_SIZE);
   Index cols = internal::random<Index>(1, EIGEN_TEST_MAX_SIZE);
   Index depth = internal::random<Index>(1, EIGEN_TEST_MAX_SIZE);
@@ -332,8 +373,62 @@ void test_product() {
   VERIFY_IS_APPROX(Ch.noalias() += Ah * Bh, (Cf.noalias() += Af * Bf).cast<half>());
 }
 
+void test_nextafter() {
+  VERIFY((numext::isnan)(numext::nextafter(std::numeric_limits<half>::quiet_NaN(), half(1.0f))));
+  VERIFY((numext::isnan)(numext::nextafter(half(1.0f), std::numeric_limits<half>::quiet_NaN())));
+  VERIFY(numext::nextafter(half(0.0f), half(0.0f)) == half(0.0f));
+  VERIFY(numext::nextafter(half(1.0f), half(1.0f)) == half(1.0f));
+  VERIFY(numext::nextafter(half(-1.0f), half(-1.0f)) == half(-1.0f));
+  VERIFY(numext::nextafter(std::numeric_limits<half>::infinity(), std::numeric_limits<half>::infinity()) ==
+         std::numeric_limits<half>::infinity());
+  VERIFY(numext::nextafter(std::numeric_limits<half>::infinity(), half(0.0f)) == (std::numeric_limits<half>::max)());
+  VERIFY(numext::nextafter(-std::numeric_limits<half>::infinity(), half(0.0f)) == -(std::numeric_limits<half>::max)());
+  VERIFY(numext::nextafter(half(1.0f), std::numeric_limits<half>::infinity()) ==
+         half(1.0f) + std::numeric_limits<half>::epsilon());
+  VERIFY(numext::nextafter(half(1.0f), -std::numeric_limits<half>::infinity()) ==
+         half(1.0f) - std::numeric_limits<half>::epsilon() / half(2.0f));
+  VERIFY(numext::nextafter(half(-1.0f), -std::numeric_limits<half>::infinity()) ==
+         half(-1.0f) - std::numeric_limits<half>::epsilon());
+  VERIFY(numext::nextafter(half(-1.0f), std::numeric_limits<half>::infinity()) ==
+         half(-1.0f) + std::numeric_limits<half>::epsilon() / half(2.0f));
+  VERIFY(numext::nextafter((std::numeric_limits<half>::max)(), std::numeric_limits<half>::infinity()) ==
+         std::numeric_limits<half>::infinity());
+  VERIFY(numext::nextafter(-(std::numeric_limits<half>::max)(), -std::numeric_limits<half>::infinity()) ==
+         -std::numeric_limits<half>::infinity());
+  // The neighbors of ±0 are the smallest subnormals with the sign of the
+  // direction, matching std::nextafter (IEEE-754 nextUp/nextDown of zero).
+  VERIFY_HALF_BITS_EQUAL(numext::nextafter(half(0.0f), half(1.0f)), 0x0001);
+  VERIFY_HALF_BITS_EQUAL(numext::nextafter(half(-0.0f), half(1.0f)), 0x0001);
+  VERIFY_HALF_BITS_EQUAL(numext::nextafter(half(0.0f), half(-1.0f)), 0x8001);
+  VERIFY_HALF_BITS_EQUAL(numext::nextafter(half(-0.0f), half(-1.0f)), 0x8001);
+  // from == to returns to, preserving the sign of zero.
+  VERIFY_HALF_BITS_EQUAL(numext::nextafter(half(0.0f), half(-0.0f)), 0x8000);
+  VERIFY_HALF_BITS_EQUAL(numext::nextafter(half(-0.0f), half(0.0f)), 0x0000);
+  VERIFY_HALF_BITS_EQUAL(numext::nextafter(half(0.0f), half(0.0f)), 0x0000);
+  VERIFY_HALF_BITS_EQUAL(numext::nextafter(half(-0.0f), half(-0.0f)), 0x8000);
+}
+
+// As in Eigen 5.0, half::x is a native fp16 type only with native fp16 arithmetic, and elsewhere holds the raw bits and
+// keeps half constants constexpr. Its type decides whether AAPCS64 passes half in a SIMD or a general-purpose register
+// (#3225).
+void test_storage() {
+#if defined(EIGEN_HAS_ARM64_FP16_SCALAR_ARITHMETIC)
+  VERIFY((std::is_same<decltype(half().x), __fp16>::value));
+#elif defined(EIGEN_HAS_BUILTIN_FLOAT16)
+  VERIFY((std::is_same<decltype(half().x), _Float16>::value));
+#else
+  VERIFY((std::is_same<decltype(half().x), numext::uint16_t>::value));
+  half h;
+  h.x = 0x3c00;
+  VERIFY_IS_EQUAL(static_cast<float>(h), 1.0f);
+  constexpr half kHighest = NumTraits<half>::highest();
+  VERIFY_HALF_BITS_EQUAL(kHighest, 0x7bff);
+#endif
+}
+
 EIGEN_DECLARE_TEST(half_float) {
   CALL_SUBTEST(test_numtraits());
+  CALL_SUBTEST(test_storage());
   for (int i = 0; i < g_repeat; i++) {
     CALL_SUBTEST(test_conversion());
     CALL_SUBTEST(test_arithmetic());
@@ -342,5 +437,6 @@ EIGEN_DECLARE_TEST(half_float) {
     CALL_SUBTEST(test_trigonometric_functions());
     CALL_SUBTEST(test_array());
     CALL_SUBTEST(test_product());
+    CALL_SUBTEST(test_nextafter());
   }
 }

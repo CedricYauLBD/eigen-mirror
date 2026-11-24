@@ -6,13 +6,14 @@
 // This Source Code Form is subject to the terms of the Mozilla
 // Public License v. 2.0. If a copy of the MPL was not distributed
 // with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
+// SPDX-License-Identifier: MPL-2.0
 
 #define TEST_ENABLE_TEMPORARY_TRACKING
 
 #include "main.h"
 
-typedef NestByValue<MatrixXd> CpyMatrixXd;
-typedef CwiseBinaryOp<internal::scalar_sum_op<double, double>, const CpyMatrixXd, const CpyMatrixXd> XprType;
+using CpyMatrixXd = NestByValue<MatrixXd>;
+using XprType = CwiseBinaryOp<internal::scalar_sum_op<double, double>, const CpyMatrixXd, const CpyMatrixXd>;
 
 XprType get_xpr_with_temps(const MatrixXd& a) {
   MatrixXd t1 = a.rowwise().reverse();
@@ -33,5 +34,7 @@ EIGEN_DECLARE_TEST(nestbyvalue) {
     VERIFY_IS_APPROX(b, a.rowwise().reverse().eval() + (a + a).eval());
     // Block expressions work with dense NestByValue.
     VERIFY_IS_APPROX(b, a.nestByValue().rowwise().reverse().eval() + (a.nestByValue() + a.nestByValue()).eval());
+    // Expressions without direct access can be nested by value too.
+    VERIFY_IS_APPROX(MatrixXd((a + a).nestByValue()), (a + a).eval());
   }
 }

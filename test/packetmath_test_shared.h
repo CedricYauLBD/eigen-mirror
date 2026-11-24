@@ -7,6 +7,10 @@
 // This Source Code Form is subject to the terms of the Mozilla
 // Public License v. 2.0. If a copy of the MPL was not distributed
 // with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
+// SPDX-License-Identifier: MPL-2.0
+
+#ifndef EIGEN_TEST_PACKETMATH_TEST_SHARED_H
+#define EIGEN_TEST_PACKETMATH_TEST_SHARED_H
 
 #include "main.h"
 #include <typeinfo>
@@ -18,11 +22,142 @@
 
 bool g_first_pass = true;
 
+// Marks the body of a packet test kernel or operation. CUDA and HIP compile it for the device only, since their host
+// pass can lack the packet operations it calls, so there it runs only through run_on_gpu; ordinary C++ compiles it for
+// the host.
+#if defined(EIGEN_GPUCC)
+#define EIGEN_PACKET_TEST_FUNC __device__
+#else
+#define EIGEN_PACKET_TEST_FUNC
+#endif
+// Whether such a body is compiled at all: always in ordinary C++, and only in the device pass of CUDA or HIP, whose
+// host pass may not know the packet types a body uses (the GPU half packets).
+#if !defined(EIGEN_GPUCC) || defined(EIGEN_GPU_COMPILE_PHASE)
+#define EIGEN_PACKET_TEST_KERNEL_BODY 1
+#else
+#define EIGEN_PACKET_TEST_KERNEL_BODY 0
+#endif
+
 namespace Eigen {
 
 namespace test {
 
-template <typename T, std::enable_if_t<NumTraits<T>::IsSigned, bool> = true>
+// The scalar type and lane count of a packet as host code sees them. A test whose packets have unpacket_traits only
+// in a GPU device pass (the half packets) specializes it.
+template <typename Packet>
+struct packet_layout {
+  using Scalar = typename internal::unpacket_traits<Packet>::type;
+  static constexpr int kSize = internal::unpacket_traits<Packet>::size;
+};
+
+template <typename Scalar>
+std::vector<Scalar> special_values() {
+  using L = std::numeric_limits<Scalar>;
+  const Scalar largest_subnormal = (L::min)() - L::denorm_min();
+  return {Scalar(0),
+          Scalar(-0.0),
+          Scalar(1),
+          Scalar(-1),
+          Scalar(0.5),
+          Scalar(-0.5),
+          Scalar(2),
+          Scalar(-2),
+          Scalar(3),
+          Scalar(-3),
+          Scalar(0.25),
+          Scalar(0.75),
+          Scalar(1.5),
+          Scalar(-1.5),
+          Scalar(2.5),
+          Scalar(-2.5),
+          Scalar(-0.4),
+          Scalar(0.4),
+          Scalar(1e-3),
+          Scalar(-1e-3),
+          L::epsilon(),
+          -L::epsilon(),
+          Scalar(1) + L::epsilon(),
+          Scalar(1) - L::epsilon() / Scalar(2),
+          L::denorm_min(),
+          -L::denorm_min(),
+          largest_subnormal,
+          -largest_subnormal,
+          (L::min)(),
+          -(L::min)(),
+          (L::max)(),
+          -(L::max)(),
+          L::infinity(),
+          -L::infinity(),
+          L::quiet_NaN(),
+          -L::quiet_NaN()};
+}
+
+template <typename T, std::enable_if_t<!NumTraits<T>::IsInteger || !NumTraits<T>::IsSigned, int> = 0>
+inline T REF_ADD(const T& a, const T& b) {
+  return a + b;
+}
+template <typename T, std::enable_if_t<NumTraits<T>::IsInteger && NumTraits<T>::IsSigned, int> = 0>
+inline T REF_ADD(const T& a, const T& b) {
+  using UnsignedT = std::make_unsigned_t<T>;
+  return static_cast<T>(static_cast<UnsignedT>(a) + static_cast<UnsignedT>(b));
+}
+template <typename T, std::enable_if_t<!NumTraits<T>::IsInteger || !NumTraits<T>::IsSigned, int> = 0>
+inline T REF_SUB(const T& a, const T& b) {
+  return a - b;
+}
+template <typename T, std::enable_if_t<NumTraits<T>::IsInteger && NumTraits<T>::IsSigned, int> = 0>
+inline T REF_SUB(const T& a, const T& b) {
+  using UnsignedT = std::make_unsigned_t<T>;
+  return static_cast<T>(static_cast<UnsignedT>(a) - static_cast<UnsignedT>(b));
+}
+template <typename T, std::enable_if_t<!NumTraits<T>::IsInteger || std::is_same<T, bool>::value, int> = 0>
+inline T REF_MUL(const T& a, const T& b) {
+  return a * b;
+}
+template <typename T, std::enable_if_t<NumTraits<T>::IsInteger && !std::is_same<T, bool>::value, int> = 0>
+inline T REF_MUL(const T& a, const T& b) {
+  // Evaluate in an unsigned type at least as wide as int so that sub-int
+  // operands are not promoted back to signed int (whose product can overflow);
+  // the result then wraps modulo 2^bits just like pmul.
+  using UnsignedT = std::common_type_t<std::make_unsigned_t<T>, unsigned>;
+  return static_cast<T>(static_cast<UnsignedT>(a) * static_cast<UnsignedT>(b));
+}
+
+template <typename T>
+inline T REF_DIV(const T& a, const T& b) {
+  return a / b;
+}
+
+template <>
+inline bool REF_ADD(const bool& a, const bool& b) {
+  return a || b;
+}
+
+template <>
+inline bool REF_SUB(const bool& a, const bool& b) {
+  return a ^ b;
+}
+
+template <>
+inline bool REF_MUL(const bool& a, const bool& b) {
+  return a && b;
+}
+
+template <>
+inline bool REF_DIV(const bool& a, const bool& b) {
+  return a && b;
+}
+
+template <typename T, std::enable_if_t<NumTraits<T>::IsSigned && NumTraits<T>::IsInteger, bool> = true>
+T negate(const T& x) {
+  // `-x` is UB at the minimum representable value; go through the unsigned type instead, the
+  // same way the unsigned overload below does. This wraps to match what the vectorized
+  // `pnegate` actually computes there.
+  using UnsignedT = typename std::make_unsigned<T>::type;
+  return static_cast<T>(UnsignedT(0) - static_cast<UnsignedT>(x));
+}
+
+template <typename T, std::enable_if_t<NumTraits<T>::IsSigned && !NumTraits<T>::IsInteger, bool> = true>
 T negate(const T& x) {
   return -x;
 }
@@ -32,16 +167,6 @@ T negate(const T& x) {
   return T(0) - x;
 }
 
-template <typename T>
-Map<const Array<unsigned char, sizeof(T), 1> > bits(const T& x) {
-  return Map<const Array<unsigned char, sizeof(T), 1> >(reinterpret_cast<const unsigned char*>(&x));
-}
-
-template <typename T>
-bool biteq(T a, T b) {
-  return (bits(a) == bits(b)).all();
-}
-
 // NOTE: we disable inlining for this function to workaround a GCC issue when using -O3 and the i387 FPU.
 template <typename Scalar>
 EIGEN_DONT_INLINE bool isApproxAbs(const Scalar& a, const Scalar& b, const typename NumTraits<Scalar>::Real& refvalue) {
@@ -49,7 +174,15 @@ EIGEN_DONT_INLINE bool isApproxAbs(const Scalar& a, const Scalar& b, const typen
 }
 
 template <typename Scalar>
-inline void print_mismatch(const Scalar* ref, const Scalar* vec, int size) {
+inline void print_mismatch(const Scalar* ref, const Scalar* vec, int size, int at = -1) {
+  if (at >= 0 && size > 8) {
+    const int begin = (std::max)(0, at - 4);
+    const int end = (std::min)(size, begin + 8);
+    std::cout << "lanes [" << begin << ", " << end << ") ";
+    ref += begin;
+    vec += begin;
+    size = end - begin;
+  }
   std::cout << "ref: [" << Map<const Matrix<Scalar, 1, Dynamic> >(ref, size) << "]"
             << " != vec: [" << Map<const Matrix<Scalar, 1, Dynamic> >(vec, size) << "]\n";
 }
@@ -58,7 +191,7 @@ template <typename Scalar>
 bool areApproxAbs(const Scalar* a, const Scalar* b, int size, const typename NumTraits<Scalar>::Real& refvalue) {
   for (int i = 0; i < size; ++i) {
     if (!isApproxAbs(a[i], b[i], refvalue)) {
-      print_mismatch(a, b, size);
+      print_mismatch(a, b, size, i);
       std::cout << std::setprecision(16) << "Values differ in position " << i << ": " << a[i] << " vs " << b[i]
                 << std::endl;
       return false;
@@ -68,11 +201,11 @@ bool areApproxAbs(const Scalar* a, const Scalar* b, int size, const typename Num
 }
 
 template <typename Scalar>
-bool areApprox(const Scalar* a, const Scalar* b, int size) {
+bool areApprox(const Scalar* a, const Scalar* b, int size,
+               const typename NumTraits<Scalar>::Real& precision = NumTraits<Scalar>::dummy_precision()) {
   for (int i = 0; i < size; ++i) {
-    if (numext::not_equal_strict(a[i], b[i]) && !internal::isApprox(a[i], b[i]) &&
-        !((numext::isnan)(a[i]) && (numext::isnan)(b[i]))) {
-      print_mismatch(a, b, size);
+    if (!test_isCwiseApprox(a[i], b[i], false, precision)) {
+      print_mismatch(a, b, size, i);
       std::cout << std::setprecision(16) << "Values differ in position " << i << ": " << a[i] << " vs " << b[i]
                 << std::endl;
       return false;
@@ -85,7 +218,7 @@ template <typename Scalar>
 bool areEqual(const Scalar* a, const Scalar* b, int size) {
   for (int i = 0; i < size; ++i) {
     if (numext::not_equal_strict(a[i], b[i]) && !((numext::isnan)(a[i]) && (numext::isnan)(b[i]))) {
-      print_mismatch(a, b, size);
+      print_mismatch(a, b, size, i);
       std::cout << std::setprecision(16) << "Values differ in position " << i << ": " << a[i] << " vs " << b[i]
                 << std::endl;
       return false;
@@ -94,14 +227,50 @@ bool areEqual(const Scalar* a, const Scalar* b, int size) {
   return true;
 }
 
+// Checks that each lane of `data` is a full bit mask: all bits set when `zero_mask[i]` is false, all
+// bits cleared when it is true. Packet comparisons must return all-ones masks on true lanes so that
+// the result can be consumed bitwise (pselect, pand, pandnot, ...); a lane that is merely nonzero
+// (e.g. a NaN produced by an arithmetic float-to-half conversion of the mask) is not enough.
 template <typename Scalar>
-bool areApprox(const Scalar* a, const Scalar* b, int size, const typename NumTraits<Scalar>::Real& precision) {
+bool areFullBitMasks(const Scalar* data, const bool* zero_mask, int size) {
   for (int i = 0; i < size; ++i) {
-    if (numext::not_equal_strict(a[i], b[i]) && !internal::isApprox(a[i], b[i], precision) &&
-        !((numext::isnan)(a[i]) && (numext::isnan)(b[i]))) {
-      print_mismatch(a, b, size);
-      std::cout << std::setprecision(16) << "Values differ in position " << i << ": " << a[i] << " vs " << b[i]
+    const unsigned char expected = zero_mask[i] ? 0x00 : 0xff;
+    if (!(bits(data[i]) == expected).all()) {
+      std::cout << "Mask lane " << i << " should be all-" << (zero_mask[i] ? "zero" : "one")
+                << " bits, got bytes:" << std::hex;
+      for (std::size_t k = 0; k < sizeof(Scalar); ++k) std::cout << " 0x" << static_cast<int>(bits(data[i])[k]);
+      std::cout << std::dec << std::endl;
+      return false;
+    }
+  }
+  return true;
+}
+
+// Bitwise equality lane by lane; with `nan_is_nan`, two NaNs match whatever their payloads. Use it where a
+// contract fixes the result bit for bit (loads and stores, bit operations, correctly rounded arithmetic, the sign of
+// a zero) and areEqual's value comparison would pass +0 for -0.
+template <typename Scalar>
+bool areEqualBits(const Scalar* a, const Scalar* b, int size, bool nan_is_nan = true) {
+  for (int i = 0; i < size; ++i) {
+    const bool both_nan = nan_is_nan && (numext::isnan)(a[i]) && (numext::isnan)(b[i]);
+    if (!both_nan && !biteq(a[i], b[i])) {
+      print_mismatch(a, b, size, i);
+      std::cout << std::setprecision(16) << "Bits differ in position " << i << ": " << a[i] << " vs " << b[i]
                 << std::endl;
+      return false;
+    }
+  }
+  return true;
+}
+
+template <typename Scalar>
+bool areWithinUlps(const Scalar* ref, const Scalar* vec, int size, uint64_t max_ulps) {
+  for (int i = 0; i < size; ++i) {
+    const uint64_t distance = ulp_distance(ref[i], vec[i]);
+    if (distance > max_ulps) {
+      print_mismatch(ref, vec, size, i);
+      std::cout << std::setprecision(16) << "Values differ in position " << i << " by " << distance << " ulps (budget "
+                << max_ulps << "): " << ref[i] << " vs " << vec[i] << std::endl;
       return false;
     }
   }
@@ -137,6 +306,11 @@ bool areApprox(const Scalar* a, const Scalar* b, int size, const typename NumTra
       data_mask[i] = numext::is_exactly_zero(data2[i]);                                                        \
     }                                                                                                          \
     VERIFY(test::areEqual(ref_mask, data_mask, PacketSize) && #POP);                                           \
+    /* Vectorized comparisons must produce all-ones bit masks on true lanes. Scalar fallbacks return */        \
+    /* Scalar(1) and bool packets store `true` (loading 0xff into a bool is UB), so those are exempt. */       \
+    if (internal::unpacket_traits<Packet>::vectorizable && !std::is_same<Scalar, bool>::value) {               \
+      VERIFY(test::areFullBitMasks(data2, ref_mask, PacketSize) && #POP);                                      \
+    }                                                                                                          \
   }
 
 // Checks component-wise for input of size N. All of data1, data2, and ref
@@ -294,7 +468,7 @@ struct runall;
 
 template <typename Scalar, typename PacketType = typename internal::packet_traits<Scalar>::type,
           bool Vectorized = internal::packet_traits<Scalar>::Vectorizable,
-          bool HasHalf = !internal::is_same<typename internal::unpacket_traits<PacketType>::half, PacketType>::value>
+          bool HasHalf = !std::is_same<typename internal::unpacket_traits<PacketType>::half, PacketType>::value>
 struct runner;
 
 template <typename Scalar, typename PacketType>
@@ -317,3 +491,5 @@ struct runner<Scalar, PacketType, false, false> {
 
 }  // namespace test
 }  // namespace Eigen
+
+#endif  // EIGEN_TEST_PACKETMATH_TEST_SHARED_H

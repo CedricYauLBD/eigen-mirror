@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: The Eigen Authors
+# SPDX-License-Identifier: MPL-2.0
+
 include(EigenTesting)
 include(CheckCXXSourceCompiles)
 
@@ -10,9 +13,25 @@ ei_set_build_string()
 
 add_custom_target(buildtests)
 
+# buildsmoketests is created up-front so that ei_add_test_internal — which
+# runs from inside test/ and contrib/test/ — can attach the smoketest
+# label and the build dependency in the same directory scope where add_test()
+# was called.  CMake's set_property(TEST ...) and add_dependencies require
+# this scope match, so a single post-hoc registration from the top level
+# would silently fail for contrib entries.
+add_custom_target(buildsmoketests)
+
+# Load the smoke-test list once.  ei_smoke_test_list is then visible to both
+# test/ and contrib/test/ as a parent-scope variable, and ei_add_test_internal
+# checks it on every test it registers.
+include(EigenSmokeTestList)
+# Split-test parts that ei_add_test compiles together; see the file for the limits.
+include(EigenTestPartGroups)
+
 if (NOT EIGEN_CTEST_ARGS)
-  # By default, run tests in parallel on all available cores.
-  set(EIGEN_CTEST_ARGS "" CACHE STRING "-j0")
+  # Extra arguments for the ctest run of the check target, for example -j8.
+  # The default runs the tests serially.
+  set(EIGEN_CTEST_ARGS "" CACHE STRING "Arguments passed to ctest by the check target")
 endif()
 add_custom_target(check COMMAND "ctest" ${EIGEN_CTEST_ARGS})
 
@@ -20,15 +39,12 @@ add_dependencies(check buildtests)
 
 # Convenience target for only building GPU tests.
 add_custom_target(buildtests_gpu)
-add_custom_target(check_gpu COMMAND "ctest" "--output-on-failure"
+add_custom_target(check_gpu COMMAND "ctest" ${EIGEN_CTEST_ARGS}
+                                            "--output-on-failure"
                                             "--no-compress-output"
-                                            "--build-no-clean"
                                             "-T" "test"
                                             "-L" "gpu")
 add_dependencies(check_gpu buildtests_gpu)
-
-# check whether /bin/bash exists (disabled as not used anymore)
-# find_file(EIGEN_BIN_BASH_EXISTS "/bin/bash" PATHS "/" NO_DEFAULT_PATH)
 
 # This call activates testing and generates the DartConfiguration.tcl
 include(CTest)
@@ -68,7 +84,5 @@ if(CMAKE_COMPILER_IS_GNUCXX)
   endif()
 
 elseif(MSVC)
-  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /D_CRT_SECURE_NO_WARNINGS /D_SCL_SECURE_NO_WARNINGS")
+  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -D_CRT_SECURE_NO_WARNINGS -D_SCL_SECURE_NO_WARNINGS")
 endif()
-
-

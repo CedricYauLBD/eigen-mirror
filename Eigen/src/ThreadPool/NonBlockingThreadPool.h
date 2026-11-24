@@ -6,9 +6,10 @@
 // This Source Code Form is subject to the terms of the Mozilla
 // Public License v. 2.0. If a copy of the MPL was not distributed
 // with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
+// SPDX-License-Identifier: MPL-2.0
 
-#ifndef EIGEN_CXX11_THREADPOOL_NONBLOCKING_THREAD_POOL_H
-#define EIGEN_CXX11_THREADPOOL_NONBLOCKING_THREAD_POOL_H
+#ifndef EIGEN_THREADPOOL_NONBLOCKING_THREAD_POOL_H
+#define EIGEN_THREADPOOL_NONBLOCKING_THREAD_POOL_H
 
 // IWYU pragma: private
 #include "./InternalHeaderCheck.h"
@@ -18,21 +19,20 @@ namespace Eigen {
 template <typename Environment>
 class ThreadPoolTempl : public Eigen::ThreadPoolInterface {
  public:
-  typedef typename Environment::EnvThread Thread;
-  typedef typename Environment::Task Task;
-  typedef RunQueue<Task, 1024> Queue;
+  using Thread = typename Environment::EnvThread;
+  using Task = typename Environment::Task;
+  using Queue = RunQueue<Task, 1024>;
 
   struct PerThread {
-    constexpr PerThread() : pool(NULL), rand(0), thread_id(-1) {}
-    ThreadPoolTempl* pool;  // Parent pool, or null for normal threads.
-    uint64_t rand;          // Random generator state.
-    int thread_id;          // Worker thread index in pool.
+    ThreadPoolTempl* pool = nullptr;  // Parent pool, or null for normal threads.
+    uint64_t rand = 0;                // Random generator state.
+    int thread_id = -1;               // Worker thread index in pool.
   };
 
   struct ThreadData {
-    constexpr ThreadData() : thread(), steal_partition(0), queue() {}
+    constexpr ThreadData() = default;
     std::unique_ptr<Thread> thread;
-    std::atomic<unsigned> steal_partition;
+    std::atomic<unsigned> steal_partition{0};
     Queue queue;
   };
 
@@ -44,7 +44,7 @@ class ThreadPoolTempl : public Eigen::ThreadPoolInterface {
         allow_spinning_(allow_spinning),
         spin_count_(
             // TODO(dvyukov,rmlarsen): The time spent in NonEmptyQueueIndex() is proportional to num_threads_ and
-            // we assume that new work is scheduled at a constant rate, so we divide `kSpintCount` by number of
+            // we assume that new work is scheduled at a constant rate, so we divide `kSpinCount` by number of
             // threads and number of spinning threads. The constant was picked based on a fair dice roll, tune it.
             allow_spinning && num_threads > 0 ? kSpinCount / kMaxSpinningThreads / num_threads : 0),
         thread_data_(num_threads),
@@ -62,7 +62,7 @@ class ThreadPoolTempl : public Eigen::ThreadPoolInterface {
     // and NonEmptyQueueIndex. Iteration is based on the fact that if we take
     // a random starting thread index t and calculate num_threads - 1 subsequent
     // indices as (t + coprime) % num_threads, we will cover all threads without
-    // repetitions (effectively getting a presudo-random permutation of thread
+    // repetitions (effectively getting a pseudo-random permutation of thread
     // indices).
     eigen_plain_assert(num_threads_ < kMaxThreads);
     for (int i = 1; i <= num_threads_; ++i) {
@@ -70,7 +70,7 @@ class ThreadPoolTempl : public Eigen::ThreadPoolInterface {
       ComputeCoprimes(i, &all_coprimes_.back());
     }
 #ifndef EIGEN_THREAD_LOCAL
-    init_barrier_.reset(new Barrier(num_threads_));
+    init_barrier_ = std::make_unique<Barrier>(num_threads_);
 #endif
     thread_data_.resize(num_threads_);
     for (int i = 0; i < num_threads_; i++) {
@@ -93,15 +93,24 @@ class ThreadPoolTempl : public Eigen::ThreadPoolInterface {
     if (!cancelled_) {
       ec_.Notify(true);
     } else {
-      // Since we were cancelled, there might be entries in the queues.
-      // Empty them to prevent their destructor from asserting.
+      // Queued closures will never run. Destroy them before joining: a running closure may wait on something one of
+      // them owns (a promise, say). PopBack() locks and pops the end that is not the owner's, so it is safe beside a
+      // running worker; Flush() is not.
       for (size_t i = 0; i < thread_data_.size(); i++) {
-        thread_data_[i].queue.Flush();
+        while (!thread_data_[i].queue.Empty()) thread_data_[i].queue.PopBack();
       }
     }
     // Join threads explicitly (by destroying) to avoid destruction order within
     // this class.
     for (size_t i = 0; i < thread_data_.size(); ++i) thread_data_[i].thread.reset();
+    if (cancelled_) {
+      // Closures that were still running at Cancel() may have scheduled more after the drain above. Empty the queues
+      // to prevent their destructor from asserting. This must wait until the workers have exited: Flush() pops from
+      // the owner's end of the queues, and a running worker may push to it.
+      for (size_t i = 0; i < thread_data_.size(); i++) {
+        thread_data_[i].queue.Flush();
+      }
+    }
   }
 
   void SetStealPartitions(const std::vector<std::pair<unsigned, unsigned>>& partitions) {
@@ -132,15 +141,20 @@ class ThreadPoolTempl : public Eigen::ThreadPoolInterface {
       eigen_plain_assert(start < limit);
       eigen_plain_assert(limit <= num_threads_);
       int num_queues = limit - start;
+#ifdef EIGEN_THREAD_LOCAL
       int rnd = Rand(&pt->rand) % num_queues;
+#else
+      // Without thread-local storage all non-workers share one PerThread, so draw from a shared atomic state.
+      int rnd = SharedRand() % num_queues;
+#endif
       eigen_plain_assert(start + rnd < limit);
       Queue& q = thread_data_[start + rnd].queue;
       t = q.PushBack(std::move(t));
     }
-    // Note: below we touch this after making w available to worker threads.
+    // Note: below we touch this after making t available to worker threads.
     // Strictly speaking, this can lead to a racy-use-after-free. Consider that
     // Schedule is called from a thread that is neither main thread nor a worker
-    // thread of this pool. Then, execution of w directly or indirectly
+    // thread of this pool. Then, execution of t directly or indirectly
     // completes overall computations, which in turn leads to destruction of
     // this. We expect that such scenario is prevented by program, that is,
     // this is kept alive while any threads can potentially be in Schedule.
@@ -158,7 +172,7 @@ class ThreadPoolTempl : public Eigen::ThreadPoolInterface {
     PerThread* pt = GetPerThread();
     const int thread_id = pt->thread_id;
     // If we are not a worker thread of this pool, we can't get any work.
-    if (thread_id < 0) return;
+    if (pt->pool != this) return;
     Queue& q = thread_data_[thread_id].queue;
     *t = q.PopFront();
     if (t->f) return;
@@ -178,13 +192,15 @@ class ThreadPoolTempl : public Eigen::ThreadPoolInterface {
           for (int i = 0; i < spin_count_ && !t->f; ++i) *t = GlobalSteal();
           // Notify `spinning_state_` that we are no longer spinning.
           bool has_no_notify_task = StopSpinning();
-          // If a task was submitted to the queue without a call to
-          // `ec_.Notify()` (if `IsNotifyParkedThreadRequired()` returned
-          // false), and we didn't steal anything above, we must try to
-          // steal one more time, to make sure that this task will be
-          // executed. We will not necessarily find it, because it might
-          // have been already stolen by some other thread.
-          if (has_no_notify_task && !t->f) *t = GlobalSteal();
+          // A suppressed notification can belong to a different task than the
+          // one we just stole. Pass it on before executing a potentially blocking task.
+          if (has_no_notify_task) {
+            if (t->f) {
+              if (NonEmptyQueueIndex() != -1) ec_.Notify(false);
+            } else {
+              *t = GlobalSteal();
+            }
+          }
         }
       }
     }
@@ -239,6 +255,8 @@ class ThreadPoolTempl : public Eigen::ThreadPoolInterface {
     eigen_plain_assert(start >= 0);
     eigen_plain_assert(start < end);  // non-zero sized partition
     eigen_plain_assert(end <= num_threads_);
+    (void)start;
+    (void)end;
   }
 
   inline void SetStealPartition(size_t i, unsigned val) {
@@ -334,13 +352,12 @@ class ThreadPoolTempl : public Eigen::ThreadPoolInterface {
   std::unordered_map<uint64_t, std::unique_ptr<PerThread>> per_thread_map_;
 #endif
 
-  unsigned NumBlockedThreads() const { return blocked_.load(); }
   unsigned NumActiveThreads() const { return num_threads_ - blocked_.load(); }
 
   // Main worker thread loop.
   void WorkerLoop(int thread_id) {
 #ifndef EIGEN_THREAD_LOCAL
-    std::unique_ptr<PerThread> new_pt(new PerThread());
+    auto new_pt = std::make_unique<PerThread>();
     per_thread_map_mutex_.lock();
     bool insertOK = per_thread_map_.emplace(GlobalThreadIdHash(), std::move(new_pt)).second;
     eigen_plain_assert(insertOK);
@@ -418,6 +435,14 @@ class ThreadPoolTempl : public Eigen::ThreadPoolInterface {
     // We already did best-effort emptiness check in Steal, so prepare for
     // blocking.
     ec_.Prewait();
+    // Cancel() sets cancelled_ and then notifies, so this check, which follows Prewait(), either sees it or is
+    // observed by that Notify(). Without it a worker that passed the check in WorkerLoop() before Cancel() and
+    // reaches here after its Notify() blocks for good once the other workers have left without blocking: the
+    // destructor does not notify a cancelled pool, and blocked_ never reaches num_threads_.
+    if (cancelled_) {
+      ec_.CancelWait();
+      return false;
+    }
     // Now do a reliable emptiness check.
     int victim = NonEmptyQueueIndex();
     if (victim != -1) {
@@ -433,7 +458,7 @@ class ThreadPoolTempl : public Eigen::ThreadPoolInterface {
     // If we are shutting down and all worker threads blocked without work,
     // that's we are done.
     blocked_++;
-    // TODO is blocked_ required to be unsigned?
+    // TODO: is blocked_ required to be unsigned?
     if (done_ && blocked_ == static_cast<unsigned>(num_threads_)) {
       ec_.CancelWait();
       // Almost done, but need to re-check queues.
@@ -509,7 +534,7 @@ class ThreadPoolTempl : public Eigen::ThreadPoolInterface {
   // checks if there were any tasks submitted into the pool without notifying
   // parked threads, and decrements the count by one. Returns true if the number
   // of tasks submitted without notification was decremented. In this case,
-  // caller thread might have to call Steal() one more time.
+  // caller must either steal again or notify another worker.
   bool StopSpinning() {
     uint64_t spinning = spinning_state_.load(std::memory_order_relaxed);
     for (;;) {
@@ -522,7 +547,8 @@ class ThreadPoolTempl : public Eigen::ThreadPoolInterface {
       bool has_no_notify_task = state.num_no_notification > 0;
       if (has_no_notify_task) --state.num_no_notification;
 
-      if (spinning_state_.compare_exchange_weak(spinning, state.Encode(), std::memory_order_relaxed)) {
+      // Acquire the queue publication paired with the suppressed notification.
+      if (spinning_state_.compare_exchange_weak(spinning, state.Encode(), std::memory_order_acquire)) {
         return has_no_notify_task;
       }
     }
@@ -545,7 +571,9 @@ class ThreadPoolTempl : public Eigen::ThreadPoolInterface {
       // Increment the number of tasks submitted without notification.
       ++state.num_no_notification;
 
-      if (spinning_state_.compare_exchange_weak(spinning, state.Encode(), std::memory_order_relaxed)) {
+      // Publish the queued task to the spinner that consumes this notification.
+      if (spinning_state_.compare_exchange_weak(spinning, state.Encode(), std::memory_order_release,
+                                                std::memory_order_relaxed)) {
         return false;
       }
     }
@@ -571,6 +599,15 @@ class ThreadPoolTempl : public Eigen::ThreadPoolInterface {
 #endif
   }
 
+#ifndef EIGEN_THREAD_LOCAL
+  // Rand() on a state that every concurrent caller advances by a fixed odd stride.
+  static unsigned SharedRand() {
+    static std::atomic<uint64_t> shared_state(0);
+    uint64_t state = shared_state.fetch_add(0x9E3779B97F4A7C15ULL, std::memory_order_relaxed);
+    return Rand(&state);
+  }
+#endif
+
   static EIGEN_STRONG_INLINE unsigned Rand(uint64_t* state) {
     uint64_t current = *state;
     // Update the internal state
@@ -580,8 +617,8 @@ class ThreadPoolTempl : public Eigen::ThreadPoolInterface {
   }
 };
 
-typedef ThreadPoolTempl<StlThreadEnvironment> ThreadPool;
+using ThreadPool = ThreadPoolTempl<StlThreadEnvironment>;
 
 }  // namespace Eigen
 
-#endif  // EIGEN_CXX11_THREADPOOL_NONBLOCKING_THREAD_POOL_H
+#endif  // EIGEN_THREADPOOL_NONBLOCKING_THREAD_POOL_H

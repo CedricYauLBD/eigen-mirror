@@ -6,83 +6,59 @@
 // This Source Code Form is subject to the terms of the Mozilla
 // Public License v. 2.0. If a copy of the MPL was not distributed
 // with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
+// SPDX-License-Identifier: MPL-2.0
 
 #include "common.h"
 
 EIGEN_BLAS_FUNC(axpy)
-(const int *n, const RealScalar *palpha, const RealScalar *px, const int *incx, RealScalar *py, const int *incy) {
+(const EIGEN_BLAS_INT *n_in, const RealScalar *palpha, const RealScalar *px, const EIGEN_BLAS_INT *incx_in,
+ RealScalar *py, const EIGEN_BLAS_INT *incy_in) {
   const Scalar *x = reinterpret_cast<const Scalar *>(px);
   Scalar *y = reinterpret_cast<Scalar *>(py);
-  Scalar alpha = *reinterpret_cast<const Scalar *>(palpha);
+  const Scalar alpha = *reinterpret_cast<const Scalar *>(palpha);
+  const Eigen::Index n = *n_in;
 
-  if (*n <= 0) return;
-
-  if (*incx == 1 && *incy == 1)
-    make_vector(y, *n) += alpha * make_vector(x, *n);
-  else if (*incx > 0 && *incy > 0)
-    make_vector(y, *n, *incy) += alpha * make_vector(x, *n, *incx);
-  else if (*incx > 0 && *incy < 0)
-    make_vector(y, *n, -*incy) += alpha * make_vector(x, *n, *incx).reverse();
-  else if (*incx < 0 && *incy > 0)
-    make_vector(y, *n, *incy) += alpha * make_vector(x, *n, -*incx).reverse();
-  else if (*incx < 0 && *incy < 0)
-    make_vector(y, *n, -*incy) += alpha * make_vector(x, *n, -*incx);
+  if (n <= 0 || alpha == Scalar(0)) return;
+  apply_blas_vectors(n, x, *incx_in, y, *incy_in, [&](auto vx, auto vy) { vy += alpha * vx; });
 }
 
 EIGEN_BLAS_FUNC(axpby)
-(const int *pn, const RealScalar *palpha, const RealScalar *px, const int *pincx, const RealScalar *pbeta,
- RealScalar *py, const int *pincy) {
+(const EIGEN_BLAS_INT *pn, const RealScalar *palpha, const RealScalar *px, const EIGEN_BLAS_INT *pincx,
+ const RealScalar *pbeta, RealScalar *py, const EIGEN_BLAS_INT *pincy) {
   const Scalar *x = reinterpret_cast<const Scalar *>(px);
   Scalar *y = reinterpret_cast<Scalar *>(py);
   const Scalar alpha = *reinterpret_cast<const Scalar *>(palpha);
   const Scalar beta = *reinterpret_cast<const Scalar *>(pbeta);
-  const int n = *pn;
+  const Eigen::Index n = *pn;
 
   if (n <= 0) return;
-
-  if (Eigen::numext::equal_strict(beta, Scalar(1))) {
-    EIGEN_BLAS_FUNC_NAME(axpy)(pn, palpha, px, pincx, py, pincy);
-    return;
-  }
-
-  const int incx = *pincx;
-  const int incy = *pincy;
-
-  if (incx == 1 && incy == 1)
-    make_vector(y, n) = alpha * make_vector(x, n) + beta * make_vector(y, n);
-  else if (incx > 0 && incy > 0)
-    make_vector(y, n, incy) = alpha * make_vector(x, n, incx) + beta * make_vector(y, n, incy);
-  else if (incx > 0 && incy < 0)
-    make_vector(y, n, -incy) = alpha * make_vector(x, n, incx).reverse() + beta * make_vector(y, n, -incy);
-  else if (incx < 0 && incy > 0)
-    make_vector(y, n, incy) = alpha * make_vector(x, n, -incx).reverse() + beta * make_vector(y, n, incy);
-  else if (incx < 0 && incy < 0)
-    make_vector(y, n, -incy) = alpha * make_vector(x, n, -incx) + beta * make_vector(y, n, -incy);
+  // alpha == 0 does not read x, and beta == 0 does not read y.
+  apply_blas_vectors(n, x, *pincx, y, *pincy, [&](auto vx, auto vy) {
+    if (beta == Scalar(0)) {
+      if (alpha == Scalar(0))
+        vy.setZero();
+      else
+        vy = alpha * vx;
+    } else if (alpha == Scalar(0)) {
+      if (beta != Scalar(1)) vy *= beta;
+    } else if (beta == Scalar(1)) {
+      vy += alpha * vx;
+    } else {
+      vy = alpha * vx + beta * vy;
+    }
+  });
 }
 
-EIGEN_BLAS_FUNC(copy)(int *n, RealScalar *px, int *incx, RealScalar *py, int *incy) {
-  if (*n <= 0) return;
-
-  Scalar *x = reinterpret_cast<Scalar *>(px);
-  Scalar *y = reinterpret_cast<Scalar *>(py);
-
-  // be careful, *incx==0 is allowed !!
-  if (*incx == 1 && *incy == 1)
-    make_vector(y, *n) = make_vector(x, *n);
-  else {
-    if (*incx < 0) x = x - (*n - 1) * (*incx);
-    if (*incy < 0) y = y - (*n - 1) * (*incy);
-    for (int i = 0; i < *n; ++i) {
-      *y = *x;
-      x += *incx;
-      y += *incy;
-    }
-  }
+EIGEN_BLAS_FUNC(copy)
+(EIGEN_BLAS_INT *n_in, RealScalar *px, EIGEN_BLAS_INT *incx_in, RealScalar *py, EIGEN_BLAS_INT *incy_in) {
+  const Eigen::Index n = *n_in;
+  if (n <= 0) return;
+  apply_blas_vectors(n, reinterpret_cast<const Scalar *>(px), *incx_in, reinterpret_cast<Scalar *>(py), *incy_in,
+                     [](auto vx, auto vy) { vy = vx; });
 }
 
 EIGEN_BLAS_FUNC(rotg)(RealScalar *pa, RealScalar *pb, RealScalar *pc, RealScalar *ps) {
   using std::abs;
-  using std::sqrt;
 
   Scalar &a = *reinterpret_cast<Scalar *>(pa);
   Scalar &b = *reinterpret_cast<Scalar *>(pb);
@@ -99,66 +75,57 @@ EIGEN_BLAS_FUNC(rotg)(RealScalar *pa, RealScalar *pb, RealScalar *pc, RealScalar
     r = 0;
     z = 0;
   } else {
-    r = sqrt(a * a + b * b);
+    r = Eigen::numext::hypot(a, b);
     Scalar amax = aa > ab ? a : b;
     r = amax > 0 ? r : -r;
     *c = a / r;
     *s = b / r;
     z = 1;
     if (aa > ab) z = *s;
-    if (ab > aa && *c != RealScalar(0)) z = Scalar(1) / *c;
+    if (ab >= aa && *c != RealScalar(0)) z = Scalar(1) / *c;
   }
   *pa = r;
   *pb = z;
 #else
-  Scalar alpha;
-  RealScalar norm, scale;
-  if (abs(a) == RealScalar(0)) {
+  // The conventions of Reference BLAS 3.10 and later: c = 1, s = 0 for b = 0, and r = |b|, s = conj(b)/|b| for
+  // a = 0. Dividing by max(|a|, |b|) first keeps the quotients accurate for subnormal inputs and r finite whenever it
+  // is representable.
+  const RealScalar fa = abs(a), ga = abs(b);
+  if (ga == RealScalar(0)) {
+    *c = RealScalar(1);
+    *s = Scalar(0);
+  } else if (fa == RealScalar(0)) {
     *c = RealScalar(0);
-    *s = Scalar(1);
-    a = b;
+    *s = Eigen::numext::conj(b) / ga;
+    a = Scalar(ga);
   } else {
-    scale = abs(a) + abs(b);
-    norm = scale * sqrt((Eigen::numext::abs2(a / scale)) + (Eigen::numext::abs2(b / scale)));
-    alpha = a / abs(a);
-    *c = abs(a) / norm;
-    *s = alpha * Eigen::numext::conj(b) / norm;
-    a = alpha * norm;
+    const RealScalar scale = Eigen::numext::maxi(fa, ga);
+    const RealScalar norm = Eigen::numext::hypot(fa / scale, ga / scale);
+    const Scalar phase = a / fa;
+    *c = (fa / scale) / norm;
+    *s = phase * Eigen::numext::conj(b / scale) / norm;
+    a = phase * (scale * norm);
   }
 #endif
-
-  //   JacobiRotation<Scalar> r;
-  //   r.makeGivens(a,b);
-  //   *c = r.c();
-  //   *s = r.s();
 }
 
-EIGEN_BLAS_FUNC(scal)(int *n, RealScalar *palpha, RealScalar *px, int *incx) {
-  if (*n <= 0) return;
-
+EIGEN_BLAS_FUNC(scal)(EIGEN_BLAS_INT *n_in, RealScalar *palpha, RealScalar *px, EIGEN_BLAS_INT *incx_in) {
+  const Eigen::Index n = *n_in;
+  const Eigen::Index incx = *incx_in;
   Scalar *x = reinterpret_cast<Scalar *>(px);
-  Scalar alpha = *reinterpret_cast<Scalar *>(palpha);
+  const Scalar alpha = *reinterpret_cast<const Scalar *>(palpha);
+  if (n <= 0 || incx <= 0 || alpha == Scalar(1)) return;
 
-  if (*incx == 1)
-    make_vector(x, *n) *= alpha;
+  if (incx == 1)
+    make_vector(x, n) *= alpha;
   else
-    make_vector(x, *n, std::abs(*incx)) *= alpha;
+    make_vector(x, n, incx) *= alpha;
 }
 
-EIGEN_BLAS_FUNC(swap)(int *n, RealScalar *px, int *incx, RealScalar *py, int *incy) {
-  if (*n <= 0) return;
-
-  Scalar *x = reinterpret_cast<Scalar *>(px);
-  Scalar *y = reinterpret_cast<Scalar *>(py);
-
-  if (*incx == 1 && *incy == 1)
-    make_vector(y, *n).swap(make_vector(x, *n));
-  else if (*incx > 0 && *incy > 0)
-    make_vector(y, *n, *incy).swap(make_vector(x, *n, *incx));
-  else if (*incx > 0 && *incy < 0)
-    make_vector(y, *n, -*incy).reverse().swap(make_vector(x, *n, *incx));
-  else if (*incx < 0 && *incy > 0)
-    make_vector(y, *n, *incy).swap(make_vector(x, *n, -*incx).reverse());
-  else if (*incx < 0 && *incy < 0)
-    make_vector(y, *n, -*incy).reverse().swap(make_vector(x, *n, -*incx).reverse());
+EIGEN_BLAS_FUNC(swap)
+(EIGEN_BLAS_INT *n_in, RealScalar *px, EIGEN_BLAS_INT *incx_in, RealScalar *py, EIGEN_BLAS_INT *incy_in) {
+  const Eigen::Index n = *n_in;
+  if (n <= 0) return;
+  apply_blas_vectors(n, reinterpret_cast<Scalar *>(px), *incx_in, reinterpret_cast<Scalar *>(py), *incy_in,
+                     [](auto vx, auto vy) { vy.swap(vx); });
 }

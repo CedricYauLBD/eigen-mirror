@@ -5,6 +5,7 @@
 //
 // This Source Code Form is subject to the terms of the Mozilla
 // Public License v. 2.0. If a copy of the MPL was not distributed
+// SPDX-License-Identifier: MPL-2.0
 
 #define EIGEN_NO_DEBUG_SMALL_PRODUCT_BLOCKS
 #include "sparse.h"
@@ -13,7 +14,7 @@
 template <typename MatrixType, typename DenseMat>
 int generate_sparse_rectangular_problem(MatrixType& A, DenseMat& dA, int maxRows = 300, int maxCols = 300) {
   eigen_assert(maxRows >= maxCols);
-  typedef typename MatrixType::Scalar Scalar;
+  using Scalar = typename MatrixType::Scalar;
   int rows = internal::random<int>(1, maxRows);
   int cols = internal::random<int>(1, rows);
   double density = (std::max)(8. / (rows * cols), 0.01);
@@ -27,10 +28,10 @@ int generate_sparse_rectangular_problem(MatrixType& A, DenseMat& dA, int maxRows
 
 template <typename Scalar>
 void test_spqr_scalar() {
-  typedef SparseMatrix<Scalar, ColMajor> MatrixType;
+  using MatrixType = SparseMatrix<Scalar, ColMajor>;
   MatrixType A;
   Matrix<Scalar, Dynamic, Dynamic> dA;
-  typedef Matrix<Scalar, Dynamic, 1> DenseVector;
+  using DenseVector = Matrix<Scalar, Dynamic, 1>;
   DenseVector refX, x, b;
   SPQR<MatrixType> solver;
   generate_sparse_rectangular_problem(A, dA);
@@ -53,7 +54,140 @@ void test_spqr_scalar() {
   refX = dA.colPivHouseholderQr().solve(b);
   VERIFY(x.isApprox(refX, test_precision<Scalar>()));
 }
+
+template <typename = void>
+void test_spqr_fixed_ordering_uses_identity_permutation() {
+  using MatrixType = SparseMatrix<double, ColMajor>;
+  using DenseMatrix = Matrix<double, Dynamic, Dynamic>;
+  using DenseVector = Matrix<double, Dynamic, 1>;
+
+  DenseMatrix dA(6, 4);
+  dA << 4.0, 1.0, 0.0, 0.0,  //
+      1.0, 0.0, 2.0, 0.0,    //
+      -2.0, 3.0, 0.0, 6.0,   //
+      0.0, 5.0, -1.0, 0.0,   //
+      0.0, 0.0, 7.0, 2.0,    //
+      0.0, 0.0, 0.0, 3.0;
+
+  MatrixType A = dA.sparseView();
+  A.makeCompressed();
+
+  DenseVector b(6);
+  b << 1.0, -2.0, 0.5, 4.0, -1.0, 3.0;
+
+  SPQR<MatrixType> solver;
+  solver.setSPQROrdering(SPQR_ORDERING_FIXED);
+  solver.setPivotThreshold(SPQR_NO_TOL);
+  solver.compute(A);
+
+  VERIFY_IS_EQUAL(solver.info(), Success);
+  VERIFY_IS_EQUAL(solver.rank(), A.cols());
+
+  const auto permutation = solver.colsPermutation();
+  VERIFY_IS_EQUAL(permutation.size(), A.cols());
+  for (Index i = 0; i < permutation.size(); ++i) {
+    VERIFY_IS_EQUAL(permutation.indices()(i), i);
+  }
+
+  const DenseVector refX = dA.colPivHouseholderQr().solve(b);
+  DenseVector x = solver.solve(b);
+  VERIFY_IS_EQUAL(solver.info(), Success);
+  VERIFY_IS_APPROX(x, refX);
+}
+
+template <typename = void>
+void test_spqr_matrix_q_times_identity_expression() {
+  using MatrixType = SparseMatrix<double, ColMajor>;
+  using DenseMatrix = Matrix<double, Dynamic, Dynamic>;
+  using SolverType = SPQR<MatrixType>;
+  using SolverSparseMatrix = typename SolverType::MatrixType;
+  using DenseVector = Matrix<double, Dynamic, 1>;
+
+  DenseMatrix dA(6, 4);
+  dA << 4.0, 1.0, 0.0, 0.0,  //
+      1.0, 0.0, 2.0, 0.0,    //
+      -2.0, 3.0, 0.0, 6.0,   //
+      0.0, 5.0, -1.0, 0.0,   //
+      0.0, 0.0, 7.0, 2.0,    //
+      0.0, 0.0, 0.0, 3.0;
+
+  MatrixType A = dA.sparseView();
+  A.makeCompressed();
+
+  SolverType solver;
+  solver.compute(A);
+
+  VERIFY_IS_EQUAL(solver.info(), Success);
+
+  const DenseMatrix Q = solver.matrixQ() * DenseMatrix::Identity(A.rows(), A.rows());
+  const DenseMatrix denseIdentity = DenseMatrix::Identity(A.rows(), A.rows());
+  const auto qProduct = solver.matrixQ() * denseIdentity;
+  VERIFY_IS_EQUAL(qProduct.rows(), A.rows());
+  VERIFY_IS_EQUAL(qProduct.cols(), A.rows());
+  const DenseMatrix qFromDenseIdentity = qProduct;
+  DenseMatrix denseAssignedQ;
+  denseAssignedQ = solver.matrixQ();
+  VERIFY_IS_EQUAL(Q.rows(), A.rows());
+  VERIFY_IS_EQUAL(Q.cols(), A.rows());
+  VERIFY_IS_APPROX(Q.transpose() * Q, DenseMatrix::Identity(A.rows(), A.rows()));
+  VERIFY_IS_APPROX(qFromDenseIdentity, Q);
+  VERIFY_IS_APPROX(denseAssignedQ, Q);
+
+  const DenseMatrix R = DenseMatrix(solver.matrixR().template triangularView<Upper>());
+  const auto sparseR = solver.matrixR().template triangularView<Upper>();
+  SolverSparseMatrix sparseIdentity(A.rows(), A.rows());
+  sparseIdentity.setIdentity();
+  SolverSparseMatrix sparseAssignedQ(A.rows(), A.rows());
+  sparseAssignedQ = solver.matrixQ();
+  SolverSparseMatrix sparseProductQ(A.rows(), A.rows());
+  sparseProductQ = solver.matrixQ() * sparseIdentity;
+  const DenseVector rhs = DenseVector::LinSpaced(A.cols(), 1.0, double(A.cols()));
+  const DenseVector x = sparseR.solve(rhs);
+  const DenseVector expected = R.template triangularView<Upper>().solve(rhs);
+  const DenseMatrix recoveredA = Q.leftCols(A.cols()) * R * solver.colsPermutation().transpose();
+  VERIFY_IS_APPROX(x, expected);
+  VERIFY_IS_APPROX(DenseMatrix(sparseAssignedQ), denseAssignedQ);
+  VERIFY_IS_APPROX(DenseMatrix(sparseProductQ), denseAssignedQ);
+  VERIFY_IS_APPROX(recoveredA, dA);
+}
+
+// Q * X and Q^H * X for dense X that is not a plain column-major matrix: a vector or matrix with a non-unit inner
+// stride (a transposed row block), a row-major matrix, and an expression without direct access.
+template <typename Scalar>
+void test_spqr_q_product_strided_rhs() {
+  using MatrixType = SparseMatrix<Scalar, ColMajor>;
+  using DenseMatrix = Matrix<Scalar, Dynamic, Dynamic>;
+  using RowMajorDenseMatrix = Matrix<Scalar, Dynamic, Dynamic, RowMajor>;
+  MatrixType A;
+  DenseMatrix dA;
+  const Index m = generate_sparse_rectangular_problem(A, dA, 40, 40);
+  SPQR<MatrixType> solver(A);
+  VERIFY_IS_EQUAL(solver.info(), Success);
+  const DenseMatrix Q = solver.matrixQ() * DenseMatrix::Identity(m, m);
+
+  const DenseMatrix wide = DenseMatrix::Random(4, m);     // wide.row(i).transpose() has inner stride 4
+  const DenseMatrix tall = DenseMatrix::Random(m, 5);     // a column block with an outer stride
+  const RowMajorDenseMatrix rowMajor = wide.transpose();  // m x 4, row-major
+  VERIFY_IS_APPROX(solver.matrixQ().transpose() * wide.row(2).transpose(),
+                   Q.adjoint() * wide.row(2).transpose().eval());
+  VERIFY_IS_APPROX(solver.matrixQ() * wide.row(1).transpose(), Q * wide.row(1).transpose().eval());
+  VERIFY_IS_APPROX(solver.matrixQ().transpose() * wide.transpose(), Q.adjoint() * DenseMatrix(wide.transpose()));
+  VERIFY_IS_APPROX(solver.matrixQ() * wide.transpose(), Q * DenseMatrix(wide.transpose()));
+  VERIFY_IS_APPROX(solver.matrixQ().transpose() * tall.col(3), Q.adjoint() * tall.col(3).eval());
+  VERIFY_IS_APPROX(solver.matrixQ().transpose() * tall.middleCols(1, 3), Q.adjoint() * tall.middleCols(1, 3).eval());
+  VERIFY_IS_APPROX(solver.matrixQ().transpose() * rowMajor, Q.adjoint() * DenseMatrix(rowMajor));
+  VERIFY_IS_APPROX(solver.matrixQ() * rowMajor.col(2), Q * DenseMatrix(rowMajor.col(2)));
+  // arguments without direct access
+  VERIFY_IS_APPROX(solver.matrixQ().transpose() * (rowMajor + rowMajor),
+                   Q.adjoint() * DenseMatrix(rowMajor + rowMajor));
+  VERIFY_IS_APPROX(solver.matrixQ() * (tall + tall), Q * DenseMatrix(tall + tall));
+}
+
 EIGEN_DECLARE_TEST(spqr_support) {
   CALL_SUBTEST_1(test_spqr_scalar<double>());
   CALL_SUBTEST_2(test_spqr_scalar<std::complex<double> >());
+  CALL_SUBTEST_3(test_spqr_fixed_ordering_uses_identity_permutation<>());
+  CALL_SUBTEST_3(test_spqr_matrix_q_times_identity_expression<>());
+  CALL_SUBTEST_4(test_spqr_q_product_strided_rhs<double>());
+  CALL_SUBTEST_4(test_spqr_q_product_strided_rhs<std::complex<double> >());
 }

@@ -6,6 +6,7 @@
 // This Source Code Form is subject to the terms of the Mozilla
 // Public License v. 2.0. If a copy of the MPL was not distributed
 // with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
+// SPDX-License-Identifier: MPL-2.0
 
 #ifndef EIGEN_ROTATION2D_H
 #define EIGEN_ROTATION2D_H
@@ -23,7 +24,7 @@ namespace Eigen {
  *
  * \tparam Scalar_ the scalar type, i.e., the type of the coefficients
  *
- * This class is equivalent to a single scalar representing a counter clock wise rotation
+ * This class is equivalent to a single scalar representing a counter-clockwise rotation
  * as a single angle in radian. It provides some additional features such as the automatic
  * conversion from/to a 2x2 rotation matrix. Moreover this class aims to provide a similar
  * interface to Quaternion in order to facilitate the writing of generic algorithms
@@ -36,28 +37,28 @@ namespace internal {
 
 template <typename Scalar_>
 struct traits<Rotation2D<Scalar_> > {
-  typedef Scalar_ Scalar;
+  using Scalar = Scalar_;
 };
 }  // end namespace internal
 
 template <typename Scalar_>
 class Rotation2D : public RotationBase<Rotation2D<Scalar_>, 2> {
-  typedef RotationBase<Rotation2D<Scalar_>, 2> Base;
+  using Base = RotationBase<Rotation2D<Scalar_>, 2>;
 
  public:
   using Base::operator*;
 
   enum { Dim = 2 };
   /** the scalar type of the coefficients */
-  typedef Scalar_ Scalar;
-  typedef Matrix<Scalar, 2, 1> Vector2;
-  typedef Matrix<Scalar, 2, 2> Matrix2;
+  using Scalar = Scalar_;
+  using Vector2 = Matrix<Scalar, 2, 1>;
+  using Matrix2 = Matrix<Scalar, 2, 2>;
 
  protected:
   Scalar m_angle;
 
  public:
-  /** Construct a 2D counter clock wise rotation from the angle \a a in radian. */
+  /** Construct a 2D counter-clockwise rotation from the angle \a a in radian. */
   EIGEN_DEVICE_FUNC explicit inline Rotation2D(const Scalar& a) : m_angle(a) {}
 
   /** Default constructor without initialization. The represented rotation is undefined. */
@@ -116,7 +117,7 @@ class Rotation2D : public RotationBase<Rotation2D<Scalar_>, 2> {
   EIGEN_DEVICE_FUNC Matrix2 toRotationMatrix() const;
 
   /** Set \c *this from a 2x2 rotation matrix \a mat.
-   * In other words, this function extract the rotation angle from the rotation matrix.
+   * In other words, this function extracts the rotation angle from the rotation matrix.
    *
    * This method is an alias for fromRotationMatrix()
    *
@@ -166,22 +167,21 @@ class Rotation2D : public RotationBase<Rotation2D<Scalar_>, 2> {
 
 /** \ingroup Geometry_Module
  * single precision 2D rotation type */
-typedef Rotation2D<float> Rotation2Df;
+using Rotation2Df = Rotation2D<float>;
 /** \ingroup Geometry_Module
  * double precision 2D rotation type */
-typedef Rotation2D<double> Rotation2Dd;
+using Rotation2Dd = Rotation2D<double>;
 
 /** Set \c *this from a 2x2 rotation matrix \a mat.
- * In other words, this function extract the rotation angle
+ * In other words, this function extracts the rotation angle
  * from the rotation matrix.
  */
 template <typename Scalar>
 template <typename Derived>
 EIGEN_DEVICE_FUNC Rotation2D<Scalar>& Rotation2D<Scalar>::fromRotationMatrix(const MatrixBase<Derived>& mat) {
-  EIGEN_USING_STD(atan2)
   EIGEN_STATIC_ASSERT(Derived::RowsAtCompileTime == 2 && Derived::ColsAtCompileTime == 2,
                       YOU_MADE_A_PROGRAMMING_MISTAKE)
-  m_angle = atan2(mat.coeff(1, 0), mat.coeff(0, 0));
+  m_angle = numext::atan2(Scalar(mat.coeff(1, 0)), Scalar(mat.coeff(0, 0)));
   return *this;
 }
 
@@ -189,10 +189,8 @@ EIGEN_DEVICE_FUNC Rotation2D<Scalar>& Rotation2D<Scalar>::fromRotationMatrix(con
  */
 template <typename Scalar>
 typename Rotation2D<Scalar>::Matrix2 EIGEN_DEVICE_FUNC Rotation2D<Scalar>::toRotationMatrix(void) const {
-  EIGEN_USING_STD(sin)
-  EIGEN_USING_STD(cos)
-  Scalar sinA = sin(m_angle);
-  Scalar cosA = cos(m_angle);
+  Scalar sinA = numext::sin(m_angle);
+  Scalar cosA = numext::cos(m_angle);
   return (Matrix2() << cosA, -sinA, sinA, cosA).finished();
 }
 

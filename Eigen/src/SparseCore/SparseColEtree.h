@@ -6,6 +6,7 @@
 // This Source Code Form is subject to the terms of the Mozilla
 // Public License v. 2.0. If a copy of the MPL was not distributed
 // with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
+// SPDX-License-Identifier: MPL-2.0
 
 /*
 
@@ -60,7 +61,7 @@ Index etree_find(Index i, IndexVector& pp) {
 template <typename MatrixType, typename IndexVector>
 int coletree(const MatrixType& mat, IndexVector& parent, IndexVector& firstRowElt,
              typename MatrixType::StorageIndex* perm = 0) {
-  typedef typename MatrixType::StorageIndex StorageIndex;
+  using StorageIndex = typename MatrixType::StorageIndex;
   StorageIndex nc = convert_index<StorageIndex>(mat.cols());  // Number of columns
   StorageIndex m = convert_index<StorageIndex>(mat.rows());
   StorageIndex diagSize = (std::min)(nc, m);
@@ -125,10 +126,9 @@ int coletree(const MatrixType& mat, IndexVector& parent, IndexVector& firstRowEl
 template <typename IndexVector>
 void nr_etdfs(typename IndexVector::Scalar n, IndexVector& parent, IndexVector& first_kid, IndexVector& next_kid,
               IndexVector& post, typename IndexVector::Scalar postnum) {
-  typedef typename IndexVector::Scalar StorageIndex;
+  using StorageIndex = typename IndexVector::Scalar;
   StorageIndex current = n, first, next;
   while (postnum != n) {
-    // No kid for the current node
     first = first_kid(current);
 
     // no kid for the current node
@@ -158,15 +158,20 @@ void nr_etdfs(typename IndexVector::Scalar n, IndexVector& parent, IndexVector& 
   }
 }
 
+/** The order in which treePostorder() visits a node's children. */
+enum class PostorderChildren { Increasing, Decreasing };
+
 /**
  * \brief Post order a tree
  * \param n the number of nodes
  * \param parent Input tree
  * \param post postordered tree
+ * \param order the order in which to visit a node's children, including the roots as children of the dummy root n
  */
 template <typename IndexVector>
-void treePostorder(typename IndexVector::Scalar n, IndexVector& parent, IndexVector& post) {
-  typedef typename IndexVector::Scalar StorageIndex;
+void treePostorder(typename IndexVector::Scalar n, IndexVector& parent, IndexVector& post,
+                   PostorderChildren order = PostorderChildren::Increasing) {
+  using StorageIndex = typename IndexVector::Scalar;
   IndexVector first_kid, next_kid;  // Linked list of children
   StorageIndex postnum;
   // Allocate storage for working arrays and results
@@ -176,10 +181,15 @@ void treePostorder(typename IndexVector::Scalar n, IndexVector& parent, IndexVec
 
   // Set up structure describing children
   first_kid.setConstant(-1);
-  for (StorageIndex v = n - 1; v >= 0; v--) {
+  const auto prependToParent = [&](StorageIndex v) {
     StorageIndex dad = parent(v);
     next_kid(v) = first_kid(dad);
     first_kid(dad) = v;
+  };
+  if (order == PostorderChildren::Increasing) {
+    for (StorageIndex v = n - 1; v >= 0; v--) prependToParent(v);
+  } else {
+    for (StorageIndex v = 0; v < n; v++) prependToParent(v);
   }
 
   // Depth-first search from dummy root vertex #n

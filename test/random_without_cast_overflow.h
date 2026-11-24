@@ -6,9 +6,13 @@
 // This Source Code Form is subject to the terms of the Mozilla
 // Public License v. 2.0. If a copy of the MPL was not distributed
 // with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
+// SPDX-License-Identifier: MPL-2.0
 
 // Utilities for generating random numbers without overflows, which might
 // otherwise result in undefined behavior.
+
+#ifndef EIGEN_TEST_RANDOM_WITHOUT_CAST_OVERFLOW_H
+#define EIGEN_TEST_RANDOM_WITHOUT_CAST_OVERFLOW_H
 
 namespace Eigen {
 namespace internal {
@@ -138,7 +142,7 @@ struct random_without_cast_overflow<
   }
 };
 
-// Integer to floating-point, re-use above logic.
+// Integer to floating-point, reuse above logic.
 template <typename SrcScalar, typename TgtScalar>
 struct random_without_cast_overflow<
     SrcScalar, TgtScalar,
@@ -163,7 +167,7 @@ struct random_without_cast_overflow<
 template <typename SrcScalar, typename TgtScalar>
 struct random_without_cast_overflow<
     SrcScalar, TgtScalar, std::enable_if_t<NumTraits<SrcScalar>::IsComplex && !NumTraits<TgtScalar>::IsComplex>> {
-  typedef typename NumTraits<SrcScalar>::Real SrcReal;
+  using SrcReal = typename NumTraits<SrcScalar>::Real;
   static SrcScalar value() { return SrcScalar(random_without_cast_overflow<SrcReal, TgtScalar>::value(), 0); }
 };
 
@@ -171,7 +175,7 @@ struct random_without_cast_overflow<
 template <typename SrcScalar, typename TgtScalar>
 struct random_without_cast_overflow<
     SrcScalar, TgtScalar, std::enable_if_t<!NumTraits<SrcScalar>::IsComplex && NumTraits<TgtScalar>::IsComplex>> {
-  typedef typename NumTraits<TgtScalar>::Real TgtReal;
+  using TgtReal = typename NumTraits<TgtScalar>::Real;
   static SrcScalar value() { return random_without_cast_overflow<SrcScalar, TgtReal>::value(); }
 };
 
@@ -179,8 +183,8 @@ struct random_without_cast_overflow<
 template <typename SrcScalar, typename TgtScalar>
 struct random_without_cast_overflow<
     SrcScalar, TgtScalar, std::enable_if_t<NumTraits<SrcScalar>::IsComplex && NumTraits<TgtScalar>::IsComplex>> {
-  typedef typename NumTraits<SrcScalar>::Real SrcReal;
-  typedef typename NumTraits<TgtScalar>::Real TgtReal;
+  using SrcReal = typename NumTraits<SrcScalar>::Real;
+  using TgtReal = typename NumTraits<TgtScalar>::Real;
   static SrcScalar value() {
     return SrcScalar(random_without_cast_overflow<SrcReal, TgtReal>::value(),
                      random_without_cast_overflow<SrcReal, TgtReal>::value());
@@ -189,3 +193,5 @@ struct random_without_cast_overflow<
 
 }  // namespace internal
 }  // namespace Eigen
+
+#endif  // EIGEN_TEST_RANDOM_WITHOUT_CAST_OVERFLOW_H

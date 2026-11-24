@@ -7,6 +7,7 @@
 // This Source Code Form is subject to the terms of the Mozilla
 // Public License v. 2.0. If a copy of the MPL was not distributed
 // with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
+// SPDX-License-Identifier: MPL-2.0
 
 #ifndef EIGEN_STDDEQUE_H
 #define EIGEN_STDDEQUE_H
@@ -27,13 +28,13 @@
   template <>                                                                                     \
   class deque<__VA_ARGS__, std::allocator<__VA_ARGS__> >                                          \
       : public deque<__VA_ARGS__, EIGEN_ALIGNED_ALLOCATOR<__VA_ARGS__> > {                        \
-    typedef deque<__VA_ARGS__, EIGEN_ALIGNED_ALLOCATOR<__VA_ARGS__> > deque_base;                 \
+    using deque_base = deque<__VA_ARGS__, EIGEN_ALIGNED_ALLOCATOR<__VA_ARGS__> >;                 \
                                                                                                   \
    public:                                                                                        \
-    typedef __VA_ARGS__ value_type;                                                               \
-    typedef deque_base::allocator_type allocator_type;                                            \
-    typedef deque_base::size_type size_type;                                                      \
-    typedef deque_base::iterator iterator;                                                        \
+    using value_type = __VA_ARGS__;                                                               \
+    using allocator_type = deque_base::allocator_type;                                            \
+    using size_type = deque_base::size_type;                                                      \
+    using iterator = deque_base::iterator;                                                        \
     explicit deque(const allocator_type& a = allocator_type()) : deque_base(a) {}                 \
     template <typename InputIterator>                                                             \
     deque(InputIterator first, InputIterator last, const allocator_type& a = allocator_type())    \

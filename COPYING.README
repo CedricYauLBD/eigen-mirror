@@ -1,6 +1,23 @@
-Eigen is primarily MPL2 licensed. See COPYING.MPL2 and these links:
-  http://www.mozilla.org/MPL/2.0/
-  http://www.mozilla.org/MPL/2.0/FAQ.html
+Eigen is primarily licensed under the Mozilla Public License 2.0.
+See LICENSE, COPYING.MPL2, and these links:
+  https://www.mozilla.org/MPL/2.0/
+  https://www.mozilla.org/MPL/2.0/FAQ.html
 
-Some files contain third-party code under BSD or other MPL2-compatible licenses,
-whence the other COPYING.* files here.
+Some files contain third-party code under permissive or otherwise
+MPL2-compatible licenses, hence the other COPYING.* files here. These
+include Apache-2.0, BSD-style notices, the MINPACK license, the MORSE
+CMake module BSD-style notice in cmake/MORSE-Copyright.txt, and the LAPACK
+license (BSD-3-Clause-Open-MPI) of the netlib BLAS test programs in
+blas/testing/ and of the LAPACK test inputs lapack/testing/[sdcz]test_large.in,
+which derive from reference LAPACK's TESTING/[sdcz]test.in.
+
+The Riccati module (contrib/Eigen/Riccati) incorporates code adapted from
+SciPy (BSD-3-Clause) and LAPACK (BSD-3-Clause-Open-MPI). Binary
+redistributions of software that uses it must reproduce the copyright
+notices, conditions and disclaimers in
+contrib/Eigen/src/Riccati/DiscreteAlgebraicRiccatiSolver.h.
+
+Note that some optional external dependencies (e.g. FFTW, MPFR C++)
+are distributed under different licenses, including the GPL. Refer to
+the individual source files and their respective COPYING files for
+details.

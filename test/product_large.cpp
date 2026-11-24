@@ -6,16 +6,112 @@
 // This Source Code Form is subject to the terms of the Mozilla
 // Public License v. 2.0. If a copy of the MPL was not distributed
 // with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
+// SPDX-License-Identifier: MPL-2.0
 
 #include "product.h"
+#include "guard_page_buffer.h"
 #include <Eigen/LU>
+
+#if defined(__unix__)
+
+#if defined(EIGEN_VECTORIZE_ALTIVEC) || defined(EIGEN_VECTORIZE_VSX)
+template <int>
+void gemv_bfloat16_strided_tail() {
+  using MatrixType = Matrix<bfloat16, Dynamic, Dynamic, RowMajor>;
+  using VectorType = Matrix<bfloat16, Dynamic, 1>;
+  const test::GuardPageBuffer buffer(1024 * sizeof(bfloat16));
+
+  // Put the last result coefficient against an inaccessible page: even one excess gather must fail.
+  for (Index rows : {1, 2, 3, 4, 5, 7, 8, 9, 12, 15, 16, 17, 31, 32, 33}) {
+    for (Index stride : {1, 2, 3, 17}) {
+      const Index span = (rows - 1) * stride + 1;
+      bfloat16* values = buffer.place_at_end<bfloat16>(span);
+      for (Index i = 0; i < rows; ++i) new (values + i * stride) bfloat16(1);
+      Map<VectorType, 0, InnerStride<Dynamic>> result(values, rows, InnerStride<Dynamic>(stride));
+      const MatrixType A = MatrixType::Ones(rows, 65);
+      const VectorType x = VectorType::Ones(65);
+      result.noalias() += A * x;
+      VERIFY_IS_CWISE_EQUAL(result, VectorType::Constant(rows, bfloat16(66)));
+    }
+  }
+}
+#endif
+
+#if (defined(EIGEN_VECTORIZE_AVX512) && EIGEN_USE_AVX512_GEMM_KERNELS) || defined(EIGEN_VECTORIZE_VSX)
+// Place packed A, packed B, and C right before PROT_NONE guard pages to catch
+// any out-of-bounds lookahead or tail over-read in GEBP kernels.
+template <typename Scalar, int ResIncr = Dynamic>
+void gebp_guard_page_tail() {
+  using Traits = internal::gebp_traits<Scalar, Scalar>;
+  using ResMapper = internal::blas_data_mapper<Scalar, Index, ColMajor, Unaligned, ResIncr>;
+  using LhsMapper = internal::const_blas_data_mapper<Scalar, Index, ColMajor>;
+  using RhsMapper = internal::const_blas_data_mapper<Scalar, Index, ColMajor>;
+  internal::gemm_pack_lhs<Scalar, Index, LhsMapper, Traits::mr, Traits::LhsProgress, typename Traits::LhsPacket4Packing,
+                          ColMajor>
+      pack_lhs;
+  internal::gemm_pack_rhs<Scalar, Index, RhsMapper, Traits::nr, ColMajor> pack_rhs;
+  internal::gebp_kernel<Scalar, Scalar, Index, ResMapper, Traits::mr, Traits::nr, false, false> gebp;
+
+  test::GuardPageBuffer arenaA(64 * 64 * sizeof(Scalar));
+  test::GuardPageBuffer arenaB(64 * 64 * sizeof(Scalar));
+  test::GuardPageBuffer arenaC(64 * 64 * 2 * sizeof(Scalar));
+
+  for (Index m : {0, 1, 2, 3, 4, 8, 16, 24, 32, 48, 53}) {
+    for (Index n : {0, 1, 2, 3, 4, 5, 8, 9, 13}) {
+      for (Index k : {0, 1, 2, 3, 4, 5, 8, 9, 17}) {
+        Matrix<Scalar, Dynamic, Dynamic, ColMajor> A = Matrix<Scalar, Dynamic, Dynamic, ColMajor>::Random(m, k);
+        Matrix<Scalar, Dynamic, Dynamic, ColMajor> B = Matrix<Scalar, Dynamic, Dynamic, ColMajor>::Random(k, n);
+        Matrix<Scalar, Dynamic, Dynamic, ColMajor> C0 = Matrix<Scalar, Dynamic, Dynamic, ColMajor>::Random(m, n);
+
+        // GEMM allocates packed blocks EIGEN_DEFAULT_ALIGN_BYTES-aligned, and GEBP may load them with aligned
+        // packets. The resulting gap before the guard page is the smallest a real block can leave before a page end.
+        Scalar* blockA = arenaA.place_at_end<Scalar>(m * k, EIGEN_DEFAULT_ALIGN_BYTES);
+        Scalar* blockB = arenaB.place_at_end<Scalar>(k * n, EIGEN_DEFAULT_ALIGN_BYTES);
+        if (m > 0 && k > 0) {
+          Matrix<Scalar, Dynamic, 1> packedA(m * k);
+          pack_lhs(packedA.data(), LhsMapper(A.data(), A.outerStride()), k, m);
+          std::copy_n(packedA.data(), m * k, blockA);
+        }
+        if (k > 0 && n > 0) {
+          pack_rhs(blockB, RhsMapper(B.data(), B.outerStride()), k, n);
+        }
+
+        for (Index inc : {1, 2}) {
+          if (ResIncr == 1 && inc != 1) continue;
+          for (Scalar alpha : {Scalar(1), Scalar(2)}) {
+            Index ldc = m * inc;
+            Scalar* C = arenaC.place_at_end<Scalar>(ldc * n);
+            for (Index j = 0; j < n; ++j) {
+              for (Index i = 0; i < m; ++i) {
+                C[j * ldc + i * inc] = C0(i, j);
+              }
+            }
+
+            ResMapper res(C, ldc, inc);
+            gebp(res, blockA, blockB, m, k, n, alpha, -1, -1, 0, 0);
+
+            if (m > 0 && n > 0) {
+              Matrix<Scalar, Dynamic, Dynamic, ColMajor> Cref = C0;
+              if (k > 0) Cref.noalias() += alpha * (A * B);
+              Map<const Matrix<Scalar, Dynamic, Dynamic, ColMajor>, 0, InnerStride<Dynamic>> Cmap(
+                  C, m, n, InnerStride<Dynamic>(inc));
+              VERIFY_IS_APPROX(Cmap, Cref);
+            }
+          }
+        }
+      }
+    }
+  }
+}
+#endif
+#endif
 
 template <typename T>
 void test_aliasing() {
   int rows = internal::random<int>(1, 12);
   int cols = internal::random<int>(1, 12);
-  typedef Matrix<T, Dynamic, Dynamic> MatrixType;
-  typedef Matrix<T, Dynamic, 1> VectorType;
+  using MatrixType = Matrix<T, Dynamic, Dynamic>;
+  using VectorType = Matrix<T, Dynamic, 1>;
   VectorType x(cols);
   x.setRandom();
   VectorType z(x);
@@ -54,17 +150,38 @@ void product_large_regressions() {
   {
     // check the functions to setup blocking sizes compile and do not segfault
     // FIXME check they do what they are supposed to do !!
+    std::ptrdiff_t old_l1 = l1CacheSize();
+    std::ptrdiff_t old_l2 = l2CacheSize();
+    std::ptrdiff_t old_l3 = l3CacheSize();
     std::ptrdiff_t l1 = internal::random<int>(10000, 20000);
     std::ptrdiff_t l2 = internal::random<int>(100000, 200000);
     std::ptrdiff_t l3 = internal::random<int>(1000000, 2000000);
     setCpuCacheSizes(l1, l2, l3);
     VERIFY(l1 == l1CacheSize());
     VERIFY(l2 == l2CacheSize());
-    std::ptrdiff_t k1 = internal::random<int>(10, 100) * 16;
-    std::ptrdiff_t m1 = internal::random<int>(10, 100) * 16;
-    std::ptrdiff_t n1 = internal::random<int>(10, 100) * 16;
-    // only makes sure it compiles fine
-    internal::computeProductBlockingSizes<float, float, std::ptrdiff_t>(k1, m1, n1, 1);
+
+    // Regression test for small synthetic caches with AVX512 and multiple threads.
+    // The L2 model can report that fewer than one nr-wide RHS panel fits.
+    setCpuCacheSizes(10000, 100000, 1000000);
+    std::ptrdiff_t k2 = 5000;
+    std::ptrdiff_t m2 = 5000;
+    std::ptrdiff_t n2 = 256;
+    internal::computeProductBlockingSizes<double, double, std::ptrdiff_t>(k2, m2, n2, 32);
+    VERIFY(k2 > 0);
+    VERIFY(m2 > 0);
+    VERIFY(n2 > 0);
+
+    // An explicit override has to govern blocking on its own. The detected per-CPU L3 share also
+    // feeds the rhs-panel budget, so leaving it set would silently overrule callers that force
+    // small cache sizes to exercise multi-pass blocking (contrib/test/tensor_contraction.cpp
+    // does exactly that).
+    setCpuCacheSizes(896, 1920, 2944);
+    std::ptrdiff_t forced_l1, forced_l2, forced_l3, forced_l3_per_cpu = -1;
+    internal::manage_caching_sizes(GetAction, &forced_l1, &forced_l2, &forced_l3, &forced_l3_per_cpu);
+    VERIFY(forced_l1 == 896 && forced_l2 == 1920 && forced_l3 == 2944);
+    VERIFY(forced_l3_per_cpu == 0);
+
+    setCpuCacheSizes(old_l1, old_l2, old_l3);
   }
 
   {
@@ -94,9 +211,182 @@ void product_large_regressions() {
   }
 }
 
+// Regression test: row-major GEMV with stride*sizeof > 32000 disables the
+// 8-row main loop (n8=0). The cleanup must use `for` loops (not `if`) to
+// process all remaining rows. Without the fix, only 7 out of `rows` results
+// are computed. This manifests as loss of orthogonality in QR of tall-skinny
+// matrices, since the Householder application uses row-major GEMV internally.
+template <int>
+void bug_gemv_rowmajor_large_stride() {
+  // HouseholderQR of a col-major (m x n) matrix with m > 4000 uses row-major GEMV
+  // internally during Householder application. The direct GEMV check at this stride
+  // is gemv_rowmajor_large_stride_varied_rows.
+  const int m = 5000;
+  const int n = 50;
+  MatrixXd A = MatrixXd::Random(m, n);
+  MatrixXd Q = A.householderQr().householderQ() * MatrixXd::Identity(m, n);
+  MatrixXd QtQ = Q.adjoint() * Q;
+  VERIFY_IS_APPROX(QtQ, MatrixXd::Identity(n, n));
+}
+
+// Systematic test of row-major GEMV run_small_cols and main run() remainder paths.
+// Varies cols from 1-7 (covers float PacketSize=8 and double PacketSize=4 boundaries)
+// and rows across values that exercise all n8/n4/n2/n1 remainder combinations. The
+// large-stride block covers the run_small_cols regression where remainder loops used
+// `if (i < n4)` and skipped rows once several remainder blocks were needed (rows = 9).
+template <int>
+void gemv_small_cols_systematic() {
+  const int test_cols[] = {1, 2, 3, 4, 5, 6, 7};
+  const int test_rows[] = {1, 2, 3, 4, 5, 7, 8, 9, 11, 13, 15, 16, 17, 25};
+
+  // Large stride forces n8=0, exercising all remainder-only paths.
+  {
+    const int stride = 5000;  // 5000 * sizeof(double) = 40000 > 32000
+    for (int ci = 0; ci < 7; ++ci) {
+      for (int ri = 0; ri < 14; ++ri) {
+        int rows = test_rows[ri], cols = test_cols[ci];
+        Matrix<double, Dynamic, Dynamic, RowMajor> A_full(rows, stride);
+        A_full.setRandom();
+        auto A = A_full.leftCols(cols);
+        VectorXd x = VectorXd::Random(cols);
+        VectorXd y = A * x;
+        VectorXd y_ref = VectorXd::Zero(rows);
+        for (int i = 0; i < rows; ++i)
+          for (int j = 0; j < cols; ++j) y_ref(i) += A(i, j) * x(j);
+        VERIFY_IS_APPROX(y, y_ref);
+      }
+    }
+  }
+
+  // Normal stride (n8 active) to cover the 8-row main loop + remainders.
+  for (int ci = 0; ci < 7; ++ci) {
+    for (int ri = 0; ri < 14; ++ri) {
+      int rows = test_rows[ri], cols = test_cols[ci];
+      Matrix<double, Dynamic, Dynamic, RowMajor> A(rows, cols);
+      A.setRandom();
+      VectorXd x = VectorXd::Random(cols);
+      VectorXd y = A * x;
+      VectorXd y_ref = VectorXd::Zero(rows);
+      for (int i = 0; i < rows; ++i)
+        for (int j = 0; j < cols; ++j) y_ref(i) += A(i, j) * x(j);
+      VERIFY_IS_APPROX(y, y_ref);
+    }
+  }
+
+  // Float with large stride: 9000 * sizeof(float) = 36000 > 32000
+  {
+    const int stride = 9000;
+    for (int ci = 0; ci < 7; ++ci) {
+      for (int ri = 0; ri < 14; ++ri) {
+        int rows = test_rows[ri], cols = test_cols[ci];
+        Matrix<float, Dynamic, Dynamic, RowMajor> A_full(rows, stride);
+        A_full.setRandom();
+        auto A = A_full.leftCols(cols);
+        VectorXf x = VectorXf::Random(cols);
+        VectorXf y = A * x;
+        VectorXf y_ref = VectorXf::Zero(rows);
+        for (int i = 0; i < rows; ++i)
+          for (int j = 0; j < cols; ++j) y_ref(i) += A(i, j) * x(j);
+        VERIFY_IS_APPROX(y, y_ref);
+      }
+    }
+  }
+}
+
+// Test the main row-major GEMV n8=0 path (not run_small_cols) with varied row counts.
+// The n8 threshold is stride*sizeof(Scalar) > 32000.
+template <int>
+void gemv_rowmajor_large_stride_varied_rows() {
+  const int test_rows[] = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 15, 16, 17, 25, 100};
+  // Double: cols=5000 (5000*8 > 32000), enough cols to stay on main run() path.
+  {
+    const int cols = 5000;
+    for (int ri = 0; ri < 16; ++ri) {
+      int rows = test_rows[ri];
+      Matrix<double, Dynamic, Dynamic, RowMajor> A(rows, cols);
+      A.setRandom();
+      VectorXd x = VectorXd::Random(cols);
+      VectorXd y = A * x;
+      VectorXd y_ref = VectorXd::Zero(rows);
+      for (int i = 0; i < rows; ++i)
+        for (int j = 0; j < cols; ++j) y_ref(i) += A(i, j) * x(j);
+      VERIFY_IS_APPROX(y, y_ref);
+    }
+  }
+  // Float: cols=9000 (9000*4 > 32000).
+  {
+    const int cols = 9000;
+    for (int ri = 0; ri < 16; ++ri) {
+      int rows = test_rows[ri];
+      Matrix<float, Dynamic, Dynamic, RowMajor> A(rows, cols);
+      A.setRandom();
+      VectorXf x = VectorXf::Random(cols);
+      VectorXf y = A * x;
+      VectorXf y_ref = VectorXf::Zero(rows);
+      for (int i = 0; i < rows; ++i)
+        for (int j = 0; j < cols; ++j) y_ref(i) += A(i, j) * x(j);
+      VERIFY_IS_APPROX(y, y_ref);
+    }
+  }
+}
+
+// Test extreme aspect ratios that exercise GEMV, outer-product, and thin-GEMM dispatch.
+template <int>
+void product_extreme_aspect_ratios() {
+  const int sizes[] = {1, 2, 3, 4, 8, 16, 48, 64, 128};
+  for (int si = 0; si < 9; ++si) {
+    int s = sizes[si];
+    for (int ki = 0; ki < 9; ++ki) {
+      int k = sizes[ki];
+      // Thin result: s x k * k x 2  (2-column GEMM)
+      {
+        MatrixXd A = MatrixXd::Random(s, k);
+        MatrixXd B = MatrixXd::Random(k, 2);
+        MatrixXd C = A * B;
+        MatrixXd Cref = MatrixXd::Zero(s, 2);
+        for (int i = 0; i < s; ++i)
+          for (int j = 0; j < 2; ++j)
+            for (int kk = 0; kk < k; ++kk) Cref(i, j) += A(i, kk) * B(kk, j);
+        VERIFY_IS_APPROX(C, Cref);
+      }
+      // Wide result: 2 x k * k x s  (2-row GEMM)
+      {
+        MatrixXd A = MatrixXd::Random(2, k);
+        MatrixXd B = MatrixXd::Random(k, s);
+        MatrixXd C = A * B;
+        MatrixXd Cref = MatrixXd::Zero(2, s);
+        for (int i = 0; i < 2; ++i)
+          for (int j = 0; j < s; ++j)
+            for (int kk = 0; kk < k; ++kk) Cref(i, j) += A(i, kk) * B(kk, j);
+        VERIFY_IS_APPROX(C, Cref);
+      }
+      // GEMV: s x k * k x 1
+      {
+        MatrixXd A = MatrixXd::Random(s, k);
+        VectorXd x = VectorXd::Random(k);
+        VectorXd y = A * x;
+        VectorXd yref = VectorXd::Zero(s);
+        for (int i = 0; i < s; ++i)
+          for (int kk = 0; kk < k; ++kk) yref(i) += A(i, kk) * x(kk);
+        VERIFY_IS_APPROX(y, yref);
+      }
+      // Vec-mat: 1 x k * k x s
+      {
+        RowVectorXd v = RowVectorXd::Random(k);
+        MatrixXd B = MatrixXd::Random(k, s);
+        RowVectorXd r = v * B;
+        RowVectorXd rref = RowVectorXd::Zero(s);
+        for (int j = 0; j < s; ++j)
+          for (int kk = 0; kk < k; ++kk) rref(j) += v(kk) * B(kk, j);
+        VERIFY_IS_APPROX(r, rref);
+      }
+    }
+  }
+}
+
 template <int>
 void bug_1622() {
-  typedef Matrix<double, 2, -1, 0, 2, -1> Mat2X;
+  using Mat2X = Matrix<double, 2, -1, 0, 2, -1>;
   Mat2X x(2, 2);
   x.setRandom();
   MatrixXd y(2, 2);
@@ -107,6 +397,9 @@ void bug_1622() {
 }
 
 EIGEN_DECLARE_TEST(product_large) {
+#if (defined(EIGEN_VECTORIZE_ALTIVEC) || defined(EIGEN_VECTORIZE_VSX)) && defined(__unix__)
+  CALL_SUBTEST_11(gemv_bfloat16_strided_tail<0>());
+#endif
   for (int i = 0; i < g_repeat; i++) {
     CALL_SUBTEST_1(product(
         MatrixXf(internal::random<int>(1, EIGEN_TEST_MAX_SIZE), internal::random<int>(1, EIGEN_TEST_MAX_SIZE))));
@@ -135,9 +428,26 @@ EIGEN_DECLARE_TEST(product_large) {
         internal::random<int>(1, EIGEN_TEST_MAX_SIZE), internal::random<int>(1, EIGEN_TEST_MAX_SIZE))));
     CALL_SUBTEST_11(product(Matrix<bfloat16, Dynamic, Dynamic, RowMajor>(
         internal::random<int>(1, EIGEN_TEST_MAX_SIZE), internal::random<int>(1, EIGEN_TEST_MAX_SIZE))));
+    CALL_SUBTEST_12(product(Matrix<Eigen::half, Dynamic, Dynamic>(internal::random<int>(1, EIGEN_TEST_MAX_SIZE),
+                                                                  internal::random<int>(1, EIGEN_TEST_MAX_SIZE))));
   }
 
   CALL_SUBTEST_6(product_large_regressions<0>());
+  CALL_SUBTEST_6(bug_gemv_rowmajor_large_stride<0>());
+  CALL_SUBTEST_6(gemv_small_cols_systematic<0>());
+  CALL_SUBTEST_6(gemv_rowmajor_large_stride_varied_rows<0>());
+  CALL_SUBTEST_6(product_extreme_aspect_ratios<0>());
+#if defined(__unix__) && \
+    ((defined(EIGEN_VECTORIZE_AVX512) && EIGEN_USE_AVX512_GEMM_KERNELS) || defined(EIGEN_VECTORIZE_VSX))
+  CALL_SUBTEST_6(gebp_guard_page_tail<float>());
+  CALL_SUBTEST_6(gebp_guard_page_tail<double>());
+  CALL_SUBTEST_6(gebp_guard_page_tail<std::complex<float>>());
+  CALL_SUBTEST_6(gebp_guard_page_tail<std::complex<double>>());
+  CALL_SUBTEST_6((gebp_guard_page_tail<float, 1>()));
+  CALL_SUBTEST_6((gebp_guard_page_tail<double, 1>()));
+  CALL_SUBTEST_6((gebp_guard_page_tail<std::complex<float>, 1>()));
+  CALL_SUBTEST_6((gebp_guard_page_tail<std::complex<double>, 1>()));
+#endif
 
   // Regression test for bug 714:
 #if defined EIGEN_HAS_OPENMP

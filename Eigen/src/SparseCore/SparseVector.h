@@ -6,6 +6,7 @@
 // This Source Code Form is subject to the terms of the Mozilla
 // Public License v. 2.0. If a copy of the MPL was not distributed
 // with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
+// SPDX-License-Identifier: MPL-2.0
 
 #ifndef EIGEN_SPARSEVECTOR_H
 #define EIGEN_SPARSEVECTOR_H
@@ -31,10 +32,10 @@ namespace Eigen {
 namespace internal {
 template <typename Scalar_, int Options_, typename StorageIndex_>
 struct traits<SparseVector<Scalar_, Options_, StorageIndex_> > {
-  typedef Scalar_ Scalar;
-  typedef StorageIndex_ StorageIndex;
-  typedef Sparse StorageKind;
-  typedef MatrixXpr XprKind;
+  using Scalar = Scalar_;
+  using StorageIndex = StorageIndex_;
+  using StorageKind = Sparse;
+  using XprKind = MatrixXpr;
   enum {
     IsColVector = (Options_ & RowMajorBit) ? 0 : 1,
 
@@ -60,7 +61,7 @@ struct sparse_vector_assign_selector;
 
 template <typename Scalar_, int Options_, typename StorageIndex_>
 class SparseVector : public SparseCompressedBase<SparseVector<Scalar_, Options_, StorageIndex_> > {
-  typedef SparseCompressedBase<SparseVector> Base;
+  using Base = SparseCompressedBase<SparseVector>;
   using Base::convert_index;
 
  public:
@@ -68,7 +69,7 @@ class SparseVector : public SparseCompressedBase<SparseVector<Scalar_, Options_,
   EIGEN_SPARSE_INHERIT_ASSIGNMENT_OPERATOR(SparseVector, +=)
   EIGEN_SPARSE_INHERIT_ASSIGNMENT_OPERATOR(SparseVector, -=)
 
-  typedef internal::CompressedStorage<Scalar, StorageIndex> Storage;
+  using Storage = internal::CompressedStorage<Scalar, StorageIndex>;
   enum { IsColVector = internal::traits<SparseVector>::IsColVector };
 
   enum { Options = Options_ };
@@ -121,8 +122,8 @@ class SparseVector : public SparseCompressedBase<SparseVector<Scalar_, Options_,
   }
 
  public:
-  typedef typename Base::InnerIterator InnerIterator;
-  typedef typename Base::ReverseInnerIterator ReverseInnerIterator;
+  using InnerIterator = typename Base::InnerIterator;
+  using ReverseInnerIterator = typename Base::ReverseInnerIterator;
 
   inline void setZero() { m_data.clear(); }
 
@@ -168,12 +169,12 @@ class SparseVector : public SparseCompressedBase<SparseVector<Scalar_, Options_,
 
     Index startId = 0;
     Index p = Index(m_data.size()) - 1;
-    // TODO smart realloc
+    // TODO: implement smart reallocation.
     m_data.resize(p + 2, 1);
 
     while ((p >= startId) && (m_data.index(p) > i)) {
       m_data.index(p + 1) = m_data.index(p);
-      m_data.value(p + 1) = m_data.value(p);
+      m_data.value(p + 1) = internal::move_if_assignable(m_data.value(p));
       --p;
     }
     m_data.index(p + 1) = convert_index(i);
@@ -181,8 +182,6 @@ class SparseVector : public SparseCompressedBase<SparseVector<Scalar_, Options_,
     return m_data.value(p + 1);
   }
 
-  /**
-   */
   inline void reserve(Index reserveSize) { m_data.reserve(reserveSize); }
 
   inline void finalize() {}
@@ -196,7 +195,7 @@ class SparseVector : public SparseCompressedBase<SparseVector<Scalar_, Options_,
    * \brief Prunes the entries of the vector based on a `predicate`
    * \tparam F Type of the predicate.
    * \param keep_predicate The predicate that is used to test whether a value should be kept. A callable that
-   * gets passed om a `Scalar` value and returns a boolean. If the predicate returns true, the value is kept.
+   * gets passed in a `Scalar` value and returns a boolean. If the predicate returns true, the value is kept.
    * \return The new number of structural non-zeros.
    */
   template <class F>
@@ -205,8 +204,12 @@ class SparseVector : public SparseCompressedBase<SparseVector<Scalar_, Options_,
     Index n = m_data.size();
     for (Index i = 0; i < n; ++i) {
       if (keep_predicate(m_data.value(i))) {
-        m_data.value(k) = std::move(m_data.value(i));
-        m_data.index(k) = m_data.index(i);
+        // Entries in front of the first dropped one are already in place, where a self-move would leave them
+        // unspecified. A trivially copyable scalar is assigned anyway, which costs less than the branch.
+        if (std::is_trivially_copyable<Scalar>::value || k != i) {
+          m_data.value(k) = internal::move_if_assignable(m_data.value(i));
+          m_data.index(k) = m_data.index(i);
+        }
         ++k;
       }
     }
@@ -226,6 +229,12 @@ class SparseVector : public SparseCompressedBase<SparseVector<Scalar_, Options_,
     eigen_assert((IsColVector ? cols : rows) == 1 && "Outer dimension must equal 1");
     resize(IsColVector ? rows : cols);
   }
+
+  /** \sa resize(Index,Index) */
+  void resize(NoChange_t, Index cols) { resize(rows(), cols); }
+
+  /** \sa resize(Index,Index) */
+  void resize(Index rows, NoChange_t) { resize(rows, cols()); }
 
   /** Resizes the sparse vector to \a newSize
    * This method deletes all entries, thus leaving an empty sparse vector
@@ -283,8 +292,10 @@ class SparseVector : public SparseCompressedBase<SparseVector<Scalar_, Options_,
   template <int OtherOptions>
   inline void swap(SparseMatrix<Scalar, OtherOptions, StorageIndex>& other) {
     eigen_assert(other.outerSize() == 1);
+    other.makeCompressed();
     std::swap(m_size, other.m_innerSize);
     m_data.swap(other.m_data);
+    other.m_outerIndex[1] = convert_index(other.m_data.size());
   }
   template <int OtherOptions>
   friend EIGEN_DEVICE_FUNC void swap(SparseVector& a, SparseMatrix<Scalar, OtherOptions, StorageIndex>& b) {
@@ -298,7 +309,8 @@ class SparseVector : public SparseCompressedBase<SparseVector<Scalar_, Options_,
   inline SparseVector& operator=(const SparseVector& other) {
     if (other.isRValue()) {
       swap(other.const_cast_derived());
-    } else {
+    } else if (this != &other) {
+      // resize() clears m_data, so a self-assignment would copy an empty vector.
       resize(other.size());
       m_data = other.m_data;
     }
@@ -331,13 +343,6 @@ class SparseVector : public SparseCompressedBase<SparseVector<Scalar_, Options_,
     return *this;
   }
 
-#ifndef EIGEN_PARSED_BY_DOXYGEN
-  template <typename Lhs, typename Rhs>
-  inline SparseVector& operator=(const SparseSparseProduct<Lhs, Rhs>& product) {
-    return Base::operator=(product);
-  }
-#endif
-
 #ifndef EIGEN_NO_IO
   friend std::ostream& operator<<(std::ostream& s, const SparseVector& m) {
     for (Index i = 0; i < m.nonZeros(); ++i) s << "(" << m.m_data.value(i) << "," << m.m_data.index(i) << ") ";
@@ -345,9 +350,6 @@ class SparseVector : public SparseCompressedBase<SparseVector<Scalar_, Options_,
     return s;
   }
 #endif
-
-  /** Destructor */
-  inline ~SparseVector() {}
 
   /** Overloaded for performance */
   Scalar sum() const;
@@ -383,7 +385,7 @@ class SparseVector : public SparseCompressedBase<SparseVector<Scalar_, Options_,
   /** \internal \deprecated use finalize() */
   EIGEN_DEPRECATED_WITH_REASON("Use .finalize() instead.") void endFill() {}
 
-  // These two functions were here in the 3.1 release, so let's keep them in case some code rely on them.
+  // These two functions were here in the 3.1 release, so let's keep them in case some code relies on them.
   /** \internal \deprecated use data() */
   EIGEN_DEPRECATED_WITH_REASON("Use .data() instead.") Storage& _data() { return m_data; }
   /** \internal \deprecated use data() */
@@ -405,10 +407,10 @@ namespace internal {
 
 template <typename Scalar_, int Options_, typename Index_>
 struct evaluator<SparseVector<Scalar_, Options_, Index_> > : evaluator_base<SparseVector<Scalar_, Options_, Index_> > {
-  typedef SparseVector<Scalar_, Options_, Index_> SparseVectorType;
-  typedef evaluator_base<SparseVectorType> Base;
-  typedef typename SparseVectorType::InnerIterator InnerIterator;
-  typedef typename SparseVectorType::ReverseInnerIterator ReverseInnerIterator;
+  using SparseVectorType = SparseVector<Scalar_, Options_, Index_>;
+  using Base = evaluator_base<SparseVectorType>;
+  using InnerIterator = typename SparseVectorType::InnerIterator;
+  using ReverseInnerIterator = typename SparseVectorType::ReverseInnerIterator;
 
   enum { CoeffReadCost = NumTraits<Scalar_>::ReadCost, Flags = SparseVectorType::Flags };
 
@@ -428,7 +430,7 @@ template <typename Dest, typename Src>
 struct sparse_vector_assign_selector<Dest, Src, SVA_Inner> {
   static void run(Dest& dst, const Src& src) {
     eigen_internal_assert(src.innerSize() == src.size());
-    typedef internal::evaluator<Src> SrcEvaluatorType;
+    using SrcEvaluatorType = internal::evaluator<Src>;
     SrcEvaluatorType srcEval(src);
     for (typename SrcEvaluatorType::InnerIterator it(srcEval, 0); it; ++it) dst.insert(it.index()) = it.value();
   }
@@ -438,7 +440,7 @@ template <typename Dest, typename Src>
 struct sparse_vector_assign_selector<Dest, Src, SVA_Outer> {
   static void run(Dest& dst, const Src& src) {
     eigen_internal_assert(src.outerSize() == src.size());
-    typedef internal::evaluator<Src> SrcEvaluatorType;
+    using SrcEvaluatorType = internal::evaluator<Src>;
     SrcEvaluatorType srcEval(src);
     for (Index i = 0; i < src.size(); ++i) {
       typename SrcEvaluatorType::InnerIterator it(srcEval, i);
@@ -464,7 +466,7 @@ struct sparse_vector_assign_selector<Dest, Src, SVA_RuntimeSwitch> {
 template <typename Scalar, int Options, typename StorageIndex>
 class Serializer<SparseVector<Scalar, Options, StorageIndex>, void> {
  public:
-  typedef SparseVector<Scalar, Options, StorageIndex> SparseMat;
+  using SparseMat = SparseVector<Scalar, Options, StorageIndex>;
 
   struct Header {
     typename SparseMat::Index size;
@@ -487,12 +489,16 @@ class Serializer<SparseVector<Scalar, Options, StorageIndex>, void> {
 
     // Inner indices.
     std::size_t data_bytes = sizeof(StorageIndex) * header.num_non_zeros;
-    memcpy(dest, value.innerIndexPtr(), data_bytes);
+    if (data_bytes != 0) {
+      memcpy(dest, value.innerIndexPtr(), data_bytes);
+    }
     dest += data_bytes;
 
     // Values.
     data_bytes = sizeof(Scalar) * header.num_non_zeros;
-    memcpy(dest, value.valuePtr(), data_bytes);
+    if (data_bytes != 0) {
+      memcpy(dest, value.valuePtr(), data_bytes);
+    }
     dest += data_bytes;
 
     return dest;
@@ -508,21 +514,37 @@ class Serializer<SparseVector<Scalar, Options, StorageIndex>, void> {
     memcpy(&header, src, header_bytes);
     src += header_bytes;
 
+    // The header is untrusted: check the sizes before allocating, and every inner index after copying.
+    if (EIGEN_PREDICT_FALSE(header.size < 0 || header.num_non_zeros < 0 ||
+                            header.num_non_zeros > NumTraits<StorageIndex>::highest() ||
+                            static_cast<numext::uint64_t>(header.num_non_zeros) >
+                                static_cast<numext::uint64_t>(end - src) / (sizeof(StorageIndex) + sizeof(Scalar))))
+      return nullptr;
+
     value.setZero();
     value.resize(header.size);
     value.resizeNonZeros(header.num_non_zeros);
 
     // Inner indices.
     std::size_t data_bytes = sizeof(StorageIndex) * header.num_non_zeros;
-    if (EIGEN_PREDICT_FALSE(src + data_bytes > end)) return nullptr;
-    memcpy(value.innerIndexPtr(), src, data_bytes);
+    if (data_bytes != 0) {
+      memcpy(value.innerIndexPtr(), src, data_bytes);
+    }
     src += data_bytes;
 
     // Values.
     data_bytes = sizeof(Scalar) * header.num_non_zeros;
-    if (EIGEN_PREDICT_FALSE(src + data_bytes > end)) return nullptr;
-    memcpy(value.valuePtr(), src, data_bytes);
+    if (data_bytes != 0) {
+      memcpy(value.valuePtr(), src, data_bytes);
+    }
     src += data_bytes;
+
+    for (Index k = 0; k < header.num_non_zeros; ++k) {
+      if (EIGEN_PREDICT_FALSE(value.innerIndexPtr()[k] < 0 || value.innerIndexPtr()[k] >= header.size)) {
+        value.resize(0);
+        return nullptr;
+      }
+    }
     return src;
   }
 };

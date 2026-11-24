@@ -6,12 +6,13 @@
 // This Source Code Form is subject to the terms of the Mozilla
 // Public License v. 2.0. If a copy of the MPL was not distributed
 // with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
+// SPDX-License-Identifier: MPL-2.0
 
 #ifndef EIGEN_UMFPACKSUPPORT_H
 #define EIGEN_UMFPACKSUPPORT_H
 
 // for compatibility with super old version of umfpack,
-// not sure this is really needed, but this is harmless.
+// This may not be strictly needed, but it is harmless.
 #ifndef SuiteSparse_long
 #ifdef UF_long
 #define SuiteSparse_long UF_long
@@ -237,11 +238,10 @@ inline int umfpack_get_numeric(int Lp[], int Lj[], double Lx[], int Up[], int Ui
 inline int umfpack_get_numeric(int Lp[], int Lj[], std::complex<double> Lx[], int Up[], int Ui[],
                                std::complex<double> Ux[], int P[], int Q[], std::complex<double> Dx[], int *do_recip,
                                double Rs[], void *Numeric) {
-  double &lx0_real = numext::real_ref(Lx[0]);
-  double &ux0_real = numext::real_ref(Ux[0]);
-  double &dx0_real = numext::real_ref(Dx[0]);
-  return umfpack_zi_get_numeric(Lp, Lj, Lx ? &lx0_real : 0, 0, Up, Ui, Ux ? &ux0_real : 0, 0, P, Q, Dx ? &dx0_real : 0,
-                                0, do_recip, Rs, Numeric);
+  double *lx_real = Lx ? &numext::real_ref(Lx[0]) : 0;
+  double *ux_real = Ux ? &numext::real_ref(Ux[0]) : 0;
+  double *dx_real = Dx ? &numext::real_ref(Dx[0]) : 0;
+  return umfpack_zi_get_numeric(Lp, Lj, lx_real, 0, Up, Ui, ux_real, 0, P, Q, dx_real, 0, do_recip, Rs, Numeric);
 }
 inline SuiteSparse_long umfpack_get_numeric(SuiteSparse_long Lp[], SuiteSparse_long Lj[], double Lx[],
                                             SuiteSparse_long Up[], SuiteSparse_long Ui[], double Ux[],
@@ -254,11 +254,10 @@ inline SuiteSparse_long umfpack_get_numeric(SuiteSparse_long Lp[], SuiteSparse_l
                                             SuiteSparse_long Up[], SuiteSparse_long Ui[], std::complex<double> Ux[],
                                             SuiteSparse_long P[], SuiteSparse_long Q[], std::complex<double> Dx[],
                                             SuiteSparse_long *do_recip, double Rs[], void *Numeric) {
-  double &lx0_real = numext::real_ref(Lx[0]);
-  double &ux0_real = numext::real_ref(Ux[0]);
-  double &dx0_real = numext::real_ref(Dx[0]);
-  return umfpack_zl_get_numeric(Lp, Lj, Lx ? &lx0_real : 0, 0, Up, Ui, Ux ? &ux0_real : 0, 0, P, Q, Dx ? &dx0_real : 0,
-                                0, do_recip, Rs, Numeric);
+  double *lx_real = Lx ? &numext::real_ref(Lx[0]) : 0;
+  double *ux_real = Ux ? &numext::real_ref(Ux[0]) : 0;
+  double *dx_real = Dx ? &numext::real_ref(Dx[0]) : 0;
+  return umfpack_zl_get_numeric(Lp, Lj, lx_real, 0, Up, Ui, ux_real, 0, P, Q, dx_real, 0, do_recip, Rs, Numeric);
 }
 
 // Get Determinant
@@ -287,7 +286,7 @@ inline SuiteSparse_long umfpack_get_determinant(std::complex<double> *Mx, double
  * \brief A sparse LU factorization and solver based on UmfPack
  *
  * This class allows to solve for A.X = B sparse linear problems via a LU factorization
- * using the UmfPack library. The sparse matrix A must be squared and full rank.
+ * using the UmfPack library. The sparse matrix A must be square and full rank.
  * The vectors or matrices X and B can be either dense or sparse.
  *
  * \warning The input matrix A should be in a \b compressed and \b column-major form.
@@ -301,26 +300,26 @@ inline SuiteSparse_long umfpack_get_determinant(std::complex<double> *Mx, double
 template <typename MatrixType_>
 class UmfPackLU : public SparseSolverBase<UmfPackLU<MatrixType_> > {
  protected:
-  typedef SparseSolverBase<UmfPackLU<MatrixType_> > Base;
+  using Base = SparseSolverBase<UmfPackLU<MatrixType_> >;
   using Base::m_isInitialized;
 
  public:
   using Base::_solve_impl;
-  typedef MatrixType_ MatrixType;
-  typedef typename MatrixType::Scalar Scalar;
-  typedef typename MatrixType::RealScalar RealScalar;
-  typedef typename MatrixType::StorageIndex StorageIndex;
-  typedef Matrix<Scalar, Dynamic, 1> Vector;
-  typedef Matrix<int, 1, MatrixType::ColsAtCompileTime> IntRowVectorType;
-  typedef Matrix<int, MatrixType::RowsAtCompileTime, 1> IntColVectorType;
-  typedef SparseMatrix<Scalar> LUMatrixType;
-  typedef SparseMatrix<Scalar, ColMajor, StorageIndex> UmfpackMatrixType;
-  typedef Ref<const UmfpackMatrixType, StandardCompressedFormat> UmfpackMatrixRef;
+  using MatrixType = MatrixType_;
+  using Scalar = typename MatrixType::Scalar;
+  using RealScalar = typename MatrixType::RealScalar;
+  using StorageIndex = typename MatrixType::StorageIndex;
+  using Vector = Matrix<Scalar, Dynamic, 1>;
+  using IntRowVectorType = Matrix<StorageIndex, 1, MatrixType::ColsAtCompileTime>;
+  using IntColVectorType = Matrix<StorageIndex, MatrixType::RowsAtCompileTime, 1>;
+  using LUMatrixType = SparseMatrix<Scalar, ColMajor, StorageIndex>;
+  using UmfpackMatrixType = SparseMatrix<Scalar, ColMajor, StorageIndex>;
+  using UmfpackMatrixRef = Ref<const UmfpackMatrixType, StandardCompressedFormat>;
   enum { ColsAtCompileTime = MatrixType::ColsAtCompileTime, MaxColsAtCompileTime = MatrixType::MaxColsAtCompileTime };
 
  public:
-  typedef Array<double, UMFPACK_CONTROL, 1> UmfpackControl;
-  typedef Array<double, UMFPACK_INFO, 1> UmfpackInfo;
+  using UmfpackControl = Array<double, UMFPACK_CONTROL, 1>;
+  using UmfpackInfo = Array<double, UMFPACK_INFO, 1>;
 
   UmfPackLU() : m_dummy(0, 0), mp_matrix(m_dummy) { init(); }
 
@@ -341,34 +340,54 @@ class UmfPackLU : public SparseSolverBase<UmfPackLU<MatrixType_> > {
   /** \brief Reports whether previous computation was successful.
    *
    * \returns \c Success if computation was successful,
-   *          \c NumericalIssue if the matrix.appears to be negative.
+   *          \c NumericalIssue if the matrix appears to be negative.
    */
   ComputationInfo info() const {
     eigen_assert(m_isInitialized && "Decomposition is not initialized.");
     return m_info;
   }
 
+  /** \returns the unit lower triangular factor L of the factorization
+   *
+   * With P = permutationP(), Q = permutationQ() and s = rowScaling(), UMFPACK computes
+   * \code (L * U)(i, j) == s(P(i)) * A(P(i), Q(j)) \endcode
+   * up to rounding: the rows of A are scaled by s before the rows and columns are permuted.
+   * By default UMFPACK scales the rows of A (s != 1); set \c umfpackControl()[UMFPACK_SCALE] to
+   * \c UMFPACK_SCALE_NONE before the factorization to get s = 1.
+   * The reference is invalidated by the next call to compute(), analyzePattern() or factorize().
+   */
   inline const LUMatrixType &matrixL() const {
     if (m_extractedDataAreDirty) extractData();
     return m_l;
   }
 
+  /** \returns the upper triangular factor U of the factorization, see matrixL() */
   inline const LUMatrixType &matrixU() const {
     if (m_extractedDataAreDirty) extractData();
     return m_u;
   }
 
+  /** \returns the row permutation P: row P(k) of A is the k-th pivot row, see matrixL() */
   inline const IntColVectorType &permutationP() const {
     if (m_extractedDataAreDirty) extractData();
     return m_p;
   }
 
+  /** \returns the column permutation Q: column Q(k) of A is the k-th pivot column, see matrixL() */
   inline const IntRowVectorType &permutationQ() const {
     if (m_extractedDataAreDirty) extractData();
     return m_q;
   }
 
-  /** Computes the sparse Cholesky decomposition of \a matrix
+  /** \returns the factor s by which UMFPACK scaled each row of A before the factorization (all ones if scaling
+   * is disabled), indexed like the rows of A. See matrixL().
+   */
+  inline const Matrix<RealScalar, Dynamic, 1> &rowScaling() const {
+    if (m_extractedDataAreDirty) extractData();
+    return m_rowScaling;
+  }
+
+  /** Computes the sparse LU decomposition of \a matrix
    *  Note that the matrix should be column-major, and in compressed format for best performance.
    *  \sa SparseMatrix::makeCompressed().
    */
@@ -425,7 +444,7 @@ class UmfPackLU : public SparseSolverBase<UmfPackLU<MatrixType_> > {
 
   /** Performs a numeric decomposition of \a matrix
    *
-   * The given matrix must have the same sparsity than the matrix on which the pattern anylysis has been performed.
+   * The given matrix must have the same sparsity as the matrix on which the pattern analysis has been performed.
    *
    * \sa analyzePattern(), compute()
    */
@@ -527,6 +546,7 @@ class UmfPackLU : public SparseSolverBase<UmfPackLU<MatrixType_> > {
   mutable LUMatrixType m_u;
   mutable IntColVectorType m_p;
   mutable IntRowVectorType m_q;
+  mutable Matrix<RealScalar, Dynamic, 1> m_rowScaling;
 
   UmfpackMatrixType m_dummy;
   UmfpackMatrixRef mp_matrix;
@@ -546,23 +566,34 @@ class UmfPackLU : public SparseSolverBase<UmfPackLU<MatrixType_> > {
 template <typename MatrixType>
 void UmfPackLU<MatrixType>::extractData() const {
   if (m_extractedDataAreDirty) {
+    eigen_assert(m_numeric && "UmfPackLU: you must first call factorize()");
     // get size of the data
     StorageIndex lnz, unz, rows, cols, nz_udiag;
     umfpack_get_lunz(&lnz, &unz, &rows, &cols, &nz_udiag, m_numeric, Scalar());
+    const StorageIndex minRowsCols = (std::min)(rows, cols);
 
-    // allocate data
-    m_l.resize(rows, (std::min)(rows, cols));
-    m_l.resizeNonZeros(lnz);
+    // UMFPACK returns L in compressed-row form and U in compressed-column form.
+    SparseMatrix<Scalar, RowMajor, StorageIndex> rowMajorL(rows, minRowsCols);
+    rowMajorL.resizeNonZeros(lnz);
 
-    m_u.resize((std::min)(rows, cols), cols);
+    m_u.resize(minRowsCols, cols);
     m_u.resizeNonZeros(unz);
 
     m_p.resize(rows);
     m_q.resize(cols);
+    Matrix<double, Dynamic, 1> rs(rows);
+    StorageIndex doRecip = 0;
 
     // extract
-    umfpack_get_numeric(m_l.outerIndexPtr(), m_l.innerIndexPtr(), m_l.valuePtr(), m_u.outerIndexPtr(),
-                        m_u.innerIndexPtr(), m_u.valuePtr(), m_p.data(), m_q.data(), 0, 0, 0, m_numeric);
+    umfpack_get_numeric(rowMajorL.outerIndexPtr(), rowMajorL.innerIndexPtr(), rowMajorL.valuePtr(), m_u.outerIndexPtr(),
+                        m_u.innerIndexPtr(), m_u.valuePtr(), m_p.data(), m_q.data(), 0, &doRecip, rs.data(), m_numeric);
+
+    m_l = rowMajorL;
+    // Row i of A was multiplied by rs(i) if doRecip, else divided by it.
+    if (doRecip)
+      m_rowScaling = rs.template cast<RealScalar>();
+    else
+      m_rowScaling = rs.cwiseInverse().template cast<RealScalar>();
 
     m_extractedDataAreDirty = false;
   }
@@ -589,11 +620,17 @@ bool UmfPackLU<MatrixType>::_solve_impl(const MatrixBase<BDerived> &b, MatrixBas
     x_tmp.resize(x.rows());
     x_ptr = x_tmp.data();
   }
+  Matrix<Scalar, Dynamic, 1> b_tmp;
   for (int j = 0; j < rhsCols; ++j) {
     if (x.innerStride() == 1) x_ptr = &x.col(j).coeffRef(0);
+    const Scalar *b_ptr = b.derived().data() + j * b.derived().outerStride();
+    if (b.innerStride() != 1) {
+      b_tmp = b.col(j);
+      b_ptr = b_tmp.data();
+    }
     StorageIndex errorCode =
         umfpack_solve(UMFPACK_A, mp_matrix.outerIndexPtr(), mp_matrix.innerIndexPtr(), mp_matrix.valuePtr(), x_ptr,
-                      &b.const_cast_derived().col(j).coeffRef(0), m_numeric, m_control.data(), m_umfpackInfo.data());
+                      const_cast<Scalar *>(b_ptr), m_numeric, m_control.data(), m_umfpackInfo.data());
     if (x.innerStride() != 1) x.col(j) = x_tmp;
     if (errorCode != 0) return false;
   }

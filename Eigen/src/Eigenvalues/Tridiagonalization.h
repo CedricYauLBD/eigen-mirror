@@ -7,6 +7,7 @@
 // This Source Code Form is subject to the terms of the Mozilla
 // Public License v. 2.0. If a copy of the MPL was not distributed
 // with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
+// SPDX-License-Identifier: MPL-2.0
 
 #ifndef EIGEN_TRIDIAGONALIZATION_H
 #define EIGEN_TRIDIAGONALIZATION_H
@@ -22,7 +23,11 @@ template <typename MatrixType>
 struct TridiagonalizationMatrixTReturnType;
 template <typename MatrixType>
 struct traits<TridiagonalizationMatrixTReturnType<MatrixType>> : public traits<typename MatrixType::PlainObject> {
-  typedef typename MatrixType::PlainObject ReturnType;  // FIXME shall it be a BandMatrix?
+  // matrixT() returns a dense n x n matrix. A band-stored alternative (e.g. a
+  // future matrixTBand() returning BandMatrix<Scalar, Dynamic, Dynamic, 1, 1>)
+  // would be ~3n storage instead of n^2, but changing this ReturnType in place
+  // would be API-breaking for callers that assume a dense matrix.
+  using ReturnType = typename MatrixType::PlainObject;
   enum { Flags = 0 };
 };
 
@@ -66,40 +71,39 @@ template <typename MatrixType_>
 class Tridiagonalization {
  public:
   /** \brief Synonym for the template parameter \p MatrixType_. */
-  typedef MatrixType_ MatrixType;
+  using MatrixType = MatrixType_;
 
-  typedef typename MatrixType::Scalar Scalar;
-  typedef typename NumTraits<Scalar>::Real RealScalar;
-  typedef Eigen::Index Index;  ///< \deprecated since Eigen 3.3
+  using Scalar = typename MatrixType::Scalar;
+  using RealScalar = typename NumTraits<Scalar>::Real;
+  using Index = Eigen::Index;  ///< \deprecated since Eigen 3.3
 
   enum {
     Size = MatrixType::RowsAtCompileTime,
     SizeMinusOne = Size == Dynamic ? Dynamic : (Size > 1 ? Size - 1 : 1),
-    Options = internal::traits<MatrixType>::Options,
+    Options = internal::plain_object_options<MatrixType>::value,
     MaxSize = MatrixType::MaxRowsAtCompileTime,
     MaxSizeMinusOne = MaxSize == Dynamic ? Dynamic : (MaxSize > 1 ? MaxSize - 1 : 1)
   };
 
-  typedef Matrix<Scalar, SizeMinusOne, 1, Options & ~RowMajor, MaxSizeMinusOne, 1> CoeffVectorType;
-  typedef typename internal::plain_col_type<MatrixType, RealScalar>::type DiagonalType;
-  typedef Matrix<RealScalar, SizeMinusOne, 1, Options & ~RowMajor, MaxSizeMinusOne, 1> SubDiagonalType;
-  typedef internal::remove_all_t<typename MatrixType::RealReturnType> MatrixTypeRealView;
-  typedef internal::TridiagonalizationMatrixTReturnType<MatrixTypeRealView> MatrixTReturnType;
+  using CoeffVectorType = Matrix<Scalar, SizeMinusOne, 1, Options & ~RowMajor, MaxSizeMinusOne, 1>;
+  using DiagonalType = typename internal::plain_col_type<MatrixType, RealScalar>::type;
+  using SubDiagonalType = Matrix<RealScalar, SizeMinusOne, 1, Options & ~RowMajor, MaxSizeMinusOne, 1>;
+  using MatrixTypeRealView = internal::remove_all_t<typename MatrixType::RealReturnType>;
+  using MatrixTReturnType = internal::TridiagonalizationMatrixTReturnType<MatrixTypeRealView>;
 
-  typedef std::conditional_t<NumTraits<Scalar>::IsComplex,
-                             internal::add_const_on_value_type_t<typename Diagonal<const MatrixType>::RealReturnType>,
-                             const Diagonal<const MatrixType>>
-      DiagonalReturnType;
+  using DiagonalReturnType =
+      std::conditional_t<NumTraits<Scalar>::IsComplex,
+                         internal::add_const_on_value_type_t<typename Diagonal<const MatrixType>::RealReturnType>,
+                         const Diagonal<const MatrixType>>;
 
-  typedef std::conditional_t<
-      NumTraits<Scalar>::IsComplex,
-      internal::add_const_on_value_type_t<typename Diagonal<const MatrixType, -1>::RealReturnType>,
-      const Diagonal<const MatrixType, -1>>
-      SubDiagonalReturnType;
+  using SubDiagonalReturnType =
+      std::conditional_t<NumTraits<Scalar>::IsComplex,
+                         internal::add_const_on_value_type_t<typename Diagonal<const MatrixType, -1>::RealReturnType>,
+                         const Diagonal<const MatrixType, -1>>;
 
   /** \brief Return type of matrixQ() */
-  typedef HouseholderSequence<MatrixType, internal::remove_all_t<typename CoeffVectorType::ConjugateReturnType>>
-      HouseholderSequenceType;
+  using HouseholderSequenceType =
+      HouseholderSequence<MatrixType, internal::remove_all_t<typename CoeffVectorType::ConjugateReturnType>>;
 
   /** \brief Default constructor.
    *
@@ -133,6 +137,21 @@ class Tridiagonalization {
     m_isInitialized = true;
   }
 
+  /** \brief Constructor for \link InplaceDecomposition inplace decomposition \endlink
+   *
+   * \param[in,out]  matrix  Selfadjoint matrix whose tridiagonal decomposition is to be computed.
+   *
+   * When \p MatrixType is a Ref<>, the decomposition is computed within the memory of \p matrix, which then holds
+   * the packed representation returned by packedMatrix(). Otherwise this constructor behaves like
+   * Tridiagonalization(const EigenBase<InputType>&).
+   */
+  template <typename InputType>
+  explicit Tridiagonalization(EigenBase<InputType>& matrix)
+      : m_matrix(matrix.derived()), m_hCoeffs(matrix.cols() > 1 ? matrix.cols() - 1 : 1), m_isInitialized(false) {
+    internal::tridiagonalization_inplace(m_matrix, m_hCoeffs);
+    m_isInitialized = true;
+  }
+
   /** \brief Computes tridiagonal decomposition of given matrix.
    *
    * \param[in]  matrix  Selfadjoint matrix whose tridiagonal decomposition
@@ -144,7 +163,7 @@ class Tridiagonalization {
    * reflections. The cost is \f$ 4n^3/3 \f$ flops, where \f$ n \f$ denotes
    * the size of the given matrix.
    *
-   * This method reuses of the allocated data in the Tridiagonalization
+   * This method reuses the allocated data in the Tridiagonalization
    * object, if the size of the matrix does not change.
    *
    * Example: \include Tridiagonalization_compute.cpp
@@ -306,11 +325,12 @@ typename Tridiagonalization<MatrixType>::SubDiagonalReturnType Tridiagonalizatio
 namespace internal {
 
 /** \internal
- * Performs a tridiagonal decomposition of the selfadjoint matrix \a matA in-place.
+ * Unblocked tridiagonal decomposition of the selfadjoint matrix \a matA in-place.
+ * Processes one column at a time using Level 2 BLAS operations (SYMV, SYR2).
  *
  * \param[in,out] matA On input the selfadjoint matrix. Only the \b lower triangular part is referenced.
  *                     On output, the strict upper part is left unchanged, and the lower triangular part
- *                     represents the T and Q matrices in packed format has detailed below.
+ *                     represents the T and Q matrices in packed format as detailed below.
  * \param[out]    hCoeffs returned Householder coefficients (see below)
  *
  * On output, the tridiagonal selfadjoint matrix T is stored in the diagonal
@@ -329,12 +349,11 @@ namespace internal {
  * \sa Tridiagonalization::packedMatrix()
  */
 template <typename MatrixType, typename CoeffVectorType>
-EIGEN_DEVICE_FUNC void tridiagonalization_inplace(MatrixType& matA, CoeffVectorType& hCoeffs) {
-  using numext::conj;
-  typedef typename MatrixType::Scalar Scalar;
-  typedef typename MatrixType::RealScalar RealScalar;
+EIGEN_DEVICE_FUNC void tridiagonalization_inplace_unblocked(MatrixType& matA, CoeffVectorType& hCoeffs) {
+  using Scalar = typename MatrixType::Scalar;
+  using RealScalar = typename MatrixType::RealScalar;
   Index n = matA.rows();
-  eigen_assert(n == matA.cols());
+  EIGEN_INTERNAL_ASSERT_SQUARE(matA);
   eigen_assert(n == hCoeffs.size() + 1 || n == 1);
 
   for (Index i = 0; i < n - 1; ++i) {
@@ -349,10 +368,10 @@ EIGEN_DEVICE_FUNC void tridiagonalization_inplace(MatrixType& matA, CoeffVectorT
 
     hCoeffs.tail(n - i - 1).noalias() =
         (matA.bottomRightCorner(remainingSize, remainingSize).template selfadjointView<Lower>() *
-         (conj(h) * matA.col(i).tail(remainingSize)));
+         (numext::conj(h) * matA.col(i).tail(remainingSize)));
 
     hCoeffs.tail(n - i - 1) +=
-        (conj(h) * RealScalar(-0.5) * (hCoeffs.tail(remainingSize).dot(matA.col(i).tail(remainingSize)))) *
+        (numext::conj(h) * RealScalar(-0.5) * (hCoeffs.tail(remainingSize).dot(matA.col(i).tail(remainingSize)))) *
         matA.col(i).tail(n - i - 1);
 
     matA.bottomRightCorner(remainingSize, remainingSize)
@@ -362,6 +381,160 @@ EIGEN_DEVICE_FUNC void tridiagonalization_inplace(MatrixType& matA, CoeffVectorT
     matA.col(i).coeffRef(i + 1) = beta;
     hCoeffs.coeffRef(i) = h;
   }
+}
+
+#if !defined(EIGEN_GPU_COMPILE_PHASE)
+/** \internal
+ * Blocked tridiagonal decomposition (analogous to LAPACK's dsytrd/dlatrd).
+ * Processes columns in panels of BlockSize, accumulating Householder reflectors
+ * and deferring the symmetric rank-2k update to use Level 3 BLAS (triangular GEMM).
+ * Falls back to the unblocked algorithm for the last (partial) panel.
+ */
+template <typename MatrixType, typename CoeffVectorType>
+void tridiagonalization_inplace_blocked(MatrixType& matA, CoeffVectorType& hCoeffs, Index nb = 16) {
+  using Scalar = typename MatrixType::Scalar;
+  using RealScalar = typename MatrixType::RealScalar;
+  const Index n = matA.rows();
+  EIGEN_INTERNAL_ASSERT_SQUARE(matA);
+  eigen_assert(n == hCoeffs.size() + 1);
+  eigen_assert(nb >= 2 && nb < n);
+
+  enum {
+    StorageOrder = (traits<MatrixType>::Flags & RowMajorBit) ? RowMajor : ColMajor,
+    RhsStorageOrder = (StorageOrder == ColMajor) ? RowMajor : ColMajor
+  };
+
+  // Workspace: W matrix (n x nb) for deferred update vectors, temp vector (nb) for GEMV, betas (nb).
+  using WorkMatrixType = Matrix<Scalar, Dynamic, Dynamic, StorageOrder>;
+  WorkMatrixType W(n, nb);
+  Matrix<Scalar, Dynamic, 1> temp(nb);
+  Matrix<RealScalar, Dynamic, 1> betas(nb);
+
+  // Pre-allocate GEMM blocking workspace for the largest trailing matrix (first panel).
+  // Reused across all panels to avoid repeated heap allocations.
+  using BlockingType = gemm_blocking_space<StorageOrder, Scalar, Scalar, Dynamic, Dynamic, Dynamic>;
+  const Index maxTrailingSize = n - nb;
+  BlockingType blocking(maxTrailingSize, maxTrailingSize, nb, 1, false);
+  blocking.allocateAll();
+
+  Index j0 = 0;
+  for (; j0 + nb < n - 1; j0 += nb) {
+    const Index j_end = j0 + nb;
+
+    // ---- Panel factorization (dlatrd) ----
+    // Process columns j0..j_end-1, computing Householder vectors (stored in matA)
+    // and update vectors (stored in W). The rank-2k update to the trailing
+    // submatrix is deferred until after the panel.
+    for (Index j = j0; j < j_end; ++j) {
+      const Index local_j = j - j0;
+      const Index remainingSize = n - j - 1;
+
+      // Step 1: Update column j for deferred rank-2 updates from columns j0..j-1.
+      // A(j:n-1, j) -= V * W(j,:)^H + W * V(j,:)^H
+      // where V = matA(j:n-1, j0:j-1) holds Householder vectors,
+      // and W(j:n-1, 0:lj-1) holds the corresponding update vectors.
+      if (local_j > 0) {
+        auto col_j = matA.col(j).segment(j, n - j);
+        col_j.noalias() -= matA.block(j, j0, n - j, local_j) * W.row(j).head(local_j).adjoint();
+        col_j.noalias() -= W.block(j, 0, n - j, local_j) * matA.row(j).segment(j0, local_j).adjoint();
+        // Keep diagonal real (for complex scalars; no-op for real).
+        matA.coeffRef(j, j) = numext::real(matA.coeff(j, j));
+      }
+
+      // Step 2: Compute Householder reflector for column j.
+      RealScalar beta;
+      Scalar h;
+      matA.col(j).tail(remainingSize).makeHouseholderInPlace(h, beta);
+      betas(local_j) = beta;
+      matA.col(j).coeffRef(j + 1) = Scalar(1);
+
+      auto v = matA.col(j).tail(remainingSize);
+      auto w = W.col(local_j).tail(remainingSize);
+
+      // Step 3: Compute w = conj(h) * A_eff * v where A_eff accounts for deferred updates.
+      // Start with SYMV on the stored (not yet updated) trailing submatrix.
+      w.noalias() = matA.bottomRightCorner(remainingSize, remainingSize).template selfadjointView<Lower>() *
+                    (numext::conj(h) * v);
+
+      // GEMV corrections for deferred rank-2 updates within this panel.
+      if (local_j > 0) {
+        auto V_prev = matA.block(j + 1, j0, remainingSize, local_j);
+        auto W_prev = W.block(j + 1, 0, remainingSize, local_j);
+
+        // w -= conj(h) * V_prev * (W_prev^H * v)
+        temp.head(local_j).noalias() = W_prev.adjoint() * v;
+        w.noalias() -= numext::conj(h) * (V_prev * temp.head(local_j));
+
+        // w -= conj(h) * W_prev * (V_prev^H * v)
+        temp.head(local_j).noalias() = V_prev.adjoint() * v;
+        w.noalias() -= numext::conj(h) * (W_prev * temp.head(local_j));
+      }
+
+      // Step 4: Half-dot correction: w -= 0.5 * conj(h) * (w^H * v) * v
+      w += (numext::conj(h) * RealScalar(-0.5) * w.dot(v)) * v;
+
+      hCoeffs.coeffRef(j) = h;
+    }
+
+    // ---- Apply rank-2k update to trailing submatrix ----
+    // A(j_end:n-1, j_end:n-1) -= V_trail * W_trail^H + W_trail * V_trail^H
+    // using Level 3 BLAS (triangular GEMM).
+    const Index trailingSize = n - j_end;
+    if (trailingSize > 0) {
+      const Scalar* V_data = &matA.coeffRef(j_end, j0);
+      const Scalar* W_data = &W.coeffRef(j_end, 0);
+      Scalar* C_data = &matA.coeffRef(j_end, j_end);
+      const Index V_stride = matA.outerStride();
+      const Index W_stride = W.outerStride();
+      const Index C_stride = matA.outerStride();
+
+      // C -= V * W^H
+      general_matrix_matrix_triangular_product<Index, Scalar, StorageOrder, false, Scalar, RhsStorageOrder,
+                                               NumTraits<Scalar>::IsComplex, StorageOrder, 1,
+                                               Lower>::run(trailingSize, nb, V_data, V_stride, W_data, W_stride, C_data,
+                                                           1, C_stride, Scalar(-1), blocking);
+
+      // C -= W * V^H
+      general_matrix_matrix_triangular_product<Index, Scalar, StorageOrder, false, Scalar, RhsStorageOrder,
+                                               NumTraits<Scalar>::IsComplex, StorageOrder, 1,
+                                               Lower>::run(trailingSize, nb, W_data, W_stride, V_data, V_stride, C_data,
+                                                           1, C_stride, Scalar(-1), blocking);
+    }
+
+    // Restore subdiagonal entries (overwritten with 1 for Householder vectors).
+    for (Index j = j0; j < j_end; ++j) {
+      matA.coeffRef(j + 1, j) = betas(j - j0);
+    }
+  }
+
+  // ---- Process remaining columns with unblocked algorithm ----
+  if (j0 < n - 1) {
+    const Index remaining = n - j0;
+    auto trailing = matA.bottomRightCorner(remaining, remaining);
+    auto hCoeffs_tail = hCoeffs.segment(j0, remaining - 1);
+    tridiagonalization_inplace_unblocked(trailing, hCoeffs_tail);
+  }
+}
+#endif  // !EIGEN_GPU_COMPILE_PHASE
+
+/** \internal
+ * Dispatches to blocked or unblocked tridiagonalization based on matrix size.
+ * On GPU, always uses the unblocked algorithm.
+ */
+template <typename MatrixType, typename CoeffVectorType>
+EIGEN_DEVICE_FUNC void tridiagonalization_inplace(MatrixType& matA, CoeffVectorType& hCoeffs) {
+  EIGEN_INTERNAL_ASSERT_SQUARE(matA);
+  eigen_assert(matA.rows() == hCoeffs.size() + 1 || matA.rows() == 1);
+
+#if !defined(EIGEN_GPU_COMPILE_PHASE)
+  EIGEN_IF_CONSTEXPR (MatrixType::RowsAtCompileTime == Dynamic || MatrixType::ColsAtCompileTime == Dynamic) {
+    if (matA.rows() >= 96) {
+      tridiagonalization_inplace_blocked(matA, hCoeffs);
+      return;
+    }
+  }
+#endif
+  tridiagonalization_inplace_unblocked(matA, hCoeffs);
 }
 
 // forward declaration, implementation at the end of this file
@@ -395,7 +568,7 @@ struct tridiagonalization_inplace_selector;
  * The vectors \p diag and \p subdiag are not resized. The function
  * assumes that they are already of the correct size. The length of the
  * vector \p diag should equal the number of rows in \p mat, and the
- * length of the vector \p subdiag should be one left.
+ * length of the vector \p subdiag should be one less.
  *
  * This implementation contains an optimized path for 3-by-3 matrices
  * which is especially useful for plane fitting.
@@ -415,7 +588,9 @@ template <typename MatrixType, typename DiagonalType, typename SubDiagonalType, 
           typename WorkSpaceType>
 EIGEN_DEVICE_FUNC void tridiagonalization_inplace(MatrixType& mat, DiagonalType& diag, SubDiagonalType& subdiag,
                                                   CoeffVectorType& hcoeffs, WorkSpaceType& workspace, bool extractQ) {
-  eigen_assert(mat.cols() == mat.rows() && diag.size() == mat.rows() && subdiag.size() == mat.rows() - 1);
+  EIGEN_INTERNAL_ASSERT_SQUARE(mat);
+  EIGEN_INTERNAL_ASSERT_SIZE_MATCHES_ROWS(diag, mat);
+  eigen_assert(subdiag.size() == mat.rows() - 1);
   tridiagonalization_inplace_selector<MatrixType>::run(mat, diag, subdiag, hcoeffs, workspace, extractQ);
 }
 
@@ -424,7 +599,7 @@ EIGEN_DEVICE_FUNC void tridiagonalization_inplace(MatrixType& mat, DiagonalType&
  */
 template <typename MatrixType, int Size, bool IsComplex>
 struct tridiagonalization_inplace_selector {
-  typedef typename Tridiagonalization<MatrixType>::HouseholderSequenceType HouseholderSequenceType;
+  using HouseholderSequenceType = typename Tridiagonalization<MatrixType>::HouseholderSequenceType;
   template <typename DiagonalType, typename SubDiagonalType, typename CoeffVectorType, typename WorkSpaceType>
   static EIGEN_DEVICE_FUNC void run(MatrixType& mat, DiagonalType& diag, SubDiagonalType& subdiag,
                                     CoeffVectorType& hCoeffs, WorkSpaceType& workspace, bool extractQ) {
@@ -443,13 +618,12 @@ struct tridiagonalization_inplace_selector {
  */
 template <typename MatrixType>
 struct tridiagonalization_inplace_selector<MatrixType, 3, false> {
-  typedef typename MatrixType::Scalar Scalar;
-  typedef typename MatrixType::RealScalar RealScalar;
+  using Scalar = typename MatrixType::Scalar;
+  using RealScalar = typename MatrixType::RealScalar;
 
   template <typename DiagonalType, typename SubDiagonalType, typename CoeffVectorType, typename WorkSpaceType>
   static EIGEN_DEVICE_FUNC void run(MatrixType& mat, DiagonalType& diag, SubDiagonalType& subdiag, CoeffVectorType&,
                                     WorkSpaceType&, bool extractQ) {
-    using std::sqrt;
     const RealScalar tol = (std::numeric_limits<RealScalar>::min)();
     diag[0] = mat(0, 0);
     RealScalar v1norm2 = numext::abs2(mat(2, 0));
@@ -460,7 +634,7 @@ struct tridiagonalization_inplace_selector<MatrixType, 3, false> {
       subdiag[1] = mat(2, 1);
       if (extractQ) mat.setIdentity();
     } else {
-      RealScalar beta = sqrt(numext::abs2(mat(1, 0)) + v1norm2);
+      RealScalar beta = numext::sqrt<RealScalar>(numext::abs2(mat(1, 0)) + v1norm2);
       RealScalar invBeta = RealScalar(1) / beta;
       Scalar m01 = mat(1, 0) * invBeta;
       Scalar m02 = mat(2, 0) * invBeta;
@@ -470,7 +644,7 @@ struct tridiagonalization_inplace_selector<MatrixType, 3, false> {
       subdiag[0] = beta;
       subdiag[1] = mat(2, 1) - m01 * q;
       if (extractQ) {
-        mat << 1, 0, 0, 0, m01, m02, 0, m02, -m01;
+        mat << Scalar(1), Scalar(0), Scalar(0), Scalar(0), m01, m02, Scalar(0), m02, -m01;
       }
     }
   }
@@ -481,7 +655,7 @@ struct tridiagonalization_inplace_selector<MatrixType, 3, false> {
  */
 template <typename MatrixType, bool IsComplex>
 struct tridiagonalization_inplace_selector<MatrixType, 1, IsComplex> {
-  typedef typename MatrixType::Scalar Scalar;
+  using Scalar = typename MatrixType::Scalar;
 
   template <typename DiagonalType, typename SubDiagonalType, typename CoeffVectorType, typename WorkSpaceType>
   static EIGEN_DEVICE_FUNC void run(MatrixType& mat, DiagonalType& diag, SubDiagonalType&, CoeffVectorType&,

@@ -6,10 +6,23 @@
 // This Source Code Form is subject to the terms of the Mozilla
 // Public License v. 2.0. If a copy of the MPL was not distributed
 // with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
+// SPDX-License-Identifier: MPL-2.0
+
+// Include <ranges> before main.h because main.h redefines min/max as
+// error macros, which conflicts with std::ranges internals.
+#if __cplusplus >= 202002L
+#include <ranges>
+#include <concepts>
+#endif
 
 #include "main.h"
+#include "random_for_arithmetic.h"
 #include <iterator>
 #include <numeric>
+
+#if __cplusplus >= 202002L && defined(__cpp_lib_ranges) && __cpp_lib_ranges >= 201911L
+#define EIGEN_TEST_CXX20_RANGES 1
+#endif
 
 template <class Iterator>
 std::reverse_iterator<Iterator> make_reverse_iterator(Iterator i) {
@@ -17,6 +30,17 @@ std::reverse_iterator<Iterator> make_reverse_iterator(Iterator i) {
 }
 
 using std::is_sorted;
+
+template <typename VectorwiseType>
+void check_reverse_subscript(VectorwiseType xpr) {
+  const Index size = xpr.end() - xpr.begin();
+  for (Index i = 0; i < size; ++i) {
+    VERIFY_IS_EQUAL(xpr.rbegin()[i], xpr.begin()[size - 1 - i]);
+    VERIFY_IS_EQUAL(xpr.crbegin()[i], xpr.cbegin()[size - 1 - i]);
+    VERIFY_IS_EQUAL((xpr.rend() - 1)[-i], xpr.begin()[i]);
+    VERIFY_IS_EQUAL((xpr.crend() - 1)[-i], xpr.cbegin()[i]);
+  }
+}
 
 template <typename XprType>
 bool is_pointer_based_stl_iterator(const internal::pointer_based_stl_iterator<XprType>&) {
@@ -102,17 +126,151 @@ void check_begin_end_for_loop(Xpr xpr) {
   }
 }
 
+template <typename Iterator, typename OtherIterator>
+void check_iterator_order(Iterator first, OtherIterator otherFirst, Index size) {
+  for (Index i = 0; i <= size; ++i) {
+    for (Index j = 0; j <= size; ++j) {
+      const auto a = first + i;
+      const auto b = otherFirst + j;
+      VERIFY_IS_EQUAL(a - b, i - j);
+      VERIFY_IS_EQUAL(a == b, i == j);
+      VERIFY_IS_EQUAL(a != b, i != j);
+      VERIFY_IS_EQUAL(a < b, i < j);
+      VERIFY_IS_EQUAL(a <= b, i <= j);
+      VERIFY_IS_EQUAL(a > b, i > j);
+      VERIFY_IS_EQUAL(a >= b, i >= j);
+    }
+  }
+}
+
+template <int Stride, int Options>
+void test_strided_iterator_order(Index stride) {
+  using VectorType = Matrix<int, Dynamic, 1>;
+  using MappedVector = Matrix<int, Options == RowMajor ? 1 : Dynamic, Options == RowMajor ? Dynamic : 1, Options>;
+  VectorType storage = VectorType::Random(3 * numext::abs(stride) + 1);
+  Map<MappedVector, Unaligned, InnerStride<Stride>> map(storage.data() + (stride < 0 ? storage.size() - 1 : 0), 4,
+                                                        InnerStride<Stride>(stride));
+  const auto& constMap = map;
+  check_begin_end_for_loop(map);
+  check_iterator_order(map.begin(), map.begin(), map.size());
+  check_iterator_order(map.begin(), constMap.begin(), map.size());
+  check_iterator_order(constMap.begin(), map.begin(), map.size());
+  check_iterator_order(constMap.begin(), constMap.begin(), map.size());
+  const auto reverseBegin = make_reverse_iterator(map.end());
+  const auto constReverseBegin = make_reverse_iterator(constMap.end());
+  check_iterator_order(reverseBegin, reverseBegin, map.size());
+  check_iterator_order(reverseBegin, constReverseBegin, map.size());
+  check_iterator_order(constReverseBegin, reverseBegin, map.size());
+  check_iterator_order(constReverseBegin, constReverseBegin, map.size());
+  Map<const MappedVector, Unaligned, InnerStride<Stride>> readOnly(map.data(), map.size(), InnerStride<Stride>(stride));
+  check_iterator_order(readOnly.begin(), readOnly.end() - readOnly.size(), readOnly.size());
+
+  std::sort(map.begin(), map.end());
+  for (Index i = 1; i < map.size(); ++i) VERIFY(map[i - 1] <= map[i]);
+}
+
+template <typename Iterator, typename ConstIterator>
+void check_iterator_const_conversion(Iterator first, Iterator last, ConstIterator constFirst) {
+  STATIC_CHECK((std::is_convertible<Iterator, ConstIterator>::value));
+  STATIC_CHECK((std::is_assignable<ConstIterator&, Iterator>::value));
+  STATIC_CHECK((
+      std::is_same<decltype(std::declval<ConstIterator&>() = std::declval<const Iterator&>()), ConstIterator&>::value));
+  STATIC_CHECK((!std::is_convertible<ConstIterator, Iterator>::value));
+  STATIC_CHECK((!std::is_assignable<Iterator&, ConstIterator>::value));
+  const Index size = last - first;
+  for (Index i = 0; i <= size; ++i) {
+    const Iterator it = first + i;
+    ConstIterator converted = it;
+    ConstIterator assigned;
+    VERIFY(&(assigned = it) == &assigned);
+    VERIFY(converted == constFirst + i);
+    VERIFY(assigned == converted);
+    VERIFY(converted == it && it == converted);
+    VERIFY_IS_EQUAL(converted - first, i);
+    VERIFY_IS_EQUAL(last - converted, size - i);
+    if (i < size) {
+      VERIFY_IS_EQUAL(*converted, *it);
+      VERIFY_IS_EQUAL(*(assigned = it), *it);
+    }
+  }
+}
+
+template <typename VectorwiseType>
+void check_subvector_const_conversion(VectorwiseType xpr) {
+  check_iterator_const_conversion(xpr.begin(), xpr.end(), xpr.cbegin());
+  check_iterator_const_conversion(xpr.rbegin(), xpr.rend(), xpr.crbegin());
+}
+
+template <typename Xpr>
+void check_iterator_endpoints(Xpr& xpr) {
+  check_begin_end_for_loop(xpr);
+  check_iterator_const_conversion(xpr.begin(), xpr.end(), xpr.cbegin());
+  auto it = xpr.begin();
+  it += xpr.size();
+  VERIFY(it == xpr.end());
+  it -= xpr.size();
+  VERIFY(it == xpr.begin());
+  for (Index i = 0; i < xpr.size(); ++i) {
+    VERIFY(it.operator->() == &xpr[i]);
+    VERIFY_IS_EQUAL(*it++, xpr[i]);
+  }
+  VERIFY(it == xpr.end());
+  for (Index i = xpr.size(); i > 0; --i) {
+    VERIFY_IS_EQUAL(*--it, xpr[i - 1]);
+    VERIFY_IS_EQUAL(xpr.end()[-i], xpr[xpr.size() - i]);
+  }
+  VERIFY(it == xpr.begin());
+  auto reverse = make_reverse_iterator(xpr.end());
+  for (Index i = xpr.size(); i > 0; --i) VERIFY_IS_EQUAL(*reverse++, xpr[i - 1]);
+  VERIFY(reverse == make_reverse_iterator(xpr.begin()));
+}
+
+void test_strided_iterator_endpoints() {
+  // A singleton needs no padding, regardless of the stride. Forming its end pointer can overflow.
+  int value = 42;
+  const Index largeStride = (std::numeric_limits<Index>::max)();
+  for (Index stride : {Index(2), Index(-2), largeStride, -largeStride}) {
+    Map<VectorXi, Unaligned, InnerStride<Dynamic>> singleton(&value, 1, InnerStride<Dynamic>(stride));
+    check_iterator_endpoints(singleton);
+    Map<VectorXi, Unaligned, InnerStride<Dynamic>> empty(nullptr, 0, InnerStride<Dynamic>(stride));
+    check_iterator_endpoints(empty);
+  }
+
+  int storage[] = {0, 1, 2, 3, 4};
+  Map<VectorXi, Unaligned, InnerStride<2>> map(storage, 3);
+  check_iterator_endpoints(map);
+  for (int& coefficient : map) coefficient = 7;
+  for (Index i = 0; i < 5; ++i) VERIFY_IS_EQUAL(storage[i], i % 2 == 0 ? 7 : int(i));
+  Map<VectorXi, Unaligned, InnerStride<-2>> reverseMap(storage + 4, 3);
+  check_iterator_endpoints(reverseMap);
+
+  Matrix<int, 3, 4, ColMajor> columns = Matrix<int, 3, 4, ColMajor>::Random();
+  Matrix<int, 3, 4, RowMajor> rows = columns;
+  for (Index i = 0; i < columns.rows(); ++i) {
+    auto row = columns.row(i);
+    check_iterator_endpoints(row);
+    auto it = columns.row(i).begin();
+    VERIFY_IS_EQUAL(*it, columns(i, 0));
+  }
+  for (Index j = 0; j < rows.cols(); ++j) {
+    auto column = rows.col(j);
+    check_iterator_endpoints(column);
+    auto it = rows.col(j).begin();
+    VERIFY_IS_EQUAL(*it, rows(0, j));
+  }
+}
+
 template <typename Scalar, int Rows, int Cols>
 void test_stl_iterators(int rows = Rows, int cols = Cols) {
-  typedef Matrix<Scalar, Rows, 1> VectorType;
-  typedef Matrix<Scalar, 1, Cols> RowVectorType;
-  typedef Matrix<Scalar, Rows, Cols, ColMajor> ColMatrixType;
-  typedef Matrix<Scalar, Rows, Cols, RowMajor> RowMatrixType;
-  VectorType v = VectorType::Random(rows);
+  using VectorType = Matrix<Scalar, Rows, 1>;
+  using RowVectorType = Matrix<Scalar, 1, Cols>;
+  using ColMatrixType = Matrix<Scalar, Rows, Cols, ColMajor>;
+  using RowMatrixType = Matrix<Scalar, Rows, Cols, RowMajor>;
+  VectorType v = random_for_arithmetic<VectorType>(rows);
   const VectorType& cv(v);
-  ColMatrixType A = ColMatrixType::Random(rows, cols);
+  ColMatrixType A = random_for_arithmetic<ColMatrixType>(rows, cols);
   const ColMatrixType& cA(A);
-  RowMatrixType B = RowMatrixType::Random(rows, cols);
+  RowMatrixType B = random_for_arithmetic<RowMatrixType>(rows, cols);
   using Eigen::placeholders::last;
 
   Index i, j;
@@ -360,11 +518,11 @@ void test_stl_iterators(int rows = Rows, int cols = Cols) {
       typename ColMatrixType::ColXpr Acol = A.col(j);
       std::sort(Acol.begin(), Acol.end());
       VERIFY(is_sorted(Acol.cbegin(), Acol.cend()));
-      A.setRandom();
+      A = random_for_arithmetic<ColMatrixType>(A.rows(), A.cols());
 
       std::sort(A.col(j).begin(), A.col(j).end());
       VERIFY(is_sorted(A.col(j).cbegin(), A.col(j).cend()));
-      A.setRandom();
+      A = random_for_arithmetic<ColMatrixType>(A.rows(), A.cols());
     }
 
     // on a row of a rowmajor matrix -> pointer-based iterator and runtime increment
@@ -374,11 +532,11 @@ void test_stl_iterators(int rows = Rows, int cols = Cols) {
       VERIFY_IS_EQUAL(std::distance(Arow.begin(), Arow.end()), cols);
       std::sort(Arow.begin(), Arow.end());
       VERIFY(is_sorted(Arow.cbegin(), Arow.cend()));
-      A.setRandom();
+      A = random_for_arithmetic<ColMatrixType>(A.rows(), A.cols());
 
       std::sort(A.row(i).begin(), A.row(i).end());
       VERIFY(is_sorted(A.row(i).cbegin(), A.row(i).cend()));
-      A.setRandom();
+      A = random_for_arithmetic<ColMatrixType>(A.rows(), A.cols());
     }
 
     // with a generic iterator
@@ -386,12 +544,12 @@ void test_stl_iterators(int rows = Rows, int cols = Cols) {
       Reshaped<RowMatrixType, RowMatrixType::SizeAtCompileTime, 1> B1 = B.reshaped();
       std::sort(B1.begin(), B1.end());
       VERIFY(is_sorted(B1.cbegin(), B1.cend()));
-      B.setRandom();
+      B = random_for_arithmetic<RowMatrixType>(B.rows(), B.cols());
 
       // assertion because nested expressions are different
       // std::sort(B.reshaped().begin(),B.reshaped().end());
       // VERIFY(is_sorted(B.reshaped().cbegin(),B.reshaped().cend()));
-      // B.setRandom();
+      // B = random_for_arithmetic<RowMatrixType>(B.rows(), B.cols());
     }
   }
 
@@ -409,13 +567,13 @@ void test_stl_iterators(int rows = Rows, int cols = Cols) {
 
   // stress random access as required by std::nth_element
   if (rows >= 3) {
-    v.setRandom();
+    v = random_for_arithmetic<VectorType>(v.rows(), v.cols());
     VectorType v1 = v;
     std::sort(v1.begin(), v1.end());
     std::nth_element(v.begin(), v.begin() + rows / 2, v.end());
     VERIFY_IS_APPROX(v1(rows / 2), v(rows / 2));
 
-    v.setRandom();
+    v = random_for_arithmetic<VectorType>(v.rows(), v.cols());
     v1 = v;
     std::sort(v1.begin() + rows / 2, v1.end());
     std::nth_element(v.begin() + rows / 2, v.begin() + rows / 4, v.end());
@@ -446,7 +604,7 @@ void test_stl_iterators(int rows = Rows, int cols = Cols) {
       ++j;
     }
     VERIFY_IS_APPROX(A, B);
-    B.setRandom();
+    B = random_for_arithmetic<RowMatrixType>(B.rows(), B.cols());
 
     i = 0;
     for (auto r : A.rowwise()) {
@@ -460,10 +618,26 @@ void test_stl_iterators(int rows = Rows, int cols = Cols) {
     }
   }
 
+  check_subvector_const_conversion(A.rowwise());
+  check_subvector_const_conversion(A.colwise());
+  check_subvector_const_conversion(B.rowwise());
+  check_subvector_const_conversion(B.colwise());
+
+  check_reverse_subscript(A.rowwise());
+  check_reverse_subscript(A.colwise());
+  check_reverse_subscript(B.rowwise());
+  check_reverse_subscript(B.colwise());
+  const ColMatrixType& constA = A;
+  const RowMatrixType& constB = B;
+  check_reverse_subscript(constA.rowwise());
+  check_reverse_subscript(constA.colwise());
+  check_reverse_subscript(constB.rowwise());
+  check_reverse_subscript(constB.colwise());
+
   // check rows/cols iterators with STL algorithms
   {
-    RowVectorType row = RowVectorType::Random(cols);
-    VectorType col = VectorType::Random(rows);
+    RowVectorType row = random_for_arithmetic<RowVectorType>(cols);
+    VectorType col = random_for_arithmetic<VectorType>(rows);
     // Prevent overflows for integer types.
     if (Eigen::NumTraits<Scalar>::IsInteger) {
       Scalar kMaxVal = Scalar(1000);
@@ -493,7 +667,8 @@ void test_stl_iterators(int rows = Rows, int cols = Cols) {
     }));
 
     i = internal::random<Index>(0, A.rows() - 1);
-    A.setRandom();
+    A = random_for_arithmetic<ColMatrixType>(A.rows(), A.cols());
+    A.col(0).setOnes();  // every row is nonzero before row i is zeroed
     A.row(i).setZero();
     VERIFY_IS_EQUAL(
         std::find_if(A.rowwise().begin(), A.rowwise().end(),
@@ -507,7 +682,8 @@ void test_stl_iterators(int rows = Rows, int cols = Cols) {
         (A.rows() - 1) - i);
 
     j = internal::random<Index>(0, A.cols() - 1);
-    A.setRandom();
+    A = random_for_arithmetic<ColMatrixType>(A.rows(), A.cols());
+    A.row(0).setOnes();  // every column is nonzero before column j is zeroed
     A.col(j).setZero();
     VERIFY_IS_EQUAL(
         std::find_if(A.colwise().begin(), A.colwise().end(),
@@ -523,11 +699,10 @@ void test_stl_iterators(int rows = Rows, int cols = Cols) {
 
   {
     using VecOp = VectorwiseOp<ArrayXXi, 0>;
-    STATIC_CHECK((internal::is_same<VecOp::const_iterator, decltype(std::declval<const VecOp&>().cbegin())>::value));
-    STATIC_CHECK((internal::is_same<VecOp::const_iterator, decltype(std::declval<const VecOp&>().cend())>::value));
-    STATIC_CHECK(
-        (internal::is_same<VecOp::const_iterator, decltype(std::cbegin(std::declval<const VecOp&>()))>::value));
-    STATIC_CHECK((internal::is_same<VecOp::const_iterator, decltype(std::cend(std::declval<const VecOp&>()))>::value));
+    STATIC_CHECK((std::is_same<VecOp::const_iterator, decltype(std::declval<const VecOp&>().cbegin())>::value));
+    STATIC_CHECK((std::is_same<VecOp::const_iterator, decltype(std::declval<const VecOp&>().cend())>::value));
+    STATIC_CHECK((std::is_same<VecOp::const_iterator, decltype(std::cbegin(std::declval<const VecOp&>()))>::value));
+    STATIC_CHECK((std::is_same<VecOp::const_iterator, decltype(std::cend(std::declval<const VecOp&>()))>::value));
   }
 }
 
@@ -553,9 +728,9 @@ bool IsContainerType(long /* dummy */) {
 
 template <typename Scalar, int Rows, int Cols>
 void test_stl_container_detection(int rows = Rows, int cols = Cols) {
-  typedef Matrix<Scalar, Rows, 1> VectorType;
-  typedef Matrix<Scalar, Rows, Cols, ColMajor> ColMatrixType;
-  typedef Matrix<Scalar, Rows, Cols, RowMajor> RowMatrixType;
+  using VectorType = Matrix<Scalar, Rows, 1>;
+  using ColMatrixType = Matrix<Scalar, Rows, Cols, ColMajor>;
+  using RowMatrixType = Matrix<Scalar, Rows, Cols, RowMajor>;
 
   ColMatrixType A = ColMatrixType::Random(rows, cols);
   RowMatrixType B = RowMatrixType::Random(rows, cols);
@@ -579,7 +754,66 @@ void test_stl_container_detection(int rows = Rows, int cols = Cols) {
   VERIFY_IS_EQUAL(IsContainerType<RowMatrixType>(0), rows == 1 || cols == 1);
 }
 
+#ifdef EIGEN_TEST_CXX20_RANGES
+template <typename Scalar, int Rows, int Cols>
+void test_cxx20_ranges(int rows = Rows, int cols = Cols) {
+  using VectorType = Matrix<Scalar, Rows, 1>;
+  using DynVectorType = Matrix<Scalar, Dynamic, 1>;
+  using ColMatrixType = Matrix<Scalar, Rows, Cols, ColMajor>;
+
+  // Vectors with unit stride satisfy contiguous_range.
+  static_assert(std::contiguous_iterator<typename VectorType::iterator>);
+  static_assert(std::contiguous_iterator<typename VectorType::const_iterator>);
+  static_assert(std::ranges::contiguous_range<VectorType>);
+  static_assert(std::ranges::contiguous_range<const VectorType>);
+
+  // Dynamic vectors too.
+  static_assert(std::contiguous_iterator<typename DynVectorType::iterator>);
+  static_assert(std::ranges::contiguous_range<DynVectorType>);
+  static_assert(std::ranges::contiguous_range<const DynVectorType>);
+
+  using StridedVector = Map<DynVectorType, Unaligned, InnerStride<2>>;
+  using RuntimeStridedVector = Map<DynVectorType, Unaligned, InnerStride<Dynamic>>;
+  static_assert(std::random_access_iterator<typename StridedVector::iterator>);
+  static_assert(std::random_access_iterator<typename RuntimeStridedVector::iterator>);
+  static_assert(!std::contiguous_iterator<typename StridedVector::iterator>);
+  static_assert(!std::contiguous_iterator<typename RuntimeStridedVector::iterator>);
+
+  // Sized range.
+  static_assert(std::ranges::sized_range<VectorType>);
+  static_assert(std::ranges::sized_range<DynVectorType>);
+
+  // Runtime checks with std::ranges algorithms.
+  VectorType v = VectorType::Random(rows);
+  auto it = std::ranges::find(v, v(0));
+  VERIFY(it == v.begin());
+
+  // ranges::data returns the same pointer as data().
+  VERIFY(std::ranges::data(v) == v.data());
+  VERIFY(static_cast<Index>(std::ranges::size(v)) == v.size());
+  VERIFY(std::to_address(v.end()) == v.data() + v.size());
+  DynVectorType empty;
+  VERIFY(std::to_address(empty.begin()) == empty.data());
+  VERIFY(std::to_address(empty.end()) == empty.data());
+
+  // Column expression of a column-major matrix is contiguous.
+  ColMatrixType A = ColMatrixType::Random(rows, cols);
+  auto col = A.col(0);
+  VERIFY(std::ranges::data(col) == col.data());
+  auto col_it = std::ranges::find(col, col(0));
+  VERIFY(col_it == col.begin());
+}
+#endif
+
 EIGEN_DECLARE_TEST(stl_iterators) {
+  CALL_SUBTEST_1(test_strided_iterator_endpoints());
+  for (Index stride : {-2, -1, 1, 2}) {
+    CALL_SUBTEST_1((test_strided_iterator_order<Dynamic, ColMajor>(stride)));
+    CALL_SUBTEST_1((test_strided_iterator_order<Dynamic, RowMajor>(stride)));
+  }
+  CALL_SUBTEST_1((test_strided_iterator_order<-2, ColMajor>(-2)));
+  CALL_SUBTEST_1((test_strided_iterator_order<2, ColMajor>(2)));
+  CALL_SUBTEST_1((test_strided_iterator_order<1, ColMajor>(1)));
   for (int i = 0; i < g_repeat; i++) {
     CALL_SUBTEST_1((test_stl_iterators<double, 2, 3>()));
     CALL_SUBTEST_1((test_stl_iterators<float, 7, 5>()));
@@ -591,4 +825,10 @@ EIGEN_DECLARE_TEST(stl_iterators) {
 
   CALL_SUBTEST_1((test_stl_container_detection<float, 1, 1>()));
   CALL_SUBTEST_1((test_stl_container_detection<float, 5, 5>()));
+
+#ifdef EIGEN_TEST_CXX20_RANGES
+  CALL_SUBTEST_1((test_cxx20_ranges<double, 4, 3>()));
+  CALL_SUBTEST_1(
+      (test_cxx20_ranges<float, Dynamic, Dynamic>(internal::random<int>(5, 10), internal::random<int>(5, 10))));
+#endif
 }

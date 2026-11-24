@@ -40,10 +40,10 @@
  * Supported Operations:
  * ---------------------
  * UNARY OPERATIONS (vector → vector):
- * - Transcendental: exp(), sin(), cos(), sqrt(), log(), log10(), log2()
+ * - exp(), exp2(), sin(), cos(), sqrt(), cbrt(), abs(), log(), log10(), log2()
  *
  * BINARY OPERATIONS (vector op vector → vector):
- * - Arithmetic: +, *, pow()
+ * - +, pow(), max(), min()
  *
  * Template Specialization Mechanism:
  * -----------------------------------
@@ -53,7 +53,7 @@
  * 3. Dense2Dense assignment context with AOCL-compatible traits
  *
  * Dispatch conditions (all must be true):
- * - Source and destination have DirectAccessBit (contiguous memory)
+ * - Source and destination are contiguous arrays (direct access, unit inner stride, linear access)
  * - Compatible storage orders (both row-major or both column-major)
  * - Vector size ≥ EIGEN_AOCL_VML_THRESHOLD or Dynamic size
  * - Supported data type (currently double precision for VRDA)
@@ -110,7 +110,7 @@
  * Email: shbhaska@amd.com
  * Organization: Advanced Micro Devices, Inc.
  */
-
+// SPDX-License-Identifier: MPL-2.0
 
 #ifndef EIGEN_ASSIGN_AOCL_H
 #define EIGEN_ASSIGN_AOCL_H
@@ -118,24 +118,30 @@
 namespace Eigen {
 namespace internal {
 
+// The AOCL calls take one contiguous array per operand: unit inner stride and linear access, which a block of a
+// larger matrix or a map with an outer stride lacks.
+template <typename Xpr>
+struct aocl_is_contiguous
+    : bool_constant<(int(Xpr::Flags) & DirectAccessBit) && int(Xpr::InnerStrideAtCompileTime) == 1 &&
+                    (int(evaluator<Xpr>::Flags) & LinearAccessBit)> {};
+
 // Traits for unary operations.
-template <typename Dst, typename Src> class aocl_assign_traits {
-private:
+template <typename Dst, typename Src>
+class aocl_assign_traits {
+ private:
   enum {
-    DstHasDirectAccess = !!(Dst::Flags & DirectAccessBit),
-    SrcHasDirectAccess = !!(Src::Flags & DirectAccessBit),
+    DstIsContiguous = aocl_is_contiguous<Dst>::value,
+    SrcIsContiguous = aocl_is_contiguous<Src>::value,
     StorageOrdersAgree = (int(Dst::IsRowMajor) == int(Src::IsRowMajor)),
     InnerSize = Dst::IsVectorAtCompileTime   ? int(Dst::SizeAtCompileTime)
                 : (Dst::Flags & RowMajorBit) ? int(Dst::ColsAtCompileTime)
                                              : int(Dst::RowsAtCompileTime),
-    LargeEnough =
-        (InnerSize == Dynamic) || (InnerSize >= EIGEN_AOCL_VML_THRESHOLD)
+    LargeEnough = (InnerSize == Dynamic) || (InnerSize >= EIGEN_AOCL_VML_THRESHOLD)
   };
 
-public:
+ public:
   enum {
-    EnableAoclVML = DstHasDirectAccess && SrcHasDirectAccess &&
-                    StorageOrdersAgree && LargeEnough,
+    EnableAoclVML = DstIsContiguous && SrcIsContiguous && StorageOrdersAgree && LargeEnough,
     Traversal = LinearTraversal
   };
 };
@@ -143,75 +149,59 @@ public:
 // Traits for binary operations (e.g., add, pow).
 template <typename Dst, typename Lhs, typename Rhs>
 class aocl_assign_binary_traits {
-private:
+ private:
   enum {
-    DstHasDirectAccess = !!(Dst::Flags & DirectAccessBit),
-    LhsHasDirectAccess = !!(Lhs::Flags & DirectAccessBit),
-    RhsHasDirectAccess = !!(Rhs::Flags & DirectAccessBit),
-    StorageOrdersAgree = (int(Dst::IsRowMajor) == int(Lhs::IsRowMajor)) &&
-                         (int(Dst::IsRowMajor) == int(Rhs::IsRowMajor)),
+    DstIsContiguous = aocl_is_contiguous<Dst>::value,
+    LhsIsContiguous = aocl_is_contiguous<Lhs>::value,
+    RhsIsContiguous = aocl_is_contiguous<Rhs>::value,
+    StorageOrdersAgree =
+        (int(Dst::IsRowMajor) == int(Lhs::IsRowMajor)) && (int(Dst::IsRowMajor) == int(Rhs::IsRowMajor)),
     InnerSize = Dst::IsVectorAtCompileTime   ? int(Dst::SizeAtCompileTime)
                 : (Dst::Flags & RowMajorBit) ? int(Dst::ColsAtCompileTime)
                                              : int(Dst::RowsAtCompileTime),
-    LargeEnough =
-        (InnerSize == Dynamic) || (InnerSize >= EIGEN_AOCL_VML_THRESHOLD)
+    LargeEnough = (InnerSize == Dynamic) || (InnerSize >= EIGEN_AOCL_VML_THRESHOLD)
   };
 
-public:
-  enum {
-    EnableAoclVML = DstHasDirectAccess && LhsHasDirectAccess &&
-                    RhsHasDirectAccess && StorageOrdersAgree && LargeEnough
-  };
+ public:
+  enum { EnableAoclVML = DstIsContiguous && LhsIsContiguous && RhsIsContiguous && StorageOrdersAgree && LargeEnough };
 };
 
 // Unary operation dispatch for float (scalar fallback).
-#define EIGEN_AOCL_VML_UNARY_CALL_FLOAT(EIGENOP)                               \
-  template <typename DstXprType, typename SrcXprNested>                        \
-  struct Assignment<                                                           \
-      DstXprType, CwiseUnaryOp<scalar_##EIGENOP##_op<float>, SrcXprNested>,    \
-      assign_op<float, float>, Dense2Dense,                                    \
-      std::enable_if_t<                                                        \
-          aocl_assign_traits<DstXprType, SrcXprNested>::EnableAoclVML>> {      \
-    typedef CwiseUnaryOp<scalar_##EIGENOP##_op<float>, SrcXprNested>           \
-        SrcXprType;                                                            \
-    static void run(DstXprType &dst, const SrcXprType &src,                    \
-                    const assign_op<float, float> &) {                         \
-      eigen_assert(dst.rows() == src.rows() && dst.cols() == src.cols());      \
-      Eigen::Index n = dst.size();                                             \
-      if (n <= 0)                                                              \
-        return;                                                                \
-      const float *input =                                                     \
-          reinterpret_cast<const float *>(src.nestedExpression().data());      \
-      float *output = reinterpret_cast<float *>(dst.data());                   \
-      for (Eigen::Index i = 0; i < n; ++i) {                                   \
-        output[i] = std::EIGENOP(input[i]);                                    \
-      }                                                                        \
-    }                                                                          \
+#define EIGEN_AOCL_VML_UNARY_CALL_FLOAT(EIGENOP)                                                                   \
+  template <typename DstXprType, typename SrcXprNested>                                                            \
+  struct Assignment<DstXprType, CwiseUnaryOp<scalar_##EIGENOP##_op<float>, SrcXprNested>, assign_op<float, float>, \
+                    Dense2Dense, std::enable_if_t<aocl_assign_traits<DstXprType, SrcXprNested>::EnableAoclVML>> {  \
+    using SrcXprType = CwiseUnaryOp<scalar_##EIGENOP##_op<float>, SrcXprNested>;                                   \
+    static void run(DstXprType &dst, const SrcXprType &src, const assign_op<float, float> &func) {                 \
+      resize_if_allowed(dst, src, func);                                                                           \
+      eigen_assert(dst.rows() == src.rows() && dst.cols() == src.cols());                                          \
+      Eigen::Index n = dst.size();                                                                                 \
+      if (n <= 0) return;                                                                                          \
+      const float *input = reinterpret_cast<const float *>(src.nestedExpression().data());                         \
+      float *output = reinterpret_cast<float *>(dst.data());                                                       \
+      for (Eigen::Index i = 0; i < n; ++i) {                                                                       \
+        output[i] = std::EIGENOP(input[i]);                                                                        \
+      }                                                                                                            \
+    }                                                                                                              \
   };
 
 // Unary operation dispatch for double (AOCL vectorized).
-#define EIGEN_AOCL_VML_UNARY_CALL_DOUBLE(EIGENOP, AOCLOP)                      \
-  template <typename DstXprType, typename SrcXprNested>                        \
-  struct Assignment<                                                           \
-      DstXprType, CwiseUnaryOp<scalar_##EIGENOP##_op<double>, SrcXprNested>,   \
-      assign_op<double, double>, Dense2Dense,                                  \
-      std::enable_if_t<                                                        \
-          aocl_assign_traits<DstXprType, SrcXprNested>::EnableAoclVML>> {      \
-    typedef CwiseUnaryOp<scalar_##EIGENOP##_op<double>, SrcXprNested>          \
-        SrcXprType;                                                            \
-    static void run(DstXprType &dst, const SrcXprType &src,                    \
-                    const assign_op<double, double> &) {                       \
-      eigen_assert(dst.rows() == src.rows() && dst.cols() == src.cols());      \
-      Eigen::Index n = dst.size();                                             \
-      eigen_assert(n <= INT_MAX && "AOCL does not support arrays larger than INT_MAX"); \
-      if (n <= 0)                                                              \
-        return;                                                                \
-      const double *input =                                                    \
-          reinterpret_cast<const double *>(src.nestedExpression().data());     \
-      double *output = reinterpret_cast<double *>(dst.data());                 \
-      int aocl_n = internal::convert_index<int>(n);                            \
-      AOCLOP(aocl_n, const_cast<double *>(input), output);                     \
-    }                                                                          \
+#define EIGEN_AOCL_VML_UNARY_CALL_DOUBLE(EIGENOP, AOCLOP)                                                             \
+  template <typename DstXprType, typename SrcXprNested>                                                               \
+  struct Assignment<DstXprType, CwiseUnaryOp<scalar_##EIGENOP##_op<double>, SrcXprNested>, assign_op<double, double>, \
+                    Dense2Dense, std::enable_if_t<aocl_assign_traits<DstXprType, SrcXprNested>::EnableAoclVML>> {     \
+    using SrcXprType = CwiseUnaryOp<scalar_##EIGENOP##_op<double>, SrcXprNested>;                                     \
+    static void run(DstXprType &dst, const SrcXprType &src, const assign_op<double, double> &func) {                  \
+      resize_if_allowed(dst, src, func);                                                                              \
+      eigen_assert(dst.rows() == src.rows() && dst.cols() == src.cols());                                             \
+      Eigen::Index n = dst.size();                                                                                    \
+      eigen_assert(n <= INT_MAX && "AOCL does not support arrays larger than INT_MAX");                               \
+      if (n <= 0) return;                                                                                             \
+      const double *input = reinterpret_cast<const double *>(src.nestedExpression().data());                          \
+      double *output = reinterpret_cast<double *>(dst.data());                                                        \
+      int aocl_n = internal::convert_index<int>(n);                                                                   \
+      AOCLOP(aocl_n, const_cast<double *>(input), output);                                                            \
+    }                                                                                                                 \
   };
 
 // Instantiate unary calls for float (scalar).
@@ -230,72 +220,60 @@ EIGEN_AOCL_VML_UNARY_CALL_DOUBLE(log10, amd_vrda_log10)
 EIGEN_AOCL_VML_UNARY_CALL_DOUBLE(log2, amd_vrda_log2)
 
 // Binary operation dispatch for float (scalar fallback).
-#define EIGEN_AOCL_VML_BINARY_CALL_FLOAT(EIGENOP, STDFUNC)                     \
-  template <typename DstXprType, typename LhsXprNested, typename RhsXprNested> \
-  struct Assignment<                                                           \
-      DstXprType,                                                              \
-      CwiseBinaryOp<scalar_##EIGENOP##_op<float, float>, LhsXprNested,         \
-                    RhsXprNested>,                                             \
-      assign_op<float, float>, Dense2Dense,                                    \
-      std::enable_if_t<aocl_assign_binary_traits<                              \
-          DstXprType, LhsXprNested, RhsXprNested>::EnableAoclVML>> {           \
-    typedef CwiseBinaryOp<scalar_##EIGENOP##_op<float, float>, LhsXprNested,   \
-                          RhsXprNested>                                        \
-        SrcXprType;                                                            \
-    static void run(DstXprType &dst, const SrcXprType &src,                    \
-                    const assign_op<float, float> &) {                         \
-      eigen_assert(dst.rows() == src.rows() && dst.cols() == src.cols());      \
-      Eigen::Index n = dst.size();                                             \
-      if (n <= 0)                                                              \
-        return;                                                                \
-      const float *lhs = reinterpret_cast<const float *>(src.lhs().data());    \
-      const float *rhs = reinterpret_cast<const float *>(src.rhs().data());    \
-      float *output = reinterpret_cast<float *>(dst.data());                   \
-      for (Eigen::Index i = 0; i < n; ++i) {                                   \
-        output[i] = STDFUNC(lhs[i], rhs[i]);                                   \
-      }                                                                        \
-    }                                                                          \
+#define EIGEN_AOCL_VML_BINARY_CALL_FLOAT(EIGENOP, STDFUNC)                                                  \
+  template <typename DstXprType, typename LhsXprNested, typename RhsXprNested>                              \
+  struct Assignment<                                                                                        \
+      DstXprType, CwiseBinaryOp<scalar_##EIGENOP##_op<float, float>, LhsXprNested, RhsXprNested>,           \
+      assign_op<float, float>, Dense2Dense,                                                                 \
+      std::enable_if_t<aocl_assign_binary_traits<DstXprType, LhsXprNested, RhsXprNested>::EnableAoclVML>> { \
+    using SrcXprType = CwiseBinaryOp<scalar_##EIGENOP##_op<float, float>, LhsXprNested, RhsXprNested>;      \
+    static void run(DstXprType &dst, const SrcXprType &src, const assign_op<float, float> &func) {          \
+      resize_if_allowed(dst, src, func);                                                                    \
+      eigen_assert(dst.rows() == src.rows() && dst.cols() == src.cols());                                   \
+      Eigen::Index n = dst.size();                                                                          \
+      if (n <= 0) return;                                                                                   \
+      const float *lhs = reinterpret_cast<const float *>(src.lhs().data());                                 \
+      const float *rhs = reinterpret_cast<const float *>(src.rhs().data());                                 \
+      float *output = reinterpret_cast<float *>(dst.data());                                                \
+      for (Eigen::Index i = 0; i < n; ++i) {                                                                \
+        output[i] = STDFUNC(lhs[i], rhs[i]);                                                                \
+      }                                                                                                     \
+    }                                                                                                       \
   };
 
 // Binary operation dispatch for double (AOCL vectorized).
-#define EIGEN_AOCL_VML_BINARY_CALL_DOUBLE(EIGENOP, AOCLOP)                     \
-  template <typename DstXprType, typename LhsXprNested, typename RhsXprNested> \
-  struct Assignment<                                                           \
-      DstXprType,                                                              \
-      CwiseBinaryOp<scalar_##EIGENOP##_op<double, double>, LhsXprNested,       \
-                    RhsXprNested>,                                             \
-      assign_op<double, double>, Dense2Dense,                                  \
-      std::enable_if_t<aocl_assign_binary_traits<                              \
-          DstXprType, LhsXprNested, RhsXprNested>::EnableAoclVML>> {           \
-    typedef CwiseBinaryOp<scalar_##EIGENOP##_op<double, double>, LhsXprNested, \
-                          RhsXprNested>                                        \
-        SrcXprType;                                                            \
-    static void run(DstXprType &dst, const SrcXprType &src,                    \
-                    const assign_op<double, double> &) {                       \
-      eigen_assert(dst.rows() == src.rows() && dst.cols() == src.cols());      \
-      Eigen::Index n = dst.size();                                             \
-      eigen_assert(n <= INT_MAX && "AOCL does not support arrays larger than INT_MAX"); \
-      if (n <= 0)                                                              \
-        return;                                                                \
-      const double *lhs = reinterpret_cast<const double *>(src.lhs().data());  \
-      const double *rhs = reinterpret_cast<const double *>(src.rhs().data());  \
-      double *output = reinterpret_cast<double *>(dst.data());                 \
-      int aocl_n = internal::convert_index<int>(n);                            \
-      AOCLOP(aocl_n, const_cast<double *>(lhs), const_cast<double *>(rhs), output); \
-    }                                                                          \
+#define EIGEN_AOCL_VML_BINARY_CALL_DOUBLE(EIGENOP, AOCLOP)                                                  \
+  template <typename DstXprType, typename LhsXprNested, typename RhsXprNested>                              \
+  struct Assignment<                                                                                        \
+      DstXprType, CwiseBinaryOp<scalar_##EIGENOP##_op<double, double>, LhsXprNested, RhsXprNested>,         \
+      assign_op<double, double>, Dense2Dense,                                                               \
+      std::enable_if_t<aocl_assign_binary_traits<DstXprType, LhsXprNested, RhsXprNested>::EnableAoclVML>> { \
+    using SrcXprType = CwiseBinaryOp<scalar_##EIGENOP##_op<double, double>, LhsXprNested, RhsXprNested>;    \
+    static void run(DstXprType &dst, const SrcXprType &src, const assign_op<double, double> &func) {        \
+      resize_if_allowed(dst, src, func);                                                                    \
+      eigen_assert(dst.rows() == src.rows() && dst.cols() == src.cols());                                   \
+      Eigen::Index n = dst.size();                                                                          \
+      eigen_assert(n <= INT_MAX && "AOCL does not support arrays larger than INT_MAX");                     \
+      if (n <= 0) return;                                                                                   \
+      const double *lhs = reinterpret_cast<const double *>(src.lhs().data());                               \
+      const double *rhs = reinterpret_cast<const double *>(src.rhs().data());                               \
+      double *output = reinterpret_cast<double *>(dst.data());                                              \
+      int aocl_n = internal::convert_index<int>(n);                                                         \
+      AOCLOP(aocl_n, const_cast<double *>(lhs), const_cast<double *>(rhs), output);                         \
+    }                                                                                                       \
   };
 
 // Instantiate binary calls for float (scalar).
-// EIGEN_AOCL_VML_BINARY_CALL_FLOAT(sum, std::plus<float>)  // Using
-// scalar_sum_op for addition EIGEN_AOCL_VML_BINARY_CALL_FLOAT(pow, std::pow)
+// EIGEN_AOCL_VML_BINARY_CALL_FLOAT(sum, std::plus<float>)  // Using scalar_sum_op for addition
+// EIGEN_AOCL_VML_BINARY_CALL_FLOAT(pow, std::pow)
 
 // Instantiate binary calls for double (AOCL vectorized).
-EIGEN_AOCL_VML_BINARY_CALL_DOUBLE(sum, amd_vrda_add) // Using scalar_sum_op for addition
+EIGEN_AOCL_VML_BINARY_CALL_DOUBLE(sum, amd_vrda_add)  // Using scalar_sum_op for addition
 EIGEN_AOCL_VML_BINARY_CALL_DOUBLE(pow, amd_vrda_pow)
 EIGEN_AOCL_VML_BINARY_CALL_DOUBLE(max, amd_vrda_fmax)
 EIGEN_AOCL_VML_BINARY_CALL_DOUBLE(min, amd_vrda_fmin)
 
-} // namespace internal
-} // namespace Eigen
+}  // namespace internal
+}  // namespace Eigen
 
-#endif // EIGEN_ASSIGN_AOCL_H
+#endif  // EIGEN_ASSIGN_AOCL_H

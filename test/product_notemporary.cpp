@@ -6,11 +6,14 @@
 // This Source Code Form is subject to the terms of the Mozilla
 // Public License v. 2.0. If a copy of the MPL was not distributed
 // with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
+// SPDX-License-Identifier: MPL-2.0
 
 #define TEST_ENABLE_TEMPORARY_TRACKING
 #define TEST_IGNORE_STACK_ALLOCATED_TEMPORARY
+#define EIGEN_TEST_ANNOYING_SCALAR_DONT_THROW
 
 #include "main.h"
+#include "AnnoyingScalar.h"
 
 template <typename Dst, typename Lhs, typename Rhs>
 void check_scalar_multiple3(Dst& dst, const Lhs& A, const Rhs& B) {
@@ -44,12 +47,12 @@ template <typename MatrixType>
 void product_notemporary(const MatrixType& m) {
   /* This test checks the number of temporaries created
    * during the evaluation of a complex expression */
-  typedef typename MatrixType::Scalar Scalar;
-  typedef typename MatrixType::RealScalar RealScalar;
-  typedef Matrix<Scalar, 1, Dynamic> RowVectorType;
-  typedef Matrix<Scalar, Dynamic, 1> ColVectorType;
-  typedef Matrix<Scalar, Dynamic, Dynamic, ColMajor> ColMajorMatrixType;
-  typedef Matrix<Scalar, Dynamic, Dynamic, RowMajor> RowMajorMatrixType;
+  using Scalar = typename MatrixType::Scalar;
+  using RealScalar = typename MatrixType::RealScalar;
+  using RowVectorType = Matrix<Scalar, 1, Dynamic>;
+  using ColVectorType = Matrix<Scalar, Dynamic, 1>;
+  using ColMajorMatrixType = Matrix<Scalar, Dynamic, Dynamic, ColMajor>;
+  using RowMajorMatrixType = Matrix<Scalar, Dynamic, Dynamic, RowMajor>;
 
   Index rows = m.rows();
   Index cols = m.cols();
@@ -108,6 +111,11 @@ void product_notemporary(const MatrixType& m) {
 
   VERIFY_EVALUATION_COUNT(m3.template triangularView<Upper>() = (m1 * m2.adjoint()), 0);
   VERIFY_EVALUATION_COUNT(m3.template triangularView<Upper>() -= (m1 * m2.adjoint()), 0);
+  VERIFY_EVALUATION_COUNT(m3.template selfadjointView<Lower>() = m1.template triangularView<Upper>(), 0);
+  VERIFY_EVALUATION_COUNT(m3.template selfadjointView<Upper>() = m1.template selfadjointView<Lower>(), 0);
+  VERIFY_EVALUATION_COUNT(m3.template selfadjointView<Lower>() =
+                              s1 * m1.template selfadjointView<Lower>() + m2.template selfadjointView<Lower>(),
+                          0);
 
   // NOTE this is because the blas_traits require innerstride==1 to avoid a temporary, but that doesn't seem to be
   // actually needed for the triangular products
@@ -208,17 +216,48 @@ void product_notemporary(const MatrixType& m) {
   }
 }
 
+template <int Size>
+void triangular_product_with_initialized_scalar() {
+  constexpr Index kSize = 6;
+  using MatrixType = Matrix<AnnoyingScalar, Size, Size, RowMajor>;
+  using RhsStorage = Matrix<AnnoyingScalar, Size, 2, RowMajor>;
+  using ResultType = Matrix<AnnoyingScalar, Size, 1>;
+
+  const int initial_instances = AnnoyingScalar::instances;
+  {
+    MatrixType lhs(kSize, kSize);
+    RhsStorage rhs_storage(kSize, 2);
+    ResultType result(kSize);
+    lhs.setOnes();
+    rhs_storage.setZero();
+    for (Index i = 0; i < kSize; ++i) rhs_storage(i, 0) = AnnoyingScalar(i + 1);
+
+    auto rhs = rhs_storage.col(0);
+    STATIC_CHECK((decltype(rhs)::InnerStrideAtCompileTime != 1));
+    result.noalias() = lhs.template triangularView<Upper>() * rhs;
+
+    for (Index i = 0; i < kSize; ++i) {
+      const int expected = int((i + 1 + kSize) * (kSize - i) / 2);
+      VERIFY_IS_EQUAL(result(i), AnnoyingScalar(expected));
+    }
+  }
+  VERIFY_IS_EQUAL(AnnoyingScalar::instances, initial_instances);
+}
+
 EIGEN_DECLARE_TEST(product_notemporary) {
+  CALL_SUBTEST_5((triangular_product_with_initialized_scalar<6>()));
+  CALL_SUBTEST_5((triangular_product_with_initialized_scalar<Dynamic>()));
+
   int s;
   for (int i = 0; i < g_repeat; i++) {
     s = internal::random<int>(16, EIGEN_TEST_MAX_SIZE);
     CALL_SUBTEST_1(product_notemporary(MatrixXf(s, s)));
     CALL_SUBTEST_2(product_notemporary(MatrixXd(s, s)));
-    TEST_SET_BUT_UNUSED_VARIABLE(s)
+    TEST_SET_BUT_UNUSED_VARIABLE(s);
 
     s = internal::random<int>(16, EIGEN_TEST_MAX_SIZE / 2);
     CALL_SUBTEST_3(product_notemporary(MatrixXcf(s, s)));
     CALL_SUBTEST_4(product_notemporary(MatrixXcd(s, s)));
-    TEST_SET_BUT_UNUSED_VARIABLE(s)
+    TEST_SET_BUT_UNUSED_VARIABLE(s);
   }
 }

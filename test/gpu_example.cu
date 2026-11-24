@@ -6,6 +6,7 @@
 // This Source Code Form is subject to the terms of the Mozilla
 // Public License v. 2.0. If a copy of the MPL was not distributed
 // with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
+// SPDX-License-Identifier: MPL-2.0
 
 // The following is an example GPU test.
 
@@ -68,7 +69,7 @@ struct MultiplyKernel {
 };
 
 template <typename T1, typename T2, typename T3>
-void test_multiply(const T1& type1, const T2& type2, const T3& type3) {
+void test_multiply(const T1& type1, const T2& type2, const T3& /*type3*/) {
   const T1 A = T1::Random(type1.rows(), type1.cols());
   const T2 B = T2::Random(type2.rows(), type2.cols());
   T3 C;

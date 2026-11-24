@@ -6,6 +6,7 @@
 // This Source Code Form is subject to the terms of the Mozilla
 // Public License v. 2.0. If a copy of the MPL was not distributed
 // with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
+// SPDX-License-Identifier: MPL-2.0
 
 #ifndef EIGEN_SOLVERBASE_H
 #define EIGEN_SOLVERBASE_H
@@ -27,7 +28,7 @@ struct solve_assertion {
 
 template <typename Derived>
 struct solve_assertion<Transpose<Derived>> {
-  typedef Transpose<Derived> type;
+  using type = Transpose<Derived>;
 
   template <bool Transpose_, typename Rhs>
   static void run(const type& transpose, const Rhs& b) {
@@ -37,7 +38,7 @@ struct solve_assertion<Transpose<Derived>> {
 
 template <typename Scalar, typename Derived>
 struct solve_assertion<CwiseUnaryOp<Eigen::internal::scalar_conjugate_op<Scalar>, const Transpose<Derived>>> {
-  typedef CwiseUnaryOp<Eigen::internal::scalar_conjugate_op<Scalar>, const Transpose<Derived>> type;
+  using type = CwiseUnaryOp<Eigen::internal::scalar_conjugate_op<Scalar>, const Transpose<Derived>>;
 
   template <bool Transpose_, typename Rhs>
   static void run(const type& adjoint, const Rhs& b) {
@@ -71,9 +72,9 @@ struct solve_assertion<CwiseUnaryOp<Eigen::internal::scalar_conjugate_op<Scalar>
 template <typename Derived>
 class SolverBase : public EigenBase<Derived> {
  public:
-  typedef EigenBase<Derived> Base;
-  typedef typename internal::traits<Derived>::Scalar Scalar;
-  typedef Scalar CoeffReturnType;
+  using Base = EigenBase<Derived>;
+  using Scalar = typename internal::traits<Derived>::Scalar;
+  using CoeffReturnType = Scalar;
 
   template <typename Derived_>
   friend struct internal::solve_assertion;
@@ -89,7 +90,7 @@ class SolverBase : public EigenBase<Derived> {
   enum {
     RowsAtCompileTime = internal::traits<Derived>::RowsAtCompileTime,
     ColsAtCompileTime = internal::traits<Derived>::ColsAtCompileTime,
-    SizeAtCompileTime = (internal::size_of_xpr_at_compile_time<Derived>::ret),
+    SizeAtCompileTime = (internal::size_of_xpr_at_compile_time<Derived>::value),
     MaxRowsAtCompileTime = internal::traits<Derived>::MaxRowsAtCompileTime,
     MaxColsAtCompileTime = internal::traits<Derived>::MaxColsAtCompileTime,
     MaxSizeAtCompileTime = internal::size_at_compile_time(internal::traits<Derived>::MaxRowsAtCompileTime,
@@ -102,22 +103,20 @@ class SolverBase : public EigenBase<Derived> {
   };
 
   /** Default constructor */
-  SolverBase() {}
-
-  ~SolverBase() {}
+  SolverBase() = default;
 
   using Base::derived;
 
   /** \returns an expression of the solution x of \f$ A x = b \f$ using the current decomposition of A.
    */
   template <typename Rhs>
-  inline const Solve<Derived, Rhs> solve(const MatrixBase<Rhs>& b) const {
+  inline Solve<Derived, Rhs> solve(const MatrixBase<Rhs>& b) const {
     internal::solve_assertion<internal::remove_all_t<Derived>>::template run<false>(derived(), b);
     return Solve<Derived, Rhs>(derived(), b.derived());
   }
 
   /** \internal the return type of transpose() */
-  typedef Transpose<const Derived> ConstTransposeReturnType;
+  using ConstTransposeReturnType = Transpose<const Derived>;
   /** \returns an expression of the transposed of the factored matrix.
    *
    * A typical usage is to solve for the transposed problem A^T x = b:
@@ -128,10 +127,10 @@ class SolverBase : public EigenBase<Derived> {
   inline const ConstTransposeReturnType transpose() const { return ConstTransposeReturnType(derived()); }
 
   /** \internal the return type of adjoint() */
-  typedef std::conditional_t<NumTraits<Scalar>::IsComplex,
-                             CwiseUnaryOp<internal::scalar_conjugate_op<Scalar>, const ConstTransposeReturnType>,
-                             const ConstTransposeReturnType>
-      AdjointReturnType;
+  using AdjointReturnType =
+      std::conditional_t<NumTraits<Scalar>::IsComplex,
+                         CwiseUnaryOp<internal::scalar_conjugate_op<Scalar>, const ConstTransposeReturnType>,
+                         const ConstTransposeReturnType>;
   /** \returns an expression of the adjoint of the factored matrix
    *
    * A typical usage is to solve for the adjoint problem A' x = b:
@@ -146,10 +145,9 @@ class SolverBase : public EigenBase<Derived> {
  protected:
   template <bool Transpose_, typename Rhs>
   void _check_solve_assertion(const Rhs& b) const {
-    EIGEN_ONLY_USED_FOR_DEBUG(b);
     eigen_assert(derived().m_isInitialized && "Solver is not initialized.");
-    eigen_assert((Transpose_ ? derived().cols() : derived().rows()) == b.rows() &&
-                 "SolverBase::solve(): invalid number of rows of the right hand side matrix b");
+    EIGEN_INTERNAL_ASSERT_SOLVER_RHS_MSG(derived(), b, Transpose_,
+                                         "SolverBase::solve(): invalid number of rows of the right hand side matrix b");
   }
 };
 
@@ -157,7 +155,7 @@ namespace internal {
 
 template <typename Derived>
 struct generic_xpr_base<Derived, MatrixXpr, SolverStorage> {
-  typedef SolverBase<Derived> type;
+  using type = SolverBase<Derived>;
 };
 
 }  // end namespace internal

@@ -1,12 +1,14 @@
 // #define EIGEN_POWER_USE_PREFETCH  // Use prefetching in gemm routines
+// SPDX-FileCopyrightText: The Eigen Authors
+// SPDX-License-Identifier: MPL-2.0
+
+#ifndef EIGEN_MATRIX_PRODUCT_COMMON_ALTIVEC_H
+#define EIGEN_MATRIX_PRODUCT_COMMON_ALTIVEC_H
+
 #ifdef EIGEN_POWER_USE_PREFETCH
 #define EIGEN_POWER_PREFETCH(p) prefetch(p)
 #else
 #define EIGEN_POWER_PREFETCH(p)
-#endif
-
-#if defined(_ARCH_PWR9) || defined(EIGEN_ALTIVEC_MMA_DYNAMIC_DISPATCH)
-#define USE_PARTIAL_PACKETS
 #endif
 
 // IWYU pragma: private
@@ -15,6 +17,9 @@
 namespace Eigen {
 
 namespace internal {
+
+template <typename Mapper>
+using mapper_index_t = decltype(std::declval<const Mapper&>().stride());
 
 template <typename Scalar, typename Packet, typename DataMapper, const Index accRows, const Index accCols>
 EIGEN_ALWAYS_INLINE void gemm_extra_row(const DataMapper& res, const Scalar* lhs_base, const Scalar* rhs_base,
@@ -49,24 +54,24 @@ template <typename DataMapper>
 EIGEN_ALWAYS_INLINE void convertArrayBF16toF32(float* result, Index cols, Index rows, const DataMapper& src);
 
 template <const Index size, bool non_unit_stride, Index delta>
-EIGEN_ALWAYS_INLINE void storeBF16fromResult(bfloat16* dst, Packet8bf data, Index resInc, Index extra = 0);
+EIGEN_ALWAYS_INLINE void storeBF16fromResult(bfloat16* dst, const Packet8bf& data, Index resInc, Index extra = 0);
 
 template <bool non_unit_stride = false>
 EIGEN_ALWAYS_INLINE void convertArrayPointerBF16toF32(float* result, Index cols, Index rows, bfloat16* src,
                                                       Index resInc = 1);
 
 template <bool rhsExtraCols, bool lhsExtraRows>
-EIGEN_ALWAYS_INLINE void storeResults(Packet4f (&acc)[4], Index rows, const Packet4f pAlpha, float* result,
+EIGEN_ALWAYS_INLINE void storeResults(Packet4f (&acc)[4], Index rows, const Packet4f& pAlpha, float* result,
                                       Index extra_cols, Index extra_rows);
 
 template <Index num_acc, bool extraRows, Index size = 4>
-EIGEN_ALWAYS_INLINE void outputVecColResults(Packet4f (&acc)[num_acc][size], float* result, Packet4f pAlpha,
+EIGEN_ALWAYS_INLINE void outputVecColResults(Packet4f (&acc)[num_acc][size], float* result, const Packet4f& pAlpha,
                                              Index extra_rows);
 
 template <Index num_acc, Index size = 4>
-EIGEN_ALWAYS_INLINE void outputVecResults(Packet4f (&acc)[num_acc][size], float* result, Packet4f pAlpha);
+EIGEN_ALWAYS_INLINE void outputVecResults(Packet4f (&acc)[num_acc][size], float* result, const Packet4f& pAlpha);
 
-template <typename RhsMapper, bool linear>
+template <typename RhsMapper, bool linear, typename Index>
 EIGEN_ALWAYS_INLINE Packet8bf loadColData(RhsMapper& rhs, Index j);
 
 template <typename Packet>
@@ -80,14 +85,12 @@ EIGEN_ALWAYS_INLINE void bload(PacketBlock<Packet, N*(Complex ? 2 : 1)>& acc, co
 template <typename DataMapper, typename Packet, int N>
 EIGEN_ALWAYS_INLINE void bstore(PacketBlock<Packet, N>& acc, const DataMapper& res, Index row);
 
-#ifdef USE_PARTIAL_PACKETS
 template <typename DataMapper, typename Packet, const Index accCols, bool Complex, Index N, bool full = true>
 EIGEN_ALWAYS_INLINE void bload_partial(PacketBlock<Packet, N*(Complex ? 2 : 1)>& acc, const DataMapper& res, Index row,
                                        Index elements);
 
 template <typename DataMapper, typename Packet, Index N>
 EIGEN_ALWAYS_INLINE void bstore_partial(PacketBlock<Packet, N>& acc, const DataMapper& res, Index row, Index elements);
-#endif
 
 template <typename Packet, int N>
 EIGEN_ALWAYS_INLINE void bscale(PacketBlock<Packet, N>& acc, PacketBlock<Packet, N>& accZ, const Packet& pAlpha);
@@ -126,7 +129,6 @@ EIGEN_ALWAYS_INLINE void bcouple(PacketBlock<Packet, N>& taccReal, PacketBlock<P
       break;                                 \
   }
 
-#ifdef USE_PARTIAL_PACKETS
 #define MICRO_UNROLL_ITER(func, N) \
   if (remaining_rows) {            \
     func(N, true);                 \
@@ -135,9 +137,6 @@ EIGEN_ALWAYS_INLINE void bcouple(PacketBlock<Packet, N>& taccReal, PacketBlock<P
   }
 
 #define MICRO_NORMAL_PARTIAL(iter) full || (unroll_factor != (iter + 1))
-#else
-#define MICRO_UNROLL_ITER(func, N) MICRO_UNROLL_ITER1(func, N)
-#endif
 
 #define MICRO_COMPLEX_UNROLL_ITER(func, N) MICRO_UNROLL_ITER1(func, N)
 
@@ -161,6 +160,33 @@ EIGEN_ALWAYS_INLINE void bcouple(PacketBlock<Packet, N>& taccReal, PacketBlock<P
   }                                                                                                        \
   MICRO_LOAD1(lhs_ptr_real, iter)
 
+#define MICRO_LOAD1_PARTIAL(lhs_ptr, iter)                          \
+  if (unroll_factor > iter) {                                       \
+    if (MICRO_NORMAL(iter)) {                                       \
+      lhsV##iter = ploadLhs<Packet>(lhs_ptr##iter);                 \
+      lhs_ptr##iter += accCols;                                     \
+    } else {                                                        \
+      lhsV##iter = ploadu_partial<Packet>(lhs_ptr##iter, accCols2); \
+      lhs_ptr##iter += accCols2;                                    \
+    }                                                               \
+  } else {                                                          \
+    EIGEN_UNUSED_VARIABLE(lhsV##iter);                              \
+  }
+
+#define MICRO_LOAD_PARTIAL_ONE(iter) MICRO_LOAD1_PARTIAL(lhs_ptr, iter)
+
+#define MICRO_COMPLEX_LOAD_PARTIAL_ONE(iter)                                            \
+  if (!LhsIsReal && (unroll_factor > iter)) {                                           \
+    if (MICRO_NORMAL(iter)) {                                                           \
+      lhsVi##iter = ploadLhs<Packet>(lhs_ptr_real##iter + imag_delta);                  \
+    } else {                                                                            \
+      lhsVi##iter = ploadu_partial<Packet>(lhs_ptr_real##iter + imag_delta2, accCols2); \
+    }                                                                                   \
+  } else {                                                                              \
+    EIGEN_UNUSED_VARIABLE(lhsVi##iter);                                                 \
+  }                                                                                     \
+  MICRO_LOAD1_PARTIAL(lhs_ptr_real, iter)
+
 #define MICRO_SRC_PTR1(lhs_ptr, advRows, iter)                                  \
   if (unroll_factor > iter) {                                                   \
     lhs_ptr##iter = lhs_base + (row + (iter * accCols)) * strideA * advRows -   \
@@ -182,15 +208,8 @@ EIGEN_ALWAYS_INLINE void bcouple(PacketBlock<Packet, N>& taccReal, PacketBlock<P
 
 #define MICRO_COMPLEX_PREFETCH_ONE(iter) MICRO_PREFETCH1(lhs_ptr_real, iter)
 
-#ifdef USE_PARTIAL_PACKETS
-#define MICRO_UPDATE_MASK
-#else
-#define MICRO_UPDATE_MASK EIGEN_UNUSED_VARIABLE(pMask);
-#endif
-
 #define MICRO_UPDATE                \
   if (accCols == accCols2) {        \
-    MICRO_UPDATE_MASK               \
     EIGEN_UNUSED_VARIABLE(offsetA); \
     row += unroll_factor * accCols; \
   }
@@ -203,3 +222,5 @@ EIGEN_ALWAYS_INLINE void bcouple(PacketBlock<Packet, N>& taccReal, PacketBlock<P
 
 }  // end namespace internal
 }  // end namespace Eigen
+
+#endif  // EIGEN_MATRIX_PRODUCT_COMMON_ALTIVEC_H

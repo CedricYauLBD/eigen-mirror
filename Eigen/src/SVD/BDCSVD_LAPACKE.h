@@ -6,6 +6,7 @@
 //
 // This file is based on the JacobiSVD_LAPACKE.h originally from Intel -
 // see license notice below:
+// SPDX-License-Identifier: BSD-3-Clause
 /*
  Redistribution and use in source and binary forms, with or without modification,
  are permitted provided that the following conditions are met:
@@ -49,10 +50,10 @@ namespace lapacke_helpers {
 // defining a derived class to allow access to protected members
 template <typename MatrixType_, int Options>
 class BDCSVD_LAPACKE : public BDCSVD<MatrixType_, Options> {
-  typedef BDCSVD<MatrixType_, Options> SVD;
-  typedef typename SVD::MatrixType MatrixType;
-  typedef typename SVD::Scalar Scalar;
-  typedef typename SVD::RealScalar RealScalar;
+  using SVD = BDCSVD<MatrixType_, Options>;
+  using MatrixType = typename SVD::MatrixType;
+  using Scalar = typename SVD::Scalar;
+  using RealScalar = typename SVD::RealScalar;
 
  public:
   // construct this by moving from a parent object
@@ -63,9 +64,20 @@ class BDCSVD_LAPACKE : public BDCSVD<MatrixType_, Options> {
     SVD::allocate(matrix.rows(), matrix.cols(), computationOptions);
 
     SVD::m_nonzeroSingularValues = SVD::m_diagSize;
+    // LAPACK rejects the zero leading dimensions of an empty input, and given valid ones it returns without writing
+    // U or VT. Set the identities the native path returns.
+    if (SVD::diagSize() == 0) {
+      if (SVD::computeU()) SVD::m_matrixU.setIdentity();
+      if (SVD::computeV()) SVD::m_matrixV.setIdentity();
+      SVD::m_isInitialized = true;
+      return;
+    }
 
-    // prepare arguments to ?gesdd
-    const lapack_int matrix_order = lapack_storage_of(matrix);
+    // prepare arguments to ?gesdd. A, U and VT all have MatrixType's layout, which the input
+    // expression need not share.
+    MatrixType temp;
+    temp = matrix;
+    const lapack_int matrix_order = lapack_storage_of(temp);
     const char jobz = (SVD::m_computeFullU || SVD::m_computeFullV)   ? 'A'
                       : (SVD::m_computeThinU || SVD::m_computeThinV) ? 'S'
                                                                      : 'N';
@@ -94,8 +106,6 @@ class BDCSVD_LAPACKE : public BDCSVD<MatrixType_, Options> {
       ldvt = 1;
       vt = &dummy;
     }
-    MatrixType temp;
-    temp = matrix;
 
     // actual call to ?gesdd
     lapack_int info = gesdd(matrix_order, jobz, to_lapack(SVD::rows()), to_lapack(SVD::cols()), to_lapack(temp.data()),
@@ -106,10 +116,13 @@ class BDCSVD_LAPACKE : public BDCSVD<MatrixType_, Options> {
     if (info < 0 || !SVD::m_singularValues.allFinite()) {
       // this includes info == -4 => NaN entry in A
       SVD::m_info = InvalidInput;
+      SVD::m_nonzeroSingularValues = 0;
+      SVD::m_singularValues.setZero();
     } else if (info > 0) {
       SVD::m_info = NoConvergence;
     } else {
       SVD::m_info = Success;
+      SVD::m_nonzeroSingularValues = internal::count_nonzero_singular_values(SVD::m_singularValues);
       if (SVD::m_computeThinU && SVD::m_computeFullV) {
         SVD::m_matrixU = localU.leftCols(SVD::m_matrixU.cols());
       }

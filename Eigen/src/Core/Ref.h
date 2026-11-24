@@ -6,6 +6,7 @@
 // This Source Code Form is subject to the terms of the Mozilla
 // Public License v. 2.0. If a copy of the MPL was not distributed
 // with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
+// SPDX-License-Identifier: MPL-2.0
 
 #ifndef EIGEN_REF_H
 #define EIGEN_REF_H
@@ -20,8 +21,8 @@ namespace internal {
 template <typename PlainObjectType_, int Options_, typename StrideType_>
 struct traits<Ref<PlainObjectType_, Options_, StrideType_> >
     : public traits<Map<PlainObjectType_, Options_, StrideType_> > {
-  typedef PlainObjectType_ PlainObjectType;
-  typedef StrideType_ StrideType;
+  using PlainObjectType = PlainObjectType_;
+  using StrideType = StrideType_;
   enum {
     Options = Options_,
     Flags = traits<Map<PlainObjectType_, Options_, StrideType_> >::Flags | NestByRefBit,
@@ -34,7 +35,7 @@ struct traits<Ref<PlainObjectType_, Options_, StrideType_> >
   struct match {
     enum {
       IsVectorAtCompileTime = PlainObjectType::IsVectorAtCompileTime || Derived::IsVectorAtCompileTime,
-      HasDirectAccess = internal::has_direct_access<Derived>::ret,
+      HasDirectAccess = internal::has_direct_access<Derived>::value,
       StorageOrderMatch =
           IsVectorAtCompileTime || ((PlainObjectType::Flags & RowMajorBit) == (Derived::Flags & RowMajorBit)),
       InnerStrideMatch = int(InnerStrideAtCompileTime) == int(Dynamic) ||
@@ -42,20 +43,12 @@ struct traits<Ref<PlainObjectType_, Options_, StrideType_> >
                          (int(InnerStrideAtCompileTime) == 0 && int(Derived::InnerStrideAtCompileTime) == 1),
       OuterStrideMatch = IsVectorAtCompileTime || int(OuterStrideAtCompileTime) == int(Dynamic) ||
                          int(OuterStrideAtCompileTime) == int(Derived::OuterStrideAtCompileTime),
-      // NOTE, this indirection of evaluator<Derived>::Alignment is needed
-      // to workaround a very strange bug in MSVC related to the instantiation
-      // of has_*ary_operator in evaluator<CwiseNullaryOp>.
-      // This line is surprisingly very sensitive. For instance, simply adding parenthesis
-      // as "DerivedAlignment = (int(evaluator<Derived>::Alignment))," will make MSVC fail...
-      DerivedAlignment = int(evaluator<Derived>::Alignment),
-      AlignmentMatch = (int(traits<PlainObjectType>::Alignment) == int(Unaligned)) ||
-                       (DerivedAlignment >= int(Alignment)),  // FIXME the first condition is not very clear, it should
-                                                              // be replaced by the required alignment
-      ScalarTypeMatch = internal::is_same<typename PlainObjectType::Scalar, typename Derived::Scalar>::value,
+      AlignmentMatch = int(evaluator<Derived>::Alignment) >= int(Alignment),
+      ScalarTypeMatch = std::is_same<typename PlainObjectType::Scalar, typename Derived::Scalar>::value,
       MatchAtCompileTime = HasDirectAccess && StorageOrderMatch && InnerStrideMatch && OuterStrideMatch &&
                            AlignmentMatch && ScalarTypeMatch
     };
-    typedef std::conditional_t<MatchAtCompileTime, internal::true_type, internal::false_type> type;
+    using type = bool_constant<MatchAtCompileTime>;
   };
 };
 
@@ -66,11 +59,11 @@ struct traits<RefBase<Derived> > : public traits<Derived> {};
 
 template <typename Derived>
 class RefBase : public MapBase<Derived> {
-  typedef typename internal::traits<Derived>::PlainObjectType PlainObjectType;
-  typedef typename internal::traits<Derived>::StrideType StrideType;
+  using PlainObjectType = typename internal::traits<Derived>::PlainObjectType;
+  using StrideType = typename internal::traits<Derived>::StrideType;
 
  public:
-  typedef MapBase<Derived> Base;
+  using Base = MapBase<Derived>;
   EIGEN_DENSE_PUBLIC_INTERFACE(RefBase)
 
   EIGEN_DEVICE_FUNC constexpr Index innerStride() const {
@@ -79,9 +72,9 @@ class RefBase : public MapBase<Derived> {
 
   EIGEN_DEVICE_FUNC constexpr Index outerStride() const {
     return StrideType::OuterStrideAtCompileTime != 0 ? m_stride.outer()
-           : IsVectorAtCompileTime                   ? this->size()
-           : int(Flags) & RowMajorBit                ? this->cols()
-                                                     : this->rows();
+           : IsVectorAtCompileTime                   ? this->size() * innerStride()
+           : int(Flags) & RowMajorBit                ? this->cols() * innerStride()
+                                                     : this->rows() * innerStride();
   }
 
   EIGEN_DEVICE_FUNC RefBase()
@@ -94,7 +87,7 @@ class RefBase : public MapBase<Derived> {
   EIGEN_INHERIT_ASSIGNMENT_OPERATORS(RefBase)
 
  protected:
-  typedef Stride<StrideType::OuterStrideAtCompileTime, StrideType::InnerStrideAtCompileTime> StrideBase;
+  using StrideBase = Stride<StrideType::OuterStrideAtCompileTime, StrideType::InnerStrideAtCompileTime>;
 
   // Resolves inner stride if default 0.
   static EIGEN_DEVICE_FUNC constexpr Index resolveInnerStride(Index inner) { return inner == 0 ? 1 : inner; }
@@ -125,12 +118,11 @@ class RefBase : public MapBase<Derived> {
     // Determine runtime rows and columns.
     Index rows = expr.rows();
     Index cols = expr.cols();
-    if (PlainObjectType::RowsAtCompileTime == 1) {
-      eigen_assert(expr.rows() == 1 || expr.cols() == 1);
+    EIGEN_INTERNAL_ASSERT_VECTOR_IF(PlainObjectType::IsVectorAtCompileTime, expr);
+    EIGEN_IF_CONSTEXPR (PlainObjectType::RowsAtCompileTime == 1) {
       rows = 1;
       cols = expr.size();
-    } else if (PlainObjectType::ColsAtCompileTime == 1) {
-      eigen_assert(expr.rows() == 1 || expr.cols() == 1);
+    } else EIGEN_IF_CONSTEXPR (PlainObjectType::ColsAtCompileTime == 1) {
       rows = expr.size();
       cols = 1;
     }
@@ -147,10 +139,10 @@ class RefBase : public MapBase<Derived> {
 
     const bool swap_stride = (transpose != storage_differs);
 
-    // Determine expr's actual strides, resolving any defaults if zero.
-    const Index expr_inner_actual = resolveInnerStride(expr.innerStride());
-    const Index expr_outer_actual = resolveOuterStride(expr_inner_actual, expr.outerStride(), expr.rows(), expr.cols(),
-                                                       Expression::IsVectorAtCompileTime != 0, expr_row_major);
+    // Unlike a compile-time stride of 0, a runtime stride of 0 is not a default: it repeats coefficients, as in
+    // Map<const VectorXd, 0, InnerStride<>>(&x, n, InnerStride<>(0)).
+    const Index expr_inner_actual = expr.innerStride();
+    const Index expr_outer_actual = expr.outerStride();
 
     // If this is a column-major row vector or row-major column vector, the inner-stride
     // is arbitrary, so set it to either the compile-time inner stride or 1.
@@ -201,7 +193,7 @@ class RefBase : public MapBase<Derived> {
  * \brief A matrix or vector expression mapping an existing expression
  *
  * \tparam PlainObjectType the equivalent matrix type of the mapped data
- * \tparam Options specifies the pointer alignment in bytes. It can be: \c #Aligned128, , \c #Aligned64, \c #Aligned32,
+ * \tparam Options specifies the pointer alignment in bytes. It can be: \c #Aligned128, \c #Aligned64, \c #Aligned32,
  * \c #Aligned16, \c #Aligned8 or \c #Unaligned. The default is \c #Unaligned. \tparam StrideType optionally specifies
  * strides. By default, Ref implies a contiguous storage along the inner dimension (inner stride==1), but accepts a
  * variable outer stride (leading dimension). This can be overridden by specifying strides. The type passed here must be
@@ -224,9 +216,14 @@ class RefBase : public MapBase<Derived> {
  * of rows.
  *
  * In the const case, if the input expression does not match the above requirement, then it is evaluated into a
- * temporary before being passed to the function. Here are some examples: \code MatrixXf A; VectorXf a; foo1(a.head());
- * // OK foo1(A.col());              // OK foo1(A.row());              // Compilation error because here innerstride!=1
- * foo2(A.row());              // Compilation error because A.row() is a 1xN object while foo2 is expecting a Nx1 object
+ * temporary before being passed to the function. Here are some examples:
+ * \code
+ * MatrixXf A;
+ * VectorXf a;
+ * foo1(a.head());             // OK
+ * foo1(A.col());              // OK
+ * foo1(A.row());              // Compilation error because here innerstride!=1
+ * foo2(A.row());              // The 1xN row is accepted as a Nx1 vector, but copied into a temporary
  * foo2(A.row().transpose());  // The row is copied into a contiguous temporary
  * foo2(2*a);                  // The expression is evaluated into a temporary
  * foo2(A.col().segment(2,4)); // No temporary
@@ -263,31 +260,33 @@ class RefBase : public MapBase<Derived> {
 template <typename PlainObjectType, int Options, typename StrideType>
 class Ref : public RefBase<Ref<PlainObjectType, Options, StrideType> > {
  private:
-  typedef internal::traits<Ref> Traits;
-  template <typename Derived>
-  EIGEN_DEVICE_FUNC inline Ref(
-      const PlainObjectBase<Derived>& expr,
-      std::enable_if_t<bool(Traits::template match<Derived>::MatchAtCompileTime), Derived>* = 0);
+  using Traits = internal::traits<Ref>;
+  template <typename Derived, std::enable_if_t<bool(Traits::template match<Derived>::MatchAtCompileTime), int> = 0>
+  EIGEN_DEVICE_FUNC constexpr inline Ref(const PlainObjectBase<Derived>& expr);
 
  public:
-  typedef RefBase<Ref> Base;
+  using Base = RefBase<Ref>;
   EIGEN_DENSE_PUBLIC_INTERFACE(Ref)
 
 #ifndef EIGEN_PARSED_BY_DOXYGEN
-  template <typename Derived>
-  EIGEN_DEVICE_FUNC inline Ref(
-      PlainObjectBase<Derived>& expr,
-      std::enable_if_t<bool(Traits::template match<Derived>::MatchAtCompileTime), Derived>* = 0) {
+  template <typename Derived, std::enable_if_t<bool(Traits::template match<Derived>::MatchAtCompileTime), int> = 0>
+  EIGEN_DEVICE_FUNC constexpr inline Ref(PlainObjectBase<Derived>& expr) {
     EIGEN_STATIC_ASSERT(bool(Traits::template match<Derived>::MatchAtCompileTime), STORAGE_LAYOUT_DOES_NOT_MATCH);
     // Construction must pass since we will not create temporary storage in the non-const case.
     const bool success = Base::construct(expr.derived());
-    EIGEN_UNUSED_VARIABLE(success)
+    EIGEN_UNUSED_VARIABLE(success);
     eigen_assert(success);
   }
+
   template <typename Derived>
-  EIGEN_DEVICE_FUNC inline Ref(
-      const DenseBase<Derived>& expr,
-      std::enable_if_t<bool(Traits::template match<Derived>::MatchAtCompileTime), Derived>* = 0)
+  EIGEN_DEPRECATED_WITH_REASON("Omit the implementation-only second argument.")
+  EIGEN_DEVICE_FUNC constexpr inline Ref(
+      PlainObjectBase<Derived>& expr,
+      std::enable_if_t<bool(Traits::template match<Derived>::MatchAtCompileTime), Derived>*)
+      : Ref(expr) {}
+
+  template <typename Derived, std::enable_if_t<bool(Traits::template match<Derived>::MatchAtCompileTime), int> = 0>
+  EIGEN_DEVICE_FUNC constexpr inline Ref(const DenseBase<Derived>& expr)
 #else
   /** Implicit constructor from any dense expression */
   template <typename Derived>
@@ -299,9 +298,18 @@ class Ref : public RefBase<Ref<PlainObjectType, Options, StrideType> > {
     EIGEN_STATIC_ASSERT(!Derived::IsPlainObjectBase, THIS_EXPRESSION_IS_NOT_A_LVALUE__IT_IS_READ_ONLY);
     // Construction must pass since we will not create temporary storage in the non-const case.
     const bool success = Base::construct(expr.const_cast_derived());
-    EIGEN_UNUSED_VARIABLE(success)
+    EIGEN_UNUSED_VARIABLE(success);
     eigen_assert(success);
   }
+
+#ifndef EIGEN_PARSED_BY_DOXYGEN
+  template <typename Derived>
+  EIGEN_DEPRECATED_WITH_REASON("Omit the implementation-only second argument.")
+  EIGEN_DEVICE_FUNC constexpr inline Ref(
+      const DenseBase<Derived>& expr,
+      std::enable_if_t<bool(Traits::template match<Derived>::MatchAtCompileTime), Derived>*)
+      : Ref(expr) {}
+#endif
 
   EIGEN_INHERIT_ASSIGNMENT_OPERATORS(Ref)
 };
@@ -310,7 +318,7 @@ class Ref : public RefBase<Ref<PlainObjectType, Options, StrideType> > {
 template <typename TPlainObjectType, int Options, typename StrideType>
 class Ref<const TPlainObjectType, Options, StrideType>
     : public RefBase<Ref<const TPlainObjectType, Options, StrideType> > {
-  typedef internal::traits<Ref> Traits;
+  using Traits = internal::traits<Ref>;
 
   static constexpr bool may_map_m_object_successfully =
       (static_cast<int>(StrideType::InnerStrideAtCompileTime) == 0 ||
@@ -323,12 +331,11 @@ class Ref<const TPlainObjectType, Options, StrideType>
        static_cast<int>(TPlainObjectType::InnerSizeAtCompileTime) == Dynamic);
 
  public:
-  typedef RefBase<Ref> Base;
+  using Base = RefBase<Ref>;
   EIGEN_DENSE_PUBLIC_INTERFACE(Ref)
 
-  template <typename Derived>
-  EIGEN_DEVICE_FUNC inline Ref(const DenseBase<Derived>& expr,
-                               std::enable_if_t<bool(Traits::template match<Derived>::ScalarTypeMatch), Derived>* = 0) {
+  template <typename Derived, std::enable_if_t<bool(Traits::template match<Derived>::ScalarTypeMatch), int> = 0>
+  EIGEN_DEVICE_FUNC constexpr inline Ref(const DenseBase<Derived>& expr) {
     //      std::cout << match_helper<Derived>::HasDirectAccess << "," << match_helper<Derived>::OuterStrideMatch << ","
     //      << match_helper<Derived>::InnerStrideMatch << "\n"; std::cout << int(StrideType::OuterStrideAtCompileTime)
     //      << " - " << int(Derived::OuterStrideAtCompileTime) << "\n"; std::cout <<
@@ -338,11 +345,18 @@ class Ref<const TPlainObjectType, Options, StrideType>
     construct(expr.derived(), typename Traits::template match<Derived>::type());
   }
 
-  EIGEN_DEVICE_FUNC inline Ref(const Ref& other) : Base(other) {
+  template <typename Derived>
+  EIGEN_DEPRECATED_WITH_REASON("Omit the implementation-only second argument.")
+  EIGEN_DEVICE_FUNC constexpr inline Ref(
+      const DenseBase<Derived>& expr,
+      std::enable_if_t<bool(Traits::template match<Derived>::ScalarTypeMatch), Derived>*)
+      : Ref(expr) {}
+
+  EIGEN_DEVICE_FUNC constexpr inline Ref(const Ref& other) : Base(other) {
     // copy constructor shall not copy the m_object, to avoid unnecessary malloc and copy
   }
 
-  EIGEN_DEVICE_FUNC inline Ref(Ref&& other) {
+  EIGEN_DEVICE_FUNC constexpr inline Ref(Ref&& other) {
     if (other.data() == other.m_object.data()) {
       m_object = std::move(other.m_object);
       Base::construct(m_object);
@@ -351,7 +365,7 @@ class Ref<const TPlainObjectType, Options, StrideType>
   }
 
   template <typename OtherRef>
-  EIGEN_DEVICE_FUNC inline Ref(const RefBase<OtherRef>& other) {
+  EIGEN_DEVICE_FUNC constexpr inline Ref(const RefBase<OtherRef>& other) {
     EIGEN_STATIC_ASSERT(Traits::template match<OtherRef>::type::value || may_map_m_object_successfully,
                         STORAGE_LAYOUT_DOES_NOT_MATCH);
     construct(other.derived(), typename Traits::template match<OtherRef>::type());
@@ -359,18 +373,18 @@ class Ref<const TPlainObjectType, Options, StrideType>
 
  protected:
   template <typename Expression>
-  EIGEN_DEVICE_FUNC void construct(const Expression& expr, internal::true_type) {
+  EIGEN_DEVICE_FUNC void construct(const Expression& expr, std::true_type) {
     // Check if we can use the underlying expr's storage directly, otherwise call the copy version.
     if (!Base::construct(expr)) {
-      construct(expr, internal::false_type());
+      construct(expr, std::false_type());
     }
   }
 
   template <typename Expression>
-  EIGEN_DEVICE_FUNC void construct(const Expression& expr, internal::false_type) {
+  EIGEN_DEVICE_FUNC void construct(const Expression& expr, std::false_type) {
     internal::call_assignment_no_alias(m_object, expr, internal::assign_op<Scalar, Scalar>());
     const bool success = Base::construct(m_object);
-    EIGEN_ONLY_USED_FOR_DEBUG(success)
+    EIGEN_ONLY_USED_FOR_DEBUG(success);
     eigen_assert(success);
   }
 

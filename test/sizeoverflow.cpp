@@ -6,6 +6,7 @@
 // This Source Code Form is subject to the terms of the Mozilla
 // Public License v. 2.0. If a copy of the MPL was not distributed
 // with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
+// SPDX-License-Identifier: MPL-2.0
 
 #include "main.h"
 
@@ -30,6 +31,9 @@ void triggerMatrixBadAlloc(Index rows, Index cols) {
   VERIFY_THROWS_BADALLOC(MatrixType m(rows, cols));
   VERIFY_THROWS_BADALLOC(MatrixType m; m.resize(rows, cols));
   VERIFY_THROWS_BADALLOC(MatrixType m; m.conservativeResize(rows, cols));
+  // The failed resize of a non-empty object must leave it destructible.
+  VERIFY_THROWS_BADALLOC(MatrixType m(3, 3); m.resize(rows, cols));
+  VERIFY_THROWS_BADALLOC(MatrixType m(3, 3); m.conservativeResize(rows, cols));
 }
 
 template <typename VectorType>
@@ -37,6 +41,8 @@ void triggerVectorBadAlloc(Index size) {
   VERIFY_THROWS_BADALLOC(VectorType v(size));
   VERIFY_THROWS_BADALLOC(VectorType v; v.resize(size));
   VERIFY_THROWS_BADALLOC(VectorType v; v.conservativeResize(size));
+  VERIFY_THROWS_BADALLOC(VectorType v(3); v.resize(size));
+  VERIFY_THROWS_BADALLOC(VectorType v(3); v.conservativeResize(size));
 }
 
 EIGEN_DECLARE_TEST(sizeoverflow) {
@@ -65,4 +71,15 @@ EIGEN_DECLARE_TEST(sizeoverflow) {
   triggerVectorBadAlloc<VectorXf>(times_4_gives_0);
 
   triggerVectorBadAlloc<VectorXd>(times_8_gives_0);
+
+  // A reallocation that fails throws for unaligned storage too, leaving the vector as it was. The request is
+  // representable but not satisfiable; ASan aborts on such requests instead of failing them.
+#if defined(EIGEN_EXCEPTIONS) && !defined(__SANITIZE_ADDRESS__) && !__has_feature(address_sanitizer)
+  if (sizeof(Index) >= 8) {
+    using UnalignedVector = Matrix<float, Dynamic, 1, DontAlign>;
+    UnalignedVector v = UnalignedVector::Ones(3);
+    VERIFY_THROWS_BADALLOC(v.conservativeResize(Index(1) << (8 * sizeof(Index) - 4)));
+    VERIFY_IS_EQUAL(v, UnalignedVector::Ones(3));
+  }
+#endif
 }

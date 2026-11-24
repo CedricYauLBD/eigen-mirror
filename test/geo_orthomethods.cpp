@@ -6,6 +6,7 @@
 // This Source Code Form is subject to the terms of the Mozilla
 // Public License v. 2.0. If a copy of the MPL was not distributed
 // with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
+// SPDX-License-Identifier: MPL-2.0
 
 #include "main.h"
 #include <Eigen/Geometry>
@@ -18,11 +19,11 @@
 
 template <typename Scalar>
 void orthomethods_3() {
-  typedef typename NumTraits<Scalar>::Real RealScalar;
-  typedef Matrix<Scalar, 3, 3> Matrix3;
-  typedef Matrix<Scalar, 3, 1> Vector3;
+  using RealScalar = typename NumTraits<Scalar>::Real;
+  using Matrix3 = Matrix<Scalar, 3, 3>;
+  using Vector3 = Matrix<Scalar, 3, 1>;
 
-  typedef Matrix<Scalar, 4, 1> Vector4;
+  using Vector4 = Matrix<Scalar, 4, 1>;
 
   Vector3 v0 = Vector3::Random(), v1 = Vector3::Random(), v2 = Vector3::Random();
 
@@ -66,7 +67,7 @@ void orthomethods_3() {
   VERIFY_IS_MUCH_SMALLER_THAN(v40.cross3(Vector4::Random()).dot(v40), Scalar(1));
 
   // check mixed product
-  typedef Matrix<RealScalar, 3, 1> RealVector3;
+  using RealVector3 = Matrix<RealScalar, 3, 1>;
   RealVector3 rv1 = RealVector3::Random();
   v2 = rv1.template cast<Scalar>();
   VERIFY_IS_APPROX(v1.cross(v2), v1.cross(rv1));
@@ -75,9 +76,9 @@ void orthomethods_3() {
 
 template <typename Scalar>
 void orthomethods_2() {
-  typedef typename NumTraits<Scalar>::Real RealScalar;
-  typedef Matrix<Scalar, 2, 1> Vector2;
-  typedef Matrix<Scalar, 3, 1> Vector3;
+  using RealScalar = typename NumTraits<Scalar>::Real;
+  using Vector2 = Matrix<Scalar, 2, 1>;
+  using Vector3 = Matrix<Scalar, 3, 1>;
 
   Vector3 v30 = Vector3::Random(), v31 = Vector3::Random();
   Vector2 v20 = v30.template head<2>();
@@ -95,7 +96,7 @@ void orthomethods_2() {
   VERIFY_IS_APPROX(v21.cross(-v21Rot90), -v21.squaredNorm());
 
   // check mixed product
-  typedef Matrix<RealScalar, 2, 1> RealVector2;
+  using RealVector2 = Matrix<RealScalar, 2, 1>;
   RealVector2 rv21 = RealVector2::Random();
   v21 = rv21.template cast<Scalar>();
   VERIFY_IS_APPROX(v20.cross(v21), v20.cross(rv21));
@@ -104,17 +105,32 @@ void orthomethods_2() {
 
 template <typename Scalar, int Size>
 void orthomethods(int size = Size) {
-  typedef typename NumTraits<Scalar>::Real RealScalar;
-  typedef Matrix<Scalar, Size, 1> VectorType;
-  typedef Matrix<Scalar, 3, Size> Matrix3N;
-  typedef Matrix<Scalar, Size, 3> MatrixN3;
-  typedef Matrix<Scalar, 3, 1> Vector3;
+  using RealScalar = typename NumTraits<Scalar>::Real;
+  using VectorType = Matrix<Scalar, Size, 1>;
+  using Matrix3N = Matrix<Scalar, 3, Size>;
+  using MatrixN3 = Matrix<Scalar, Size, 3>;
+  using Vector3 = Matrix<Scalar, 3, 1>;
 
   VectorType v0 = VectorType::Random(size);
 
   // unitOrthogonal
   VERIFY_IS_MUCH_SMALLER_THAN(v0.unitOrthogonal().dot(v0), Scalar(1));
   VERIFY_IS_APPROX(v0.unitOrthogonal().norm(), RealScalar(1));
+  // still a unit vector where squaredNorm() underflows or overflows
+  for (const RealScalar s : {numext::sqrt((std::numeric_limits<RealScalar>::min)()) * RealScalar(1e-4),
+                             numext::sqrt((std::numeric_limits<RealScalar>::max)()) * RealScalar(1e2)})
+    VERIFY_IS_APPROX((v0 * s).unitOrthogonal().norm(), RealScalar(1));
+  // and where the norm of the two coefficients it rotates is below 1 / highest or above highest
+  for (const RealScalar s :
+       {(std::numeric_limits<RealScalar>::min)() / RealScalar(16), NumTraits<RealScalar>::highest()}) {
+    // v = s * e, set coefficient-wise: ARMv7 NEON reads a subnormal s as zero, so v / s would be NaN there.
+    VectorType v = VectorType::Zero(size), e = VectorType::Zero(size);
+    v(0) = v(1) = Scalar(s);
+    e(0) = e(1) = Scalar(1);
+    const VectorType u = v.unitOrthogonal();
+    VERIFY_IS_APPROX(u.norm(), RealScalar(1));
+    VERIFY_IS_MUCH_SMALLER_THAN(u.dot(e), Scalar(1));
+  }
 
   if (size >= 3) {
     v0.template head<2>().setZero();
@@ -137,11 +153,29 @@ void orthomethods(int size = Size) {
   matN3.setRandom();
   mcrossN3 = matN3.rowwise().cross(vec3);
   VERIFY_IS_APPROX(mcrossN3.row(i), matN3.row(i).cross(vec3));
+
+  // the same with run-time sized matrices that have 3 rows (columns)
+  using MatrixX = Matrix<Scalar, Dynamic, Dynamic>;
+  MatrixX matX3N(mat3N), matXN3(matN3);
+  VERIFY_IS_APPROX(MatrixX(matX3N.colwise().cross(vec3)), MatrixX(mcross3N));
+  VERIFY_IS_APPROX(MatrixX(matXN3.rowwise().cross(vec3)), MatrixX(mcrossN3));
+}
+
+// unitOrthogonal for a scalar type that does not convert implicitly from int, on each path
+void orthomethods_half() {
+  using Vector3h = Matrix<half, 3, 1>;
+  using Vector4h = Matrix<half, 4, 1>;
+  const Vector3h near_xy(half(1), half(2), half(0)), near_z(half(0), half(0), half(1));
+  const Vector4h v4(half(1), half(2), half(0), half(0));
+  VERIFY_IS_APPROX(near_xy.unitOrthogonal().cast<float>(), Vector3f(-2, 1, 0) / std::sqrt(5.0f));
+  VERIFY_IS_APPROX(near_z.unitOrthogonal().cast<float>(), Vector3f(0, -1, 0));
+  VERIFY_IS_APPROX(v4.unitOrthogonal().cast<float>(), Vector4f(2, -1, 0, 0) / std::sqrt(5.0f));
 }
 
 EIGEN_DECLARE_TEST(geo_orthomethods) {
   for (int i = 0; i < g_repeat; i++) {
     CALL_SUBTEST_1(orthomethods_2<float>());
+    CALL_SUBTEST_1(orthomethods_half());
     CALL_SUBTEST_2(orthomethods_2<double>());
     CALL_SUBTEST_4(orthomethods_2<std::complex<double> >());
     CALL_SUBTEST_1(orthomethods_3<float>());

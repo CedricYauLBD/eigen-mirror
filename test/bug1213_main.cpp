@@ -1,5 +1,7 @@
+// SPDX-FileCopyrightText: The Eigen Authors
+// SPDX-License-Identifier: MPL-2.0
 
-// This is a regression unit regarding a weird linking issue with gcc.
+// This is a regression unit regarding an unusual linking issue with GCC.
 
 #include "bug1213.h"
 

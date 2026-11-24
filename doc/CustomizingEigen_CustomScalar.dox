@@ -3,8 +3,10 @@ namespace Eigen {
 /** \page TopicCustomizing_CustomScalar Using custom scalar types
 \anchor user_defined_scalars
 
-By default, Eigen currently supports standard floating-point types (\c float, \c double, \c std::complex<float>, \c std::complex<double>, \c long \c double), as well as all native integer types (e.g., \c int, \c unsigned \c int, \c short, etc.), and \c bool.
-On x86-64 systems, \c long \c double permits to locally enforces the use of x87 registers with extended accuracy (in comparison to SSE).
+By default, Eigen supports the standard floating-point types (\c float, \c double, \c long \c double, \c std::complex<float>, \c std::complex<double>), all native integer types (e.g., \c int, \c unsigned \c int, \c short, etc.), and \c bool.
+%Eigen also ships with two reduced-precision floating-point types of its own: \c Eigen::half (IEEE fp16) and \c Eigen::bfloat16.
+On x86-64 systems, \c long \c double permits to locally enforce the use of x87 registers with extended accuracy (in comparison to SSE).
+See \ref TopicScalarTypes for an overview.
 
 In order to add support for a custom type \c T you need:
 -# make sure the common operator (+,-,*,/,etc.) are supported by the type \c T
@@ -14,7 +16,22 @@ In order to add support for a custom type \c T you need:
 
 The math function should be defined in the same namespace than \c T, or in the \c std namespace though that second approach is not recommended.
 
-Here is a concrete example adding support for the Adolc's \c adouble type. <a href="https://projects.coin-or.org/ADOL-C">Adolc</a> is an automatic differentiation library. The type \c adouble is basically a real value tracking the values of any number of partial derivatives.
+%Eigen calls these functions through \c Eigen::numext, which dispatches on \c NumTraits<T>. When \c NumTraits<T>::IsComplex is nonzero, \c numext::abs(x) computes <tt>hypot(real(x), imag(x))</tt> and \c numext::abs2(x) computes the sum of the squares of \c real(x) and \c imag(x). Neither calls an \c abs or \c abs2 defined in the namespace of \c T. If \c real and \c imag do not determine the magnitude of \c T, as for a quaternion, specialize both. Otherwise %Eigen sees the wrong magnitude: for example, pruning a sparse product silently drops a nonzero coefficient whose \c real and \c imag are zero.
+
+\code
+namespace Eigen {
+namespace numext {
+template <> inline double abs(const my::Quaternion& x) { return norm(x); }
+}
+namespace internal {
+template <> struct abs2_impl<my::Quaternion> {
+  static inline double run(const my::Quaternion& x) { return squaredNorm(x); }
+};
+}
+}
+\endcode
+
+Here is a concrete example adding support for the Adolc's \c adouble type. <a href="https://github.com/coin-or/ADOL-C">Adolc</a> is an automatic differentiation library. The type \c adouble is basically a real value tracking the values of any number of partial derivatives.
 
 \code
 #ifndef ADOLCSUPPORT_H
@@ -29,9 +46,9 @@ namespace Eigen {
 template<> struct NumTraits<adtl::adouble>
  : NumTraits<double> // permits to get the epsilon, dummy_precision, lowest, highest functions
 {
-  typedef adtl::adouble Real;
-  typedef adtl::adouble NonInteger;
-  typedef adtl::adouble Nested;
+  using Real = adtl::adouble;
+  using NonInteger = adtl::adouble;
+  using Nested = adtl::adouble;
 
   enum {
     IsComplex = 0,
@@ -69,9 +86,9 @@ This other example adds support for the \c mpq_class type from <a href="https://
 namespace Eigen {
   template<> struct NumTraits<mpq_class> : GenericNumTraits<mpq_class>
   {
-    typedef mpq_class Real;
-    typedef mpq_class NonInteger;
-    typedef mpq_class Nested;
+    using Real = mpq_class;
+    using NonInteger = mpq_class;
+    using Nested = mpq_class;
 
     static inline Real epsilon() { return 0; }
     static inline Real dummy_precision() { return 0; }

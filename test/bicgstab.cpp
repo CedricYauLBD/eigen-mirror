@@ -6,6 +6,7 @@
 // This Source Code Form is subject to the terms of the Mozilla
 // Public License v. 2.0. If a copy of the MPL was not distributed
 // with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
+// SPDX-License-Identifier: MPL-2.0
 
 #include "sparse_solver.h"
 #include <Eigen/IterativeLinearSolvers>
@@ -24,6 +25,11 @@ void test_bicgstab_T() {
   //   CALL_SUBTEST( check_sparse_square_solving(bicgstab_colmajor_I)     );
   CALL_SUBTEST(check_sparse_square_solving(bicgstab_colmajor_ilut));
   // CALL_SUBTEST( check_sparse_square_solving(bicgstab_colmajor_ssor)     );
+
+  CALL_SUBTEST(check_sparse_zero_tolerance(bicgstab_colmajor_diag));
+  CALL_SUBTEST(check_sparse_zero_tolerance(bicgstab_colmajor_ilut));
+
+  CALL_SUBTEST(check_sparse_default_tolerance(bicgstab_colmajor_diag));
 }
 
 // https://gitlab.com/libeigen/eigen/-/issues/2856
@@ -44,7 +50,10 @@ void test_2856() {
   expected(6) = -1001;
   expected(12) = -1001;
   expected(13) = 1001;
-  VERIFY_IS_EQUAL(x, expected);
+  // The regression is the breakdown handling (a spurious "not converged"), so require an
+  // accurate solution, not a bit-exact one: FP contraction makes the iterate differ by a
+  // few ulps on some targets (e.g. riscv64).
+  VERIFY_IS_APPROX(x, expected);
 
   Eigen::VectorXd residual = b - A * x;
   VERIFY(residual.isZero());
@@ -79,10 +88,52 @@ void test_2899() {
   VERIFY(residual.isZero());
 }
 
+// solveWithGuessInPlace() lives on IterativeSolverBase; check it on a second solver.
+void test_solve_with_guess_in_place() {
+  const Index n = 40;
+  MatrixXd M = MatrixXd::Random(n, n);
+  SparseMatrix<double> A = (M + double(n) * MatrixXd::Identity(n, n)).sparseView();
+  VectorXd b = VectorXd::Random(n), x0 = VectorXd::Random(n);
+  BiCGSTAB<SparseMatrix<double> > solver(A);
+  solver.setTolerance(1e-10);
+  VectorXd x1 = solver.solveWithGuess(b, x0);
+  VERIFY_IS_EQUAL(solver.info(), Success);
+  VectorXd x2 = x0;
+  solver.solveWithGuessInPlace(b, x2);
+  VERIFY_IS_EQUAL(solver.info(), Success);
+  VERIFY_IS_APPROX(x1, x2);
+  VERIFY((A * x2 - b).norm() <= 10 * solver.tolerance() * b.norm());
+}
+
+// A zero right-hand side is solved by x = 0 without iterating; iterations() used to report the cap.
+void test_zero_rhs() {
+  SparseMatrix<double> A(4, 4);
+  for (Index i = 0; i < 4; ++i) A.insert(i, i) = 2.0;
+  BiCGSTAB<SparseMatrix<double> > solver(A);
+  VectorXd x = solver.solve(VectorXd::Zero(4));
+  VERIFY(x.isZero());
+  VERIFY_IS_EQUAL(solver.iterations(), Index(0));
+  VERIFY_IS_EQUAL(solver.error(), 0.0);
+}
+
+// See check_sparse_small_rhs: the solvers returned NoConvergence or an inaccurate x for small |b|.
+template <typename = void>
+void test_bicgstab_small_rhs() {
+  BiCGSTAB<SparseMatrix<double>, DiagonalPreconditioner<double>> solver_double;
+  BiCGSTAB<SparseMatrix<float>, DiagonalPreconditioner<float>> solver_float;
+  check_sparse_small_rhs(solver_double);
+  check_sparse_small_rhs(solver_float);
+  check_sparse_tiny_rhs(solver_float);
+}
+
 EIGEN_DECLARE_TEST(bicgstab) {
   CALL_SUBTEST_1((test_bicgstab_T<double, int>()));
   CALL_SUBTEST_2((test_bicgstab_T<std::complex<double>, int>()));
   CALL_SUBTEST_3((test_bicgstab_T<double, long int>()));
   CALL_SUBTEST_4(test_2856());
   CALL_SUBTEST_5(test_2899());
+  CALL_SUBTEST_6(test_solve_with_guess_in_place());
+  CALL_SUBTEST_6(test_zero_rhs());
+  CALL_SUBTEST_3(test_bicgstab_small_rhs<>());
+  CALL_SUBTEST_6((check_matrix_free_accessors<BiCGSTAB<MatrixFreeOperator, IdentityPreconditioner>>()));
 }

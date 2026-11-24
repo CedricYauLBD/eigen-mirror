@@ -1,21 +1,21 @@
+# SPDX-FileCopyrightText: The Eigen Authors
+# SPDX-License-Identifier: MPL-2.0
+
 project(EigenLapack CXX)
 
 if(EIGEN_BUILD_LAPACK AND EIGEN_BUILD_BLAS)
 
-include(CheckLanguage)
-check_language(Fortran)
-if(CMAKE_Fortran_COMPILER)
-  enable_language(Fortran)
-  if("${CMAKE_Fortran_COMPILER_ID}" STREQUAL "GNU")
-    if ("${CMAKE_Fortran_COMPILER_VERSION}" VERSION_GREATER_EQUAL 10.0)
-      # We use an old version of LAPACK with argument type mismatches.
-      # Allow them to compile anyway with newer GNU versions.
-      set(CMAKE_Fortran_FLAGS  "${CMAKE_Fortran_FLAGS} -fallow-argument-mismatch")
-    endif()
+option(EIGEN_ENABLE_LAPACK_TESTS "Enable the Lapack unit tests" OFF)
+
+if(EIGEN_ENABLE_LAPACK_TESTS)
+  include(CheckLanguage)
+  check_language(Fortran)
+  if(CMAKE_Fortran_COMPILER)
+    enable_language(Fortran)
+  else()
+    message(STATUS "A Fortran compiler was not found; LAPACK unit tests won't be enabled")
+    set(EIGEN_ENABLE_LAPACK_TESTS OFF)
   endif()
-  set(EIGEN_Fortran_COMPILER_WORKS ON)
-else()
-  set(EIGEN_Fortran_COMPILER_WORKS OFF)
 endif()
 
 add_custom_target(lapack)
@@ -23,85 +23,63 @@ include_directories(../blas)
 
 set(EigenLapack_SRCS
   dsecnd_INT_CPU_TIME.cpp second_INT_CPU_TIME.cpp single.cpp double.cpp complex_single.cpp complex_double.cpp
+  ilaver.cpp
 )
 
-set(EIGEN_LAPACK_DEF "eigen_lapack_cpp.def")
-
-if(EIGEN_Fortran_COMPILER_WORKS)
-
-set(EigenLapack_SRCS  ${EigenLapack_SRCS}
-  slarft.f  dlarft.f  clarft.f  zlarft.f
-  slarfb.f  dlarfb.f  clarfb.f  zlarfb.f
-  slarfg.f  dlarfg.f  clarfg.f  zlarfg.f
-  slarf.f   dlarf.f   clarf.f   zlarf.f
-  sladiv.f  dladiv.f  cladiv.f  zladiv.f
-  ilaslr.f  iladlr.f  ilaclr.f  ilazlr.f
-  ilaslc.f  iladlc.f  ilaclc.f  ilazlc.f
-  dlapy2.f  dlapy3.f  slapy2.f  slapy3.f
-  clacgv.f  zlacgv.f
-  slamch.f  dlamch.f
-)
+# The reference LAPACK release that the routines follow: ILAVER reports it, and the tests build its sources.
+set(EIGEN_LAPACK_REFERENCE_VERSION 3.12.1)
+set(EIGEN_LAPACK_REFERENCE_SHA256 2ca6407a001a474d4d4d35f3a61550156050c48016d949f0da0529c0aa052422)
+string(REPLACE "." ";" eigen_lapack_version "${EIGEN_LAPACK_REFERENCE_VERSION}")
+list(GET eigen_lapack_version 0 eigen_lapack_version_major)
+list(GET eigen_lapack_version 1 eigen_lapack_version_minor)
+list(GET eigen_lapack_version 2 eigen_lapack_version_patch)
+set_property(SOURCE ilaver.cpp APPEND PROPERTY COMPILE_DEFINITIONS
+  EIGEN_LAPACK_VERSION_MAJOR=${eigen_lapack_version_major}
+  EIGEN_LAPACK_VERSION_MINOR=${eigen_lapack_version_minor}
+  EIGEN_LAPACK_VERSION_PATCH=${eigen_lapack_version_patch})
 
 set(EIGEN_LAPACK_DEF "eigen_lapack.def")
 
-option(EIGEN_ENABLE_LAPACK_TESTS OFF "Enable the Lapack unit tests")
-
 if(EIGEN_ENABLE_LAPACK_TESTS)
 
-  get_filename_component(eigen_full_path_to_reference_lapack "./reference/" ABSOLUTE)
-  if(NOT EXISTS ${eigen_full_path_to_reference_lapack})
-    # Download lapack and install sources and testing at the right place
-    message(STATUS "Download lapack_addons_3.4.1.tgz...")
-    
-    file(DOWNLOAD "http://downloads.tuxfamily.org/eigen/lapack_addons_3.4.1.tgz"
-                  "${CMAKE_CURRENT_SOURCE_DIR}/lapack_addons_3.4.1.tgz"
-                  INACTIVITY_TIMEOUT 15
-                  TIMEOUT 240
-                  STATUS download_status
-                  EXPECTED_MD5 ab5742640617e3221a873aba44bbdc93
-                  SHOW_PROGRESS)
-                  
-    message(STATUS ${download_status})
-    list(GET download_status 0 download_status_num)
-    set(download_status_num 0)
-    if(download_status_num EQUAL 0)
-      message(STATUS "Setup lapack reference and lapack unit tests")
-      execute_process(COMMAND tar xzf  "lapack_addons_3.4.1.tgz" WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
-    else()
-      message(STATUS "Download of lapack_addons_3.4.1.tgz failed, LAPACK unit tests won't be enabled")
-      set(EIGEN_ENABLE_LAPACK_TESTS false)
-    endif()
-                  
+  include(FetchContent)
+  FetchContent_Declare(eigen_lapack_reference
+    URL https://codeload.github.com/Reference-LAPACK/lapack/tar.gz/refs/tags/v${EIGEN_LAPACK_REFERENCE_VERSION}
+    URL_HASH SHA256=${EIGEN_LAPACK_REFERENCE_SHA256}
+    TLS_VERIFY ON)
+  FetchContent_GetProperties(eigen_lapack_reference)
+  if(NOT eigen_lapack_reference_POPULATED)
+    FetchContent_Populate(eigen_lapack_reference)
   endif()
-  
-  get_filename_component(eigen_full_path_to_reference_lapack "./reference/" ABSOLUTE)
-  if(EXISTS ${eigen_full_path_to_reference_lapack})
-    set(EigenLapack_funcfilenames
-        ssyev.f   dsyev.f   csyev.f   zsyev.f
-        spotrf.f  dpotrf.f  cpotrf.f  zpotrf.f
-        spotrs.f  dpotrs.f  cpotrs.f  zpotrs.f
-        sgetrf.f  dgetrf.f  cgetrf.f  zgetrf.f
-        sgetrs.f  dgetrs.f  cgetrs.f  zgetrs.f)
-    
-    file(GLOB ReferenceLapack_SRCS0 RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} "reference/*.f")
-    foreach(filename1 IN LISTS ReferenceLapack_SRCS0)
-      string(REPLACE "reference/" "" filename ${filename1})
-      list(FIND EigenLapack_SRCS ${filename} id1)
-      list(FIND EigenLapack_funcfilenames ${filename} id2)
-      if((id1 EQUAL -1) AND (id2 EQUAL -1))
-        set(ReferenceLapack_SRCS ${ReferenceLapack_SRCS} reference/${filename})
-      endif()
-    endforeach()
-  endif()
-  
-  
-endif()
+  set(LAPACK_SOURCE_DIR "${eigen_lapack_reference_SOURCE_DIR}")
+  set(LAPACK_BINARY_DIR "${CMAKE_CURRENT_BINARY_DIR}")
 
+  # The test drivers link Eigen's routines and reference LAPACK's remaining ones.
+  # A reference source is left out when eigen_lapack.def exports its routine;
+  # LAPACK_Test_Symbols checks that no routine is defined twice.
+  file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/${EIGEN_LAPACK_DEF}" EigenLapack_routines
+       REGEX "^[ \t]*[a-z0-9_]+_[ \t]*$")
+  list(TRANSFORM EigenLapack_routines REPLACE "^[ \t]*([a-z0-9_]+)_[ \t]*$" "\\1")
+  file(GLOB ReferenceLapack_candidates "${LAPACK_SOURCE_DIR}/SRC/*.f"
+       "${LAPACK_SOURCE_DIR}/SRC/*.F" "${LAPACK_SOURCE_DIR}/SRC/*.f90"
+       "${LAPACK_SOURCE_DIR}/SRC/*.F90"
+       "${LAPACK_SOURCE_DIR}/SRC/DEPRECATED/*.f")
+  list(APPEND ReferenceLapack_candidates
+    "${LAPACK_SOURCE_DIR}/INSTALL/sroundup_lwork.f"
+    "${LAPACK_SOURCE_DIR}/INSTALL/droundup_lwork.f")
+  set(ReferenceLapack_SRCS "")
+  foreach(source IN LISTS ReferenceLapack_candidates)
+    get_filename_component(routine "${source}" NAME_WE)
+    string(TOLOWER "${routine}" routine)
+    if(NOT routine IN_LIST EigenLapack_routines)
+      list(APPEND ReferenceLapack_SRCS "${source}")
+    endif()
+  endforeach()
 endif()
 
 set(EIGEN_LAPACK_TARGETS "")
 
-add_library(eigen_lapack_static STATIC ${EigenLapack_SRCS} ${ReferenceLapack_SRCS})
+add_library(eigen_lapack_static STATIC ${EigenLapack_SRCS})
 target_link_libraries(eigen_lapack_static  eigen_blas_static)
 list(APPEND EIGEN_LAPACK_TARGETS eigen_lapack_static)
 
@@ -116,37 +94,113 @@ if (EIGEN_BUILD_SHARED_LIBS)
   list(APPEND EIGEN_LAPACK_TARGETS eigen_lapack)
 endif()
 
+# The 64-bit integer (ILP64) library exports the same symbol names as the 32-bit one, with EIGEN_BLAS_INT
+# (blas/blas.h) as the integer type, as eigen_blas_ilp64 does; it links against eigen_blas_ilp64.
+# blas/ may shadow a cached EIGEN_BUILD_BLAS_ILP64=ON with OFF, so test for the target it would have built.
+if(TARGET eigen_blas_ilp64_static)
+  option(EIGEN_BUILD_LAPACK_ILP64 "Toggles the building of the 64-bit integer (ILP64) Eigen Lapack library" ON)
+else()
+  set(EIGEN_BUILD_LAPACK_ILP64 OFF)
+endif()
+
+if(EIGEN_BUILD_LAPACK_ILP64)
+  add_library(eigen_lapack_ilp64_static STATIC ${EigenLapack_SRCS})
+  target_compile_definitions(eigen_lapack_ilp64_static PUBLIC "EIGEN_64BIT_BLAS")
+  target_link_libraries(eigen_lapack_ilp64_static eigen_blas_ilp64_static)
+  list(APPEND EIGEN_LAPACK_TARGETS eigen_lapack_ilp64_static)
+
+  if(EIGEN_BUILD_SHARED_LIBS AND TARGET eigen_blas_ilp64)
+    add_library(eigen_lapack_ilp64 SHARED ${EigenLapack_SRCS} ${EIGEN_LAPACK_DEF})
+    # EIGEN_LAPACK_BUILD_DLL stays private, as EIGEN_BLAS_BUILD_DLL does for eigen_blas_ilp64.
+    target_compile_definitions(eigen_lapack_ilp64
+      PUBLIC "EIGEN_BLAS_LINK_DLL" "EIGEN_64BIT_BLAS"
+      PRIVATE "EIGEN_LAPACK_BUILD_DLL")
+    target_link_libraries(eigen_lapack_ilp64 eigen_blas_ilp64)
+    set_target_properties(eigen_lapack_ilp64 PROPERTIES CXX_VISIBILITY_PRESET hidden
+      VERSION ${EIGEN_VERSION_NUMBER}
+      SOVERSION ${EIGEN_MAJOR_VERSION})
+    list(APPEND EIGEN_LAPACK_TARGETS eigen_lapack_ilp64)
+  endif()
+endif()
+
 foreach(target IN LISTS EIGEN_LAPACK_TARGETS)
   if(EIGEN_STANDARD_LIBRARIES_TO_LINK_TO)
     target_link_libraries(${target} ${EIGEN_STANDARD_LIBRARIES_TO_LINK_TO})
   endif()
   target_link_libraries(${target} Eigen3::Eigen)
+  if(MSVC)
+    # complex_single.cpp and complex_double.cpp exceed the COFF section limit (C1128).
+    target_compile_options(${target} PRIVATE "-bigobj")
+  endif()
   add_dependencies(lapack ${target})
-  install(TARGETS ${target}
-          RUNTIME DESTINATION bin
-          LIBRARY DESTINATION lib
-          ARCHIVE DESTINATION lib)
+  if(EIGEN_INSTALL)
+    install(TARGETS ${target}
+            RUNTIME DESTINATION bin
+            LIBRARY DESTINATION lib
+            ARCHIVE DESTINATION lib)
+  endif()
 endforeach()
 
-
-get_filename_component(eigen_full_path_to_testing_lapack "./testing/" ABSOLUTE)
-if(EXISTS ${eigen_full_path_to_testing_lapack})
-  
-  # The following comes from lapack/TESTING/CMakeLists.txt
-  # Get Python
-  find_package(PythonInterp)
-  message(STATUS "Looking for Python found - ${PYTHONINTERP_FOUND}")
-  if (PYTHONINTERP_FOUND)
-    message(STATUS "Using Python version ${PYTHON_VERSION_STRING}")
+# Checks of Eigen's routines that need no Fortran compiler.
+if(EIGEN_BUILD_TESTING)
+  function(eigen_add_lapack_cxx_test name source library)
+    add_executable(${name} testing/${source}.cpp)
+    target_include_directories(${name} PRIVATE "${Eigen_SOURCE_DIR}/test")
+    target_link_libraries(${name} ${library})
+    if(MSVC)
+      # lapack_wrappers.cpp can exceed the COFF section limit (C1128).
+      target_compile_options(${name} PRIVATE "-bigobj")
+    endif()
+    if(NOT EIGEN_LEAVE_TEST_IN_ALL_TARGET)
+      set_target_properties(${name} PROPERTIES EXCLUDE_FROM_ALL ON)
+    endif()
+    add_test(NAME ${name} COMMAND ${name})
+    add_dependencies(buildtests ${name})
+  endfunction()
+  # lapack_routines links the shared library where there is one. It includes test/main.h, which undefines NDEBUG and
+  # redefines eigen_assert, so its instances of Eigen's inline templates differ from the static library's, and in one
+  # program the linker keeps one instance of each for both: MSVC 14.29 built the library's
+  # gemm_product_impl::evalWithoutGemm without the argument that its own eigen_zero_impl::run never reads, and the
+  # test's run read that argument uninitialized.
+  if(TARGET eigen_lapack)
+    eigen_add_lapack_cxx_test(lapack_routines lapack_routines eigen_lapack)
+    set_target_properties(lapack_routines PROPERTIES RUNTIME_OUTPUT_DIRECTORY "$<TARGET_FILE_DIR:eigen_lapack>")
+    if(WIN32)
+      # Windows looks for eigen_lapack.dll's own dependency, eigen_blas.dll, beside the executable.
+      add_custom_command(TARGET lapack_routines POST_BUILD
+        COMMAND "${CMAKE_COMMAND}" -E copy_if_different "$<TARGET_FILE:eigen_blas>" "$<TARGET_FILE_DIR:lapack_routines>")
+    endif()
+  else()
+    eigen_add_lapack_cxx_test(lapack_routines lapack_routines eigen_lapack_static)
   endif()
+  # lapack_wrappers replaces Eigen's weak xerbla_, which code inside a Windows DLL would not see, so it stays static.
+  eigen_add_lapack_cxx_test(lapack_wrappers lapack_wrappers eigen_lapack_static)
+  if(EIGEN_BUILD_LAPACK_ILP64)
+    # The same checks through 64-bit integers.
+    eigen_add_lapack_cxx_test(lapack_wrappers_ilp64 lapack_wrappers eigen_lapack_ilp64_static)
+  endif()
+endif()
 
-  set(LAPACK_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR})
-  set(LAPACK_BINARY_DIR ${CMAKE_CURRENT_BINARY_DIR})
+
+if(EIGEN_ENABLE_LAPACK_TESTS)
+
+  # Reference LAPACK's own Fortran flags, such as -frecursive for gfortran and
+  # a strict floating-point model for Intel Fortran.
+  list(APPEND CMAKE_MODULE_PATH "${LAPACK_SOURCE_DIR}/CMAKE")
+  include(CheckLAPACKCompilerFlags)
+  CheckLAPACKCompilerFlags()
+
+  # Test-only: never installed and not part of the eigen_lapack libraries.
+  add_library(eigen_lapack_reference STATIC EXCLUDE_FROM_ALL ${ReferenceLapack_SRCS})
+  set_target_properties(eigen_lapack_reference PROPERTIES
+    Fortran_MODULE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/reference_modules")
+  target_link_libraries(eigen_lapack_reference PUBLIC eigen_lapack_static)
+
   set(BUILD_SINGLE      true)
   set(BUILD_DOUBLE      true)
   set(BUILD_COMPLEX     true)
-  set(BUILD_COMPLEX16E  true)
-  
+  set(BUILD_COMPLEX16   true)
+
   if(MSVC_VERSION)
 #  string(REPLACE "/STACK:10000000" "/STACK:900000000000000000"
 #    CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS}")
@@ -154,318 +208,118 @@ if(EXISTS ${eigen_full_path_to_testing_lapack})
     CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS}")
   endif()
   file(MAKE_DIRECTORY "${LAPACK_BINARY_DIR}/TESTING")
-  add_subdirectory(testing/MATGEN)
-  add_subdirectory(testing/LIN)
-  add_subdirectory(testing/EIG)
+  set(LAPACK_LIBRARIES eigen_lapack_reference)
+  set(BLAS_LIBRARIES eigen_blas_static)
+  set(TMGLIB tmglib)
+  set(LAPACK_VERSION ${EIGEN_LAPACK_REFERENCE_VERSION})
+  set(LAPACK_MAJOR_VERSION ${eigen_lapack_version_major})
+  # Upstream's test libraries are build-only dependencies.
+  function(lapack_install_library target)
+  endfunction()
+  add_subdirectory("${LAPACK_SOURCE_DIR}/TESTING/MATGEN" testing/MATGEN)
+  add_subdirectory("${LAPACK_SOURCE_DIR}/TESTING/LIN" testing/LIN)
+  add_subdirectory("${LAPACK_SOURCE_DIR}/TESTING/EIG" testing/EIG)
+
+  # Builds every registered driver, and the Fortran-free lapack_* tests defined above.
+  add_custom_target(buildtests_lapack)
+  if(TARGET buildtests)
+    add_dependencies(buildtests buildtests_lapack)
+  endif()
+  get_property(lapack_cxx_tests DIRECTORY PROPERTY BUILDSYSTEM_TARGETS)
+  list(FILTER lapack_cxx_tests INCLUDE REGEX "^lapack_")
+  if(lapack_cxx_tests)
+    add_dependencies(buildtests_lapack ${lapack_cxx_tests})
+  endif()
+  set(EIGEN_LAPACK_TEST_NAMES "")
+  set(EIGEN_LAPACK_TEST_OUTPUTS "")
+  # A relative <input> names a file in reference LAPACK's TESTING directory.
   macro(add_lapack_test output input target)
-    set(TEST_INPUT "${LAPACK_SOURCE_DIR}/testing/${input}")
-    set(TEST_OUTPUT "${LAPACK_BINARY_DIR}/TESTING/${output}")
-    string(REPLACE "." "_" input_name ${input})
-    set(testName "${target}_${input_name}")
-    if(EXISTS "${TEST_INPUT}")
-      add_dependencies(buildtests ${target})
-      add_test(NAME LAPACK-${testName}
-        COMMAND "${CMAKE_COMMAND}"
-        -DTEST=$<TARGET_FILE:${target}>
-        -DINPUT=${TEST_INPUT} 
-        -DOUTPUT=${TEST_OUTPUT} 
-        -DINTDIR=${CMAKE_CFG_INTDIR}
-        -P "${LAPACK_SOURCE_DIR}/testing/runtest.cmake")
+    if(IS_ABSOLUTE "${input}")
+      set(TEST_INPUT "${input}")
+    else()
+      set(TEST_INPUT "${LAPACK_SOURCE_DIR}/TESTING/${input}")
     endif()
+    set(TEST_OUTPUT "${LAPACK_BINARY_DIR}/TESTING/${output}")
+    get_filename_component(input_name "${input}" NAME)
+    string(REPLACE "." "_" input_name "${input_name}")
+    set(testName "${target}_${input_name}")
+    if(NOT TARGET ${target})
+      message(FATAL_ERROR "Reference LAPACK runs ${input} with ${target}, which its TESTING directory does not define")
+    endif()
+    if(NOT EXISTS "${TEST_INPUT}")
+      message(FATAL_ERROR "Reference LAPACK test input ${TEST_INPUT} does not exist")
+    endif()
+    add_dependencies(buildtests_lapack ${target})
+    list(APPEND EIGEN_LAPACK_TEST_NAMES "LAPACK-${testName}")
+    list(APPEND EIGEN_LAPACK_TEST_OUTPUTS "${TEST_OUTPUT}")
+    add_test(NAME LAPACK-${testName}
+      COMMAND "${CMAKE_COMMAND}"
+      -DTEST=$<TARGET_FILE:${target}>
+      -DINPUT=${TEST_INPUT}
+      -DOUTPUT=${TEST_OUTPUT}
+      -DINTDIR=${CMAKE_CFG_INTDIR}
+      -P "${LAPACK_SOURCE_DIR}/TESTING/runtest.cmake")
   endmacro()
 
-  if (BUILD_SINGLE)
-  add_lapack_test(stest.out stest.in xlintsts)
-  #
-  # ======== SINGLE RFP LIN TESTS ========================
-  add_lapack_test(stest_rfp.out stest_rfp.in xlintstrfs)
-  #
-  #
-  # ======== SINGLE EIG TESTS ===========================
-  #
-
-  add_lapack_test(snep.out nep.in xeigtsts)
-
-
-  add_lapack_test(ssep.out sep.in xeigtsts)
-
-
-  add_lapack_test(ssvd.out svd.in xeigtsts)
-
-
-  add_lapack_test(sec.out sec.in xeigtsts)
-
-
-  add_lapack_test(sed.out sed.in xeigtsts)
-
-
-  add_lapack_test(sgg.out sgg.in xeigtsts)
-
-
-  add_lapack_test(sgd.out sgd.in xeigtsts)
-
-
-  add_lapack_test(ssb.out ssb.in xeigtsts)
-
-
-  add_lapack_test(ssg.out ssg.in xeigtsts)
-
-
-  add_lapack_test(sbal.out sbal.in xeigtsts)
-
-
-  add_lapack_test(sbak.out sbak.in xeigtsts)
-
-
-  add_lapack_test(sgbal.out sgbal.in xeigtsts)
-
-
-  add_lapack_test(sgbak.out sgbak.in xeigtsts)
-
-
-  add_lapack_test(sbb.out sbb.in xeigtsts)
-
-
-  add_lapack_test(sglm.out glm.in xeigtsts)
-
-
-  add_lapack_test(sgqr.out gqr.in xeigtsts)
-
-
-  add_lapack_test(sgsv.out gsv.in xeigtsts)
-
-
-  add_lapack_test(scsd.out csd.in xeigtsts)
-
-
-  add_lapack_test(slse.out lse.in xeigtsts)
+  # Register the same drivers and inputs as reference LAPACK's own
+  # TESTING/CMakeLists.txt, whose precision guards all hold here.
+  file(STRINGS "${LAPACK_SOURCE_DIR}/TESTING/CMakeLists.txt" reference_tests
+       REGEX "^[ \t]*add_lapack_test\\(")
+  if(NOT reference_tests)
+    message(FATAL_ERROR "No reference LAPACK tests were registered")
   endif()
-
-  if (BUILD_DOUBLE)
-  #
-  # ======== DOUBLE LIN TESTS ===========================
-  add_lapack_test(dtest.out dtest.in xlintstd)
-  #
-  # ======== DOUBLE RFP LIN TESTS ========================
-  add_lapack_test(dtest_rfp.out dtest_rfp.in xlintstrfd)
-  #
-  # ======== DOUBLE EIG TESTS ===========================
-
-  add_lapack_test(dnep.out nep.in xeigtstd)
-
-
-  add_lapack_test(dsep.out sep.in xeigtstd)
-
-
-  add_lapack_test(dsvd.out svd.in xeigtstd)
-
-
-  add_lapack_test(dec.out dec.in xeigtstd)
-
-
-  add_lapack_test(ded.out ded.in xeigtstd)
-
-
-  add_lapack_test(dgg.out dgg.in xeigtstd)
-
-
-  add_lapack_test(dgd.out dgd.in xeigtstd)
-
-
-  add_lapack_test(dsb.out dsb.in xeigtstd)
-
-
-  add_lapack_test(dsg.out dsg.in xeigtstd)
-
-
-  add_lapack_test(dbal.out dbal.in xeigtstd)
-
-
-  add_lapack_test(dbak.out dbak.in xeigtstd)
-
-
-  add_lapack_test(dgbal.out dgbal.in xeigtstd)
-
-
-  add_lapack_test(dgbak.out dgbak.in xeigtstd)
-
-
-  add_lapack_test(dbb.out dbb.in xeigtstd)
-
-
-  add_lapack_test(dglm.out glm.in xeigtstd)
-
-
-  add_lapack_test(dgqr.out gqr.in xeigtstd)
-
-
-  add_lapack_test(dgsv.out gsv.in xeigtstd)
-
-
-  add_lapack_test(dcsd.out csd.in xeigtstd)
-
-
-  add_lapack_test(dlse.out lse.in xeigtstd)
-  endif()
-
-  if (BUILD_COMPLEX)
-  add_lapack_test(ctest.out ctest.in xlintstc)
-  #
-  # ======== COMPLEX RFP LIN TESTS ========================
-  add_lapack_test(ctest_rfp.out ctest_rfp.in xlintstrfc)
-  #
-  # ======== COMPLEX EIG TESTS ===========================
-
-  add_lapack_test(cnep.out nep.in xeigtstc)
-
-
-  add_lapack_test(csep.out sep.in xeigtstc)
-
-
-  add_lapack_test(csvd.out svd.in xeigtstc)
-
-
-  add_lapack_test(cec.out cec.in xeigtstc)
-
-
-  add_lapack_test(ced.out ced.in xeigtstc)
-
-
-  add_lapack_test(cgg.out cgg.in xeigtstc)
-
-
-  add_lapack_test(cgd.out cgd.in xeigtstc)
-
-
-  add_lapack_test(csb.out csb.in xeigtstc)
-
-
-  add_lapack_test(csg.out csg.in xeigtstc)
-
-
-  add_lapack_test(cbal.out cbal.in xeigtstc)
-
-
-  add_lapack_test(cbak.out cbak.in xeigtstc)
-
-
-  add_lapack_test(cgbal.out cgbal.in xeigtstc)
-
-
-  add_lapack_test(cgbak.out cgbak.in xeigtstc)
-
-
-  add_lapack_test(cbb.out cbb.in xeigtstc)
-
-
-  add_lapack_test(cglm.out glm.in xeigtstc)
-
-
-  add_lapack_test(cgqr.out gqr.in xeigtstc)
-
-
-  add_lapack_test(cgsv.out gsv.in xeigtstc)
-
-
-  add_lapack_test(ccsd.out csd.in xeigtstc)
-
-
-  add_lapack_test(clse.out lse.in xeigtstc)
-  endif()
-
-  if (BUILD_COMPLEX16)
-  #
-  # ======== COMPLEX16 LIN TESTS ========================
-  add_lapack_test(ztest.out ztest.in xlintstz)
-  #
-  # ======== COMPLEX16 RFP LIN TESTS ========================
-  add_lapack_test(ztest_rfp.out ztest_rfp.in xlintstrfz)
-  #
-  # ======== COMPLEX16 EIG TESTS ===========================
-
-  add_lapack_test(znep.out nep.in xeigtstz)
-
-
-  add_lapack_test(zsep.out sep.in xeigtstz)
-
-
-  add_lapack_test(zsvd.out svd.in xeigtstz)
-
-
-  add_lapack_test(zec.out zec.in xeigtstz)
-
-
-  add_lapack_test(zed.out zed.in xeigtstz)
-
-
-  add_lapack_test(zgg.out zgg.in xeigtstz)
-
-
-  add_lapack_test(zgd.out zgd.in xeigtstz)
-
-
-  add_lapack_test(zsb.out zsb.in xeigtstz)
-
-
-  add_lapack_test(zsg.out zsg.in xeigtstz)
-
-
-  add_lapack_test(zbal.out zbal.in xeigtstz)
-
-
-  add_lapack_test(zbak.out zbak.in xeigtstz)
-
-
-  add_lapack_test(zgbal.out zgbal.in xeigtstz)
-
-
-  add_lapack_test(zgbak.out zgbak.in xeigtstz)
-
-
-  add_lapack_test(zbb.out zbb.in xeigtstz)
-
-
-  add_lapack_test(zglm.out glm.in xeigtstz)
-
-
-  add_lapack_test(zgqr.out gqr.in xeigtstz)
-
-
-  add_lapack_test(zgsv.out gsv.in xeigtstz)
-
-
-  add_lapack_test(zcsd.out csd.in xeigtstz)
-
-
-  add_lapack_test(zlse.out lse.in xeigtstz)
-  endif()
-
-
-  if (BUILD_SIMPLE)
-      if (BUILD_DOUBLE)
-  #
-  # ======== SINGLE-DOUBLE PROTO LIN TESTS ==============
-          add_lapack_test(dstest.out dstest.in xlintstds)
-      endif()
-  endif()
-
-
-  if (BUILD_COMPLEX)
-      if (BUILD_COMPLEX16)
-  #
-  # ======== COMPLEX-COMPLEX16 LIN TESTS ========================
-          add_lapack_test(zctest.out zctest.in xlintstzc)
-      endif()
-  endif()
-
-  # ==============================================================================
-
-  execute_process(COMMAND ${CMAKE_COMMAND} -E copy ${LAPACK_SOURCE_DIR}/testing/lapack_testing.py ${LAPACK_BINARY_DIR})
+  foreach(reference_test IN LISTS reference_tests)
+    if(NOT reference_test MATCHES
+        "^[ \t]*add_lapack_test\\([ \t]*([^ \t)]+)[ \t]+([^ \t)]+)[ \t]+([^ \t)]+)[ \t]*\\)")
+      message(FATAL_ERROR "Unrecognized reference LAPACK test registration: ${reference_test}")
+    endif()
+    add_lapack_test("${CMAKE_MATCH_1}" "${CMAKE_MATCH_2}" "${CMAKE_MATCH_3}")
+  endforeach()
+  # Reference LAPACK's inputs stop at N = 50, below some of Eigen's blocking
+  # thresholds; these repeat the paths that reach Eigen's routines at up to
+  # the drivers' NMAX = 132.
+  foreach(precision s d c z)
+    add_lapack_test(${precision}test_large.out
+                    "${CMAKE_CURRENT_SOURCE_DIR}/testing/${precision}test_large.in" xlintst${precision})
+  endforeach()
+
+  set(EIGEN_LAPACK_TEST_ALLOWED_FAILURES "${CMAKE_CURRENT_SOURCE_DIR}/testing_allowed_failures.txt"
+      CACHE FILEPATH "Per-output failure counts that LAPACK_Test_Summary accepts; empty accepts none")
+  string(REPLACE ";" "\n" lapack_outputs "${EIGEN_LAPACK_TEST_OUTPUTS}")
+  file(WRITE "${LAPACK_BINARY_DIR}/lapack_test_outputs.txt" "${lapack_outputs}\n")
   add_test(
     NAME LAPACK_Test_Summary
     WORKING_DIRECTORY ${LAPACK_BINARY_DIR}
-    COMMAND ${PYTHON_EXECUTABLE} "lapack_testing.py"
+    COMMAND "${CMAKE_COMMAND}"
+            "-DOUTPUT_MANIFEST=${LAPACK_BINARY_DIR}/lapack_test_outputs.txt"
+            "-DREPORT_FILE=${LAPACK_BINARY_DIR}/TESTING/testing_results.txt"
+            "-DFAILURES_FILE=${LAPACK_BINARY_DIR}/TESTING/testing_failures.txt"
+            "-DALLOWED_FAILURES=${EIGEN_LAPACK_TEST_ALLOWED_FAILURES}"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/testing_summary.cmake"
   )
+  set_tests_properties(${EIGEN_LAPACK_TEST_NAMES} PROPERTIES FIXTURES_SETUP lapack_outputs)
+  set_tests_properties(LAPACK_Test_Summary PROPERTIES FIXTURES_REQUIRED lapack_outputs)
+
+  if(CMAKE_NM)
+    set(symbols_args "")
+    # ELF only: Cygwin is UNIX but builds PE DLLs, which nm -D cannot read.
+    if(TARGET eigen_lapack AND UNIX AND NOT APPLE AND NOT CYGWIN)
+      set(symbols_args "-DEIGEN_LAPACK_SHARED=$<TARGET_FILE:eigen_lapack>"
+                       "-DEIGEN_BLAS_SHARED=$<TARGET_FILE:eigen_blas>")
+      add_dependencies(buildtests_lapack eigen_lapack)
+    endif()
+    add_test(
+      NAME LAPACK_Test_Symbols
+      COMMAND "${CMAKE_COMMAND}"
+              "-DNM=${CMAKE_NM}"
+              "-DDEF_FILE=${CMAKE_CURRENT_SOURCE_DIR}/${EIGEN_LAPACK_DEF}"
+              "-DEIGEN_LAPACK=$<TARGET_FILE:eigen_lapack_static>"
+              "-DEIGEN_BLAS=$<TARGET_FILE:eigen_blas_static>"
+              "-DREFERENCE=$<TARGET_FILE:eigen_lapack_reference>"
+              ${symbols_args}
+              -P "${CMAKE_CURRENT_SOURCE_DIR}/testing_symbols.cmake"
+    )
+  endif()
 
 endif()
 

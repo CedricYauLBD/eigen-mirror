@@ -6,9 +6,13 @@
 // This Source Code Form is subject to the terms of the Mozilla
 // Public License v. 2.0. If a copy of the MPL was not distributed
 // with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
+// SPDX-License-Identifier: MPL-2.0
 
 #ifndef EIGEN_PACKET_MATH_CLANG_H
 #define EIGEN_PACKET_MATH_CLANG_H
+
+// IWYU pragma: private
+#include "../../InternalHeaderCheck.h"
 
 namespace Eigen {
 namespace internal {
@@ -21,14 +25,32 @@ template <typename ScalarT, int n>
 using VectorType = ScalarT __attribute__((ext_vector_type(n), aligned(n * sizeof(ScalarT))));
 }  // namespace detail
 
-// --- Primary packet type definitions (fixed at 64 bytes) ---
+// --- Naming Convention ---
+// This backend uses size-independent type aliases so the same code works
+// for EIGEN_GENERIC_VECTOR_SIZE_BYTES in {16, 32, 64}:
+//
+//   PacketXf  - float vector   (4, 8, or 16 elements)
+//   PacketXd  - double vector  (2, 4, or 8 elements)
+//   PacketXi  - int32_t vector (4, 8, or 16 elements)
+//   PacketXl  - int64_t vector (2, 4, or 8 elements)
+//   PacketXcf - complex<float> vector  (2, 4, or 8 elements)  [in Complex.h]
+//   PacketXcd - complex<double> vector (1, 2, or 4 elements)  [in Complex.h]
+//
+// The "X" suffix indicates the element count is determined by the macro
+// EIGEN_GENERIC_VECTOR_SIZE_BYTES at compile time. Operations that require
+// compile-time constant indices (e.g. __builtin_shufflevector) obtain them by
+// expanding detail::vector_indices<Packet>, so they need no per-size code.
 
-// TODO(rmlarsen): Generalize to other vector sizes.
-static_assert(EIGEN_GENERIC_VECTOR_SIZE_BYTES == 64, "We currently assume the full vector size is 64 bytes");
-using Packet16f = detail::VectorType<float, 16>;
-using Packet8d = detail::VectorType<double, 8>;
-using Packet16i = detail::VectorType<int32_t, 16>;
-using Packet8l = detail::VectorType<int64_t, 8>;
+static_assert(EIGEN_GENERIC_VECTOR_SIZE_BYTES == 16 || EIGEN_GENERIC_VECTOR_SIZE_BYTES == 32 ||
+                  EIGEN_GENERIC_VECTOR_SIZE_BYTES == 64,
+              "EIGEN_GENERIC_VECTOR_SIZE_BYTES must be 16, 32, or 64");
+
+constexpr int kFloatPacketSize = EIGEN_GENERIC_VECTOR_SIZE_BYTES / sizeof(float);
+constexpr int kDoublePacketSize = EIGEN_GENERIC_VECTOR_SIZE_BYTES / sizeof(double);
+using PacketXf = detail::VectorType<float, kFloatPacketSize>;
+using PacketXd = detail::VectorType<double, kDoublePacketSize>;
+using PacketXi = detail::VectorType<int32_t, kFloatPacketSize>;
+using PacketXl = detail::VectorType<int64_t, kDoublePacketSize>;
 
 // --- packet_traits specializations ---
 struct generic_float_packet_traits : default_packet_traits {
@@ -79,18 +101,20 @@ struct generic_float_packet_traits : default_packet_traits {
 
 template <>
 struct packet_traits<float> : generic_float_packet_traits {
-  using type = Packet16f;
-  using half = Packet16f;
+  using type = PacketXf;
+  using half = PacketXf;
   enum {
-    size = 16,
+    size = kFloatPacketSize,
   };
 };
 
 template <>
 struct packet_traits<double> : generic_float_packet_traits {
-  using type = Packet8d;
-  using half = Packet8d;
-  enum { size = 8, HasACos = 0, HasASin = 0 };
+  using type = PacketXd;
+  using half = PacketXd;
+  // Generic double-precision acos/asin are not yet implemented in
+  // GenericPacketMathFunctions.h (only float versions exist).
+  enum { size = kDoublePacketSize, HasACos = 0, HasASin = 0 };
 };
 
 struct generic_integer_packet_traits : default_packet_traits {
@@ -126,19 +150,19 @@ struct generic_integer_packet_traits : default_packet_traits {
 
 template <>
 struct packet_traits<int32_t> : generic_integer_packet_traits {
-  using type = Packet16i;
-  using half = Packet16i;
+  using type = PacketXi;
+  using half = PacketXi;
   enum {
-    size = 16,
+    size = kFloatPacketSize,
   };
 };
 
 template <>
 struct packet_traits<int64_t> : generic_integer_packet_traits {
-  using type = Packet8l;
-  using half = Packet8l;
+  using type = PacketXl;
+  using half = PacketXl;
   enum {
-    size = 8,
+    size = kDoublePacketSize,
   };
 };
 
@@ -151,37 +175,37 @@ struct generic_unpacket_traits : default_unpacket_traits {
 };
 
 template <>
-struct unpacket_traits<Packet16f> : generic_unpacket_traits {
+struct unpacket_traits<PacketXf> : generic_unpacket_traits {
   using type = float;
-  using half = Packet16f;
-  using integer_packet = Packet16i;
+  using half = PacketXf;
+  using integer_packet = PacketXi;
   enum {
-    size = 16,
+    size = kFloatPacketSize,
   };
 };
 template <>
-struct unpacket_traits<Packet8d> : generic_unpacket_traits {
+struct unpacket_traits<PacketXd> : generic_unpacket_traits {
   using type = double;
-  using half = Packet8d;
-  using integer_packet = Packet8l;
+  using half = PacketXd;
+  using integer_packet = PacketXl;
   enum {
-    size = 8,
+    size = kDoublePacketSize,
   };
 };
 template <>
-struct unpacket_traits<Packet16i> : generic_unpacket_traits {
+struct unpacket_traits<PacketXi> : generic_unpacket_traits {
   using type = int32_t;
-  using half = Packet16i;
+  using half = PacketXi;
   enum {
-    size = 16,
+    size = kFloatPacketSize,
   };
 };
 template <>
-struct unpacket_traits<Packet8l> : generic_unpacket_traits {
+struct unpacket_traits<PacketXl> : generic_unpacket_traits {
   using type = int64_t;
-  using half = Packet8l;
+  using half = PacketXl;
   enum {
-    size = 8,
+    size = kDoublePacketSize,
   };
 };
 
@@ -196,7 +220,7 @@ template <typename VectorT>
 using scalar_type_of_vector_t = typename ScalarTypeOfVector<VectorT>::type;
 
 template <typename VectorType>
-struct UnsignedVectorHelpter {
+struct UnsignedVectorHelper {
   static VectorType v;
   static constexpr int n = __builtin_vectorelements(v);
   using UnsignedScalar = std::make_unsigned_t<scalar_type_of_vector_t<VectorType>>;
@@ -204,41 +228,62 @@ struct UnsignedVectorHelpter {
 };
 
 template <typename VectorT>
-using unsigned_vector_t = typename UnsignedVectorHelpter<VectorT>::type;
+using unsigned_vector_t = typename UnsignedVectorHelper<VectorT>::type;
 
 template <typename VectorT>
-using HalfPacket = VectorType<typename unpacket_traits<VectorT>::type, unpacket_traits<VectorT>::size / 2>;
+constexpr int vector_elements() {
+  return static_cast<int>(sizeof(VectorT) / sizeof(scalar_type_of_vector_t<VectorT>));
+}
+
+// Signed integer vector with the same lane count and width, for sign-bit
+// tests and bitwise manipulation of floating-point packets.
+template <typename VectorT>
+struct SignedVectorHelper {
+  using SignedScalar = std::conditional_t<sizeof(scalar_type_of_vector_t<VectorT>) == 4, int32_t, int64_t>;
+  using type = VectorType<SignedScalar, vector_elements<VectorT>()>;
+};
 
 template <typename VectorT>
-using QuarterPacket = VectorType<typename unpacket_traits<VectorT>::type, unpacket_traits<VectorT>::size / 4>;
+using signed_vector_t = typename SignedVectorHelper<VectorT>::type;
+
+template <typename VectorT>
+using half_vector_t = VectorType<scalar_type_of_vector_t<VectorT>, vector_elements<VectorT>() / 2>;
+
+template <typename VectorT>
+using quarter_vector_t = VectorType<scalar_type_of_vector_t<VectorT>, vector_elements<VectorT>() / 4>;
+
+template <typename VectorT>
+using scalar_pair_t = std::pair<scalar_type_of_vector_t<VectorT>, scalar_type_of_vector_t<VectorT>>;
+
+// Index sequence covering every element of VectorT. Expanding it inside a
+// __builtin_shufflevector index list or a braced initializer is what keeps the
+// operations below independent of EIGEN_GENERIC_VECTOR_SIZE_BYTES.
+template <typename VectorT>
+using vector_indices = std::make_index_sequence<vector_elements<VectorT>()>;
 
 // load and store helpers.
 template <typename VectorT>
 EIGEN_STRONG_INLINE VectorT load_vector_unaligned(const scalar_type_of_vector_t<VectorT>* from) {
   VectorT to;
-  constexpr int n = __builtin_vectorelements(to);
-  for (int i = 0; i < n; ++i) {
-    to[i] = from[i];
-  }
+  __builtin_memcpy(&to, from, sizeof(VectorT));
   return to;
 }
 
 template <typename VectorT>
 EIGEN_STRONG_INLINE VectorT load_vector_aligned(const scalar_type_of_vector_t<VectorT>* from) {
-  return *reinterpret_cast<const VectorT*>(assume_aligned<EIGEN_GENERIC_VECTOR_SIZE_BYTES>(from));
+  eigen_assert((std::uintptr_t(from) % alignof(VectorT) == 0) && "load_vector_aligned");
+  return *reinterpret_cast<const VectorT*>(assume_aligned<alignof(VectorT)>(from));
 }
 
 template <typename VectorT>
 EIGEN_STRONG_INLINE void store_vector_unaligned(scalar_type_of_vector_t<VectorT>* to, const VectorT& from) {
-  constexpr int n = __builtin_vectorelements(from);
-  for (int i = 0; i < n; ++i) {
-    *to++ = from[i];
-  }
+  __builtin_memcpy(to, &from, sizeof(VectorT));
 }
 
 template <typename VectorT>
 EIGEN_STRONG_INLINE void store_vector_aligned(scalar_type_of_vector_t<VectorT>* to, const VectorT& from) {
-  *reinterpret_cast<VectorT*>(assume_aligned<EIGEN_GENERIC_VECTOR_SIZE_BYTES>(to)) = from;
+  eigen_assert((std::uintptr_t(to) % alignof(VectorT) == 0) && "store_vector_aligned");
+  *reinterpret_cast<VectorT*>(assume_aligned<alignof(VectorT)>(to)) = from;
 }
 
 }  // namespace detail
@@ -266,21 +311,21 @@ EIGEN_STRONG_INLINE void store_vector_aligned(scalar_type_of_vector_t<VectorT>* 
     detail::store_vector_aligned<PACKET_TYPE>(to, from);                                                          \
   }
 
-EIGEN_CLANG_PACKET_LOAD_STORE_PACKET(Packet16f)
-EIGEN_CLANG_PACKET_LOAD_STORE_PACKET(Packet8d)
-EIGEN_CLANG_PACKET_LOAD_STORE_PACKET(Packet16i)
-EIGEN_CLANG_PACKET_LOAD_STORE_PACKET(Packet8l)
+EIGEN_CLANG_PACKET_LOAD_STORE_PACKET(PacketXf)
+EIGEN_CLANG_PACKET_LOAD_STORE_PACKET(PacketXd)
+EIGEN_CLANG_PACKET_LOAD_STORE_PACKET(PacketXi)
+EIGEN_CLANG_PACKET_LOAD_STORE_PACKET(PacketXl)
 #undef EIGEN_CLANG_PACKET_LOAD_STORE_PACKET
 
 // --- Broadcast operation ---
 template <>
-EIGEN_STRONG_INLINE Packet16f pset1frombits<Packet16f>(uint32_t from) {
-  return Packet16f(numext::bit_cast<float>(from));
+EIGEN_STRONG_INLINE PacketXf pset1frombits<PacketXf>(uint32_t from) {
+  return PacketXf(numext::bit_cast<float>(from));
 }
 
 template <>
-EIGEN_STRONG_INLINE Packet8d pset1frombits<Packet8d>(uint64_t from) {
-  return Packet8d(numext::bit_cast<double>(from));
+EIGEN_STRONG_INLINE PacketXd pset1frombits<PacketXd>(uint64_t from) {
+  return PacketXd(numext::bit_cast<double>(from));
 }
 
 #define EIGEN_CLANG_PACKET_SET1(PACKET_TYPE)                                                            \
@@ -293,10 +338,10 @@ EIGEN_STRONG_INLINE Packet8d pset1frombits<Packet8d>(uint64_t from) {
     return from[0];                                                                                     \
   }
 
-EIGEN_CLANG_PACKET_SET1(Packet16f)
-EIGEN_CLANG_PACKET_SET1(Packet8d)
-EIGEN_CLANG_PACKET_SET1(Packet16i)
-EIGEN_CLANG_PACKET_SET1(Packet8l)
+EIGEN_CLANG_PACKET_SET1(PacketXf)
+EIGEN_CLANG_PACKET_SET1(PacketXd)
+EIGEN_CLANG_PACKET_SET1(PacketXi)
+EIGEN_CLANG_PACKET_SET1(PacketXl)
 #undef EIGEN_CLANG_PACKET_SET1
 
 // --- Arithmetic operations ---
@@ -310,23 +355,22 @@ EIGEN_CLANG_PACKET_SET1(Packet8l)
     return -a;                                                                 \
   }
 
-EIGEN_CLANG_PACKET_ARITHMETIC(Packet16f)
-EIGEN_CLANG_PACKET_ARITHMETIC(Packet8d)
-EIGEN_CLANG_PACKET_ARITHMETIC(Packet16i)
-EIGEN_CLANG_PACKET_ARITHMETIC(Packet8l)
+EIGEN_CLANG_PACKET_ARITHMETIC(PacketXf)
+EIGEN_CLANG_PACKET_ARITHMETIC(PacketXd)
+EIGEN_CLANG_PACKET_ARITHMETIC(PacketXi)
+EIGEN_CLANG_PACKET_ARITHMETIC(PacketXl)
 #undef EIGEN_CLANG_PACKET_ARITHMETIC
 
 // --- Bitwise operations (via casting) ---
 
 namespace detail {
 
-// Note: pcast functions are not template specializations, just helpers
-// identical to preinterpret. We duplicate them here to avoid a circular
-// dependence with TypeCasting.h.
-EIGEN_STRONG_INLINE Packet16i pcast_float_to_int(const Packet16f& a) { return reinterpret_cast<Packet16i>(a); }
-EIGEN_STRONG_INLINE Packet16f pcast_int_to_float(const Packet16i& a) { return reinterpret_cast<Packet16f>(a); }
-EIGEN_STRONG_INLINE Packet8l pcast_double_to_long(const Packet8d& a) { return reinterpret_cast<Packet8l>(a); }
-EIGEN_STRONG_INLINE Packet8d pcast_long_to_double(const Packet8l& a) { return reinterpret_cast<Packet8d>(a); }
+// Reinterpret-cast helpers, equivalent to preinterpret<> but defined here
+// because PacketMath.h is included before TypeCasting.h.
+EIGEN_STRONG_INLINE PacketXi preinterpret_float_to_int(const PacketXf& a) { return reinterpret_cast<PacketXi>(a); }
+EIGEN_STRONG_INLINE PacketXf preinterpret_int_to_float(const PacketXi& a) { return reinterpret_cast<PacketXf>(a); }
+EIGEN_STRONG_INLINE PacketXl preinterpret_double_to_long(const PacketXd& a) { return reinterpret_cast<PacketXl>(a); }
+EIGEN_STRONG_INLINE PacketXd preinterpret_long_to_double(const PacketXl& a) { return reinterpret_cast<PacketXd>(a); }
 
 }  // namespace detail
 
@@ -338,7 +382,7 @@ EIGEN_STRONG_INLINE Packet8d pcast_long_to_double(const Packet8l& a) { return re
   }                                                                                                  \
   template <>                                                                                        \
   constexpr EIGEN_STRONG_INLINE PACKET_TYPE ptrue<PACKET_TYPE>(const PACKET_TYPE& /*unused*/) {      \
-    return PACKET_TYPE(0) == PACKET_TYPE(0);                                                         \
+    return numext::bit_cast<PACKET_TYPE>(PACKET_TYPE(0) == PACKET_TYPE(0));                          \
   }                                                                                                  \
   template <>                                                                                        \
   EIGEN_STRONG_INLINE PACKET_TYPE pand<PACKET_TYPE>(const PACKET_TYPE& a, const PACKET_TYPE& b) {    \
@@ -370,16 +414,23 @@ EIGEN_STRONG_INLINE Packet8d pcast_long_to_double(const Packet8l& a) { return re
     return a << N;                                                                                   \
   }
 
-EIGEN_CLANG_PACKET_BITWISE_INT(Packet16i)
-EIGEN_CLANG_PACKET_BITWISE_INT(Packet8l)
+EIGEN_CLANG_PACKET_BITWISE_INT(PacketXi)
+EIGEN_CLANG_PACKET_BITWISE_INT(PacketXl)
 #undef EIGEN_CLANG_PACKET_BITWISE_INT
 
 // Bitwise ops for floating point packets
 #define EIGEN_CLANG_PACKET_BITWISE_FLOAT(PACKET_TYPE, CAST_TO_INT, CAST_FROM_INT)                    \
   template <>                                                                                        \
+  constexpr EIGEN_STRONG_INLINE PACKET_TYPE pzero<PACKET_TYPE>(const PACKET_TYPE& /*unused*/) {      \
+    using Scalar = detail::scalar_type_of_vector_t<PACKET_TYPE>;                                     \
+    return PACKET_TYPE(Scalar(0));                                                                   \
+  }                                                                                                  \
+  template <>                                                                                        \
   EIGEN_STRONG_INLINE PACKET_TYPE ptrue<PACKET_TYPE>(const PACKET_TYPE& /* unused */) {              \
     using Scalar = detail::scalar_type_of_vector_t<PACKET_TYPE>;                                     \
-    return CAST_FROM_INT(PACKET_TYPE(Scalar(0)) == PACKET_TYPE(Scalar(0)));                          \
+    PACKET_TYPE r = numext::bit_cast<PACKET_TYPE>(PACKET_TYPE(Scalar(0)) == PACKET_TYPE(Scalar(0))); \
+    EIGEN_FAST_MATH_CONSTANT_BARRIER(r);                                                             \
+    return r;                                                                                        \
   }                                                                                                  \
   template <>                                                                                        \
   EIGEN_STRONG_INLINE PACKET_TYPE pand<PACKET_TYPE>(const PACKET_TYPE& a, const PACKET_TYPE& b) {    \
@@ -398,56 +449,175 @@ EIGEN_CLANG_PACKET_BITWISE_INT(Packet8l)
     return CAST_FROM_INT(CAST_TO_INT(a) & ~CAST_TO_INT(b));                                          \
   }
 
-EIGEN_CLANG_PACKET_BITWISE_FLOAT(Packet16f, detail::pcast_float_to_int, detail::pcast_int_to_float)
-EIGEN_CLANG_PACKET_BITWISE_FLOAT(Packet8d, detail::pcast_double_to_long, detail::pcast_long_to_double)
+EIGEN_CLANG_PACKET_BITWISE_FLOAT(PacketXf, detail::preinterpret_float_to_int, detail::preinterpret_int_to_float)
+EIGEN_CLANG_PACKET_BITWISE_FLOAT(PacketXd, detail::preinterpret_double_to_long, detail::preinterpret_long_to_double)
 #undef EIGEN_CLANG_PACKET_BITWISE_FLOAT
 
-// --- Min/Max operations ---
-#if EIGEN_HAS_BUILTIN(__builtin_elementwise_min) && EIGEN_HAS_BUILTIN(__builtin_elementwise_max) && \
-    EIGEN_HAS_BUILTIN(__builtin_elementwise_abs)
-#define EIGEN_CLANG_PACKET_ELEMENTWISE(PACKET_TYPE)                                                                 \
-  template <>                                                                                                       \
-  EIGEN_STRONG_INLINE PACKET_TYPE pmin<PACKET_TYPE>(const PACKET_TYPE& a, const PACKET_TYPE& b) {                   \
-    /* Match NaN propagation of std::min. */                                                                        \
-    return a == a ? __builtin_elementwise_min(a, b) : a;                                                            \
-  }                                                                                                                 \
-  template <>                                                                                                       \
-  EIGEN_STRONG_INLINE PACKET_TYPE pmax<PACKET_TYPE>(const PACKET_TYPE& a, const PACKET_TYPE& b) {                   \
-    /* Match NaN propagation of std::max. */                                                                        \
-    return a == a ? __builtin_elementwise_max(a, b) : a;                                                            \
-  }                                                                                                                 \
+// --- Comparison operations ---
+// Clang vector extensions perform comparisons in the original type (float/double),
+// returning an int vector with all-ones (-1) for true and all-zeros for false.
+// The bit_cast reinterprets those int bitmasks as float packets, which is the
+// format expected by pselect and other Eigen packet operations.
+#define EIGEN_CLANG_PACKET_CMP(PACKET_TYPE, INT_PACKET_TYPE)                                                \
+  template <>                                                                                               \
+  EIGEN_STRONG_INLINE PACKET_TYPE pcmp_eq<PACKET_TYPE>(const PACKET_TYPE& a, const PACKET_TYPE& b) {        \
+    return numext::bit_cast<PACKET_TYPE>(INT_PACKET_TYPE(a == b));                                          \
+  }                                                                                                         \
+  template <>                                                                                               \
+  EIGEN_STRONG_INLINE PACKET_TYPE pcmp_lt<PACKET_TYPE>(const PACKET_TYPE& a, const PACKET_TYPE& b) {        \
+    return numext::bit_cast<PACKET_TYPE>(INT_PACKET_TYPE(a < b));                                           \
+  }                                                                                                         \
+  template <>                                                                                               \
+  EIGEN_STRONG_INLINE PACKET_TYPE pcmp_le<PACKET_TYPE>(const PACKET_TYPE& a, const PACKET_TYPE& b) {        \
+    return numext::bit_cast<PACKET_TYPE>(INT_PACKET_TYPE(a <= b));                                          \
+  }                                                                                                         \
+  template <>                                                                                               \
+  EIGEN_STRONG_INLINE PACKET_TYPE pcmp_lt_or_nan<PACKET_TYPE>(const PACKET_TYPE& a, const PACKET_TYPE& b) { \
+    return numext::bit_cast<PACKET_TYPE>(INT_PACKET_TYPE(!(a >= b)));                                       \
+  }
+
+EIGEN_CLANG_PACKET_CMP(PacketXf, PacketXi)
+EIGEN_CLANG_PACKET_CMP(PacketXd, PacketXl)
+#undef EIGEN_CLANG_PACKET_CMP
+
+// --- Min/Max/select operations ---
+namespace detail {
+// Functors usable at any vector width; the min/max reduction trees in
+// Reductions.h reuse them on progressively narrower vectors. The
+// compare-select forms compile to a single min/max instruction on targets
+// whose min/max returns the second operand when the inputs are unordered
+// (e.g. x86), and they spell out the NaN propagation of std::min/std::max:
+// the first argument is returned if either input is NaN.
+struct pmin_op {
+  template <typename VectorT>
+  EIGEN_STRONG_INLINE VectorT operator()(const VectorT& a, const VectorT& b) const {
+    return b < a ? b : a;
+  }
+};
+struct pmax_op {
+  template <typename VectorT>
+  EIGEN_STRONG_INLINE VectorT operator()(const VectorT& a, const VectorT& b) const {
+    return b > a ? b : a;
+  }
+};
+// IEEE 754-2008 minNum/maxNum semantics: return the other operand if one input
+// is NaN. Floating-point support in __builtin_elementwise_{min,max} is
+// deprecated because the name does not say which of the several IEEE min/max
+// flavors is meant; __builtin_elementwise_{minnum,maxnum} spell out the same
+// semantics the deprecated builtins provided for floats, and additionally pin
+// down +0.0 > -0.0. The elementwise_{min,max} fallback (always available
+// under this backend's clang >= 16 gate) has the same NaN semantics but
+// leaves the zero-sign tie unspecified.
+struct pmin_num_op {
+  template <typename VectorT>
+  EIGEN_STRONG_INLINE VectorT operator()(const VectorT& a, const VectorT& b) const {
+#if EIGEN_HAS_BUILTIN(__builtin_elementwise_minnum)
+    return __builtin_elementwise_minnum(a, b);
+#else
+    return __builtin_elementwise_min(a, b);
+#endif
+  }
+};
+struct pmax_num_op {
+  template <typename VectorT>
+  EIGEN_STRONG_INLINE VectorT operator()(const VectorT& a, const VectorT& b) const {
+#if EIGEN_HAS_BUILTIN(__builtin_elementwise_maxnum)
+    return __builtin_elementwise_maxnum(a, b);
+#else
+    return __builtin_elementwise_max(a, b);
+#endif
+  }
+};
+// Return NaN if either input is NaN, otherwise the min/max. When a is NaN the
+// plain compare-select form already returns a, so only b needs an explicit
+// test.
+struct pmin_nan_op {
+  template <typename VectorT>
+  EIGEN_STRONG_INLINE VectorT operator()(const VectorT& a, const VectorT& b) const {
+    return b != b ? b : pmin_op()(a, b);
+  }
+};
+struct pmax_nan_op {
+  template <typename VectorT>
+  EIGEN_STRONG_INLINE VectorT operator()(const VectorT& a, const VectorT& b) const {
+    return b != b ? b : pmax_op()(a, b);
+  }
+};
+}  // namespace detail
+
+// pmin/pmax/pselect are pure compare-select code and apply to all packet types.
+#define EIGEN_CLANG_PACKET_MINMAX_SELECT(PACKET_TYPE)                                                 \
+  template <>                                                                                         \
+  EIGEN_STRONG_INLINE PACKET_TYPE pmin<PACKET_TYPE>(const PACKET_TYPE& a, const PACKET_TYPE& b) {     \
+    return detail::pmin_op()(a, b);                                                                   \
+  }                                                                                                   \
+  template <>                                                                                         \
+  EIGEN_STRONG_INLINE PACKET_TYPE pmax<PACKET_TYPE>(const PACKET_TYPE& a, const PACKET_TYPE& b) {     \
+    return detail::pmax_op()(a, b);                                                                   \
+  }                                                                                                   \
+  template <>                                                                                         \
+  EIGEN_STRONG_INLINE PACKET_TYPE pselect<PACKET_TYPE>(const PACKET_TYPE& mask, const PACKET_TYPE& a, \
+                                                       const PACKET_TYPE& b) {                        \
+    /* The mask is all-ones or all-zeros per lane, so testing the sign of the */                      \
+    /* signed integer view suffices and maps to a single blend instruction.   */                      \
+    /* Unlike a floating-point `mask != 0` test it also survives -ffast-math, */                      \
+    /* which may assume the all-ones NaN bit pattern cannot occur in a float. */                      \
+    return reinterpret_cast<detail::signed_vector_t<PACKET_TYPE>>(mask) < 0 ? a : b;                  \
+  }
+
+EIGEN_CLANG_PACKET_MINMAX_SELECT(PacketXf)
+EIGEN_CLANG_PACKET_MINMAX_SELECT(PacketXd)
+EIGEN_CLANG_PACKET_MINMAX_SELECT(PacketXi)
+EIGEN_CLANG_PACKET_MINMAX_SELECT(PacketXl)
+#undef EIGEN_CLANG_PACKET_MINMAX_SELECT
+
+// NaN-propagation variants for the floating-point packets.
+#define EIGEN_CLANG_PACKET_MINMAX_FLOAT(PACKET_TYPE)                                                                \
   template <>                                                                                                       \
   EIGEN_STRONG_INLINE PACKET_TYPE pmin<PropagateNumbers, PACKET_TYPE>(const PACKET_TYPE& a, const PACKET_TYPE& b) { \
-    return __builtin_elementwise_min(a, b);                                                                         \
+    return detail::pmin_num_op()(a, b);                                                                             \
   }                                                                                                                 \
   template <>                                                                                                       \
   EIGEN_STRONG_INLINE PACKET_TYPE pmax<PropagateNumbers, PACKET_TYPE>(const PACKET_TYPE& a, const PACKET_TYPE& b) { \
-    return __builtin_elementwise_max(a, b);                                                                         \
+    return detail::pmax_num_op()(a, b);                                                                             \
   }                                                                                                                 \
   template <>                                                                                                       \
   EIGEN_STRONG_INLINE PACKET_TYPE pmin<PropagateNaN, PACKET_TYPE>(const PACKET_TYPE& a, const PACKET_TYPE& b) {     \
-    return a != a ? a : (b != b ? b : __builtin_elementwise_min(a, b));                                             \
+    return detail::pmin_nan_op()(a, b);                                                                             \
   }                                                                                                                 \
   template <>                                                                                                       \
   EIGEN_STRONG_INLINE PACKET_TYPE pmax<PropagateNaN, PACKET_TYPE>(const PACKET_TYPE& a, const PACKET_TYPE& b) {     \
-    return a != a ? a : (b != b ? b : __builtin_elementwise_max(a, b));                                             \
-  }                                                                                                                 \
-  template <>                                                                                                       \
-  EIGEN_STRONG_INLINE PACKET_TYPE pabs<PACKET_TYPE>(const PACKET_TYPE& a) {                                         \
-    return __builtin_elementwise_abs(a);                                                                            \
-  }                                                                                                                 \
-  template <>                                                                                                       \
-  EIGEN_STRONG_INLINE PACKET_TYPE pselect<PACKET_TYPE>(const PACKET_TYPE& mask, const PACKET_TYPE& a,               \
-                                                       const PACKET_TYPE& b) {                                      \
-    return mask != 0 ? a : b;                                                                                       \
+    return detail::pmax_nan_op()(a, b);                                                                             \
   }
 
-EIGEN_CLANG_PACKET_ELEMENTWISE(Packet16f)
-EIGEN_CLANG_PACKET_ELEMENTWISE(Packet8d)
-EIGEN_CLANG_PACKET_ELEMENTWISE(Packet16i)
-EIGEN_CLANG_PACKET_ELEMENTWISE(Packet8l)
-#undef EIGEN_CLANG_PACKET_ELEMENTWISE
+EIGEN_CLANG_PACKET_MINMAX_FLOAT(PacketXf)
+EIGEN_CLANG_PACKET_MINMAX_FLOAT(PacketXd)
+#undef EIGEN_CLANG_PACKET_MINMAX_FLOAT
+
+#if EIGEN_HAS_BUILTIN(__builtin_elementwise_abs)
+#define EIGEN_CLANG_PACKET_ABS(PACKET_TYPE)                                 \
+  template <>                                                               \
+  EIGEN_STRONG_INLINE PACKET_TYPE pabs<PACKET_TYPE>(const PACKET_TYPE& a) { \
+    return __builtin_elementwise_abs(a);                                    \
+  }
+
+EIGEN_CLANG_PACKET_ABS(PacketXf)
+EIGEN_CLANG_PACKET_ABS(PacketXd)
+EIGEN_CLANG_PACKET_ABS(PacketXi)
+EIGEN_CLANG_PACKET_ABS(PacketXl)
+#undef EIGEN_CLANG_PACKET_ABS
 #endif
+
+// psignbit: a signed compare of the integer view is a single instruction,
+// unlike the generic floating-point fallback.
+template <>
+EIGEN_STRONG_INLINE PacketXf psignbit(const PacketXf& a) {
+  return reinterpret_cast<PacketXf>(reinterpret_cast<PacketXi>(a) < 0);
+}
+template <>
+EIGEN_STRONG_INLINE PacketXd psignbit(const PacketXd& a) {
+  return reinterpret_cast<PacketXd>(reinterpret_cast<PacketXl>(a) < 0);
+}
 
 // --- Math functions (float/double only) ---
 
@@ -480,47 +650,25 @@ EIGEN_CLANG_PACKET_ELEMENTWISE(Packet8l)
     return __builtin_elementwise_sqrt(a);                                     \
   }
 
-EIGEN_CLANG_PACKET_MATH_FLOAT(Packet16f)
-EIGEN_CLANG_PACKET_MATH_FLOAT(Packet8d)
+EIGEN_CLANG_PACKET_MATH_FLOAT(PacketXf)
+EIGEN_CLANG_PACKET_MATH_FLOAT(PacketXd)
 #undef EIGEN_CLANG_PACKET_MATH_FLOAT
 #endif
 
 // --- Fused Multiply-Add (MADD) ---
-#if defined(__FMA__) && EIGEN_HAS_BUILTIN(__builtin_elementwise_fma)
-#define EIGEN_CLANG_PACKET_MADD(PACKET_TYPE)                                                      \
-  template <>                                                                                     \
-  EIGEN_STRONG_INLINE PACKET_TYPE pmadd<PACKET_TYPE>(const PACKET_TYPE& a, const PACKET_TYPE& b,  \
-                                                     const PACKET_TYPE& c) {                      \
-    return __builtin_elementwise_fma(a, b, c);                                                    \
-  }                                                                                               \
-  template <>                                                                                     \
-  EIGEN_STRONG_INLINE PACKET_TYPE pmsub<PACKET_TYPE>(const PACKET_TYPE& a, const PACKET_TYPE& b,  \
-                                                     const PACKET_TYPE& c) {                      \
-    return __builtin_elementwise_fma(a, b, -c);                                                   \
-  }                                                                                               \
-  template <>                                                                                     \
-  EIGEN_STRONG_INLINE PACKET_TYPE pnmadd<PACKET_TYPE>(const PACKET_TYPE& a, const PACKET_TYPE& b, \
-                                                      const PACKET_TYPE& c) {                     \
-    return __builtin_elementwise_fma(-a, b, c);                                                   \
-  }                                                                                               \
-  template <>                                                                                     \
-  EIGEN_STRONG_INLINE PACKET_TYPE pnmsub<PACKET_TYPE>(const PACKET_TYPE& a, const PACKET_TYPE& b, \
-                                                      const PACKET_TYPE& c) {                     \
-    return -(__builtin_elementwise_fma(a, b, c));                                                 \
+#if (defined(EIGEN_VECTORIZE_FMA) || defined(__FMA__)) && EIGEN_HAS_BUILTIN(__builtin_elementwise_fma)
+#define EIGEN_CLANG_PACKET_MADD(PACKET_TYPE)                                                                \
+  template <>                                                                                               \
+  struct is_fused_madd<PACKET_TYPE> : true_type {};                                                         \
+  template <>                                                                                               \
+  EIGEN_STRONG_INLINE PACKET_TYPE pmadd(const PACKET_TYPE& a, const PACKET_TYPE& b, const PACKET_TYPE& c) { \
+    return __builtin_elementwise_fma(a, b, c);                                                              \
   }
-#else
-// Fallback if FMA builtin is not available
-#define EIGEN_CLANG_PACKET_MADD(PACKET_TYPE)                                                     \
-  template <>                                                                                    \
-  EIGEN_STRONG_INLINE PACKET_TYPE pmadd<PACKET_TYPE>(const PACKET_TYPE& a, const PACKET_TYPE& b, \
-                                                     const PACKET_TYPE& c) {                     \
-    return (a * b) + c;                                                                          \
-  }
-#endif
 
-EIGEN_CLANG_PACKET_MADD(Packet16f)
-EIGEN_CLANG_PACKET_MADD(Packet8d)
+EIGEN_CLANG_PACKET_MADD(PacketXf)
+EIGEN_CLANG_PACKET_MADD(PacketXd)
 #undef EIGEN_CLANG_PACKET_MADD
+#endif
 
 #define EIGEN_CLANG_PACKET_SCATTER_GATHER(PACKET_TYPE)                                                               \
   template <>                                                                                                        \
@@ -541,180 +689,187 @@ EIGEN_CLANG_PACKET_MADD(Packet8d)
     return result;                                                                                                   \
   }
 
-EIGEN_CLANG_PACKET_SCATTER_GATHER(Packet16f)
-EIGEN_CLANG_PACKET_SCATTER_GATHER(Packet8d)
-EIGEN_CLANG_PACKET_SCATTER_GATHER(Packet16i)
-EIGEN_CLANG_PACKET_SCATTER_GATHER(Packet8l)
+EIGEN_CLANG_PACKET_SCATTER_GATHER(PacketXf)
+EIGEN_CLANG_PACKET_SCATTER_GATHER(PacketXd)
+EIGEN_CLANG_PACKET_SCATTER_GATHER(PacketXi)
+EIGEN_CLANG_PACKET_SCATTER_GATHER(PacketXl)
 
 #undef EIGEN_CLANG_PACKET_SCATTER_GATHER
 
 // ---- Various operations that depend on __builtin_shufflevector.
 #if EIGEN_HAS_BUILTIN(__builtin_shufflevector)
 namespace detail {
-template <typename Packet>
-EIGEN_STRONG_INLINE Packet preverse_impl_8(const Packet& a) {
-  return __builtin_shufflevector(a, a, 7, 6, 5, 4, 3, 2, 1, 0);
+
+// --- Half / whole vector helpers ---
+template <typename VectorT, std::size_t... Is>
+EIGEN_STRONG_INLINE half_vector_t<VectorT> lower_half_impl(const VectorT& a, std::index_sequence<Is...>) {
+  return __builtin_shufflevector(a, a, Is...);
 }
-template <typename Packet>
-EIGEN_STRONG_INLINE Packet preverse_impl_16(const Packet& a) {
-  return __builtin_shufflevector(a, a, 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0);
+
+template <typename VectorT, std::size_t... Is>
+EIGEN_STRONG_INLINE half_vector_t<VectorT> upper_half_impl(const VectorT& a, std::index_sequence<Is...>) {
+  return __builtin_shufflevector(a, a, (sizeof...(Is) + Is)...);
 }
+
+template <typename VectorT, typename HalfT, std::size_t... Is>
+EIGEN_STRONG_INLINE VectorT concat_halves_impl(const HalfT& lo, const HalfT& hi, std::index_sequence<Is...>) {
+  return __builtin_shufflevector(lo, hi, Is...);
+}
+
+template <typename VectorT>
+EIGEN_STRONG_INLINE half_vector_t<VectorT> lower_half(const VectorT& a) {
+  return lower_half_impl(a, vector_indices<half_vector_t<VectorT>>{});
+}
+
+template <typename VectorT>
+EIGEN_STRONG_INLINE half_vector_t<VectorT> upper_half(const VectorT& a) {
+  return upper_half_impl(a, vector_indices<half_vector_t<VectorT>>{});
+}
+
+template <typename VectorT, typename HalfT>
+EIGEN_STRONG_INLINE VectorT concat_halves(const HalfT& lo, const HalfT& hi) {
+  return concat_halves_impl<VectorT>(lo, hi, vector_indices<VectorT>{});
+}
+
+// --- Width-generic bodies for the packet operations below ---
+template <typename Packet, std::size_t... Is>
+EIGEN_STRONG_INLINE Packet preverse_impl(const Packet& a, std::index_sequence<Is...>) {
+  return __builtin_shufflevector(a, a, (sizeof...(Is) - 1 - Is)...);
+}
+
+// Loads half a packet worth of scalars and repeats each of them twice.
+template <typename Packet, std::size_t... Is>
+EIGEN_STRONG_INLINE Packet ploaddup_impl(const typename unpacket_traits<Packet>::type* from,
+                                         std::index_sequence<Is...>) {
+  static_assert((unpacket_traits<Packet>::size) % 2 == 0, "Packet size must be a multiple of 2");
+  using HalfT = half_vector_t<Packet>;
+  const HalfT a = load_vector_unaligned<HalfT>(from);
+  return __builtin_shufflevector(a, a, (Is / 2)...);
+}
+
+// Loads a quarter of a packet worth of scalars and repeats each of them four times.
+template <typename Packet, std::size_t... Is>
+EIGEN_STRONG_INLINE Packet ploadquad_impl(const typename unpacket_traits<Packet>::type* from,
+                                          std::index_sequence<Is...>) {
+  static_assert((unpacket_traits<Packet>::size) % 4 == 0, "Packet size must be a multiple of 4");
+  using QuarterT = quarter_vector_t<Packet>;
+  const QuarterT a = load_vector_unaligned<QuarterT>(from);
+  return __builtin_shufflevector(a, a, (Is / 4)...);
+}
+
+template <typename Packet, std::size_t... Is>
+EIGEN_STRONG_INLINE Packet plset_impl(const typename unpacket_traits<Packet>::type& a, std::index_sequence<Is...>) {
+  using Scalar = typename unpacket_traits<Packet>::type;
+  return Packet{(a + Scalar(Is))...};
+}
+
+// All ones in the even lanes, all zeros in the odd ones. Return the integer representation so finite fast-math cannot
+// make the all-ones lanes poison before the caller applies EIGEN_FAST_MATH_CONSTANT_BARRIER.
+template <typename Packet, std::size_t... Is>
+EIGEN_STRONG_INLINE typename unpacket_traits<Packet>::integer_packet peven_mask_impl(std::index_sequence<Is...>) {
+  using IntegerPacket = typename unpacket_traits<Packet>::integer_packet;
+  using Bits = scalar_type_of_vector_t<IntegerPacket>;
+  return IntegerPacket{(Is % 2 == 0 ? Bits(-1) : Bits(0))...};
+}
+
 }  // namespace detail
 
-#define EIGEN_CLANG_PACKET_REVERSE(PACKET_TYPE, SIZE)                           \
+#define EIGEN_CLANG_PACKET_PREVERSE(PACKET_TYPE)                                \
   template <>                                                                   \
   EIGEN_STRONG_INLINE PACKET_TYPE preverse<PACKET_TYPE>(const PACKET_TYPE& a) { \
-    return detail::preverse_impl_##SIZE(a);                                     \
+    return detail::preverse_impl(a, detail::vector_indices<PACKET_TYPE>{});     \
   }
 
-EIGEN_CLANG_PACKET_REVERSE(Packet16f, 16)
-EIGEN_CLANG_PACKET_REVERSE(Packet8d, 8)
-EIGEN_CLANG_PACKET_REVERSE(Packet16i, 16)
-EIGEN_CLANG_PACKET_REVERSE(Packet8l, 8)
-#undef EIGEN_CLANG_PACKET_REVERSE
+EIGEN_CLANG_PACKET_PREVERSE(PacketXf)
+EIGEN_CLANG_PACKET_PREVERSE(PacketXd)
+EIGEN_CLANG_PACKET_PREVERSE(PacketXi)
+EIGEN_CLANG_PACKET_PREVERSE(PacketXl)
+#undef EIGEN_CLANG_PACKET_PREVERSE
 
-namespace detail {
-template <typename Packet>
-EIGEN_STRONG_INLINE Packet ploaddup16(const typename unpacket_traits<Packet>::type* from) {
-  static_assert((unpacket_traits<Packet>::size) % 2 == 0, "Packet size must be a multiple of 2");
-  using HalfPacket = HalfPacket<Packet>;
-  HalfPacket a = load_vector_unaligned<HalfPacket>(from);
-  return __builtin_shufflevector(a, a, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7);
-}
+#define EIGEN_CLANG_PACKET_LOADDUP(PACKET_TYPE)                                                           \
+  template <>                                                                                             \
+  EIGEN_STRONG_INLINE PACKET_TYPE ploaddup<PACKET_TYPE>(const unpacket_traits<PACKET_TYPE>::type* from) { \
+    return detail::ploaddup_impl<PACKET_TYPE>(from, detail::vector_indices<PACKET_TYPE>{});               \
+  }
 
-template <typename Packet>
-EIGEN_STRONG_INLINE Packet ploadquad16(const typename unpacket_traits<Packet>::type* from) {
-  static_assert((unpacket_traits<Packet>::size) % 4 == 0, "Packet size must be a multiple of 4");
-  using QuarterPacket = QuarterPacket<Packet>;
-  QuarterPacket a = load_vector_unaligned<QuarterPacket>(from);
-  return __builtin_shufflevector(a, a, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3);
-}
+EIGEN_CLANG_PACKET_LOADDUP(PacketXf)
+EIGEN_CLANG_PACKET_LOADDUP(PacketXd)
+EIGEN_CLANG_PACKET_LOADDUP(PacketXi)
+EIGEN_CLANG_PACKET_LOADDUP(PacketXl)
+#undef EIGEN_CLANG_PACKET_LOADDUP
 
-template <typename Packet>
-EIGEN_STRONG_INLINE Packet ploaddup8(const typename unpacket_traits<Packet>::type* from) {
-  static_assert((unpacket_traits<Packet>::size) % 2 == 0, "Packet size must be a multiple of 2");
-  using HalfPacket = HalfPacket<Packet>;
-  HalfPacket a = load_vector_unaligned<HalfPacket>(from);
-  return __builtin_shufflevector(a, a, 0, 0, 1, 1, 2, 2, 3, 3);
-}
+#define EIGEN_CLANG_PACKET_LOADQUAD(PACKET_TYPE)                                                           \
+  template <>                                                                                              \
+  EIGEN_STRONG_INLINE PACKET_TYPE ploadquad<PACKET_TYPE>(const unpacket_traits<PACKET_TYPE>::type* from) { \
+    return detail::ploadquad_impl<PACKET_TYPE>(from, detail::vector_indices<PACKET_TYPE>{});               \
+  }
 
-template <typename Packet>
-EIGEN_STRONG_INLINE Packet ploadquad8(const typename unpacket_traits<Packet>::type* from) {
-  static_assert((unpacket_traits<Packet>::size) % 4 == 0, "Packet size must be a multiple of 4");
-  using QuarterPacket = QuarterPacket<Packet>;
-  QuarterPacket a = load_vector_unaligned<QuarterPacket>(from);
-  return __builtin_shufflevector(a, a, 0, 0, 0, 0, 1, 1, 1, 1);
-}
+EIGEN_CLANG_PACKET_LOADQUAD(PacketXf)
+EIGEN_CLANG_PACKET_LOADQUAD(PacketXi)
+#if EIGEN_GENERIC_VECTOR_SIZE_BYTES >= 32
+// PacketXd and PacketXl hold only two elements at 16 bytes, so they have no quarter packet to load from.
+EIGEN_CLANG_PACKET_LOADQUAD(PacketXd)
+EIGEN_CLANG_PACKET_LOADQUAD(PacketXl)
+#endif
+#undef EIGEN_CLANG_PACKET_LOADQUAD
 
-}  // namespace detail
+#define EIGEN_CLANG_PACKET_PLSET(PACKET_TYPE)                                                       \
+  template <>                                                                                       \
+  EIGEN_STRONG_INLINE PACKET_TYPE plset<PACKET_TYPE>(const unpacket_traits<PACKET_TYPE>::type& a) { \
+    return detail::plset_impl<PACKET_TYPE>(a, detail::vector_indices<PACKET_TYPE>{});               \
+  }
 
-template <>
-EIGEN_STRONG_INLINE Packet16f ploaddup<Packet16f>(const float* from) {
-  return detail::ploaddup16<Packet16f>(from);
-}
-template <>
-EIGEN_STRONG_INLINE Packet8d ploaddup<Packet8d>(const double* from) {
-  return detail::ploaddup8<Packet8d>(from);
-}
-template <>
-EIGEN_STRONG_INLINE Packet16i ploaddup<Packet16i>(const int32_t* from) {
-  return detail::ploaddup16<Packet16i>(from);
-}
-template <>
-EIGEN_STRONG_INLINE Packet8l ploaddup<Packet8l>(const int64_t* from) {
-  return detail::ploaddup8<Packet8l>(from);
-}
+EIGEN_CLANG_PACKET_PLSET(PacketXf)
+EIGEN_CLANG_PACKET_PLSET(PacketXd)
+EIGEN_CLANG_PACKET_PLSET(PacketXi)
+EIGEN_CLANG_PACKET_PLSET(PacketXl)
+#undef EIGEN_CLANG_PACKET_PLSET
 
+// --- peven_mask ---
 template <>
-EIGEN_STRONG_INLINE Packet16f ploadquad<Packet16f>(const float* from) {
-  return detail::ploadquad16<Packet16f>(from);
+EIGEN_STRONG_INLINE PacketXf peven_mask(const PacketXf& /* unused */) {
+  PacketXf r = numext::bit_cast<PacketXf>(detail::peven_mask_impl<PacketXf>(detail::vector_indices<PacketXf>{}));
+  EIGEN_FAST_MATH_CONSTANT_BARRIER(r);
+  return r;
 }
 template <>
-EIGEN_STRONG_INLINE Packet8d ploadquad<Packet8d>(const double* from) {
-  return detail::ploadquad8<Packet8d>(from);
-}
-template <>
-EIGEN_STRONG_INLINE Packet16i ploadquad<Packet16i>(const int32_t* from) {
-  return detail::ploadquad16<Packet16i>(from);
-}
-template <>
-EIGEN_STRONG_INLINE Packet8l ploadquad<Packet8l>(const int64_t* from) {
-  return detail::ploadquad8<Packet8l>(from);
-}
-
-template <>
-EIGEN_STRONG_INLINE Packet16f plset<Packet16f>(const float& a) {
-  Packet16f x{a + 0.0f, a + 1.0f, a + 2.0f,  a + 3.0f,  a + 4.0f,  a + 5.0f,  a + 6.0f,  a + 7.0f,
-              a + 8.0f, a + 9.0f, a + 10.0f, a + 11.0f, a + 12.0f, a + 13.0f, a + 14.0f, a + 15.0f};
-  return x;
-}
-template <>
-EIGEN_STRONG_INLINE Packet8d plset<Packet8d>(const double& a) {
-  return Packet8d{a + 0.0, a + 1.0, a + 2.0, a + 3.0, a + 4.0, a + 5.0, a + 6.0, a + 7.0};
-}
-template <>
-EIGEN_STRONG_INLINE Packet16i plset<Packet16i>(const int32_t& a) {
-  return Packet16i{a + 0, a + 1, a + 2,  a + 3,  a + 4,  a + 5,  a + 6,  a + 7,
-                   a + 8, a + 9, a + 10, a + 11, a + 12, a + 13, a + 14, a + 15};
-}
-template <>
-EIGEN_STRONG_INLINE Packet8l plset<Packet8l>(const int64_t& a) {
-  return Packet8l{a + 0, a + 1, a + 2, a + 3, a + 4, a + 5, a + 6, a + 7};
-}
-
-template <>
-EIGEN_STRONG_INLINE Packet16f peven_mask(const Packet16f& /* unused */) {
-  float kTrue = numext::bit_cast<float>(int32_t(-1));
-  float kFalse = 0.0f;
-  return Packet16f{kTrue, kFalse, kTrue, kFalse, kTrue, kFalse, kTrue, kFalse,
-                   kTrue, kFalse, kTrue, kFalse, kTrue, kFalse, kTrue, kFalse};
-}
-
-template <>
-EIGEN_STRONG_INLINE Packet8d peven_mask(const Packet8d& /* unused */) {
-  double kTrue = numext::bit_cast<double>(int64_t(-1l));
-  double kFalse = 0.0;
-  return Packet8d{kTrue, kFalse, kTrue, kFalse, kTrue, kFalse, kTrue, kFalse};
+EIGEN_STRONG_INLINE PacketXd peven_mask(const PacketXd& /* unused */) {
+  PacketXd r = numext::bit_cast<PacketXd>(detail::peven_mask_impl<PacketXd>(detail::vector_indices<PacketXd>{}));
+  EIGEN_FAST_MATH_CONSTANT_BARRIER(r);
+  return r;
 }
 
 // Helpers for ptranspose.
 namespace detail {
 
-template <typename Packet>
-EIGEN_ALWAYS_INLINE void zip_in_place16(Packet& p1, Packet& p2) {
-  Packet tmp = __builtin_shufflevector(p1, p2, 0, 16, 1, 17, 2, 18, 3, 19, 4, 20, 5, 21, 6, 22, 7, 23);
-  p2 = __builtin_shufflevector(p1, p2, 8, 24, 9, 25, 10, 26, 11, 27, 12, 28, 13, 29, 14, 30, 15, 31);
+// Shuffle index of output element `i` when interleaving two vectors of `Size`
+// elements each. `Group` adjacent elements move together: 1 for scalar packets,
+// 2 for the complex packets in Complex.h, whose real and imaginary parts must
+// stay adjacent. Output groups alternate between the two inputs, taking group
+// `first_group` of each first.
+template <std::size_t Group, std::size_t Size>
+constexpr std::size_t zip_index(std::size_t i, std::size_t first_group) {
+  return Size * ((i / Group) % 2) + Group * (first_group + i / Group / 2) + i % Group;
+}
+
+// Interleaves p1 and p2 in place, leaving the low half of the result in p1 and
+// the high half in p2.
+template <std::size_t Group, typename VectorT, std::size_t... Is>
+EIGEN_ALWAYS_INLINE void zip_in_place_impl(VectorT& p1, VectorT& p2, std::index_sequence<Is...>) {
+  constexpr std::size_t kSize = sizeof...(Is);
+  // With a single lane group per vector both output shuffles would pick group
+  // 0 and silently duplicate p1; such packets must not reach this code.
+  static_assert(kSize >= 2 * Group, "zip_in_place needs at least two lane groups per vector");
+  const VectorT tmp = __builtin_shufflevector(p1, p2, zip_index<Group, kSize>(Is, 0)...);
+  p2 = __builtin_shufflevector(p1, p2, zip_index<Group, kSize>(Is, kSize / (2 * Group))...);
   p1 = tmp;
 }
 
+// Complex.h specializes this for its packet types, which zip whole complex
+// values rather than individual reals.
 template <typename Packet>
-EIGEN_ALWAYS_INLINE void zip_in_place8(Packet& p1, Packet& p2) {
-  Packet tmp = __builtin_shufflevector(p1, p2, 0, 8, 1, 9, 2, 10, 3, 11);
-  p2 = __builtin_shufflevector(p1, p2, 4, 12, 5, 13, 6, 14, 7, 15);
-  p1 = tmp;
-}
-
-template <typename Packet>
-void zip_in_place(Packet& p1, Packet& p2);
-
-template <>
-EIGEN_ALWAYS_INLINE void zip_in_place<Packet16f>(Packet16f& p1, Packet16f& p2) {
-  zip_in_place16(p1, p2);
-}
-
-template <>
-EIGEN_ALWAYS_INLINE void zip_in_place<Packet8d>(Packet8d& p1, Packet8d& p2) {
-  zip_in_place8(p1, p2);
-}
-
-template <>
-EIGEN_ALWAYS_INLINE void zip_in_place<Packet16i>(Packet16i& p1, Packet16i& p2) {
-  zip_in_place16(p1, p2);
-}
-
-template <>
-EIGEN_ALWAYS_INLINE void zip_in_place<Packet8l>(Packet8l& p1, Packet8l& p2) {
-  zip_in_place8(p1, p2);
+EIGEN_ALWAYS_INLINE void zip_in_place(Packet& p1, Packet& p2) {
+  zip_in_place_impl<1>(p1, p2, vector_indices<Packet>{});
 }
 
 template <typename Packet>
@@ -767,61 +922,68 @@ EIGEN_ALWAYS_INLINE void ptranspose_impl(PacketBlock<Packet, 16>& kernel) {
 
 }  // namespace detail
 
-EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE void ptranspose(PacketBlock<Packet16f, 16>& kernel) {
+// ptranspose overloads: only emit valid block sizes per vector size.
+// At 16 bytes: float has 4 elems, double has 2 elems.
+// At 32 bytes: float has 8 elems, double has 4 elems.
+// At 64 bytes: float has 16 elems, double has 8 elems.
+
+// All sizes support PacketBlock<PacketXf, 2> and PacketBlock<PacketXf, 4>.
+EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE void ptranspose(PacketBlock<PacketXf, 4>& kernel) {
+  detail::ptranspose_impl(kernel);
+}
+EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE void ptranspose(PacketBlock<PacketXf, 2>& kernel) {
   detail::ptranspose_impl(kernel);
 }
 
-EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE void ptranspose(PacketBlock<Packet16f, 8>& kernel) {
+// All sizes support PacketBlock<PacketXd, 2>.
+EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE void ptranspose(PacketBlock<PacketXd, 2>& kernel) {
   detail::ptranspose_impl(kernel);
 }
 
-EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE void ptranspose(PacketBlock<Packet16f, 4>& kernel) {
+// All sizes support PacketBlock<PacketXi, 2> and PacketBlock<PacketXi, 4>.
+EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE void ptranspose(PacketBlock<PacketXi, 4>& kernel) {
+  detail::ptranspose_impl(kernel);
+}
+EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE void ptranspose(PacketBlock<PacketXi, 2>& kernel) {
   detail::ptranspose_impl(kernel);
 }
 
-EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE void ptranspose(PacketBlock<Packet16f, 2>& kernel) {
+// All sizes support PacketBlock<PacketXl, 2>.
+EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE void ptranspose(PacketBlock<PacketXl, 2>& kernel) {
   detail::ptranspose_impl(kernel);
 }
 
-EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE void ptranspose(PacketBlock<Packet8d, 8>& kernel) {
+#if EIGEN_GENERIC_VECTOR_SIZE_BYTES >= 32
+// 32+ bytes: float has 8+ elems, double has 4+ elems.
+EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE void ptranspose(PacketBlock<PacketXf, 8>& kernel) {
   detail::ptranspose_impl(kernel);
 }
+EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE void ptranspose(PacketBlock<PacketXd, 4>& kernel) {
+  detail::ptranspose_impl(kernel);
+}
+EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE void ptranspose(PacketBlock<PacketXi, 8>& kernel) {
+  detail::ptranspose_impl(kernel);
+}
+EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE void ptranspose(PacketBlock<PacketXl, 4>& kernel) {
+  detail::ptranspose_impl(kernel);
+}
+#endif
 
-EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE void ptranspose(PacketBlock<Packet8d, 4>& kernel) {
+#if EIGEN_GENERIC_VECTOR_SIZE_BYTES >= 64
+// 64 bytes: float has 16 elems, double has 8 elems.
+EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE void ptranspose(PacketBlock<PacketXf, 16>& kernel) {
   detail::ptranspose_impl(kernel);
 }
-
-EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE void ptranspose(PacketBlock<Packet8d, 2>& kernel) {
+EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE void ptranspose(PacketBlock<PacketXd, 8>& kernel) {
   detail::ptranspose_impl(kernel);
 }
-
-EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE void ptranspose(PacketBlock<Packet16i, 16>& kernel) {
+EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE void ptranspose(PacketBlock<PacketXi, 16>& kernel) {
   detail::ptranspose_impl(kernel);
 }
-
-EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE void ptranspose(PacketBlock<Packet16i, 8>& kernel) {
+EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE void ptranspose(PacketBlock<PacketXl, 8>& kernel) {
   detail::ptranspose_impl(kernel);
 }
-
-EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE void ptranspose(PacketBlock<Packet16i, 4>& kernel) {
-  detail::ptranspose_impl(kernel);
-}
-
-EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE void ptranspose(PacketBlock<Packet16i, 2>& kernel) {
-  detail::ptranspose_impl(kernel);
-}
-
-EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE void ptranspose(PacketBlock<Packet8l, 8>& kernel) {
-  detail::ptranspose_impl(kernel);
-}
-
-EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE void ptranspose(PacketBlock<Packet8l, 4>& kernel) {
-  detail::ptranspose_impl(kernel);
-}
-
-EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE void ptranspose(PacketBlock<Packet8l, 2>& kernel) {
-  detail::ptranspose_impl(kernel);
-}
+#endif
 #endif
 
 }  // end namespace internal

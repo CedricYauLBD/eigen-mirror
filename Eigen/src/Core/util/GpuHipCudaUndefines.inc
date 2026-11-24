@@ -7,6 +7,7 @@
 // This Source Code Form is subject to the terms of the Mozilla
 // Public License v. 2.0. If a copy of the MPL was not distributed
 // with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
+// SPDX-License-Identifier: MPL-2.0
 
 #if defined(EIGEN_CORE_GPU_HIP_CUDA_DEFINES_H)
 
@@ -18,8 +19,21 @@
 #undef gpuSuccess
 #undef gpuErrorNotReady
 #undef gpuGetDeviceCount
+#undef gpuGetLastError
+#undef gpuPeekAtLastError
+#undef gpuGetErrorName
 #undef gpuGetErrorString
 #undef gpuGetDeviceProperties
+#undef gpuDeviceGetAttribute
+#undef gpuDevAttrMultiProcessorCount
+#undef gpuDevAttrMaxThreadsPerBlock
+#undef gpuDevAttrMaxThreadsPerMultiProcessor
+#undef gpuDevAttrMaxSharedMemoryPerBlock
+#undef gpuDevAttrMaxSharedMemoryPerBlockOptin
+#undef gpuDevAttrComputeCapabilityMajor
+#undef gpuDevAttrComputeCapabilityMinor
+#undef gpuDevAttrWarpSize
+#undef gpuDevAttrMemoryPoolsSupported
 #undef gpuStreamDefault
 #undef gpuGetDevice
 #undef gpuSetDevice
@@ -32,8 +46,6 @@
 #undef gpuMemcpyDeviceToHost
 #undef gpuMemcpyHostToDevice
 #undef gpuStreamQuery
-#undef gpuSharedMemConfig
-#undef gpuDeviceSetSharedMemConfig
 #undef gpuStreamSynchronize
 #undef gpuDeviceSynchronize
 #undef gpuMemcpy

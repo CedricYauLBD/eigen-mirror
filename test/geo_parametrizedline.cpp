@@ -7,6 +7,7 @@
 // This Source Code Form is subject to the terms of the Mozilla
 // Public License v. 2.0. If a copy of the MPL was not distributed
 // with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
+// SPDX-License-Identifier: MPL-2.0
 
 #include "main.h"
 #include <Eigen/Geometry>
@@ -20,11 +21,11 @@ void parametrizedline(const LineType &_line) {
   */
   using std::abs;
   const Index dim = _line.dim();
-  typedef typename LineType::Scalar Scalar;
-  typedef typename NumTraits<Scalar>::Real RealScalar;
-  typedef Matrix<Scalar, LineType::AmbientDimAtCompileTime, 1> VectorType;
-  typedef Hyperplane<Scalar, LineType::AmbientDimAtCompileTime> HyperplaneType;
-  typedef Matrix<Scalar, HyperplaneType::AmbientDimAtCompileTime, HyperplaneType::AmbientDimAtCompileTime> MatrixType;
+  using Scalar = typename LineType::Scalar;
+  using RealScalar = typename NumTraits<Scalar>::Real;
+  using VectorType = Matrix<Scalar, LineType::AmbientDimAtCompileTime, 1>;
+  using HyperplaneType = Hyperplane<Scalar, LineType::AmbientDimAtCompileTime>;
+  using MatrixType = Matrix<Scalar, HyperplaneType::AmbientDimAtCompileTime, HyperplaneType::AmbientDimAtCompileTime>;
 
   VectorType p0 = VectorType::Random(dim);
   VectorType p1 = VectorType::Random(dim);
@@ -38,13 +39,15 @@ void parametrizedline(const LineType &_line) {
 
   VERIFY_IS_MUCH_SMALLER_THAN(l0.distance(p0), RealScalar(1));
   VERIFY_IS_MUCH_SMALLER_THAN(l0.distance(p0 + s0 * d0), RealScalar(1));
-  VERIFY_IS_APPROX((l0.projection(p1) - p1).norm(), l0.distance(p1));
+  // Each side has an absolute error of O(eps * (|p0| + |p1|)), which exceeds a relative bound when p1 is near the line.
+  VERIFY_IS_MUCH_SMALLER_THAN(abs((l0.projection(p1) - p1).norm() - l0.distance(p1)), p0.norm() + p1.norm());
   VERIFY_IS_MUCH_SMALLER_THAN(l0.distance(l0.projection(p1)), RealScalar(1));
-  VERIFY_IS_APPROX(Scalar(l0.distance((p0 + s0 * d0) + d0.unitOrthogonal() * s1)), s1);
+  VectorType orthogonal = d0.unitOrthogonal();
+  VERIFY_IS_APPROX(Scalar(LineType(VectorType::Zero(dim), d0).distance(orthogonal * s1)), s1);
 
   // casting
   const int Dim = LineType::AmbientDimAtCompileTime;
-  typedef typename GetDifferentType<Scalar>::type OtherScalar;
+  using OtherScalar = typename GetDifferentType<Scalar>::type;
   ParametrizedLine<OtherScalar, Dim> hp1f = l0.template cast<OtherScalar>();
   VERIFY_IS_APPROX(hp1f.template cast<Scalar>(), l0);
   ParametrizedLine<Scalar, Dim> hp1d = l0.template cast<Scalar>();
@@ -56,8 +59,10 @@ void parametrizedline(const LineType &_line) {
   HyperplaneType hp(p2, n2);
   Scalar t = l0.intersectionParameter(hp);
   VectorType pi = l0.pointAt(t);
-  VERIFY_IS_MUCH_SMALLER_THAN(hp.signedDistance(pi), RealScalar(1));
-  VERIFY_IS_MUCH_SMALLER_THAN(l0.distance(pi), RealScalar(1));
+  // A line nearly parallel to the plane puts pi far away, and both residuals are O(eps * |pi|).
+  const RealScalar pi_scale = numext::maxi(RealScalar(1), pi.norm());
+  VERIFY_IS_MUCH_SMALLER_THAN(hp.signedDistance(pi), pi_scale);
+  VERIFY_IS_MUCH_SMALLER_THAN(l0.distance(pi), pi_scale);
   VERIFY_IS_APPROX(l0.intersectionPoint(hp), pi);
 
   // transform
@@ -86,8 +91,8 @@ void parametrizedline(const LineType &_line) {
 
 template <typename Scalar>
 void parametrizedline_alignment() {
-  typedef ParametrizedLine<Scalar, 4, AutoAlign> Line4a;
-  typedef ParametrizedLine<Scalar, 4, DontAlign> Line4u;
+  using Line4a = ParametrizedLine<Scalar, 4, AutoAlign>;
+  using Line4u = ParametrizedLine<Scalar, 4, DontAlign>;
 
   EIGEN_ALIGN_MAX Scalar array1[16];
   EIGEN_ALIGN_MAX Scalar array2[16];

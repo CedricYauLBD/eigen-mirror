@@ -6,6 +6,7 @@
 // This Source Code Form is subject to the terms of the Mozilla
 // Public License v. 2.0. If a copy of the MPL was not distributed
 // with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
+// SPDX-License-Identifier: MPL-2.0
 
 #include "sparse.h"
 
@@ -28,8 +29,8 @@ void initSPD(double density, Matrix<Scalar, Dynamic, Dynamic>& refMat, SparseMat
 template <typename Scalar>
 void sparse_solvers(int rows, int cols) {
   double density = (std::max)(8. / (rows * cols), 0.01);
-  typedef Matrix<Scalar, Dynamic, Dynamic> DenseMatrix;
-  typedef Matrix<Scalar, Dynamic, 1> DenseVector;
+  using DenseMatrix = Matrix<Scalar, Dynamic, Dynamic>;
+  using DenseVector = Matrix<Scalar, Dynamic, 1>;
   // Scalar eps = 1e-6;
 
   DenseVector vec1 = DenseVector::Random(rows);
@@ -90,10 +91,155 @@ void sparse_solvers(int rows, int cols) {
     m2.template triangularView<Upper>().solveInPlace(matB);
     VERIFY_IS_APPROX(matB, refMatB);
 
-    // test deprecated API
-    initSparse<Scalar>(density, refMat2, m2, ForceNonZeroDiag | MakeLowerTriangular, &zeroCoords, &nonzeroCoords);
-    VERIFY_IS_APPROX(refMat2.template triangularView<Lower>().solve(vec2),
-                     m2.template triangularView<Lower>().solve(vec3));
+    // A triangularView is a view of the triangular PART of a possibly-general matrix,
+    // so the stored matrix need not be strictly triangular. Exercise a general lhs, a
+    // SparseVector rhs, a mismatched-StorageIndex rhs, an uncompressed lhs, an
+    // expression lhs, and a unit diagonal -- none of which the checks above cover.
+    {
+      SparseMatrix<Scalar> mg(rows, rows);
+      DenseMatrix refMatG = DenseMatrix::Zero(rows, rows);
+      initSparse<Scalar>(density, refMatG, mg, ForceNonZeroDiag);  // GENERAL (both triangles stored)
+      initSparse<Scalar>(density, refMatB, matB);
+
+      // general matrix through a lower / upper / unit-upper view, sparse rhs
+      for (int mode = 0; mode < 3; ++mode) {
+        DenseMatrix rb = refMatB;
+        SparseMatrix<Scalar> mb = matB;
+        if (mode == 0) {
+          refMatG.template triangularView<Lower>().solveInPlace(rb);
+          mg.template triangularView<Lower>().solveInPlace(mb);
+        } else if (mode == 1) {
+          refMatG.template triangularView<Upper>().solveInPlace(rb);
+          mg.template triangularView<Upper>().solveInPlace(mb);
+        } else {
+          refMatG.template triangularView<UnitUpper>().solveInPlace(rb);
+          mg.template triangularView<UnitUpper>().solveInPlace(mb);
+        }
+        VERIFY_IS_APPROX(mb.toDense(), rb);
+      }
+
+      // expression lhs (no raw storage -> iterator path)
+      {
+        DenseMatrix rb = refMatB;
+        SparseMatrix<Scalar> mb = matB;
+        refMatG.template triangularView<Upper>().solveInPlace(rb);
+        (Scalar(1) * mg).template triangularView<Upper>().solveInPlace(mb);
+        VERIFY_IS_APPROX(mb.toDense(), rb);
+      }
+
+      // uncompressed lhs (innerNonZeroPtr != null)
+      {
+        DenseMatrix rb = refMatB;
+        SparseMatrix<Scalar> mb = matB, mu = mg;
+        mu.reserve(Matrix<int, Dynamic, 1>::Constant(mu.cols(), rows));  // -> uncompressed
+        refMatG.template triangularView<Lower>().solveInPlace(rb);
+        mu.template triangularView<Lower>().solveInPlace(mb);
+        VERIFY_IS_APPROX(mb.toDense(), rb);
+      }
+
+      // mismatched-StorageIndex rhs (-> InnerIterator fallback)
+      {
+        DenseMatrix rb = refMatB;
+        SparseMatrix<Scalar, ColMajor, long> mbl = matB;
+        refMatG.template triangularView<Lower>().solveInPlace(rb);
+        mg.template triangularView<Lower>().solveInPlace(mbl);
+        VERIFY_IS_APPROX(DenseMatrix(mbl), rb);
+      }
+
+      // SparseVector rhs (sets CompressedAccessBit but its outerIndexPtr() is null)
+      {
+        DenseVector rv = DenseVector::Zero(rows);
+        SparseVector<Scalar> vb(rows);
+        for (Index i = 0; i < rows; ++i)
+          if (internal::random<int>(0, 2) == 0) {
+            Scalar s = internal::random<Scalar>();
+            vb.coeffRef(i) = s;
+            rv(i) = s;
+          }
+        DenseVector rref = refMatG.template triangularView<Lower>().solve(rv);
+        SparseVector<Scalar> vx = vb;
+        mg.template triangularView<Lower>().solveInPlace(vx);
+        VERIFY_IS_APPROX(DenseVector(vx), rref);
+      }
+
+      // explicitly-stored zero rhs entries must not expand into stored zeros: the reach
+      // is a structural bound, so a zero rhs coefficient (or one that cancels to zero)
+      // is pruned at insertion rather than materialized across the whole reach.
+      {
+        SparseMatrix<Scalar> mb(rows, matB.cols());
+        DenseMatrix rb = DenseMatrix::Zero(rows, matB.cols());
+        for (Index c = 0; c < mb.cols(); ++c)
+          for (Index i = 0; i < rows; ++i)
+            if (internal::random<int>(0, 3) == 0) {
+              Scalar s = internal::random<int>(0, 2) == 0 ? Scalar(0) : internal::random<Scalar>();  // some explicit 0
+              mb.insert(i, c) = s;
+              rb(i, c) = s;
+            }
+        mb.makeCompressed();
+        refMatG.template triangularView<Lower>().solveInPlace(rb);
+        mg.template triangularView<Lower>().solveInPlace(mb);
+        VERIFY_IS_APPROX(mb.toDense(), rb);
+        for (Index c = 0; c < mb.cols(); ++c)
+          for (typename SparseMatrix<Scalar>::InnerIterator it(mb, c); it; ++it)
+            VERIFY(!numext::is_exactly_zero(it.value()));  // no stored zeros
+      }
+
+      // A reached column with no stored diagonal (non-unit) is out of contract: it must
+      // assert in debug on every path (pointer/iterator x lower/upper), rather than the
+      // failure being silently keyed to has_compressed_access. In release these divide by
+      // zero -> inf/NaN with no out-of-bounds read (covered by the sanitizer drivers).
+      {
+        SparseMatrix<Scalar> us(3, 3);
+        us.insert(0, 1) = Scalar(1);
+        us.insert(1, 1) = Scalar(2);
+        us.insert(2, 2) = Scalar(3);
+        us.makeCompressed();  // column 0 empty -> reached from rhs(0) but no diagonal
+        SparseMatrix<Scalar> ub(3, 1);
+        ub.insert(0, 0) = Scalar(1);
+        ub.makeCompressed();
+        SparseMatrix<Scalar> up = ub, ui = ub;
+        VERIFY_RAISES_ASSERT(us.template triangularView<Upper>().solveInPlace(up));                // pointer upper
+        VERIFY_RAISES_ASSERT((Scalar(1) * us).template triangularView<Upper>().solveInPlace(ui));  // iterator upper
+
+        SparseMatrix<Scalar> ls(3, 3);
+        ls.insert(0, 0) = Scalar(2);
+        ls.insert(1, 1) = Scalar(3);
+        ls.makeCompressed();  // column 2 empty (last) -> reached from rhs(2) but no diagonal
+        SparseMatrix<Scalar> lb(3, 1);
+        lb.insert(2, 0) = Scalar(1);
+        lb.makeCompressed();
+        SparseMatrix<Scalar> lp = lb, li = lb;
+        VERIFY_RAISES_ASSERT(ls.template triangularView<Lower>().solveInPlace(lp));                // pointer lower
+        VERIFY_RAISES_ASSERT((Scalar(1) * ls).template triangularView<Lower>().solveInPlace(li));  // iterator lower
+      }
+
+      // mixed-scalar rhs: a real lhs applied to a rhs must accumulate in the rhs scalar.
+      // For real Scalar this is the ordinary path; for complex Scalar it is the
+      // real-factor / complex-data case that must both compile and be correct.
+      {
+        using Real = typename NumTraits<Scalar>::Real;
+        SparseMatrix<Real> mr(rows, rows);
+        Matrix<Real, Dynamic, Dynamic> refMatR = Matrix<Real, Dynamic, Dynamic>::Zero(rows, rows);
+        initSparse<Real>(density, refMatR, mr, ForceNonZeroDiag);
+        DenseMatrix rb = refMatB;
+        SparseMatrix<Scalar> mb = matB;
+        refMatR.template cast<Scalar>().template triangularView<Lower>().solveInPlace(rb);
+        mr.template triangularView<Lower>().solveInPlace(mb);  // SparseMatrix<Real> lhs, <Scalar> rhs
+        VERIFY_IS_APPROX(mb.toDense(), rb);
+      }
+    }
+
+    // general row-major matrix without stored diagonal through a unit-lower view, dense rhs
+    {
+      SparseMatrix<Scalar, RowMajor> mr(rows, rows);
+      DenseMatrix refMatR = DenseMatrix::Zero(rows, rows);
+      initSparse<Scalar>(density, refMatR, mr);
+      mr.coeffRef(0, rows - 1) += Scalar(1);
+      refMatR(0, rows - 1) += Scalar(1);
+      mr.prune([](Index r, Index c, const Scalar&) { return r != c; });
+      VERIFY_IS_APPROX(refMatR.template triangularView<UnitLower>().solve(vec2),
+                       mr.template triangularView<UnitLower>().solve(vec3));
+    }
 
     // test empty triangular matrix
     {
@@ -110,8 +256,51 @@ void sparse_solvers(int rows, int cols) {
   }
 }
 
+// A sparse right-hand side of either storage order, with fewer, as many or more columns than rows.
+template <typename Scalar, int RhsOrder>
+void sparse_triangular_solve_rhs_order() {
+  using DenseMatrix = Matrix<Scalar, Dynamic, Dynamic>;
+  using Lhs = SparseMatrix<Scalar, ColMajor>;
+  using Rhs = SparseMatrix<Scalar, RhsOrder>;
+  const Index n = internal::random<Index>(1, 12);
+  for (Index k : {Index(1), n, n + 4, Index(2 * n + 1)}) {
+    DenseMatrix refL = DenseMatrix::Zero(n, n);
+    Lhs L(n, n);
+    initSparse<Scalar>(0.4, refL, L, ForceNonZeroDiag);
+    DenseMatrix refB = DenseMatrix::Zero(n, k);
+    Rhs B(n, k);
+    initSparse<Scalar>(0.4, refB, B);
+    {
+      DenseMatrix x = refB;
+      Rhs b = B;
+      refL.template triangularView<Lower>().solveInPlace(x);
+      L.template triangularView<Lower>().solveInPlace(b);
+      VERIFY_IS_EQUAL(b.rows(), n);
+      VERIFY_IS_EQUAL(b.cols(), k);
+      VERIFY_IS_APPROX(DenseMatrix(b), x);
+    }
+    {
+      DenseMatrix x = refB;
+      Rhs b = B;
+      refL.template triangularView<UnitUpper>().solveInPlace(x);
+      L.template triangularView<UnitUpper>().solveInPlace(b);
+      VERIFY_IS_APPROX(DenseMatrix(b), x);
+    }
+    {
+      DenseMatrix x = refB;
+      Rhs b = B;
+      refL.template triangularView<Upper>().solveInPlace(x);
+      L.template triangularView<Upper>().solveInPlace(b);
+      VERIFY_IS_APPROX(DenseMatrix(b), x);
+    }
+  }
+}
+
 EIGEN_DECLARE_TEST(sparse_solvers) {
   for (int i = 0; i < g_repeat; i++) {
+    CALL_SUBTEST_1((sparse_triangular_solve_rhs_order<double, ColMajor>()));
+    CALL_SUBTEST_1((sparse_triangular_solve_rhs_order<double, RowMajor>()));
+    CALL_SUBTEST_2((sparse_triangular_solve_rhs_order<std::complex<double>, RowMajor>()));
     CALL_SUBTEST_1(sparse_solvers<double>(8, 8));
     int s = internal::random<int>(1, 300);
     CALL_SUBTEST_2(sparse_solvers<std::complex<double> >(s, s));

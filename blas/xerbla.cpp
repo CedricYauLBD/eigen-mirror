@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: The Eigen Authors
+// SPDX-License-Identifier: MPL-2.0
 
 #include <stdio.h>
 
@@ -13,7 +15,9 @@
 extern "C" {
 #endif
 
-EIGEN_WEAK_LINKING void xerbla_(const char *msg, int *info) { printf("Eigen BLAS ERROR #%i: %s\n", *info, msg); }
+EIGEN_WEAK_LINKING void BLASFUNC(xerbla)(const char* msg, EIGEN_BLAS_INT* info, size_t len) {
+  printf("Eigen BLAS ERROR #%i: %.*s\n", static_cast<int>(*info), static_cast<int>(len), msg);
+}
 
 #ifdef __cplusplus
 }

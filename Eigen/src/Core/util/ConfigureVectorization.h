@@ -7,19 +7,20 @@
 // This Source Code Form is subject to the terms of the Mozilla
 // Public License v. 2.0. If a copy of the MPL was not distributed
 // with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
+// SPDX-License-Identifier: MPL-2.0
 
 #ifndef EIGEN_CONFIGURE_VECTORIZATION_H
 #define EIGEN_CONFIGURE_VECTORIZATION_H
 
 // Prepare for using the generic clang backend if requested.
+#if defined(EIGEN_VECTORIZE_GENERIC) && !defined(EIGEN_GENERIC_VECTOR_SIZE_BYTES)
+#define EIGEN_GENERIC_VECTOR_SIZE_BYTES 64
+#endif
 #if defined(EIGEN_VECTORIZE_GENERIC) && !defined(EIGEN_DONT_VECTORIZE) && !defined(EIGEN_DONT_ALIGN)
 #if !EIGEN_ARCH_VECTOR_EXTENSIONS
 #error "The compiler does not support clang vector extensions."
 #endif
 #define EIGEN_VECTORIZE
-#ifndef EIGEN_GENERIC_VECTOR_SIZE_BYTES
-#define EIGEN_GENERIC_VECTOR_SIZE_BYTES 64
-#endif
 #define EIGEN_MAX_ALIGN_BYTES EIGEN_GENERIC_VECTOR_SIZE_BYTES
 #endif
 
@@ -50,16 +51,17 @@
 #define EIGEN_ALIGNOF(x) alignof(x)
 #endif
 
+#if defined(__riscv)
+// Defines the default LMUL for RISC-V
+#ifndef EIGEN_RISCV64_DEFAULT_LMUL
+#define EIGEN_RISCV64_DEFAULT_LMUL 1
+#endif
+#endif
+
 // Align to the boundary that avoids false sharing.
-//   https://en.cppreference.com/w/cpp/thread/hardware_destructive_interference_size
-// There is a bug in android NDK < r26 where the macro is defined but std::hardware_destructive_interference_size
-// still does not exist.
-#if defined(__cpp_lib_hardware_interference_size) && __cpp_lib_hardware_interference_size >= 201603 && \
-    (!EIGEN_OS_ANDROID || __NDK_MAJOR__ + 0 >= 26)
-#include <new>
-#define EIGEN_ALIGN_TO_AVOID_FALSE_SHARING EIGEN_ALIGN_TO_BOUNDARY(std::hardware_destructive_interference_size)
-#else
-// Overalign for the cache line size of 128 bytes (Apple M1)
+// Pinned to 128 bytes to preserve a stable ABI across architectures and standard libraries
+// and avoid GCC -Winterference-size warnings.
+#ifndef EIGEN_ALIGN_TO_AVOID_FALSE_SHARING
 #define EIGEN_ALIGN_TO_AVOID_FALSE_SHARING EIGEN_ALIGN_TO_BOUNDARY(128)
 #endif
 
@@ -72,16 +74,45 @@
 #else
 #define EIGEN_IDEAL_MAX_ALIGN_BYTES 0
 #endif
+#elif defined(EIGEN_VECTORIZE_GENERIC)
+// Generic clang backend overrides native SIMD; align to the generic vector size.
+#define EIGEN_IDEAL_MAX_ALIGN_BYTES EIGEN_GENERIC_VECTOR_SIZE_BYTES
 #elif defined(__AVX512F__)
 // 64 bytes static alignment is preferred only if really required
 #define EIGEN_IDEAL_MAX_ALIGN_BYTES 64
+// Deliberately no SME case: this block runs long before EIGEN_VECTORIZE_SME is
+// defined, so a test for it here is unreachable -- and moving it would be wrong
+// rather than merely late. Raising the value changes the alignment, and so the
+// ABI, of every fixed-size object relative to a NEON build of the same headers;
+// past 16 bytes aligned_malloc also switches to the prefixed
+// handmade_aligned_malloc, so a matrix allocated in an SME translation unit and
+// freed in a non-SME one corrupts the heap. Keeping 16 is not free: the SME GEMM
+// kernel is up to 3.4x faster at small sizes when the result matrix starts on a
+// 64-byte boundary, which is what 64 here would give every Eigen-owned matrix.
+#elif defined(EIGEN_ARM64_USE_SVE) && defined(__ARM_FEATURE_SVE_BITS) && (__ARM_FEATURE_SVE_BITS != 0)
+// A fixed-length SVE packet is __ARM_FEATURE_SVE_BITS/8 bytes wide and asks for
+// exactly that much alignment; a fixed-size object has to be able to offer it or
+// it never reaches the vectorized path.  The Alignment enum stops at 128.
+#if __ARM_FEATURE_SVE_BITS <= 1024
+#define EIGEN_IDEAL_MAX_ALIGN_BYTES (__ARM_FEATURE_SVE_BITS / 8)
+#else
+#define EIGEN_IDEAL_MAX_ALIGN_BYTES 128
+#endif
 #elif defined(__AVX__)
 // 32 bytes static alignment is preferred only if really required
 #define EIGEN_IDEAL_MAX_ALIGN_BYTES 32
 #elif defined __HVX__ && (__HVX_LENGTH__ == 128)
 #define EIGEN_IDEAL_MAX_ALIGN_BYTES 128
-#elif defined(EIGEN_RISCV64_USE_RVV10)
-#define EIGEN_IDEAL_MAX_ALIGN_BYTES 64
+#elif defined(EIGEN_RISCV64_USE_RVV10) && defined(__riscv_v_fixed_vlen)
+// As for SVE: a default packet is VLEN * LMUL / 8 bytes and asks for that much alignment, which a
+// fixed-size object must be able to offer to reach the aligned path. The Alignment enum stops at 128.
+// Without a fixed VLEN, falling through to 16 keeps vectorization on, so the RVV block below reports
+// the missing -mrvv-vector-bits=zvl; evaluating the formula would give 0 and disable that block.
+#if (__riscv_v_fixed_vlen * EIGEN_RISCV64_DEFAULT_LMUL / 8) <= 128
+#define EIGEN_IDEAL_MAX_ALIGN_BYTES (__riscv_v_fixed_vlen * EIGEN_RISCV64_DEFAULT_LMUL / 8)
+#else
+#define EIGEN_IDEAL_MAX_ALIGN_BYTES 128
+#endif
 #else
 #define EIGEN_IDEAL_MAX_ALIGN_BYTES 16
 #endif
@@ -200,23 +231,39 @@
 #endif
 #endif
 
-// The following (except #include <malloc.h> and _M_IX86_FP ??) can likely be
-// removed as gcc 4.1 and msvc 2008 are not supported anyways.
 #if EIGEN_COMP_MSVC
-#include <malloc.h>  // for _aligned_malloc -- need it regardless of whether vectorization is enabled
-// a user reported that in 64-bit mode, MSVC doesn't care to define _M_IX86_FP.
-#if (defined(_M_IX86_FP) && (_M_IX86_FP >= 2)) || EIGEN_ARCH_x86_64
-#define EIGEN_SSE2_ON_MSVC_2008_OR_LATER
-#endif
-#else
-#if defined(__SSE2__)
-#define EIGEN_SSE2_ON_NON_MSVC
-#endif
+#include <malloc.h>  // for _alloca
 #endif
 
 #if !(defined(EIGEN_DONT_VECTORIZE) || defined(EIGEN_GPUCC) || defined(EIGEN_VECTORIZE_GENERIC))
 
-#if defined(EIGEN_SSE2_ON_NON_MSVC) || defined(EIGEN_SSE2_ON_MSVC_2008_OR_LATER)
+// Whether the ARM SME backend can be built at all. Two hard requirements, both
+// properties of the translation unit rather than of the CPU:
+//   - SME2, not just SME: the micro-kernel's multi-vector loads (svld1_*_x2/x4)
+//     and svcount_t predicates are SME2 instructions.
+//   - scalable (VLA) SVE mode: the kernel derives its ZA-tile geometry from the
+//     runtime streaming vector length, so -msve-vector-bits=N would pin it to
+//     one SVL and silently miscompute at any other.
+#if defined(__ARM_FEATURE_SME2) && !(defined(__ARM_FEATURE_SVE_BITS) && (__ARM_FEATURE_SVE_BITS != 0))
+#define EIGEN_ARM64_SME_USABLE
+#endif
+
+// ... and whether it is the backend to use. SME is selected automatically when
+// it is usable: unlike SVE it needs no fixed vector length, and it only
+// replaces the GEMM kernels -- everything else keeps the NEON packet path. Two
+// escapes: EIGEN_ARM64_NO_SME turns it off, and EIGEN_ARM64_USE_SVE takes
+// precedence for callers who asked for SVE specifically.
+#if defined(EIGEN_ARM64_SME_USABLE) && !defined(EIGEN_ARM64_NO_SME) && !defined(EIGEN_ARM64_USE_SVE)
+#define EIGEN_ARM64_SME_SELECTED
+#endif
+
+#if defined(EIGEN_ARM64_USE_SME) && defined(EIGEN_ARM64_NO_SME)
+#error "EIGEN_ARM64_USE_SME and EIGEN_ARM64_NO_SME are mutually exclusive."
+#endif
+
+// MSVC reports SSE2 through _M_IX86_FP on 32-bit x86; x86-64 always supports SSE2.
+#if (EIGEN_COMP_MSVC && ((defined(_M_IX86_FP) && (_M_IX86_FP >= 2)) || EIGEN_ARCH_x86_64)) || \
+    (!EIGEN_COMP_MSVC && defined(__SSE2__))
 
 // Defines symbols for compile-time detection of which instructions are
 // used.
@@ -297,7 +344,10 @@
 #define EIGEN_VECTORIZE_AVX512VL
 #endif
 #ifdef __AVX512FP16__
-#ifdef __AVX512VL__
+#if EIGEN_COMP_NVHPC
+// NVC++ exposes AVX512-FP16 inconsistently: older releases define the feature without _Float16/__m512h,
+// and 24.11-26.3 lower compare/blend intrinsics to unresolved __builtin_ia32_*ph* references.
+#elif defined(__AVX512VL__)
 #define EIGEN_VECTORIZE_AVX512FP16
 // Built-in _Float16.
 #define EIGEN_HAS_BUILTIN_FLOAT16 1
@@ -356,9 +406,8 @@
 // so, to avoid compile errors when windows.h is included after Eigen/Core, ensure intrinsics are extern "C" here too.
 // notice that since these are C headers, the extern "C" is theoretically needed anyways.
 extern "C" {
-// In theory we should only include immintrin.h and not the other *mmintrin.h header files directly.
-// Doing so triggers some issues with ICC. However old gcc versions seems to not have this file, thus:
-#if EIGEN_COMP_ICC >= 1110 || EIGEN_COMP_EMSCRIPTEN
+// ICC and Emscripten need the umbrella header instead of direct *mmintrin.h includes.
+#if EIGEN_COMP_ICC || EIGEN_COMP_EMSCRIPTEN
 #include <immintrin.h>
 #else
 #include <mmintrin.h>
@@ -386,9 +435,14 @@ extern "C" {
 
 #define EIGEN_VECTORIZE
 #define EIGEN_VECTORIZE_VSX 1
+// The POWER8 (ISA 2.07) vector instructions, such as 64-bit integer lane arithmetic and compares and vec_neg; a
+// POWER7 target has VSX without them.
+#if defined(__POWER8_VECTOR__)
+#define EIGEN_VECTORIZE_POWER8_VECTOR
+#endif
 #define EIGEN_VECTORIZE_FMA
 #include <altivec.h>
-// We need to #undef all these ugly tokens defined in <altivec.h>
+// We need to #undef macros defined by <altivec.h> that conflict with standard C++ names.
 // => use __vector instead of vector
 #undef bool
 #undef vector
@@ -400,13 +454,19 @@ extern "C" {
 #define EIGEN_VECTORIZE_ALTIVEC
 #define EIGEN_VECTORIZE_FMA
 #include <altivec.h>
-// We need to #undef all these ugly tokens defined in <altivec.h>
+// We need to #undef macros defined by <altivec.h> that conflict with standard C++ names.
 // => use __vector instead of vector
 #undef bool
 #undef vector
 #undef pixel
 
-#elif ((defined __ARM_NEON) || (defined __ARM_NEON__)) && !(defined EIGEN_ARM64_USE_SVE)
+#elif defined(EIGEN_ARM64_USE_SME) && !defined(EIGEN_ARM64_SME_USABLE)
+
+#error \
+    "EIGEN_ARM64_USE_SME requires a compiler targeting SME2 in scalable (SVE VLA) mode: build with e.g. -march=armv9.2-a+sme2 and without -msve-vector-bits."
+
+#elif ((defined __ARM_NEON) || (defined __ARM_NEON__)) && !(defined EIGEN_ARM64_USE_SVE) && \
+    !(defined EIGEN_ARM64_SME_SELECTED)
 
 #define EIGEN_VECTORIZE
 #define EIGEN_VECTORIZE_NEON
@@ -424,8 +484,44 @@ extern "C" {
 // to ensure a fixed length is set
 #if defined __ARM_FEATURE_SVE_BITS
 #define EIGEN_ARM64_SVE_VL __ARM_FEATURE_SVE_BITS
+
+// Architecture-mandated length constraints.
+static_assert((EIGEN_ARM64_SVE_VL >= 128) && (EIGEN_ARM64_SVE_VL <= 2048) &&
+                  ((EIGEN_ARM64_SVE_VL & (EIGEN_ARM64_SVE_VL - 1)) == 0),
+              "SVE vector length must be 2^n for some n in [7, 11]");
 #else
-#error "Eigen requires a fixed SVE lector length but EIGEN_ARM64_SVE_VL is not set."
+#error "Eigen requires a fixed SVE vector length but EIGEN_ARM64_SVE_VL is not set."
+#endif
+
+// TriangularMatrixMatrix.h puts a (2 * max(mr, nr))^2 panel of Scalar on the
+// stack, and mr is 3 * PacketSize, so for float -- the widest scalar this backend
+// vectorizes -- the panel is 9 * VL^2 / 64 bytes
+// -- 144 kB at VL=1024 and 576 kB at VL=2048, past the 128 kB default, and the
+// backend does not compile at those lengths without more room. Only raise Eigen's
+// default; an explicit user limit remains authoritative, including 0.
+#if defined(EIGEN_STACK_ALLOCATION_LIMIT_WAS_DEFAULTED) && \
+    EIGEN_STACK_ALLOCATION_LIMIT < (9 * EIGEN_ARM64_SVE_VL * EIGEN_ARM64_SVE_VL / 64)
+#undef EIGEN_STACK_ALLOCATION_LIMIT
+#define EIGEN_STACK_ALLOCATION_LIMIT (9 * EIGEN_ARM64_SVE_VL * EIGEN_ARM64_SVE_VL / 64)
+#endif
+
+// Selected automatically whenever the toolchain can provide it; see
+// EIGEN_ARM64_SME_SELECTED above for the conditions and the opt-out.
+#elif defined(EIGEN_ARM64_SME_SELECTED)
+
+#define EIGEN_VECTORIZE
+#define EIGEN_VECTORIZE_SME
+#include <arm_neon.h>
+#include <arm_sme.h>
+
+// Double-precision outer products (FMOPA into a ZA.D tile) need the optional
+// FEAT_SME_F64F64, which each compiler reports differently: GCC defines the ACLE
+// macro, clang defines no macro but gates the builtin on the target feature.
+// Both halves are needed -- clang otherwise accepts svmopa_za64_f64_m without the
+// feature, so a missed gate faults at run time rather than at build time.
+#if !defined(EIGEN_ARM64_NO_SME_F64F64) && \
+    (defined(__ARM_FEATURE_SME_F64F64) || EIGEN_HAS_BUILTIN(__builtin_sme_svmopa_za64_f64_m))
+#define EIGEN_VECTORIZE_SME_F64F64
 #endif
 
 #elif EIGEN_ARCH_RISCV
@@ -440,6 +536,8 @@ extern "C" {
 
 #define EIGEN_VECTORIZE
 #define EIGEN_VECTORIZE_RVV10
+// pmadd and its variants map to the fused vfmadd/vfmsub/vfnmsub/vfnmadd.
+#define EIGEN_VECTORIZE_FMA
 #include <riscv_vector.h>
 
 // Since we depend on knowing RVV vector length at compile-time, we need
@@ -454,8 +552,18 @@ extern "C" {
 #error "Eigen requires a fixed RVV vector length but -mrvv-vector-bits=zvl is not set."
 #endif
 
+// Raise Eigen's own default only, as the SVE block above does: an explicit limit is a caller
+// policy on stack safety, and rewriting it defeats the policy. nomalloc, bdcsvd, jacobisvd,
+// diagonalview and diagonalmatrices set 0 to switch the check off, and clobbering that re-enables
+// alloca underneath the very tests written to catch it.
+#ifdef EIGEN_STACK_ALLOCATION_LIMIT_WAS_DEFAULTED
 #undef EIGEN_STACK_ALLOCATION_LIMIT
+#if __riscv_v_fixed_vlen <= 512
 #define EIGEN_STACK_ALLOCATION_LIMIT 196608
+#else
+#define EIGEN_STACK_ALLOCATION_LIMIT 393216
+#endif
+#endif
 
 #if defined(__riscv_zvfh) && defined(__riscv_zfh)
 #define EIGEN_VECTORIZE_RVV10FP16
@@ -473,10 +581,13 @@ extern "C" {
 
 #endif  // defined(EIGEN_ARCH_RISCV)
 
-#elif (defined __s390x__ && defined __VEC__)
+// ZVector needs the vector float instructions of z14 (__ARCH__ 12); below that, s390x stays scalar.
+#elif (defined __s390x__ && defined __VEC__ && (!defined(__ARCH__) || __ARCH__ >= 12))
 
 #define EIGEN_VECTORIZE
 #define EIGEN_VECTORIZE_ZVECTOR
+// pmadd maps to the fused vec_madd (z14 has the fused multiply-add instructions for scalars too).
+#define EIGEN_VECTORIZE_FMA
 #include <vecintrin.h>
 
 #elif defined __mips_msa
@@ -498,6 +609,8 @@ extern "C" {
 
 #define EIGEN_VECTORIZE
 #define EIGEN_VECTORIZE_LSX
+// pmadd and its variants map to the fused vfmadd/vfmsub/vfnmadd/vfnmsub.
+#define EIGEN_VECTORIZE_FMA
 #include <lsxintrin.h>
 
 #elif defined __HVX__ && (__HVX_LENGTH__ == 128)
@@ -508,6 +621,9 @@ extern "C" {
 
 #endif
 #endif
+
+// The backend blocks above are the only consumers; do not leak it into user code.
+#undef EIGEN_STACK_ALLOCATION_LIMIT_WAS_DEFAULTED
 
 // Following the Arm ACLE arm_neon.h should also include arm_fp16.h but not all
 // compilers seem to follow this. We therefore include it explicitly.
@@ -521,7 +637,14 @@ extern "C" {
 #define EIGEN_VECTORIZE_FMA
 #endif
 
-#if defined(__F16C__) && !defined(EIGEN_GPUCC) && (!EIGEN_COMP_CLANG_STRICT || EIGEN_CLANG_STRICT_AT_LEAST(3, 8, 0))
+// The generic clang backend skips the x86 detection above but fuses its pmadd where __FMA__ is defined, and the
+// kernels that choose constants or error-free products by EIGEN_VECTORIZE_FMA must know it.
+#if defined(EIGEN_VECTORIZE_GENERIC) && !defined(EIGEN_DONT_VECTORIZE) && defined(__FMA__) && \
+    !defined(EIGEN_VECTORIZE_FMA)
+#define EIGEN_VECTORIZE_FMA
+#endif
+
+#if defined(__F16C__) && !defined(EIGEN_GPUCC)
 // We can use the optimized fp16 to float and float to fp16 conversion routines
 #define EIGEN_HAS_FP16_C
 
@@ -538,43 +661,50 @@ extern "C" {
 #if defined EIGEN_CUDACC
 #define EIGEN_VECTORIZE_GPU
 #include <vector_types.h>
-#if EIGEN_CUDA_SDK_VER >= 70500
-#define EIGEN_HAS_CUDA_FP16
-#endif
-#endif
-
-#if defined(EIGEN_HAS_CUDA_FP16)
 #include <cuda_runtime_api.h>
+#if defined(EIGEN_HAS_CUDA_FP16)
 #include <cuda_fp16.h>
+#endif
 #endif
 
 #if defined(EIGEN_HIPCC)
 #define EIGEN_VECTORIZE_GPU
 #include <hip/hip_vector_types.h>
-#define EIGEN_HAS_HIP_FP16
 #include <hip/hip_fp16.h>
 #define EIGEN_HAS_HIP_BF16
 #include <hip/hip_bfloat16.h>
-#endif
-
-#if defined(__riscv)
-// Defines the default LMUL for RISC-V
-#ifndef EIGEN_RISCV64_DEFAULT_LMUL
-#define EIGEN_RISCV64_DEFAULT_LMUL 1
-#endif
 #endif
 
 /** \brief Namespace containing all symbols from the %Eigen library. */
 // IWYU pragma: private
 #include "../InternalHeaderCheck.h"
 
+/** Whether numext::madd uses std::fma for scalars. Defaults to the hardware: fused where a single
+ * instruction exists, which keeps the scalar and vectorized paths consistent, and unfused otherwise,
+ * where software fma costs 2-3x on Intel and up to 30x on WASM. A long double without an fma instruction
+ * (internal::has_fast_fma) is never fused. Error-free transformations such as
+ * internal::twoprod ignore this setting: they call numext::fma when EIGEN_VECTORIZE_FMA is enabled
+ * or internal::has_fast_fma holds for the scalar, and use Dekker's product elsewhere.
+ * Resolved here rather than in Macros.h, which Eigen/Core includes first, because the architecture
+ * branches above settle EIGEN_VECTORIZE_FMA -- the ARM one only a few lines up.
+ */
+#ifndef EIGEN_SCALAR_MADD_USE_FMA
+#ifdef EIGEN_VECTORIZE_FMA
+#define EIGEN_SCALAR_MADD_USE_FMA 1
+#else
+#define EIGEN_SCALAR_MADD_USE_FMA 0
+#endif
+#endif
+
 namespace Eigen {
 
 inline static const char* SimdInstructionSetsInUse(void) {
-#if defined(EIGEN_VECTORIZE_AVX512)
+#if defined(EIGEN_VECTORIZE_GENERIC) && !defined(EIGEN_DONT_VECTORIZE)
+  return "Clang vector extensions";
+#elif defined(EIGEN_VECTORIZE_AVX512)
   return "AVX512, FMA, AVX2, AVX, SSE, SSE2, SSE3, SSSE3, SSE4.1, SSE4.2";
 #elif defined(EIGEN_VECTORIZE_AVX)
-  return "AVX SSE, SSE2, SSE3, SSSE3, SSE4.1, SSE4.2";
+  return "AVX, SSE, SSE2, SSE3, SSSE3, SSE4.1, SSE4.2";
 #elif defined(EIGEN_VECTORIZE_SSE4_2)
   return "SSE, SSE2, SSE3, SSSE3, SSE4.1, SSE4.2";
 #elif defined(EIGEN_VECTORIZE_SSE4_1)
@@ -587,10 +717,14 @@ inline static const char* SimdInstructionSetsInUse(void) {
   return "SSE, SSE2";
 #elif defined(EIGEN_VECTORIZE_ALTIVEC)
   return "AltiVec";
+#elif defined(EIGEN_VECTORIZE_POWER8_VECTOR)
+  return "VSX, POWER8 vector";
 #elif defined(EIGEN_VECTORIZE_VSX)
   return "VSX";
 #elif defined(EIGEN_VECTORIZE_NEON)
   return "ARM NEON";
+#elif defined(EIGEN_VECTORIZE_SME)
+  return "ARM SME";
 #elif defined(EIGEN_VECTORIZE_SVE)
   return "ARM SVE";
 #elif defined(EIGEN_VECTORIZE_ZVECTOR)
@@ -599,6 +733,10 @@ inline static const char* SimdInstructionSetsInUse(void) {
   return "MIPS MSA";
 #elif defined(EIGEN_VECTORIZE_LSX)
   return "LOONGARCH64 LSX";
+#elif defined(EIGEN_VECTORIZE_RVV10)
+  return "RVV";
+#elif defined(EIGEN_VECTORIZE_HVX)
+  return "Hexagon HVX";
 #else
   return "None";
 #endif

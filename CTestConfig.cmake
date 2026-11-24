@@ -4,6 +4,8 @@
 ## # The following are required to uses Dart and the Cdash dashboard
 ##   enable_testing()
 ##   include(CTest)
+# SPDX-FileCopyrightText: The Eigen Authors
+# SPDX-License-Identifier: MPL-2.0
 set(CTEST_PROJECT_NAME "Eigen")
 set(CTEST_NIGHTLY_START_TIME "00:00:00 UTC")
 
@@ -13,5 +15,5 @@ set(CTEST_DROP_LOCATION "/submit.php?project=Eigen")
 set(CTEST_DROP_SITE_CDASH TRUE)
 #set(CTEST_PROJECT_SUBPROJECTS
 #Official
-#Unsupported
+#Contrib
 #)

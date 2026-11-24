@@ -1,9 +1,12 @@
+// SPDX-FileCopyrightText: The Eigen Authors
+// SPDX-License-Identifier: MPL-2.0
+
 #include <Eigen/Sparse>
 #include <vector>
 #include <iostream>
 
-typedef Eigen::SparseMatrix<double> SpMat;  // declares a column-major sparse matrix type of double
-typedef Eigen::Triplet<double> T;
+using SpMat = Eigen::SparseMatrix<double>;  // declares a column-major sparse matrix type of double
+using T = Eigen::Triplet<double>;
 
 void buildProblem(std::vector<T>& coefficients, Eigen::VectorXd& b, int n);
 void saveAsBitmap(const Eigen::VectorXd& x, int n, const char* filename);

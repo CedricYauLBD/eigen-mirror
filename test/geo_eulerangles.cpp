@@ -7,6 +7,7 @@
 // This Source Code Form is subject to the terms of the Mozilla
 // Public License v. 2.0. If a copy of the MPL was not distributed
 // with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
+// SPDX-License-Identifier: MPL-2.0
 
 // Silence warnings about using the deprecated non-canonical .eulerAngles(), which are still being tested.
 #define EIGEN_NO_DEPRECATED_WARNING
@@ -18,9 +19,9 @@
 
 template <typename Scalar>
 void verify_euler(const Matrix<Scalar, 3, 1>& ea, int i, int j, int k) {
-  typedef Matrix<Scalar, 3, 3> Matrix3;
-  typedef Matrix<Scalar, 3, 1> Vector3;
-  typedef AngleAxis<Scalar> AngleAxisx;
+  using Matrix3 = Matrix<Scalar, 3, 3>;
+  using Vector3 = Matrix<Scalar, 3, 1>;
+  using AngleAxisx = AngleAxis<Scalar>;
   const Matrix3 m(AngleAxisx(ea[0], Vector3::Unit(i)) * AngleAxisx(ea[1], Vector3::Unit(j)) *
                   AngleAxisx(ea[2], Vector3::Unit(k)));
   const Scalar kPi = Scalar(EIGEN_PI);
@@ -95,11 +96,11 @@ void check_all_var(const Matrix<Scalar, 3, 1>& ea) {
 
 template <typename Scalar>
 void eulerangles() {
-  typedef Matrix<Scalar, 3, 3> Matrix3;
-  typedef Matrix<Scalar, 3, 1> Vector3;
-  typedef Array<Scalar, 3, 1> Array3;
-  typedef Quaternion<Scalar> Quaternionx;
-  typedef AngleAxis<Scalar> AngleAxisx;
+  using Matrix3 = Matrix<Scalar, 3, 3>;
+  using Vector3 = Matrix<Scalar, 3, 1>;
+  using Array3 = Array<Scalar, 3, 1>;
+  using Quaternionx = Quaternion<Scalar>;
+  using AngleAxisx = AngleAxis<Scalar>;
 
   const Scalar kPi = Scalar(EIGEN_PI);
   const Scalar smallVal = static_cast<Scalar>(0.001);
@@ -162,22 +163,22 @@ void eulerangles() {
   // Similar to above, but with pi instead of pi/2
   Vector3 ea_pi = ea;
   ea_pi[1] = kPi;
-  test_with_some_zeros(ea_gl);
+  test_with_some_zeros(ea_pi);
   ea_pi[1] += internal::random<Scalar>(-smallVal, smallVal);
-  test_with_some_zeros(ea_gl);
+  test_with_some_zeros(ea_pi);
   ea_pi[1] = -kPi;
-  test_with_some_zeros(ea_gl);
+  test_with_some_zeros(ea_pi);
   ea_pi[1] += internal::random<Scalar>(-smallVal, smallVal);
-  test_with_some_zeros(ea_gl);
+  test_with_some_zeros(ea_pi);
   ea_pi[1] = kPi;
   ea_pi[2] = ea_pi[0];
-  test_with_some_zeros(ea_gl);
+  test_with_some_zeros(ea_pi);
   ea_pi[1] += internal::random<Scalar>(-smallVal, smallVal);
-  test_with_some_zeros(ea_gl);
+  test_with_some_zeros(ea_pi);
   ea_pi[1] = -kPi;
-  test_with_some_zeros(ea_gl);
+  test_with_some_zeros(ea_pi);
   ea_pi[1] += internal::random<Scalar>(-smallVal, smallVal);
-  test_with_some_zeros(ea_gl);
+  test_with_some_zeros(ea_pi);
 
   ea[2] = ea[0] = internal::random<Scalar>(0, kPi);
   check_all_var(ea);

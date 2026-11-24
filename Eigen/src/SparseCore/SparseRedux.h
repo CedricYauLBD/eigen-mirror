@@ -6,6 +6,7 @@
 // This Source Code Form is subject to the terms of the Mozilla
 // Public License v. 2.0. If a copy of the MPL was not distributed
 // with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
+// SPDX-License-Identifier: MPL-2.0
 
 #ifndef EIGEN_SPARSEREDUX_H
 #define EIGEN_SPARSEREDUX_H
@@ -17,7 +18,8 @@ namespace Eigen {
 
 template <typename Derived>
 typename internal::traits<Derived>::Scalar SparseMatrixBase<Derived>::sum() const {
-  eigen_assert(rows() > 0 && cols() > 0 && "you are using a non initialized matrix");
+  // The sum of an empty matrix is zero, as for dense ones.
+  if (size() == 0) return Scalar(0);
   Scalar res(0);
   internal::evaluator<Derived> thisEval(derived());
   for (Index j = 0; j < outerSize(); ++j)
@@ -28,7 +30,6 @@ typename internal::traits<Derived>::Scalar SparseMatrixBase<Derived>::sum() cons
 template <typename Scalar_, int Options_, typename Index_>
 typename internal::traits<SparseMatrix<Scalar_, Options_, Index_> >::Scalar
 SparseMatrix<Scalar_, Options_, Index_>::sum() const {
-  eigen_assert(rows() > 0 && cols() > 0 && "you are using a non initialized matrix");
   if (this->isCompressed())
     return Matrix<Scalar, 1, Dynamic>::Map(m_data.valuePtr(), m_data.size()).sum();
   else
@@ -38,7 +39,6 @@ SparseMatrix<Scalar_, Options_, Index_>::sum() const {
 template <typename Scalar_, int Options_, typename Index_>
 typename internal::traits<SparseVector<Scalar_, Options_, Index_> >::Scalar
 SparseVector<Scalar_, Options_, Index_>::sum() const {
-  eigen_assert(rows() > 0 && cols() > 0 && "you are using a non initialized matrix");
   return Matrix<Scalar, 1, Dynamic>::Map(m_data.valuePtr(), m_data.size()).sum();
 }
 

@@ -6,8 +6,572 @@
 // This Source Code Form is subject to the terms of the Mozilla
 // Public License v. 2.0. If a copy of the MPL was not distributed
 // with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
+// SPDX-License-Identifier: MPL-2.0
 
 #include "main.h"
+#include <Eigen/Cholesky>
+#include <Eigen/Eigenvalues>
+#include <Eigen/Geometry>
+#include <Eigen/LU>
+#include <Eigen/QR>
+#include <Eigen/SVD>
+#include <Eigen/Sparse>
+#include "twoprod_helpers.h"
+#include "fp_control.h"
+
+#if EIGEN_COMP_MSVC
+#include <cfenv>
+#endif
+
+namespace log10_adl_test {
+struct Scalar {
+  double value;
+};
+inline Scalar log10(Scalar x) { return {std::log10(x.value)}; }
+}  // namespace log10_adl_test
+
+namespace numext_dispatch_test {
+// Only numext supplies math for this scalar; generic packet fallbacks must not bypass it.
+struct Scalar {
+  double value;
+};
+}  // namespace numext_dispatch_test
+
+namespace Eigen {
+namespace numext {
+template <>
+inline numext_dispatch_test::Scalar sin(const numext_dispatch_test::Scalar& x) {
+  return {std::sin(x.value)};
+}
+template <>
+inline numext_dispatch_test::Scalar acosh(const numext_dispatch_test::Scalar& x) {
+  return {std::acosh(x.value)};
+}
+template <>
+inline numext_dispatch_test::Scalar atanh(const numext_dispatch_test::Scalar& x) {
+  return {std::atanh(x.value)};
+}
+}  // namespace numext
+}  // namespace Eigen
+
+void check_generic_packet_numext_dispatch() {
+  const numext_dispatch_test::Scalar x{0.25}, y{2.0};
+  VERIFY_IS_EQUAL(internal::psin(x).value, std::sin(x.value));
+  VERIFY_IS_EQUAL(internal::pacosh(y).value, std::acosh(y.value));
+  VERIFY_IS_EQUAL(internal::patanh(x).value, std::atanh(x.value));
+}
+
+namespace adl_template_math_test {
+struct Scalar {
+  double v;
+  Scalar() : v(0.0) {}
+  template <typename U, std::enable_if_t<std::is_arithmetic<U>::value, int> = 0>
+  Scalar(U x) : v(static_cast<double>(x)) {}
+  explicit operator double() const { return v; }
+  Scalar operator-() const { return Scalar(-v); }
+  friend Scalar operator+(const Scalar& a, const Scalar& b) { return Scalar(a.v + b.v); }
+  friend Scalar operator-(const Scalar& a, const Scalar& b) { return Scalar(a.v - b.v); }
+  friend Scalar operator*(const Scalar& a, const Scalar& b) { return Scalar(a.v * b.v); }
+  friend Scalar operator/(const Scalar& a, const Scalar& b) { return Scalar(a.v / b.v); }
+  Scalar& operator+=(const Scalar& b) {
+    v += b.v;
+    return *this;
+  }
+  Scalar& operator-=(const Scalar& b) {
+    v -= b.v;
+    return *this;
+  }
+  Scalar& operator*=(const Scalar& b) {
+    v *= b.v;
+    return *this;
+  }
+  Scalar& operator/=(const Scalar& b) {
+    v /= b.v;
+    return *this;
+  }
+  friend bool operator==(const Scalar& a, const Scalar& b) { return a.v == b.v; }
+  friend bool operator!=(const Scalar& a, const Scalar& b) { return a.v != b.v; }
+  friend bool operator<(const Scalar& a, const Scalar& b) { return a.v < b.v; }
+  friend bool operator<=(const Scalar& a, const Scalar& b) { return a.v <= b.v; }
+  friend bool operator>(const Scalar& a, const Scalar& b) { return a.v > b.v; }
+  friend bool operator>=(const Scalar& a, const Scalar& b) { return a.v >= b.v; }
+};
+
+// Unconstrained function templates in the scalar's namespace (like CGAL::abs / CGAL::sqrt).
+// Unqualified calls after `using numext::...;` would be ambiguous with Eigen::numext templates.
+template <typename T>
+inline T abs(const T& x) {
+  return Scalar(std::abs(x.v));
+}
+template <typename T>
+inline T sqrt(const T& x) {
+  return Scalar(std::sqrt(x.v));
+}
+template <typename T>
+inline T sin(const T& x) {
+  return Scalar(std::sin(x.v));
+}
+template <typename T>
+inline T cos(const T& x) {
+  return Scalar(std::cos(x.v));
+}
+template <typename T>
+inline T acos(const T& x) {
+  return Scalar(std::acos(x.v));
+}
+template <typename T>
+inline T atan2(const T& y, const T& x) {
+  return Scalar(std::atan2(y.v, x.v));
+}
+template <typename T>
+inline T log(const T& x) {
+  return Scalar(std::log(x.v));
+}
+template <typename T>
+inline T ldexp(const T& x, int exp) {
+  return Scalar(std::ldexp(x.v, exp));
+}
+// Not templates: the UCRT declares unconstrained isfinite, isnan and isinf templates.
+inline bool(isfinite)(const Scalar& x) { return (std::isfinite)(x.v); }
+inline bool(isnan)(const Scalar& x) { return (std::isnan)(x.v); }
+inline bool(isinf)(const Scalar& x) { return (std::isinf)(x.v); }
+}  // namespace adl_template_math_test
+
+namespace adl_non_template_math_test {
+struct Scalar {
+  double v = 0.0;
+  Scalar() = default;
+  Scalar(double x) : v(x) {}
+  Scalar operator-() const { return Scalar(-v); }
+  friend Scalar operator+(const Scalar& a, const Scalar& b) { return Scalar(a.v + b.v); }
+  friend Scalar operator-(const Scalar& a, const Scalar& b) { return Scalar(a.v - b.v); }
+  friend Scalar operator*(const Scalar& a, const Scalar& b) { return Scalar(a.v * b.v); }
+  friend Scalar operator/(const Scalar& a, const Scalar& b) { return Scalar(a.v / b.v); }
+  Scalar& operator+=(const Scalar& b) {
+    v += b.v;
+    return *this;
+  }
+  Scalar& operator-=(const Scalar& b) {
+    v -= b.v;
+    return *this;
+  }
+  Scalar& operator*=(const Scalar& b) {
+    v *= b.v;
+    return *this;
+  }
+  Scalar& operator/=(const Scalar& b) {
+    v /= b.v;
+    return *this;
+  }
+  friend bool operator==(const Scalar& a, const Scalar& b) { return a.v == b.v; }
+  friend bool operator!=(const Scalar& a, const Scalar& b) { return a.v != b.v; }
+  friend bool operator<(const Scalar& a, const Scalar& b) { return a.v < b.v; }
+  friend bool operator<=(const Scalar& a, const Scalar& b) { return a.v <= b.v; }
+  friend bool operator>(const Scalar& a, const Scalar& b) { return a.v > b.v; }
+  friend bool operator>=(const Scalar& a, const Scalar& b) { return a.v >= b.v; }
+};
+
+inline Scalar abs(const Scalar& x) { return Scalar(std::abs(x.v)); }
+inline Scalar sqrt(const Scalar& x) { return Scalar(std::sqrt(x.v)); }
+}  // namespace adl_non_template_math_test
+
+namespace std {
+template <>
+class numeric_limits<adl_template_math_test::Scalar> : public numeric_limits<double> {};
+}  // namespace std
+
+namespace Eigen {
+template <>
+struct NumTraits<adl_template_math_test::Scalar> : GenericNumTraits<adl_template_math_test::Scalar> {
+  static inline Real epsilon() { return Real(NumTraits<double>::epsilon()); }
+  static inline Real dummy_precision() { return Real(NumTraits<double>::dummy_precision()); }
+  static inline Real highest() { return Real(NumTraits<double>::highest()); }
+  static inline Real lowest() { return Real(NumTraits<double>::lowest()); }
+};
+
+// Intentionally omits std::numeric_limits and IsSigned so GenericNumTraits::IsSigned defaults to 0.
+template <>
+struct NumTraits<adl_non_template_math_test::Scalar> : GenericNumTraits<adl_non_template_math_test::Scalar> {
+  static inline Real epsilon() { return Real(NumTraits<double>::epsilon()); }
+  static inline Real dummy_precision() { return Real(NumTraits<double>::dummy_precision()); }
+  static inline Real highest() { return Real(NumTraits<double>::highest()); }
+  static inline Real lowest() { return Real(NumTraits<double>::lowest()); }
+};
+}  // namespace Eigen
+
+// The dispatch checks below are templates on the custom scalar, so each test part instantiates only the solvers it
+// runs.
+constexpr double kAdlMathTol = 1e-11;
+
+template <typename Xpr>
+double adl_max_abs(const Xpr& m) {
+  return m.cwiseAbs().maxCoeff().v;
+}
+
+template <typename S>
+struct adl_math_fixture {
+  using Mat2 = Matrix<S, 2, 2>;
+  using Mat4 = Matrix<S, 4, 4>;
+  using Vec2 = Matrix<S, 2, 1>;
+  using Vec4 = Matrix<S, 4, 1>;
+
+  adl_math_fixture() : b(S(1.0), S(2.0)), b4(S(1.0), S(-2.0), S(3.0), S(-1.0)) {
+    a << S(4.0), S(1.0), S(1.0), S(3.0);
+    ns4 << S(0.0), S(2.0), S(-3.0), S(1.0), S(-4.0), S(1.0), S(2.0), S(-1.0), S(1.0), S(-7.0), S(0.5), S(2.0), S(3.0),
+        S(1.0), S(-2.0), S(-6.0);
+    spd4 = ns4.transpose() * ns4 + Mat4::Identity();
+  }
+
+  Mat2 a;
+  Vec2 b;
+  Mat4 ns4;
+  Vec4 b4;
+  Mat4 spd4;
+};
+
+template <typename S>
+void check_adl_dense_solvers() {
+  using Mat2 = Matrix<S, 2, 2>;
+  using Vec2 = Matrix<S, 2, 1>;
+  const adl_math_fixture<S> f;
+  const Mat2& a = f.a;
+  const Vec2& b = f.b;
+  const Mat2 a_upd = a + b * b.transpose();
+
+  LDLT<Mat2> ldlt(a);
+  ldlt.rankUpdate(b, S(1.0));
+  Vec2 x_ldlt = ldlt.solve(b);
+  VERIFY_LE(adl_max_abs(ldlt.reconstructedMatrix() - a_upd), kAdlMathTol);
+  VERIFY_LE(adl_max_abs(a_upd * x_ldlt - b), kAdlMathTol);
+
+  LLT<Mat2> llt(a);
+  llt.rankUpdate(b, S(1.0));
+  VERIFY_LE(adl_max_abs(llt.reconstructedMatrix() - a_upd), kAdlMathTol);
+  VERIFY_LE(adl_max_abs(a_upd * llt.solve(b) - b), kAdlMathTol);
+
+  BunchKaufman<Mat2> bk(a);
+  Vec2 x_bk = bk.solve(b);
+  VERIFY_LE(adl_max_abs(a * x_bk - b), kAdlMathTol);
+
+  FullPivLU<Mat2> lu(a);
+  VERIFY_IS_EQUAL(lu.rank(), 2);
+  Vec2 x_lu = lu.solve(b);
+  Mat2 a_inv = a.inverse();
+  VERIFY_LE(adl_max_abs(a * x_lu - b), kAdlMathTol);
+  VERIFY_LE(adl_max_abs(a * a_inv - Mat2::Identity()), kAdlMathTol);
+
+  HouseholderQR<Mat2> hqr(a);
+  ColPivHouseholderQR<Mat2> cpqr(a);
+  FullPivHouseholderQR<Mat2> fpqr(a);
+  VERIFY_IS_APPROX(hqr.absDeterminant().v, 11.0);
+  VERIFY_IS_APPROX(cpqr.absDeterminant().v, 11.0);
+  VERIFY_IS_APPROX(fpqr.absDeterminant().v, 11.0);
+  VERIFY_IS_EQUAL(cpqr.rank(), 2);
+  VERIFY_IS_EQUAL(fpqr.rank(), 2);
+  VERIFY_LE(adl_max_abs(a * hqr.solve(b) - b), kAdlMathTol);
+  VERIFY_LE(adl_max_abs(a * cpqr.solve(b) - b), kAdlMathTol);
+  VERIFY_LE(adl_max_abs(a * fpqr.solve(b) - b), kAdlMathTol);
+
+  JacobiSVD<Mat2, ComputeFullU | ComputeFullV> jsvd(a);
+  VERIFY_IS_EQUAL(jsvd.rank(), 2);
+  VERIFY_LE(adl_max_abs(jsvd.matrixU() * jsvd.singularValues().asDiagonal() * jsvd.matrixV().transpose() - a),
+            kAdlMathTol);
+  VERIFY_LE(adl_max_abs(a * jsvd.solve(b) - b), kAdlMathTol);
+}
+
+template <typename S>
+void check_adl_bdcsvd() {
+  using MatX = Matrix<S, Dynamic, Dynamic>;
+  const adl_math_fixture<S> f;
+  const MatX xns4 = f.ns4;
+  BDCSVD<MatX, ComputeFullU | ComputeFullV> bdcsvd(xns4);
+  VERIFY_IS_EQUAL(bdcsvd.rank(), 4);
+  VERIFY_LE(adl_max_abs(bdcsvd.matrixU() * bdcsvd.singularValues().asDiagonal() * bdcsvd.matrixV().transpose() - xns4),
+            kAdlMathTol);
+}
+
+template <typename S>
+void check_adl_selfadjoint_eigensolvers() {
+  using Mat2 = Matrix<S, 2, 2>;
+  using Mat3 = Matrix<S, 3, 3>;
+  using Mat4 = Matrix<S, 4, 4>;
+  using MatX = Matrix<S, Dynamic, Dynamic>;
+  const adl_math_fixture<S> f;
+  const Mat2& a = f.a;
+  const Mat4& spd4 = f.spd4;
+
+  SelfAdjointEigenSolver<Mat2> eig2;
+  eig2.computeDirect(a);
+  VERIFY_IS_EQUAL(eig2.info(), Success);
+  VERIFY_LE(adl_max_abs(eig2.eigenvectors() * eig2.eigenvalues().asDiagonal() * eig2.eigenvectors().transpose() - a),
+            kAdlMathTol);
+
+  Mat3 spd3;
+  spd3 << S(5.0), S(1.0), S(0.5), S(1.0), S(4.0), S(-0.5), S(0.5), S(-0.5), S(3.0);
+  SelfAdjointEigenSolver<Mat3> eig3;
+  eig3.computeDirect(spd3);
+  VERIFY_IS_EQUAL(eig3.info(), Success);
+  VERIFY_LE(adl_max_abs(eig3.eigenvectors() * eig3.eigenvalues().asDiagonal() * eig3.eigenvectors().transpose() - spd3),
+            kAdlMathTol);
+
+  SelfAdjointEigenSolver<MatX> eigx{MatX(spd4)};
+  VERIFY_IS_EQUAL(eigx.info(), Success);
+  VERIFY_LE(
+      adl_max_abs(eigx.eigenvectors() * eigx.eigenvalues().asDiagonal() * eigx.eigenvectors().transpose() - MatX(spd4)),
+      kAdlMathTol);
+
+  Tridiagonalization<Mat4> tridiag(spd4);
+  VERIFY_LE(adl_max_abs(tridiag.matrixQ() * tridiag.matrixT() * tridiag.matrixQ().transpose() - spd4), kAdlMathTol);
+}
+
+template <typename S>
+void check_adl_real_schur_qz() {
+  using Mat4 = Matrix<S, 4, 4>;
+  const adl_math_fixture<S> f;
+  const Mat4& ns4 = f.ns4;
+  const Mat4& spd4 = f.spd4;
+
+  RealSchur<Mat4> rschur(ns4);
+  VERIFY_IS_EQUAL(rschur.info(), Success);
+  VERIFY_LE(adl_max_abs(rschur.matrixU() * rschur.matrixT() * rschur.matrixU().transpose() - ns4), kAdlMathTol);
+
+  RealQZ<Mat4> rqz(ns4, spd4);
+  VERIFY_IS_EQUAL(rqz.info(), Success);
+  VERIFY_LE(adl_max_abs(rqz.matrixQ() * rqz.matrixS() * rqz.matrixZ() - ns4), kAdlMathTol);
+  VERIFY_LE(adl_max_abs(rqz.matrixQ() * rqz.matrixT() * rqz.matrixZ() - spd4), kAdlMathTol);
+}
+
+template <typename S>
+void check_adl_general_eigensolvers() {
+#ifndef _MSC_VER  // MSVC's std::complex<T> needs unary + and a conversion to double from T.
+  using CS = std::complex<S>;
+  using Mat4 = Matrix<S, 4, 4>;
+  const adl_math_fixture<S> f;
+  const Mat4& ns4 = f.ns4;
+  const Mat4& spd4 = f.spd4;
+
+  EigenSolver<Mat4> esolver(ns4);
+  VERIFY_IS_EQUAL(esolver.info(), Success);
+  VERIFY_LE(adl_max_abs((ns4.template cast<CS>() * esolver.eigenvectors() -
+                         esolver.eigenvectors() * esolver.eigenvalues().asDiagonal())
+                            .cwiseAbs()),
+            kAdlMathTol);
+
+  GeneralizedEigenSolver<Mat4> gesolver(ns4, spd4);
+  VERIFY_IS_EQUAL(gesolver.info(), Success);
+  VERIFY((gesolver.eigenvalues().imag().array() != S(0)).any());
+  // A scalar without frexp scales a complex pair's T_i = diag(a, b) by max(|a|, |b|). With B scaled by 2^514, a b
+  // overflows; the eigenvalues are those of (ns4, spd4) times 2^-450.
+  GeneralizedEigenSolver<Mat4> gesolver_scaled(ns4 * S(std::ldexp(1.0, 64)), spd4 * S(std::ldexp(1.0, 514)), false);
+  VERIFY_IS_EQUAL(gesolver_scaled.info(), Success);
+  for (Index k = 0; k < 4; ++k) {
+    const CS lambda = gesolver_scaled.eigenvalues()(k) * S(std::ldexp(1.0, 450));
+    VERIFY_LE((gesolver.eigenvalues().array() - lambda).cwiseAbs().minCoeff().v, kAdlMathTol * numext::abs(lambda).v);
+  }
+#endif
+}
+
+template <typename S>
+void check_adl_complex_schur() {
+#ifndef _MSC_VER  // MSVC's std::complex<T> needs unary + and a conversion to double from T.
+  using CS = std::complex<S>;
+  using Mat2 = Matrix<S, 2, 2>;
+  using CMat2 = Matrix<CS, 2, 2>;
+  const adl_math_fixture<S> f;
+  const Mat2& a = f.a;
+
+  ComplexSchur<Mat2> cschur_real(a);
+  VERIFY_IS_EQUAL(cschur_real.info(), Success);
+  VERIFY_LE(adl_max_abs((cschur_real.matrixU() * cschur_real.matrixT() * cschur_real.matrixU().adjoint() -
+                         a.template cast<CS>())
+                            .cwiseAbs()),
+            kAdlMathTol);
+
+  CMat2 ca;
+  ca << CS(S(2.0), S(1.0)), CS(S(0.5), S(-0.5)), CS(S(0.5), S(0.5)), CS(S(3.0), S(-1.0));
+  ComplexSchur<CMat2> cschur_cplx(ca);
+  VERIFY_IS_EQUAL(cschur_cplx.info(), Success);
+  VERIFY_LE(
+      adl_max_abs((cschur_cplx.matrixU() * cschur_cplx.matrixT() * cschur_cplx.matrixU().adjoint() - ca).cwiseAbs()),
+      kAdlMathTol);
+#endif
+}
+
+template <typename S>
+void check_adl_geometry() {
+  using Vec3 = Matrix<S, 3, 1>;
+  const adl_math_fixture<S> f;
+
+  Quaternion<S> q(AngleAxis<S>(S(0.5), Vec3::UnitZ()));
+  AngleAxis<S> aa;
+  aa = q;
+  VERIFY_IS_APPROX(aa.angle().v, 0.5);
+  Rotation2D<S> rot2(S(0.25));
+  Rotation2D<S> rot2_from_mat(rot2.toRotationMatrix());
+  VERIFY_IS_APPROX(rot2_from_mat.angle().v, 0.25);
+  AlignedBox<S, 3> box(Vec3(S(0.0), S(0.0), S(0.0)), Vec3(S(1.0), S(1.0), S(1.0)));
+  VERIFY_IS_APPROX(box.exteriorDistance(Vec3(S(4.0), S(5.0), S(1.0))).v, 5.0);
+  ParametrizedLine<S, 3> line = ParametrizedLine<S, 3>::Through(Vec3::Zero(), Vec3(S(3.0), S(4.0), S(0.0)));
+  VERIFY_IS_APPROX(line.distance(Vec3(S(0.0), S(0.0), S(2.0))).v, 2.0);
+  VERIFY_IS_APPROX(f.b.stableNorm().v, std::sqrt(5.0));
+}
+
+template <typename S>
+void check_adl_sparse_direct_solvers() {
+  using Mat4 = Matrix<S, 4, 4>;
+  using Vec4 = Matrix<S, 4, 1>;
+  const adl_math_fixture<S> f;
+  const Mat4& ns4 = f.ns4;
+  const Mat4& spd4 = f.spd4;
+  const Vec4& b4 = f.b4;
+
+  SparseMatrix<S> sp_spd = spd4.sparseView();
+  sp_spd.makeCompressed();
+  SparseMatrix<S> sp_ns = ns4.sparseView();
+  sp_ns.makeCompressed();
+  SparseMatrix<S> sp_pruned = (sp_spd * sp_spd).pruned(S(1e-6));
+  VERIFY(sp_pruned.nonZeros() > Index(0));
+
+  SimplicialLLT<SparseMatrix<S>> sllt(sp_spd);
+  VERIFY_IS_EQUAL(sllt.info(), Success);
+  VERIFY_LE(adl_max_abs(spd4 * sllt.solve(b4) - b4), kAdlMathTol);
+
+  SimplicialLDLT<SparseMatrix<S>> sldlt(sp_spd);
+  VERIFY_IS_EQUAL(sldlt.info(), Success);
+  VERIFY_LE(adl_max_abs(spd4 * sldlt.solve(b4) - b4), kAdlMathTol);
+
+  SparseLU<SparseMatrix<S>> splu(sp_ns);
+  VERIFY_IS_EQUAL(splu.info(), Success);
+  VERIFY_LE(adl_max_abs(ns4 * splu.solve(b4) - b4), kAdlMathTol);
+
+  SparseQR<SparseMatrix<S>, COLAMDOrdering<int>> spqr(sp_ns);
+  VERIFY_IS_EQUAL(spqr.info(), Success);
+  VERIFY_LE(adl_max_abs(ns4 * spqr.solve(b4) - b4), kAdlMathTol);
+}
+
+template <typename S>
+void check_adl_sparse_iterative_solvers() {
+  using Mat4 = Matrix<S, 4, 4>;
+  using Vec4 = Matrix<S, 4, 1>;
+  const adl_math_fixture<S> f;
+  const Mat4& ns4 = f.ns4;
+  const Mat4& spd4 = f.spd4;
+  const Vec4& b4 = f.b4;
+
+  SparseMatrix<S> sp_spd = spd4.sparseView();
+  sp_spd.makeCompressed();
+  SparseMatrix<S> sp_ns = ns4.sparseView();
+  sp_ns.makeCompressed();
+
+  IncompleteCholesky<S> ichol(sp_spd);
+  VERIFY_IS_EQUAL(ichol.info(), Success);
+  ConjugateGradient<SparseMatrix<S>, Lower | Upper, IncompleteCholesky<S>> cg(sp_spd);
+  VERIFY_LE(adl_max_abs(spd4 * cg.solve(b4) - b4), 1e-8);
+
+  IncompleteLUT<S> ilut(sp_ns);
+  VERIFY_IS_EQUAL(ilut.info(), Success);
+  BiCGSTAB<SparseMatrix<S>, IncompleteLUT<S>> bicg(sp_ns);
+  VERIFY_LE(adl_max_abs(ns4 * bicg.solve(b4) - b4), 1e-8);
+
+  LeastSquaresConjugateGradient<SparseMatrix<S>> lscg(sp_ns);
+  VERIFY_LE(adl_max_abs(ns4 * lscg.solve(b4) - b4), 1e-8);
+
+  GMRES<SparseMatrix<S>> gmres(sp_ns);
+  VERIFY_LE(adl_max_abs(ns4 * gmres.solve(b4) - b4), 1e-8);
+
+  MINRES<SparseMatrix<S>> minres(sp_spd);
+  VERIFY_LE(adl_max_abs(spd4 * minres.solve(b4) - b4), 1e-8);
+
+  // The shadow space is random. For a nearly degenerate one the recurrence residual drifts from b - A x, which
+  // residual replacement corrects.
+  IDRS<SparseMatrix<S>> idrs(sp_ns);
+  idrs.setResidualUpdate(true);
+  VERIFY_LE(adl_max_abs(ns4 * idrs.solve(b4) - b4), 1e-8);
+
+  IDRSTABL<SparseMatrix<S>> idrstabl(sp_ns);
+  VERIFY_LE(adl_max_abs(ns4 * idrstabl.solve(b4) - b4), 1e-8);
+
+  LSMR<SparseMatrix<S>> lsmr(sp_ns);
+  VERIFY_LE(adl_max_abs(ns4 * lsmr.solve(b4) - b4), 1e-8);
+}
+
+// Scalar with non-template math overloads and NumTraits::IsSigned == 0.
+template <typename PlainS>
+void check_adl_non_template_decompositions() {
+  using PlainMat4 = Matrix<PlainS, 4, 4>;
+  using PlainVec4 = Matrix<PlainS, 4, 1>;
+  const adl_math_fixture<PlainS> f;
+  const PlainMat4& pns4 = f.ns4;
+  const PlainMat4& pspd4 = f.spd4;
+  const PlainVec4& pb4 = f.b4;
+
+  HouseholderQR<PlainMat4> phqr(pns4);
+  VERIFY_IS_APPROX(phqr.absDeterminant().v, 469.5);
+  FullPivLU<PlainMat4> plu(pns4);
+  VERIFY_IS_EQUAL(plu.rank(), 4);
+  VERIFY_LE(adl_max_abs(pns4 * plu.solve(pb4) - pb4), kAdlMathTol);
+  ColPivHouseholderQR<PlainMat4> pcpqr(pns4);
+  FullPivHouseholderQR<PlainMat4> pfpqr(pns4);
+  VERIFY_IS_EQUAL(pcpqr.rank(), 4);
+  VERIFY_IS_EQUAL(pfpqr.rank(), 4);
+  RealSchur<PlainMat4> prschur(pns4);
+  VERIFY_IS_EQUAL(prschur.info(), Success);
+  VERIFY_LE(adl_max_abs(prschur.matrixU() * prschur.matrixT() * prschur.matrixU().transpose() - pns4), kAdlMathTol);
+  SelfAdjointEigenSolver<PlainMat4> peig4(pspd4);
+  VERIFY_IS_EQUAL(peig4.info(), Success);
+  VERIFY_LE(
+      adl_max_abs(peig4.eigenvectors() * peig4.eigenvalues().asDiagonal() * peig4.eigenvectors().transpose() - pspd4),
+      kAdlMathTol);
+  JacobiSVD<PlainMat4, ComputeFullU | ComputeFullV> pjsvd(pns4);
+  VERIFY_LE(adl_max_abs(pjsvd.matrixU() * pjsvd.singularValues().asDiagonal() * pjsvd.matrixV().transpose() - pns4),
+            kAdlMathTol);
+
+  VERIFY_IS_EQUAL(numext::copysign(PlainS(2.0), PlainS(-1.0)).v, -2.0);
+  VERIFY_IS_EQUAL(numext::copysign(PlainS(-2.0), PlainS(1.0)).v, 2.0);
+  // Pin the `< Scalar(0)` fallback limitation on signed zero and NaN when copysign is unavailable.
+  VERIFY((std::signbit)(numext::copysign(PlainS(-0.0), PlainS(1.0)).v));
+  VERIFY(!(std::signbit)(numext::copysign(PlainS(1.0), PlainS(-0.0)).v));
+  VERIFY_IS_EQUAL(numext::copysign(PlainS(1.0), PlainS(-0.0)).v, 1.0);
+  VERIFY_IS_EQUAL(numext::copysign(PlainS(1.0), PlainS(-std::numeric_limits<double>::quiet_NaN())).v, 1.0);
+}
+
+template <typename PlainS>
+void check_adl_non_template_complex() {
+#ifndef _MSC_VER  // MSVC's std::complex<T> needs unary + and a conversion to double from T.
+  using PlainCS = std::complex<PlainS>;
+  using PlainMat4 = Matrix<PlainS, 4, 4>;
+  const adl_math_fixture<PlainS> f;
+  const PlainMat4& pns4 = f.ns4;
+
+  ComplexSchur<PlainMat4> plain_cschur_real(pns4);
+  VERIFY_IS_EQUAL(plain_cschur_real.info(), Success);
+  VERIFY_LE(
+      adl_max_abs((plain_cschur_real.matrixU() * plain_cschur_real.matrixT() * plain_cschur_real.matrixU().adjoint() -
+                   pns4.template cast<PlainCS>())
+                      .cwiseAbs()),
+      kAdlMathTol);
+
+  Matrix<PlainCS, 2, 2> pca;
+  pca << PlainCS(PlainS(2.0), PlainS(1.0)), PlainCS(PlainS(0.5), PlainS(-0.5)), PlainCS(PlainS(0.5), PlainS(0.5)),
+      PlainCS(PlainS(3.0), PlainS(-1.0));
+  ComplexSchur<Matrix<PlainCS, 2, 2>> plain_cschur_cplx(pca);
+  VERIFY_IS_EQUAL(plain_cschur_cplx.info(), Success);
+  VERIFY_LE(
+      adl_max_abs(
+          (plain_cschur_cplx.matrixU() * plain_cschur_cplx.matrixT() * plain_cschur_cplx.matrixU().adjoint() - pca)
+              .cwiseAbs()),
+      kAdlMathTol);
+
+  const PlainCS csqrt_neg = numext::sqrt(PlainCS(PlainS(-3.0), PlainS(-4.0)));
+  VERIFY_IS_APPROX(csqrt_neg.real().v, 1.0);
+  VERIFY_IS_APPROX(csqrt_neg.imag().v, -2.0);
+
+  // Pin fallback behavior on negative zero: `< Scalar(0)` cannot see -0, so sqrt(-1 - 0i) yields +i.
+  const PlainCS csqrt_neg_zero = numext::sqrt(PlainCS(PlainS(-1.0), PlainS(-0.0)));
+  VERIFY_IS_APPROX(csqrt_neg_zero.real().v, 0.0);
+  VERIFY_IS_APPROX(csqrt_neg_zero.imag().v, 1.0);
+#endif
+}
 
 template <typename T, typename U>
 bool check_if_equal_or_nans(const T& actual, const U& expected) {
@@ -20,18 +584,100 @@ bool check_if_equal_or_nans(const std::complex<T>& actual, const std::complex<U>
          check_if_equal_or_nans(numext::imag(actual), numext::imag(expected));
 }
 
-template <typename T, typename U>
-bool test_is_equal_or_nans(const T& actual, const U& expected) {
-  if (check_if_equal_or_nans(actual, expected)) {
-    return true;
-  }
+template <typename T>
+struct check_copysign_impl {
+  static void run() {
+    const T pos_zero = T(0);
+    const T pos_one = T(1);
 
-  // false:
-  std::cerr << "\n    actual   = " << actual << "\n    expected = " << expected << "\n\n";
-  return false;
+    // Tests valid for all types.
+    VERIFY_IS_EQUAL(numext::copysign(pos_one, pos_one), pos_one);
+    VERIFY_IS_EQUAL(numext::copysign(pos_zero, pos_one), pos_zero);
+
+    // Tests valid for all signed types (integer and floating-point).
+    if (NumTraits<T>::IsSigned) {
+      const T neg_one = numext::negate(pos_one);
+      VERIFY_IS_EQUAL(numext::copysign(pos_one, neg_one), neg_one);
+      VERIFY_IS_EQUAL(numext::copysign(neg_one, pos_one), pos_one);
+      VERIFY_IS_EQUAL(numext::copysign(neg_one, neg_one), neg_one);
+    }
+
+    // Tests specific to floating-point types (negative zero, infinity, NaN).
+    if (!NumTraits<T>::IsInteger) {
+      const T neg_zero = numext::negate(pos_zero);
+      const T neg_one = numext::negate(pos_one);
+      const T pos_inf = std::numeric_limits<T>::infinity();
+      const T neg_inf = numext::negate(pos_inf);
+      const T pos_nan = std::numeric_limits<T>::quiet_NaN();
+      const T neg_nan = numext::negate(pos_nan);
+      // Sign transferred from zero.
+      VERIFY_IS_EQUAL(numext::copysign(pos_one, pos_zero), pos_one);
+      VERIFY_IS_EQUAL(numext::copysign(pos_one, neg_zero), neg_one);
+      // Sign transferred from infinity.
+      VERIFY_IS_EQUAL(numext::copysign(pos_one, pos_inf), pos_one);
+      VERIFY_IS_EQUAL(numext::copysign(pos_one, neg_inf), neg_one);
+      // Sign transferred from NaN.
+      VERIFY_IS_EQUAL(numext::copysign(pos_one, pos_nan), pos_one);
+      VERIFY_IS_EQUAL(numext::copysign(pos_one, neg_nan), neg_one);
+    }
+
+    for (int k = 0; k < 100; ++k) {
+      // For signed integers avoid lowest() so that abs(a) does not overflow.
+      const T a = (NumTraits<T>::IsSigned && NumTraits<T>::IsInteger)
+                      ? internal::random<T>(numext::negate(NumTraits<T>::highest()), NumTraits<T>::highest())
+                      : internal::random<T>();
+      const T b = internal::random<T>();
+      const T result = numext::copysign(a, b);
+      // Magnitude is preserved.
+      VERIFY_IS_EQUAL(numext::abs(result), numext::abs(a));
+      // Sign matches sign source. Integers have no negative zero, so the sign
+      // of the result is only meaningful when a != 0.
+      if (!NumTraits<T>::IsInteger || a != T(0)) {
+        VERIFY_IS_EQUAL(numext::copysign(pos_one, result), numext::copysign(pos_one, b));
+      }
+    }
+  }
+};
+
+template <typename T>
+struct check_copysign_impl<std::complex<T>> {
+  static void run() {
+    using ComplexT = std::complex<T>;
+    const T pos_one = T(1);
+    const T neg_one = numext::negate(pos_one);
+
+    // Complex copysign is applied component-wise.
+    VERIFY_IS_EQUAL(numext::copysign(ComplexT(pos_one, pos_one), ComplexT(pos_one, neg_one)),
+                    ComplexT(pos_one, neg_one));
+    VERIFY_IS_EQUAL(numext::copysign(ComplexT(neg_one, pos_one), ComplexT(pos_one, neg_one)),
+                    ComplexT(pos_one, neg_one));
+    VERIFY_IS_EQUAL(numext::copysign(ComplexT(pos_one, neg_one), ComplexT(neg_one, pos_one)),
+                    ComplexT(neg_one, pos_one));
+
+    for (int k = 0; k < 100; ++k) {
+      const ComplexT a = internal::random<ComplexT>();
+      const ComplexT b = internal::random<ComplexT>();
+      const ComplexT result = numext::copysign(a, b);
+      // Each component is independently copysigned.
+      VERIFY_IS_EQUAL(numext::real(result), numext::copysign(numext::real(a), numext::real(b)));
+      VERIFY_IS_EQUAL(numext::imag(result), numext::copysign(numext::imag(a), numext::imag(b)));
+    }
+  }
+};
+
+template <typename T>
+void check_copysign() {
+  check_copysign_impl<T>::run();
 }
 
-#define VERIFY_IS_EQUAL_OR_NANS(a, b) VERIFY(test_is_equal_or_nans(a, b))
+template <>
+void check_copysign<bool>() {
+  for (bool a : {false, true}) {
+    for (bool b : {false, true}) {
+      VERIFY_IS_EQUAL(numext::copysign(a, b), a);
+    }
+  }
+}
 
 template <typename T>
 void check_negate() {
@@ -44,9 +690,201 @@ void check_negate() {
   }
 }
 
+#if EIGEN_COMP_MSVC
+#pragma float_control(precise, on, push)
+#pragma fenv_access(on)
+#endif
+
+template <typename T>
+void check_complex_exp() {
+  using Complex = std::complex<T>;
+  const T highest = (std::numeric_limits<T>::max)();
+  const T inf = std::numeric_limits<T>::infinity();
+  const T nan = std::numeric_limits<T>::quiet_NaN();
+
+  const Complex finite_inf = numext::exp(Complex(T(1), inf));
+  VERIFY((numext::isnan)(finite_inf.real()));
+  VERIFY((numext::isnan)(finite_inf.imag()));
+
+  const Complex finite_nan = numext::exp(Complex(T(1), nan));
+  VERIFY((numext::isnan)(finite_nan.real()));
+  VERIFY((numext::isnan)(finite_nan.imag()));
+
+#if EIGEN_COMP_MSVC
+  std::feclearexcept(FE_ALL_EXCEPT);
+#endif
+  const Complex highest_inf = numext::exp(Complex(highest, inf));
+  VERIFY((numext::isnan)(highest_inf.real()));
+  VERIFY((numext::isnan)(highest_inf.imag()));
+#if EIGEN_COMP_MSVC
+  VERIFY((std::fetestexcept(FE_INVALID) & FE_INVALID) != 0);
+  std::feclearexcept(FE_ALL_EXCEPT);
+#endif
+
+  const Complex inf_nan = numext::exp(Complex(inf, nan));
+  VERIFY((numext::isinf)(inf_nan.real()));
+  VERIFY((numext::isnan)(inf_nan.imag()));
+}
+
+#if EIGEN_COMP_MSVC
+#pragma fenv_access(off)
+#pragma float_control(pop)
+#endif
+
+// numext::exp2(a + ib) against 2^a (cos(b ln 2) + i sin(b ln 2)) evaluated in the wider type W: each part within
+// 4 ulps of the modulus (the implementation is within about 2.1), or of the smallest subnormal.
+template <typename T, typename W>
+void check_complex_exp2_accuracy(T a, T b) {
+  const std::complex<T> w = numext::exp2(std::complex<T>(a, b));
+  const W m = std::exp2(W(a));
+  const W t = W(b) * W(EIGEN_LN2);
+  const W ref[2] = {m * std::cos(t), m * std::sin(t)};
+  const T got[2] = {w.real(), w.imag()};
+  const W tol = numext::maxi(W(4) * W(NumTraits<T>::epsilon()) * m, W((std::numeric_limits<T>::denorm_min)()));
+  for (int k = 0; k < 2; ++k) {
+    if (numext::abs(ref[k]) > W((std::numeric_limits<T>::max)())) {
+      VERIFY((numext::isinf)(got[k]) && (got[k] > T(0)) == (ref[k] > W(0)));
+    } else {
+      VERIFY(numext::abs(W(got[k]) - ref[k]) <= tol);
+    }
+  }
+}
+
+template <typename T, typename W>
+void check_complex_exp2_accuracy() {
+  const T emax = T(std::numeric_limits<T>::max_exponent);
+  check_complex_exp2_accuracy<T, W>(T(1), T(2));
+  check_complex_exp2_accuracy<T, W>(T(-3.5), T(0.75));
+  check_complex_exp2_accuracy<T, W>(T(10.25), T(-7));
+  check_complex_exp2_accuracy<T, W>(T(0.5), T(100.3));
+  check_complex_exp2_accuracy<T, W>(T(-20), T(-1000.7));
+  for (int i = 0; i < 200; ++i) {
+    check_complex_exp2_accuracy<T, W>(internal::random<T>(T(-30), T(30)), internal::random<T>(T(-1000), T(1000)));
+  }
+  // The cases below need W's exponent range, which IBM double-double long double shares with double.
+  if (std::numeric_limits<W>::max_exponent <= std::numeric_limits<T>::max_exponent ||
+      std::numeric_limits<W>::min_exponent >= std::numeric_limits<T>::min_exponent) {
+    return;
+  }
+  // 2^a overflows, 2^a cos(b ln 2) does not.
+  check_complex_exp2_accuracy<T, W>(emax + T(0.5), T(1.5));
+  check_complex_exp2_accuracy<T, W>(emax - T(0.25), T(-2));
+#if !EIGEN_ARCH_ARM  // 32-bit ARM flushes subnormals.
+  const T emin = T(std::numeric_limits<T>::min_exponent);
+  check_complex_exp2_accuracy<T, W>(emin - T(std::numeric_limits<T>::digits) / T(2) + T(0.3), T(1));
+  // A denormal phase that 2^a scales back into range, also past 2^(2 emax): the imaginary part to a few of its own
+  // ulps, where the normwise check above is blind.
+  const T b = (std::numeric_limits<T>::min)() / T(64);
+  for (const T a : {T(100), T(2) * (emax - T(1)) + T(4)}) {
+    const W ref = std::exp2(W(a)) * std::sin(W(b) * W(EIGEN_LN2));
+    const T got = numext::exp2(std::complex<T>(a, b)).imag();
+    VERIFY(numext::abs(W(got) - ref) <= W(4) * W(NumTraits<T>::epsilon()) * numext::abs(ref));
+  }
+  // The same for the smallest normal phases, whose product b ln(2) has a denormal rounding error.
+  for (const T scale : {T(1.5), T(2), T(3), T(1) / NumTraits<T>::epsilon()}) {
+    const T b_normal = (std::numeric_limits<T>::min)() * scale;
+    for (const T a : {T(100), emax - T(4)}) {
+      const W ref = std::exp2(W(a)) * std::sin(W(b_normal) * W(EIGEN_LN2));
+      const T got = numext::exp2(std::complex<T>(a, b_normal)).imag();
+      VERIFY(numext::abs(W(got) - ref) <= W(4) * W(NumTraits<T>::epsilon()) * numext::abs(ref));
+    }
+  }
+#endif
+}
+
+template <typename T>
+void check_complex_exp2() {
+  using Complex = std::complex<T>;
+  const T inf = std::numeric_limits<T>::infinity();
+  const T nan = std::numeric_limits<T>::quiet_NaN();
+
+  // Exact on the real axis, keeping the sign of a zero imaginary part.
+  for (int n = -10; n <= 10; ++n) {
+    VERIFY_IS_EQUAL(numext::exp2(Complex(T(n), T(0))), Complex(std::ldexp(T(1), n), T(0)));
+    VERIFY((std::signbit)(numext::exp2(Complex(T(n), -T(0))).imag()));
+  }
+
+  // The special values of exp in C99 Annex G.
+  VERIFY(check_if_equal_or_nans(numext::exp2(Complex(inf, T(0))), Complex(inf, T(0))));
+  VERIFY(check_if_equal_or_nans(numext::exp2(Complex(-inf, T(0))), Complex(T(0), T(0))));
+  VERIFY(check_if_equal_or_nans(numext::exp2(Complex(nan, T(0))), Complex(nan, T(0))));
+  VERIFY(check_if_equal_or_nans(numext::exp2(Complex(inf, T(1))), Complex(inf, inf)));
+  VERIFY(check_if_equal_or_nans(numext::exp2(Complex(inf, T(-2))), Complex(inf, -inf)));
+  VERIFY(check_if_equal_or_nans(numext::exp2(Complex(-inf, T(1))), Complex(T(0), T(0))));
+  VERIFY(check_if_equal_or_nans(numext::exp2(Complex(T(1), inf)), Complex(nan, nan)));
+  VERIFY(check_if_equal_or_nans(numext::exp2(Complex(T(1), nan)), Complex(nan, nan)));
+  VERIFY(check_if_equal_or_nans(numext::exp2(Complex(nan, T(1))), Complex(nan, nan)));
+  VERIFY(check_if_equal_or_nans(numext::exp2(Complex(nan, nan)), Complex(nan, nan)));
+  VERIFY((std::signbit)(numext::exp2(Complex(inf, -T(0))).imag()));
+  const Complex at_minus_inf = numext::exp2(Complex(-inf, T(-1)));
+  VERIFY(!(std::signbit)(at_minus_inf.real()) && (std::signbit)(at_minus_inf.imag()));
+  for (const T b : {inf, -inf, nan}) {
+    const Complex at_inf = numext::exp2(Complex(inf, b));
+    VERIFY((numext::isinf)(at_inf.real()) && (numext::isnan)(at_inf.imag()));
+    const Complex at_minus_inf_b = numext::exp2(Complex(-inf, b));
+    VERIFY(numext::is_exactly_zero(at_minus_inf_b.real()) && numext::is_exactly_zero(at_minus_inf_b.imag()));
+  }
+
+  // exp2(conj(z)) = conj(exp2(z)).
+  for (int i = 0; i < 20; ++i) {
+    const Complex z(internal::random<T>(T(-30), T(30)), internal::random<T>(T(-1000), T(1000)));
+    VERIFY_IS_EQUAL(numext::exp2(numext::conj(z)), numext::conj(numext::exp2(z)));
+  }
+  // Also where 2^a overflows, underflows or is infinite, and for a denormal phase, down to the sign of zero.
+  const T emax = T(std::numeric_limits<T>::max_exponent), emin = T(std::numeric_limits<T>::min_exponent);
+  const T digits = T(std::numeric_limits<T>::digits);
+  for (const T a :
+       {emax + T(0.5), T(2) * emax + T(4), emin - digits / T(2) + T(0.3), emin - T(2) * digits, inf, -inf}) {
+    for (const T b : {T(1.5), T(5), (std::numeric_limits<T>::min)() / T(64)}) {
+      const Complex w_conj = numext::exp2(Complex(a, -b)), conj_w = numext::conj(numext::exp2(Complex(a, b)));
+      VERIFY_IS_EQUAL(w_conj, conj_w);
+      VERIFY_IS_EQUAL((std::signbit)(w_conj.real()), (std::signbit)(conj_w.real()));
+      VERIFY_IS_EQUAL((std::signbit)(w_conj.imag()), (std::signbit)(conj_w.imag()));
+    }
+  }
+  // A large finite b has no accurate phase left, but b ln(2) is finite: the result keeps the modulus 2^a. With cos
+  // and sin each within a few ulps, |w| = 2 sqrt(cos^2 + sin^2) is within a few ulps of 2, and ulp(2) = 2 eps.
+  // highest() * 0.75, not highest() / 3: IBM double-double division overflows internally and returns NaN there.
+  const T eps = NumTraits<T>::epsilon();
+  for (const T b : {NumTraits<T>::highest(), NumTraits<T>::highest() * T(0.75), T(1) / (eps * eps * eps)}) {
+    const Complex w = numext::exp2(Complex(T(1), b));
+    VERIFY((numext::isfinite)(w.real()) && (numext::isfinite)(w.imag()));
+    VERIFY(numext::abs(numext::abs(w) - T(2)) <= T(16) * eps);
+    VERIFY_IS_EQUAL(numext::exp2(Complex(T(1), -b)), numext::conj(w));
+  }
+  // An imaginary part that underflows keeps the sign of sin(b ln(2)): sin(-ln(2)) < 0 < sin(-5 ln(2)).
+  VERIFY((std::signbit)(numext::exp2(Complex(emin - T(2) * digits, T(-1))).imag()));
+  VERIFY(!(std::signbit)(numext::exp2(Complex(emin - T(2) * digits, T(-5))).imag()));
+
+  // The array expression, on a size with packet and tail coefficients.
+  const Array<Complex, Dynamic, 1> z = Array<Complex, Dynamic, 1>::Random(17) * T(10);
+  const Array<Complex, Dynamic, 1> w = z.exp2();
+  for (Index i = 0; i < z.size(); ++i) VERIFY_IS_EQUAL(w(i), numext::exp2(z(i)));
+}
+
+template <typename T>
+std::enable_if_t<NumTraits<T>::IsInteger && NumTraits<T>::IsSigned, T> random_abs2_input() {
+  const T safeAbs2Input = static_cast<T>(std::sqrt(static_cast<long double>(NumTraits<T>::highest())));
+  return internal::random<T>(-safeAbs2Input, safeAbs2Input);
+}
+
+// Note: bool resolves here (IsInteger && !IsSigned), but check_abs<bool> is fully
+// specialized and never calls random_abs2_input<bool>().
+template <typename T>
+std::enable_if_t<NumTraits<T>::IsInteger && !NumTraits<T>::IsSigned, T> random_abs2_input() {
+  const T safeAbs2Input = static_cast<T>(std::sqrt(static_cast<long double>(NumTraits<T>::highest())));
+  return internal::random<T>(T(0), safeAbs2Input);
+}
+
+template <typename T>
+std::enable_if_t<!NumTraits<T>::IsInteger, T> random_abs2_input() {
+  using Real = typename NumTraits<T>::Real;
+  return internal::random<T>() / Real(2);
+}
+
 template <typename T>
 void check_abs() {
-  typedef typename NumTraits<T>::Real Real;
+  using Real = typename NumTraits<T>::Real;
   Real zero(0);
 
   if (NumTraits<T>::IsSigned) VERIFY_IS_EQUAL(numext::abs(numext::negate(T(1))), T(1));
@@ -54,8 +892,7 @@ void check_abs() {
   VERIFY_IS_EQUAL(numext::abs(T(1)), T(1));
 
   for (int k = 0; k < 100; ++k) {
-    T x = internal::random<T>();
-    x = x / Real(2);
+    T x = random_abs2_input<T>();
     if (NumTraits<T>::IsSigned) {
       VERIFY_IS_EQUAL(numext::abs(x), numext::abs(numext::negate(x)));
       VERIFY(numext::abs(numext::negate(x)) >= zero);
@@ -74,12 +911,612 @@ void check_abs<bool>() {
   }
 }
 
+// numext::sign(z) = z / |z| for complex z. The interesting inputs are the ends of the range, where
+// forming 1/|z| first would overflow (subnormal |z|) or itself be subnormal, hence inexact (|z| near max).
+template <typename T>
+void check_complex_sign() {
+  using Real = typename NumTraits<T>::Real;
+  const Real zero(0), one(1);
+
+  VERIFY_IS_EQUAL(numext::sign(T(zero, zero)), T(zero, zero));
+  VERIFY_IS_EQUAL(numext::sign(T(one, zero)), T(one, zero));
+  VERIFY_IS_EQUAL(numext::sign(T(zero, -one)), T(zero, -one));
+
+  for (Real r : {std::numeric_limits<Real>::denorm_min(), (std::numeric_limits<Real>::min)(),
+                 (std::numeric_limits<Real>::max)()}) {
+    VERIFY_IS_EQUAL(numext::sign(T(r, zero)), T(one, zero));
+    VERIFY_IS_EQUAL(numext::sign(T(-r, zero)), T(-one, zero));
+    VERIFY_IS_EQUAL(numext::sign(T(zero, r)), T(zero, one));
+  }
+
+  // Off the axes, sign(z) = (x, y) / m / sqrt(1 + (min(|x|, |y|) / m)^2) for m = max(|x|, |y|), also where |z|
+  // overflows (z = (max, max)) or is subnormal, which abs() cannot resolve.
+  const Real eps = NumTraits<Real>::epsilon();
+  const Real denorm_min = std::numeric_limits<Real>::denorm_min();
+  const Real highest = (std::numeric_limits<Real>::max)();
+  const Real sqrt_half = Real(0.70710678118654752440);
+  const Real two_over_sqrt5 = Real(0.89442719099991587856), one_over_sqrt5 = Real(0.44721359549995793928);
+  struct Case {
+    Real x, y, sign_x, sign_y;
+  };
+  const Case cases[] = {{(std::numeric_limits<Real>::min)(), (std::numeric_limits<Real>::min)(), sqrt_half, sqrt_half},
+                        {one, one, sqrt_half, sqrt_half},
+                        {highest / Real(2), highest / Real(2), sqrt_half, sqrt_half},
+                        {highest, highest, sqrt_half, sqrt_half},
+                        {-highest, highest, -sqrt_half, sqrt_half},
+                        {highest, -highest / Real(2), two_over_sqrt5, -one_over_sqrt5},
+                        {denorm_min, denorm_min, sqrt_half, sqrt_half},
+                        {-denorm_min, denorm_min, -sqrt_half, sqrt_half},
+                        {Real(6) * denorm_min, Real(3) * denorm_min, two_over_sqrt5, one_over_sqrt5},
+                        {Real(2) * denorm_min, -Real(4) * denorm_min, one_over_sqrt5, -two_over_sqrt5}};
+  const auto check = [&](const T& value, const Case& c) {
+    VERIFY(numext::abs(numext::real(value) - c.sign_x) <= Real(4) * eps);
+    VERIFY(numext::abs(numext::imag(value) - c.sign_y) <= Real(4) * eps);
+  };
+  // Array::sign() takes the packet path in the body and the scalar path in the remainder.
+  Array<T, Dynamic, 1> z(19), s_array;
+  for (const Case& c : cases) {
+    check(numext::sign(T(c.x, c.y)), c);
+#if EIGEN_ARCH_ARM  // 32-bit ARM flushes subnormals in packet operations.
+    if (numext::abs(c.x) < (std::numeric_limits<Real>::min)()) continue;
+#endif
+    z.setConstant(T(c.x, c.y));
+    s_array = z.sign();
+    check(s_array(0), c);
+    check(s_array(s_array.size() - 1), c);
+  }
+
+  // Lane isolation: extreme, NaN and infinite elements next to ordinary ones, at every lane position, agree with the
+  // scalar function (NaN in either component gives NaN in both).
+  const Real nan = NumTraits<Real>::quiet_NaN(), inf = NumTraits<Real>::infinity();
+  std::vector<T> lanes = {T(highest, highest), T(nan, highest),  T(highest, nan), T(inf, one),   T(3, 4),
+                          T(-highest, one),    T(one, -highest), T(zero, zero),   T(-inf, -inf), T(one, 2)};
+#if !EIGEN_ARCH_ARM  // 32-bit ARM flushes subnormals in packet operations.
+  lanes.push_back(T(denorm_min, denorm_min));
+  lanes.push_back(T(nan, denorm_min));
+  lanes.push_back(T(-denorm_min, nan));
+  lanes.push_back(T(Real(6) * denorm_min, Real(3) * denorm_min));
+#endif
+  const auto same = [&](const Real& x, const Real& y) {
+    return ((numext::isnan)(x) && (numext::isnan)(y)) || x == y || numext::abs(x - y) <= Real(4) * eps;
+  };
+  for (size_t shift = 0; shift < lanes.size(); ++shift) {
+    for (Index i = 0; i < z.size(); ++i) z(i) = lanes[(size_t(i) + shift) % lanes.size()];
+    s_array = z.sign();
+    for (Index i = 0; i < z.size(); ++i) {
+      const T expected = numext::sign(z(i));
+      VERIFY(same(numext::real(s_array(i)), numext::real(expected)));
+      VERIFY(same(numext::imag(s_array(i)), numext::imag(expected)));
+    }
+  }
+}
+
+// numext::log(z) where |z| overflows or rounds to a subnormal although log|z| is finite.
+template <typename T>
+void check_complex_log() {
+  using Complex = std::complex<T>;
+  const T highest = (std::numeric_limits<T>::max)();
+  const T denorm_min = std::numeric_limits<T>::denorm_min();
+  const T half_ln2 = T(EIGEN_LN2) / T(2);
+  const T tol = T(4) * NumTraits<T>::epsilon();
+
+  for (const T r : {highest, denorm_min}) {
+    const T ref = numext::log(r) + half_ln2;
+    const Complex z = numext::log(Complex(r, -r));
+    VERIFY(numext::abs(z.real() - ref) <= tol * numext::abs(ref));
+    VERIFY_IS_APPROX(z.imag(), -T(EIGEN_PI) / T(4));
+  }
+  VERIFY_IS_EQUAL(numext::log(Complex(denorm_min, T(0))).real(), numext::log(denorm_min));
+  VERIFY_IS_EQUAL(numext::log(Complex(T(0), T(0))).real(), -std::numeric_limits<T>::infinity());
+  VERIFY_IS_EQUAL(numext::log(Complex(std::numeric_limits<T>::infinity(), highest)).real(),
+                  std::numeric_limits<T>::infinity());
+}
+
+// Complex fuzzy comparisons at moduli whose squares overflow or underflow.
+template <typename T>
+void check_complex_fuzzy() {
+  using Complex = std::complex<T>;
+  const T prec = NumTraits<T>::dummy_precision();
+  for (const T s :
+       {numext::sqrt((std::numeric_limits<T>::min)()) / T(16), numext::sqrt((std::numeric_limits<T>::max)()) * T(16)}) {
+    VERIFY(!internal::isApprox(Complex(s, T(0)), Complex(T(3) * s, T(0)), prec));
+    VERIFY(!internal::isApprox(Complex(s, -s), Complex(-s, s), prec));
+    VERIFY(internal::isApprox(Complex(s, -s), Complex(s * (T(1) + NumTraits<T>::epsilon()), -s), prec));
+    VERIFY(!internal::isMuchSmallerThan(Complex(T(3) * s, T(0)), Complex(s, T(0)), prec));
+    VERIFY(internal::isMuchSmallerThan(Complex(s * prec / T(4), T(0)), Complex(s, s), prec));
+    Matrix<Complex, 3, 1> v = Matrix<Complex, 3, 1>::Constant(Complex(s, T(0)));
+    VERIFY(!v.isApproxToConstant(Complex(T(3) * s, T(0)), prec));
+  }
+}
+
+// log1p(z) to a few ulps of |log1p(z)| for small z off the real axis, where rounding |1 + z| to 1 loses log|1 + z|.
+// W is wider than T; log|1 + z| = log1p(x (2 + x) + y^2) / 2.
+template <typename T, typename W>
+void check_complex_log1p_accuracy() {
+  const T eps = NumTraits<T>::epsilon();
+  const T tiny_x[] = {T(0), T(4) * eps, -T(3) * eps, T(1e-3) * numext::sqrt(eps)};
+  const T tiny_y[] = {numext::sqrt(eps), -T(2) * numext::sqrt(eps), T(1e-3), T(64) * eps};
+  for (const T x : tiny_x) {
+    for (const T y : tiny_y) {
+      const std::complex<T> got = numext::log1p(std::complex<T>(x, y));
+      const W ref_re = std::log1p(W(x) * (W(2) + W(x)) + W(y) * W(y)) / W(2);
+      const W ref_im = std::atan2(W(y), W(1) + W(x));
+      const W err = numext::hypot(W(got.real()) - ref_re, W(got.imag()) - ref_im);
+      VERIFY(err <= W(4) * W(eps) * numext::hypot(ref_re, ref_im));
+    }
+  }
+}
+
+// log1p(z) for |z| of at least 1, where 1 + z is accurate: the argument is atan2(y, 1 + x) to a few ulps, however large
+// |x| is. W is wider than T.
+template <typename T, typename W>
+void check_complex_log1p_large() {
+  const T eps = NumTraits<T>::epsilon();
+  const T big = (std::numeric_limits<T>::max)() / T(4);
+  for (const T x : {T(3), -T(5), T(1e3), -T(1e5), T(1e10), -T(1e10), T(1e20), big, -big}) {
+    for (const T y : {T(1), -T(0.25), T(1e-3) * x, T(1e-10) * x, big / T(2)}) {
+      const std::complex<T> got = numext::log1p(std::complex<T>(x, y));
+      const W ref_re = std::log(std::hypot(W(1) + W(x), W(y)));
+      const W ref_im = std::atan2(W(y), W(1) + W(x));
+      VERIFY(numext::abs(W(got.imag()) - ref_im) <= W(4) * W(eps) * numext::abs(ref_im));
+      VERIFY(numext::abs(W(got.real()) - ref_re) <= W(4) * W(eps) * numext::abs(ref_re));
+    }
+  }
+}
+
+// C99 Annex G: a nonzero finite numerator over a zero divisor gives an infinity, and a finite one over an infinite
+// divisor gives zero, also where the divisor's parts have equal magnitudes. scalar_quotient_op is the coefficient-wise
+// quotient's scalar path.
+template <typename T>
+void check_complex_divide() {
+  using Complex = std::complex<T>;
+  const T zero(0), one(1), inf = std::numeric_limits<T>::infinity();
+  for (const Complex a : {Complex(one, zero), Complex(-T(3), T(0.5)), Complex(one, one)}) {
+    for (const Complex b : {Complex(zero, zero), Complex(-zero, zero), Complex(zero, -zero)}) {
+      for (const Complex q : {numext::divide(a, b), internal::scalar_quotient_op<Complex, Complex>()(a, b)}) {
+        VERIFY((numext::isinf)(q.real()) || (numext::isinf)(q.imag()));
+      }
+    }
+    for (const Complex b : {Complex(inf, inf), Complex(-inf, inf), Complex(inf, zero)}) {
+      for (const Complex q : {numext::divide(a, b), internal::scalar_quotient_op<Complex, Complex>()(a, b)}) {
+        VERIFY_IS_EQUAL(q.real(), zero);
+        VERIFY_IS_EQUAL(q.imag(), zero);
+      }
+    }
+  }
+}
+
+// Quotients that are representable although Smith's numerator a_r + a_i d / c or denominator c + d^2 / c is not: the
+// operands lie above max / 2 or the divisor's parts are. Both the scalar and the packet (Array) path must give them.
+template <typename T>
+void check_complex_divide_extreme() {
+  using Complex = std::complex<T>;
+  const T zero(0), half(0.5), one(1);
+  const T highest = (std::numeric_limits<T>::max)();
+  const T h = T(0.75) * highest, big = T(0.9) * highest, lowest = (std::numeric_limits<T>::min)();
+  struct Case {
+    Complex a, b, quotient;
+  };
+  const Case cases[] = {{Complex(h, h), Complex(h, h), Complex(one, zero)},
+                        {Complex(h, -h), Complex(h, h), Complex(zero, -one)},
+                        {Complex(-h, h), Complex(h, -h), Complex(-one, zero)},
+                        {Complex(h, zero), Complex(h, h), Complex(half, -half)},
+                        {Complex(-h, zero), Complex(h, h), Complex(-half, half)},
+                        {Complex(zero, h), Complex(-h, h), Complex(half, -half)},
+                        {Complex(highest, highest), Complex(T(2), T(2)), Complex(highest / T(2), zero)},
+                        {Complex(highest, -highest), Complex(T(2), T(2)), Complex(zero, -highest / T(2))},
+                        {Complex(big, zero), Complex(big, zero), Complex(one, zero)},
+                        {Complex(zero, big), Complex(zero, -big), Complex(-one, zero)},
+                        {Complex(lowest, lowest), Complex(T(2) * lowest, T(2) * lowest), Complex(half, zero)},
+                        {Complex(lowest, zero), Complex(zero, -T(2) * lowest), Complex(zero, half)}};
+  const T tol = T(8) * NumTraits<T>::epsilon();
+  Array<Complex, Dynamic, 1> a(19), b(19), q;
+  for (const Case& c : cases) {
+    a.setConstant(c.a);
+    b.setConstant(c.b);
+    q = a / b;
+    for (const Complex& value : {numext::divide(c.a, c.b), internal::scalar_quotient_op<Complex, Complex>()(c.a, c.b),
+                                 q(0), q(q.size() - 1)}) {
+      VERIFY(numext::abs(value.real() - c.quotient.real()) <= tol * numext::abs(c.quotient));
+      VERIFY(numext::abs(value.imag() - c.quotient.imag()) <= tol * numext::abs(c.quotient));
+    }
+  }
+  // Random quotients of operands near the top of the range: a = q b with 0.25 <= |q| < 1 and the parts of b up to
+  // max / 2.
+  for (int i = 0; i < 50; ++i) {
+    const Complex b_big(internal::random<T>(T(-0.5), T(0.5)) * highest, internal::random<T>(T(-0.5), T(0.5)) * highest);
+    const Complex q_ref(internal::random<T>(T(-0.7), T(0.7)), internal::random<T>(T(-0.7), T(0.7)));
+    if (numext::abs(b_big) < T(0.2) * highest || numext::abs(q_ref) < T(0.25)) continue;
+    const Complex a_big = q_ref * b_big;
+    a.setConstant(a_big);
+    b.setConstant(b_big);
+    q = a / b;
+    for (const Complex& value : {numext::divide(a_big, b_big), q(0), q(q.size() - 1)}) {
+      VERIFY(numext::abs(value - q_ref) <= tol * numext::abs(q_ref));
+    }
+  }
+}
+
+// The unscaled quotient is right where no numerator overflows. |a_r| + |a_i| = highest + ulp / 2 at a tie does overflow
+// the sum a_r + a_i of Smith's numerator for b = 1 + i, but the quotient does not: it rounds to 2^(emax - 1). A
+// subnormal component beside a large one survives division by one. Those two are the regression checks; the assertions
+// on the zero signs of a division by an infinity pin the existing behavior and do not guard the rework.
+template <typename T>
+void check_complex_divide_ties_and_zero_signs() {
+  using Complex = std::complex<T>;
+  const T zero(0), one(1);
+  const T highest = (std::numeric_limits<T>::max)();
+  const T denorm_min = std::numeric_limits<T>::denorm_min();
+  const T inf = std::numeric_limits<T>::infinity();
+  const int ulp_exponent = NumTraits<T>::max_exponent() - NumTraits<T>::digits();  // ulp(highest) = 2^ulp_exponent
+  const T ulp = numext::ldexp(one, ulp_exponent);
+  const Complex tie(highest - ulp, T(1.5) * ulp);
+  const Complex one_plus_i(one, one);
+  const T tol = T(8) * NumTraits<T>::epsilon();
+  const Complex expected(numext::ldexp(one, NumTraits<T>::max_exponent() - 1),
+                         -numext::ldexp(one, NumTraits<T>::max_exponent() - 1));
+  for (const Complex& q :
+       {numext::divide(tie, one_plus_i), internal::scalar_quotient_op<Complex, Complex>()(tie, one_plus_i)}) {
+    VERIFY(numext::abs(q - expected) <= tol * numext::abs(expected));
+  }
+  const T tiny_cases[] = {denorm_min, -denorm_min};
+#if !EIGEN_ARCH_ARM  // 32-bit ARM flushes subnormals.
+  for (const T tiny : tiny_cases) {
+    const Complex q = numext::divide(Complex(tiny, highest), Complex(one, zero));
+    VERIFY_IS_EQUAL(q.real(), tiny);
+    VERIFY_IS_EQUAL(q.imag(), highest);
+    // Plain Smith's quotient by an infinite divisor: 0 with the sign of the numerator component.
+    for (const T large : {one, -one}) {
+      const Complex r = numext::divide(Complex(tiny, large), Complex(inf, zero));
+      VERIFY_IS_EQUAL(r.real(), T(tiny / inf));
+      VERIFY_IS_EQUAL((std::signbit)(r.real()), (std::signbit)(tiny));
+      VERIFY_IS_EQUAL(r.imag(), zero);
+      VERIFY_IS_EQUAL((std::signbit)(r.imag()), (std::signbit)(large));
+    }
+  }
+#else
+  (void)tiny_cases;
+  (void)inf;
+  (void)denorm_min;
+#endif
+}
+
+#if EIGEN_COMP_MSVC
+#pragma float_control(precise, on, push)
+#pragma fenv_access(on)
+#elif EIGEN_COMP_CLANG && (EIGEN_ARCH_i386_OR_x86_64 || (EIGEN_ARCH_ARM64 && EIGEN_COMP_CLANG >= 1600)) && \
+    !defined(__GPUCC__) && !defined(__SYCL_DEVICE_ONLY__)
+// AArch64 strict floating-point support was enabled in Clang 16.
+#pragma STDC FENV_ACCESS ON
+#endif
+
+// The exceptions numext::divide(a, b) raises, or -1 where the environment cannot be held.
+template <typename T>
+EIGEN_DONT_INLINE int complex_divide_exceptions(const std::complex<T>& a, const std::complex<T>& b) {
+  const T operands[4] = {a.real(), a.imag(), b.real(), b.imag()};
+  T quotient[2];
+  return fp_exceptions_raised_by_staged<4, 2>(
+      FE_OVERFLOW | FE_UNDERFLOW | FE_INVALID | FE_DIVBYZERO, operands, quotient, [](const T* in, T* out) {
+        const std::complex<T> q = numext::divide(std::complex<T>(in[0], in[1]), std::complex<T>(in[2], in[3]));
+        out[0] = q.real();
+        out[1] = q.imag();
+      });
+}
+
+// Smith's ratio d / c is +-1 for |c| = |d|: its sign must not come from c * d, which overflows, or underflows
+// inexactly, for divisors whose quotient does neither. For a divisor on an axis, the ratio Smith does not take is
+// x / 0.
+template <typename T>
+void check_complex_divide_exceptions() {
+  using Complex = std::complex<T>;
+  const T big = numext::sqrt((std::numeric_limits<T>::max)()) * T(3);
+  const T small = numext::sqrt((std::numeric_limits<T>::min)()) * T(0.3);
+  const T two(2), zero(0);
+  for (const Complex b :
+       {Complex(big, big), Complex(-big, big), Complex(big, -big), Complex(-big, -big), Complex(small, small),
+        Complex(-small, small), Complex(small, -small), Complex(-small, -small), Complex(two, zero),
+        Complex(-two, zero), Complex(zero, two), Complex(zero, -two)}) {
+    const int exceptions = complex_divide_exceptions(Complex(T(1), T(0)), b);
+    if (exceptions >= 0) VERIFY_IS_EQUAL(exceptions, 0);
+  }
+
+  // The test for an overflowed numerator or denominator raises nothing where no term overflows, although their sum
+  // does (the terms are at most 2 max|a| and 2 max|b|), and nothing for an infinite or NaN operand whose quotient
+  // is infinite or NaN without an invalid operation.
+  const T highest = (std::numeric_limits<T>::max)(), infinity = NumTraits<T>::infinity();
+  const T nan = NumTraits<T>::quiet_NaN(), one(1);
+  const Complex cases[][2] = {{Complex(highest / 4, zero), Complex(highest, zero)},
+                              {Complex(T(0.6) * highest, T(0.6) * highest), Complex(one, zero)},
+                              {Complex(highest, highest), Complex(one, zero)},
+                              {Complex(highest, zero), Complex(highest, zero)},
+                              {Complex(highest / 2, highest / 2), Complex(-one, zero)},
+                              {Complex(T(0.6) * highest, zero), Complex(zero, T(0.6) * highest)},
+                              {Complex(infinity, one), Complex(one, one)},
+                              {Complex(nan, one), Complex(one, one)},
+                              {Complex(one, one), Complex(infinity, one)}};
+  for (const auto& operands : cases) {
+    const int exceptions = complex_divide_exceptions(operands[0], operands[1]);
+    if (exceptions >= 0) VERIFY_IS_EQUAL(exceptions, 0);
+  }
+}
+
+// The exceptions numext::sign(z) raises, or -1 where the environment cannot be held.
+template <typename T>
+EIGEN_DONT_INLINE int complex_sign_exceptions(const std::complex<T>& z) {
+  const T operands[2] = {z.real(), z.imag()};
+  T result[2];
+  return fp_exceptions_raised_by_staged<2, 2>(FE_OVERFLOW | FE_UNDERFLOW | FE_INVALID | FE_DIVBYZERO, operands, result,
+                                              [](const T* in, T* out) {
+                                                const std::complex<T> s = numext::sign(std::complex<T>(in[0], in[1]));
+                                                out[0] = s.real();
+                                                out[1] = s.imag();
+                                              });
+}
+
+// |z| is not formed where it overflows (z = (max, max), whose sign is finite), and a NaN component raises nothing
+// (the rescaling for m = 0 would divide 0 by 0).
+template <typename T>
+void check_complex_sign_exceptions() {
+  using Complex = std::complex<T>;
+  const T highest = (std::numeric_limits<T>::max)(), nan = NumTraits<T>::quiet_NaN(), zero(0), one(1);
+  for (const Complex z : {Complex(highest, highest), Complex(-highest, highest), Complex(highest, zero),
+                          Complex(T(0.6) * highest, T(0.6) * highest), Complex(one, one), Complex(zero, nan),
+                          Complex(nan, zero), Complex(nan, nan), Complex(one, nan), Complex(zero, zero)}) {
+    const int exceptions = complex_sign_exceptions(z);
+    if (exceptions >= 0) VERIFY_IS_EQUAL(exceptions, 0);
+  }
+}
+
+// numext::fma(a, b, c) for half or bfloat16, and whether it raised FE_INVALID (-1 where the environment cannot be
+// held).
+template <typename T>
+EIGEN_DONT_INLINE int narrow_fma_invalid(const T& a, const T& b, const T& c, T& result) {
+  const T operands[3] = {a, b, c};
+  return fp_exceptions_raised_by_staged<3, 1>(FE_INVALID, operands, &result,
+                                              [](const T* in, T* out) { out[0] = numext::fma(in[0], in[1], in[2]); });
+}
+
+// An infinite or NaN operand gives the IEEE fma without FE_INVALID, except for inf * 0 and inf - inf.
+template <typename T>
+void check_narrow_fma_nonfinite() {
+  const T inf = NumTraits<T>::infinity(), nan = NumTraits<T>::quiet_NaN(), zero(0), one(1), two(2);
+  const T quiet[][4] = {{inf, one, zero, inf}, {-inf, one, zero, -inf}, {one, one, inf, inf},  {one, one, -inf, -inf},
+                        {inf, two, inf, inf},  {two, -inf, -inf, -inf}, {nan, one, zero, nan}, {one, one, nan, nan},
+                        {inf, one, nan, nan},  {zero, nan, inf, nan}};
+  for (const auto& operands : quiet) {
+    T result;
+    const int invalid = narrow_fma_invalid(operands[0], operands[1], operands[2], result);
+    if (invalid >= 0) VERIFY_IS_EQUAL(invalid, 0);
+    VERIFY(check_if_equal_or_nans(result, operands[3]));
+  }
+  const T invalid_operands[][3] = {{inf, zero, one}, {zero, -inf, one}, {inf, one, -inf}, {-inf, two, inf}};
+  for (const auto& operands : invalid_operands) {
+    T result;
+    narrow_fma_invalid(operands[0], operands[1], operands[2], result);
+    VERIFY((numext::isnan)(result));
+  }
+}
+
+#if EIGEN_COMP_MSVC
+#pragma fenv_access(off)
+#pragma float_control(pop)
+#elif EIGEN_COMP_CLANG && (EIGEN_ARCH_i386_OR_x86_64 || (EIGEN_ARCH_ARM64 && EIGEN_COMP_CLANG >= 1600)) && \
+    !defined(__GPUCC__) && !defined(__SYCL_DEVICE_ONLY__)
+#pragma STDC FENV_ACCESS OFF
+#endif
+
+// log2(2^k) = k on the scalar path, as on the vectorized one. A size-1 array takes the scalar path.
+template <typename T>
+void check_log2_powers_of_two() {
+  for (int k = std::numeric_limits<T>::min_exponent - std::numeric_limits<T>::digits;
+       k < std::numeric_limits<T>::max_exponent; ++k) {
+    const T x = numext::ldexp(T(1), k);
+    VERIFY_IS_EQUAL(internal::scalar_log2_op<T>()(x), T(k));
+    VERIFY_IS_EQUAL((Array<T, Dynamic, 1>::Constant(1, x).log2()(0)), T(k));
+  }
+}
+
+// log2|z| = k for z = 2^k (+-1, +-0 i) and +-2^k i, on the scalar path and in vectorized lanes, the imaginary part
+// arg(z) log2(e) with the sign of a zero. Padding to a multiple of 64 elements puts every z in a full packet.
+template <typename T>
+void check_complex_log2_powers_of_two() {
+  using Complex = std::complex<T>;
+#if EIGEN_ARCH_ARM  // 32-bit ARM flushes subnormals.
+  const int k_min = std::numeric_limits<T>::min_exponent - 1;
+#else
+  const int k_min = std::numeric_limits<T>::min_exponent - std::numeric_limits<T>::digits;
+#endif
+  const int k_max = std::numeric_limits<T>::max_exponent - 1;
+  constexpr int kPerExponent = 6;
+  const Index count = kPerExponent * (k_max - k_min + 1);
+  Array<Complex, Dynamic, 1> z = Array<Complex, Dynamic, 1>::Ones((count + 63) / 64 * 64);
+  for (int k = k_min; k <= k_max; ++k) {
+    const T x = numext::ldexp(T(1), k), zero(0);
+    z.template segment<kPerExponent>(kPerExponent * (k - k_min)) << Complex(x, zero), Complex(x, -zero),
+        Complex(-x, zero), Complex(-x, -zero), Complex(zero, x), Complex(zero, -x);
+  }
+  const Array<Complex, Dynamic, 1> vectorized = z.log2();
+  for (int k = k_min; k <= k_max; ++k) {
+    for (Index i = kPerExponent * (k - k_min); i < kPerExponent * (k - k_min + 1); ++i) {
+      const T arg_log2 = T(EIGEN_LOG2E) * std::atan2(z(i).imag(), z(i).real());
+      const Complex scalar = internal::scalar_log2_op<Complex>()(z(i));
+      VERIFY_IS_EQUAL(scalar.real(), T(k));
+      VERIFY_IS_EQUAL(scalar.imag(), arg_log2);
+      VERIFY_IS_EQUAL(std::signbit(scalar.imag()), std::signbit(arg_log2));
+      VERIFY_IS_EQUAL(vectorized(i).real(), T(k));
+      VERIFY_IS_APPROX(vectorized(i).imag(), arg_log2);
+      VERIFY_IS_EQUAL(std::signbit(vectorized(i).imag()), std::signbit(arg_log2));
+    }
+  }
+}
+
+// The scalar complex log2 where |z| overflows or is subnormal, against log2|z| in the wider type W: within 2 ulps.
+template <typename T, typename W>
+void check_complex_log2_extreme_modulus() {
+  // W must hold |z| for the largest z.
+  if (std::numeric_limits<W>::max_exponent <= std::numeric_limits<T>::max_exponent) return;
+  using Complex = std::complex<T>;
+  const T highest = (std::numeric_limits<T>::max)();
+  std::vector<Complex> zs = {Complex(highest, highest), Complex(-highest, highest / 3)};
+#if !EIGEN_ARCH_ARM  // 32-bit ARM flushes subnormals.
+  const T denorm_min = std::numeric_limits<T>::denorm_min();
+  zs.push_back(Complex(3 * denorm_min, 4 * denorm_min));
+  zs.push_back(Complex((std::numeric_limits<T>::min)() / 3, -denorm_min));
+#endif
+  for (const Complex& z : zs) {
+    const W ref = std::log2(std::hypot(W(z.real()), W(z.imag())));
+    const T got = internal::scalar_log2_op<Complex>()(z).real();
+    VERIFY(numext::abs(W(got) - ref) <= W(2) * W(NumTraits<T>::epsilon()) * numext::abs(ref));
+  }
+}
+
+// NumTraits<T>::digits() counts significand bits like numeric_limits<T>::digits; std::complex<T>, for which
+// numeric_limits is not specialized, derives it from epsilon() = 2^(1 - digits).
+template <typename T>
+void check_complex_digits() {
+  VERIFY_IS_EQUAL(NumTraits<std::complex<T>>::digits(), std::numeric_limits<T>::digits);
+  VERIFY_IS_EQUAL(NumTraits<std::complex<T>>::digits10(), std::numeric_limits<T>::digits10);
+  VERIFY_IS_EQUAL(NumTraits<std::complex<T>>::max_digits10(), std::numeric_limits<T>::max_digits10);
+}
+
+// The FMA implementation must retain the product's rounding error even when scalar madd is unfused.
+template <typename T>
+void check_twoprod_pair(const T& x, const T& y) {
+  T hi, lo;
+  internal::twoprod(x, y, hi, lo);
+  VERIFY_IS_EQUAL(hi, x * y);
+  // fma is exact by IEEE-754 contract, so this is the definition of the low word rather than an
+  // independent approximation of it.
+  EIGEN_USING_STD(fma);
+  VERIFY_IS_EQUAL(lo, fma(x, y, -hi));
+  VERIFY_IS_EQUAL(internal::twoprod_low(x, y, hi), fma(x, y, -hi));
+}
+
+template <typename T>
+void check_twoprod() {
+  // (1 + epsilon) * (1 - epsilon) = 1 - epsilon^2 exposes a lost low word in every IEEE type.
+  const T epsilon = NumTraits<T>::epsilon();
+  check_twoprod_pair(T(1) + epsilon, T(1) - epsilon);
+  for (int k = 0; k < 100; ++k) {
+    check_twoprod_pair(internal::random<T>(T(-1), T(1)), internal::random<T>(T(-1), T(1)));
+  }
+}
+
+// twoprod_full_range returns the FMA residual wherever the product is normal, also for an x that Veltkamp's splitting
+// would overflow on, or whose partial products in Dekker's algorithm would underflow.
+template <typename T>
+void check_twoprod_full_range_pair(const T& x, const T& y) {
+  if (!(numext::isfinite)(T(x * y))) return;
+  T hi, lo;
+  internal::twoprod_full_range(x, y, hi, lo);
+  VERIFY_IS_EQUAL(hi, x * y);
+  EIGEN_USING_STD(fma);
+  const T residual = fma(x, y, -hi);
+  // 32-bit ARM flushes subnormals, so a denormal residual is not comparable there.
+  const bool comparable =
+      !EIGEN_ARCH_ARM || numext::abs(residual) >= (std::numeric_limits<T>::min)() || numext::is_exactly_zero(residual);
+  if (numext::abs(hi) >= (std::numeric_limits<T>::min)() && comparable) {
+    VERIFY_IS_EQUAL(lo, residual);
+  } else {
+    VERIFY((numext::isfinite)(lo));
+  }
+}
+
+template <typename T>
+void check_twoprod_full_range() {
+  const T eps = NumTraits<T>::epsilon();
+  const T highest = NumTraits<T>::highest(), lowest_normal = (std::numeric_limits<T>::min)();
+  for (const T y : {T(EIGEN_LN2), T(0.5), T(2), internal::random<T>(T(0.5), T(1)), -internal::random<T>(T(1), T(2))}) {
+    // The ends of the range and both rescaling thresholds.
+    for (const T x :
+         {highest, highest / T(3), highest * eps * eps, lowest_normal / (eps * eps), lowest_normal,
+          T(2) * lowest_normal, T(3) * lowest_normal, lowest_normal / T(64), (std::numeric_limits<T>::denorm_min)()}) {
+      for (const T x_near : {x, T(x * (T(1) + eps)), T(x * (T(1) - eps))}) {
+        check_twoprod_full_range_pair(x_near, y);
+        check_twoprod_full_range_pair(T(-x_near), y);
+      }
+    }
+    // Every binade of x, the denormal ones included.
+    for (int e = std::numeric_limits<T>::min_exponent - std::numeric_limits<T>::digits;
+         e < std::numeric_limits<T>::max_exponent; ++e) {
+      EIGEN_USING_STD(ldexp);
+      for (int k = 0; k < 4; ++k) check_twoprod_full_range_pair(T(ldexp(internal::random<T>(T(1), T(2)), e)), y);
+    }
+  }
+}
+
+// numext::madd fuses as EIGEN_SCALAR_MADD_USE_FMA says, except a long double without an fma instruction.
+template <typename T>
+void check_scalar_madd_fusion() {
+  // (1 + eps)(1 - eps) - 1 is -eps^2 fused and 0 unfused.
+  const T eps = NumTraits<T>::epsilon();
+  const T x = T(1) + eps, y = T(1) - eps;
+  if (internal::scalar_madd_uses_fma<T>::value) {
+    VERIFY_IS_EQUAL(numext::madd<T>(x, y, T(-1)), T(-eps * eps));
+  } else if (std::numeric_limits<T>::digits > std::numeric_limits<double>::digits &&
+             !internal::has_fast_fma<T>::value) {
+    // Checked unfused only for a format wider than double with no fma instruction: elsewhere the compiler may
+    // contract x * y + z into an instruction has_fast_fma does not know of.
+    VERIFY_IS_EQUAL(numext::madd<T>(x, y, T(-1)), T(0));
+    VERIFY_IS_EQUAL(internal::pmadd<T>(x, y, T(-1)), T(0));
+  }
+}
+
+void check_scalar_madd_fusion_policy() {
+  VERIFY_IS_EQUAL(internal::scalar_madd_uses_fma<float>::value, bool(EIGEN_SCALAR_MADD_USE_FMA));
+  VERIFY_IS_EQUAL(internal::scalar_madd_uses_fma<double>::value, bool(EIGEN_SCALAR_MADD_USE_FMA));
+#if EIGEN_ARCH_i386_OR_x86_64 || EIGEN_ARCH_ARM64
+  // Neither architecture has an fma instruction for x87 extended or binary128.
+  if (std::numeric_limits<long double>::digits != std::numeric_limits<double>::digits) {
+    VERIFY(!internal::has_fast_fma<long double>::value);
+    VERIFY(!internal::scalar_madd_uses_fma<long double>::value);
+  }
+#endif
+  check_scalar_madd_fusion<float>();
+  check_scalar_madd_fusion<double>();
+  check_scalar_madd_fusion<long double>();
+}
+
+#ifdef EIGEN_VECTORIZE_FMA
+// Custom scalars can return a lazy expression from unary minus.
+struct TwoprodScalar {
+  struct Negation {
+    const TwoprodScalar& operand;
+  };
+
+  TwoprodScalar() = default;
+  explicit TwoprodScalar(double v) : value(v) {}
+  TwoprodScalar(const Negation& negation) : value(-negation.operand.value) {}
+
+  Negation operator-() const { return {*this}; }
+  TwoprodScalar operator*(const TwoprodScalar& other) const { return TwoprodScalar(value * other.value); }
+
+  friend TwoprodScalar fma(const TwoprodScalar& x, const TwoprodScalar& y, const TwoprodScalar& z) {
+    return TwoprodScalar(std::fma(x.value, y.value, z.value));
+  }
+
+  double value = 0;
+};
+
+void check_twoprod_negation_expression() {
+  STATIC_CHECK(internal::is_scalar<TwoprodScalar>::value);
+  STATIC_CHECK(internal::has_fma<TwoprodScalar>::value);
+  STATIC_CHECK((!std::is_same<decltype(-std::declval<TwoprodScalar>()), TwoprodScalar>::value));
+  const double epsilon = NumTraits<double>::epsilon();
+  for (double sign : {-1.0, 1.0}) {
+    const TwoprodScalar x(sign * (1 + epsilon)), y(1 - epsilon);
+    TwoprodScalar hi, lo;
+    internal::twoprod(x, y, hi, lo);
+    VERIFY_IS_EQUAL(hi.value, sign);
+    VERIFY_IS_EQUAL(lo.value, -sign * epsilon * epsilon);
+    VERIFY_IS_EQUAL(internal::twoprod_low(x, y, hi).value, -sign * epsilon * epsilon);
+  }
+}
+#endif
+
 template <typename T>
 void check_arg() {
-  typedef typename NumTraits<T>::Real Real;
-  VERIFY_IS_EQUAL(numext::abs(T(0)), T(0));
-  VERIFY_IS_EQUAL(numext::abs(T(1)), T(1));
-
+  using Real = typename NumTraits<T>::Real;
   for (int k = 0; k < 100; ++k) {
     T x = internal::random<T>();
     Real y = numext::arg(x);
@@ -109,9 +1546,9 @@ struct check_sqrt_impl {
 };
 
 template <typename T>
-struct check_sqrt_impl<std::complex<T> > {
+struct check_sqrt_impl<std::complex<T>> {
   static void run() {
-    typedef typename std::complex<T> ComplexT;
+    using ComplexT = std::complex<T>;
 
     for (int i = 0; i < 1000; ++i) {
       const ComplexT x = internal::random<ComplexT>();
@@ -119,32 +1556,7 @@ struct check_sqrt_impl<std::complex<T> > {
       VERIFY_IS_APPROX(sqrtx * sqrtx, x);
     }
 
-    // Corner cases.
-    const T zero = T(0);
-    const T one = T(1);
-    const T inf = std::numeric_limits<T>::infinity();
-    const T nan = std::numeric_limits<T>::quiet_NaN();
-
-    // Set of corner cases from https://en.cppreference.com/w/cpp/numeric/complex/sqrt
-    const int kNumCorners = 20;
-    const ComplexT corners[kNumCorners][2] = {
-        {ComplexT(zero, zero), ComplexT(zero, zero)},  {ComplexT(-zero, zero), ComplexT(zero, zero)},
-        {ComplexT(zero, -zero), ComplexT(zero, zero)}, {ComplexT(-zero, -zero), ComplexT(zero, zero)},
-        {ComplexT(one, inf), ComplexT(inf, inf)},      {ComplexT(nan, inf), ComplexT(inf, inf)},
-        {ComplexT(one, -inf), ComplexT(inf, -inf)},    {ComplexT(nan, -inf), ComplexT(inf, -inf)},
-        {ComplexT(-inf, one), ComplexT(zero, inf)},    {ComplexT(inf, one), ComplexT(inf, zero)},
-        {ComplexT(-inf, -one), ComplexT(zero, -inf)},  {ComplexT(inf, -one), ComplexT(inf, -zero)},
-        {ComplexT(-inf, nan), ComplexT(nan, inf)},     {ComplexT(inf, nan), ComplexT(inf, nan)},
-        {ComplexT(zero, nan), ComplexT(nan, nan)},     {ComplexT(one, nan), ComplexT(nan, nan)},
-        {ComplexT(nan, zero), ComplexT(nan, nan)},     {ComplexT(nan, one), ComplexT(nan, nan)},
-        {ComplexT(nan, -one), ComplexT(nan, nan)},     {ComplexT(nan, nan), ComplexT(nan, nan)},
-    };
-
-    for (int i = 0; i < kNumCorners; ++i) {
-      const ComplexT& x = corners[i][0];
-      const ComplexT sqrtx = corners[i][1];
-      VERIFY_IS_EQUAL_OR_NANS(numext::sqrt(x), sqrtx);
-    }
+    // The IEEE corner cases are in complex_sqrt.
   }
 };
 
@@ -177,13 +1589,11 @@ struct check_rsqrt_impl {
 };
 
 template <typename T>
-struct check_rsqrt_impl<std::complex<T> > {
+struct check_rsqrt_impl<std::complex<T>> {
   static void run() {
-    typedef typename std::complex<T> ComplexT;
+    using ComplexT = std::complex<T>;
     const T zero = T(0);
     const T one = T(1);
-    const T inf = std::numeric_limits<T>::infinity();
-    const T nan = std::numeric_limits<T>::quiet_NaN();
 
     for (int i = 0; i < 1000; ++i) {
       const ComplexT x = internal::random<ComplexT>();
@@ -192,49 +1602,81 @@ struct check_rsqrt_impl<std::complex<T> > {
       VERIFY_IS_APPROX(rsqrtx * rsqrtx, invx);
     }
 
-// GCC and MSVC differ in their treatment of 1/(0 + 0i)
-//   GCC/clang = (inf, nan)
-//   MSVC = (nan, nan)
-// and 1 / (x + inf i)
-//   GCC/clang = (0, 0)
-//   MSVC = (nan, nan)
-#if (EIGEN_COMP_GNUC)
-    {
-      const int kNumCorners = 20;
-      const ComplexT corners[kNumCorners][2] = {
-          // Only consistent across GCC, clang
-          {ComplexT(zero, zero), ComplexT(zero, zero)},
-          {ComplexT(-zero, zero), ComplexT(zero, zero)},
-          {ComplexT(zero, -zero), ComplexT(zero, zero)},
-          {ComplexT(-zero, -zero), ComplexT(zero, zero)},
-          {ComplexT(one, inf), ComplexT(inf, inf)},
-          {ComplexT(nan, inf), ComplexT(inf, inf)},
-          {ComplexT(one, -inf), ComplexT(inf, -inf)},
-          {ComplexT(nan, -inf), ComplexT(inf, -inf)},
-          // Consistent across GCC, clang, MSVC
-          {ComplexT(-inf, one), ComplexT(zero, inf)},
-          {ComplexT(inf, one), ComplexT(inf, zero)},
-          {ComplexT(-inf, -one), ComplexT(zero, -inf)},
-          {ComplexT(inf, -one), ComplexT(inf, -zero)},
-          {ComplexT(-inf, nan), ComplexT(nan, inf)},
-          {ComplexT(inf, nan), ComplexT(inf, nan)},
-          {ComplexT(zero, nan), ComplexT(nan, nan)},
-          {ComplexT(one, nan), ComplexT(nan, nan)},
-          {ComplexT(nan, zero), ComplexT(nan, nan)},
-          {ComplexT(nan, one), ComplexT(nan, nan)},
-          {ComplexT(nan, -one), ComplexT(nan, nan)},
-          {ComplexT(nan, nan), ComplexT(nan, nan)},
-      };
-
-      for (int i = 0; i < kNumCorners; ++i) {
-        const ComplexT& x = corners[i][0];
-        const ComplexT rsqrtx = ComplexT(one, zero) / corners[i][1];
-        VERIFY_IS_EQUAL_OR_NANS(numext::rsqrt(x), rsqrtx);
-      }
-    }
-#endif
+    // The IEEE corner cases are in complex_sqrt.
   }
 };
+
+// numext::hypot: the IEEE special cases, exact results over the whole exponent range (which covers the scaled branches
+// of the double version and subnormal operands and results), and random operands against a wider reference. float and
+// double are within 1 ulp; other types keep the division-based formula, within 2.
+template <typename T>
+void check_hypot() {
+  using Wide = long double;
+  const T inf = NumTraits<T>::infinity();
+  const T nan = NumTraits<T>::quiet_NaN();
+  const T highest = NumTraits<T>::highest();
+  const T lowest_normal = (std::numeric_limits<T>::min)();
+  const T denorm_min = std::numeric_limits<T>::denorm_min();
+  const bool tight = std::is_same<T, float>::value || std::is_same<T, double>::value;
+
+  for (T x : {T(0), -T(0), denorm_min, T(1), -T(3), highest, inf, -inf, nan}) {
+    VERIFY_IS_EQUAL(numext::hypot(x, inf), inf);
+    VERIFY_IS_EQUAL(numext::hypot(-inf, x), inf);
+    if (!(numext::isinf)(x)) {
+      VERIFY((numext::isnan)(numext::hypot(x, nan)));
+      VERIFY((numext::isnan)(numext::hypot(nan, x)));
+    }
+  }
+  // +0 for zeros of either sign.
+  for (T x : {T(0), -T(0)}) {
+    for (T y : {T(0), -T(0)}) {
+      const T h = numext::hypot(x, y);
+      VERIFY(numext::is_exactly_zero(h) && !(std::signbit)(h));
+    }
+  }
+  // |x| when the other operand is zero or too small to matter, at both ends of the range.
+  for (T x : {denorm_min, T(3) * denorm_min, lowest_normal, T(1), T(1e10), highest}) {
+    VERIFY_IS_EQUAL(numext::hypot(x, T(0)), x);
+    VERIFY_IS_EQUAL(numext::hypot(-T(0), -x), x);
+  }
+  VERIFY_IS_EQUAL(numext::hypot(highest, T(1)), highest);
+  VERIFY_IS_EQUAL(numext::hypot(T(1), -highest), highest);
+  // Overflow only where the result exceeds the largest finite value.
+  VERIFY_IS_EQUAL(numext::hypot(highest, highest), inf);
+  VERIFY((numext::isfinite)(numext::hypot(highest / T(2), highest / T(2))));
+  VERIFY_IS_APPROX(numext::hypot(highest / T(2), highest / T(2)), highest * T(0.70710678118654752440L));
+
+  // (3, 4, 5) 2^k is exact in every binade, down to subnormal results and up to the overflow threshold.
+  const int digits = std::numeric_limits<T>::digits;
+  for (int k = std::numeric_limits<T>::min_exponent - digits; k < std::numeric_limits<T>::max_exponent - 3; ++k) {
+    const T three = numext::ldexp(T(3), k), four = numext::ldexp(T(4), k), five = numext::ldexp(T(5), k);
+    if (tight) {
+      VERIFY_IS_EQUAL(numext::hypot(three, four), five);
+      VERIFY_IS_EQUAL(numext::hypot(-four, three), five);
+    } else {
+      VERIFY_IS_APPROX(numext::hypot(three, four), five);
+    }
+  }
+
+  // Random significands; the larger operand anywhere in the range, the smaller up to digits + 2 binades below it.
+  const bool wide_reference = std::numeric_limits<Wide>::digits > digits;
+  const int budget = (tight ? 1 : 2) + (wide_reference ? 0 : 1);
+  for (int iter = 0; iter < 20000; ++iter) {
+    const int e = internal::random<int>(std::numeric_limits<T>::min_exponent, std::numeric_limits<T>::max_exponent - 2);
+    const int gap = internal::random<int>(0, digits + 2);
+    const T x = numext::ldexp(T(1) + internal::random<T>(T(0), T(1)), e);
+    const T y = numext::ldexp(T(1) + internal::random<T>(T(0), T(1)), e - gap);
+    const T h = numext::hypot(x, y);
+    const T ref = static_cast<T>(std::hypot(static_cast<Wide>(x), static_cast<Wide>(y)));
+    T lo = ref, hi = ref;
+    for (int i = 0; i < budget; ++i) {
+      lo = numext::nextafter(lo, T(0));
+      hi = numext::nextafter(hi, inf);
+    }
+    VERIFY(h >= lo && h <= hi);
+    VERIFY_IS_EQUAL(numext::hypot(y, -x), h);
+  }
+}
 
 template <typename T>
 void check_rsqrt() {
@@ -293,6 +1735,218 @@ void check_signbit() {
 }
 
 template <typename T>
+void check_nextafter() {
+  const T zero(0);
+  const T one(1);
+  const T two(2);
+  // NumTraits::epsilon() is the ulp at 1. std::numeric_limits reports the far smaller representational gap for the
+  // non-IEEE IBM double-double `long double`, which is not the step nextafter takes.
+  const T eps = NumTraits<T>::epsilon();
+  const T denorm_min = std::numeric_limits<T>::denorm_min();
+  const T inf = std::numeric_limits<T>::infinity();
+  const T nan = std::numeric_limits<T>::quiet_NaN();
+  const T max = (std::numeric_limits<T>::max)();
+
+  // from == to returns to.
+  VERIFY(numext::equal_strict(numext::nextafter(one, one), one));
+  // Stepping up from 1 and back down returns 1.
+  VERIFY(numext::equal_strict(numext::nextafter(numext::nextafter(one, two), zero), one));
+  // One-ulp steps around 1.
+  VERIFY(numext::equal_strict(numext::nextafter(one, two), one + eps));
+  VERIFY(numext::equal_strict(numext::nextafter(one + eps, zero), one));
+  // The neighbors of ±0 are the smallest subnormals, with the sign of the direction.
+  VERIFY(numext::equal_strict(numext::nextafter(zero, one), denorm_min));
+  VERIFY(numext::equal_strict(numext::nextafter(zero, -one), -denorm_min));
+  VERIFY(numext::equal_strict(numext::nextafter(-zero, one), denorm_min));
+  VERIFY(numext::equal_strict(numext::copysign(one, numext::nextafter(zero, -one)), -one));
+  // Stepping the smallest subnormals toward the other sign lands on the zero
+  // of the starting sign (IEEE-754 nextUp/nextDown).
+  VERIFY(numext::equal_strict(numext::nextafter(denorm_min, -one), zero));
+  VERIFY(numext::equal_strict(numext::copysign(one, numext::nextafter(denorm_min, -one)), one));
+  VERIFY(numext::equal_strict(numext::copysign(one, numext::nextafter(-denorm_min, one)), -one));
+  // Infinities saturate and unsaturate by one step.
+  VERIFY(numext::equal_strict(numext::nextafter(max, inf), inf));
+  VERIFY(numext::equal_strict(numext::nextafter(inf, zero), max));
+  // NaNs propagate.
+  VERIFY((numext::isnan)(numext::nextafter(nan, one)));
+  VERIFY((numext::isnan)(numext::nextafter(one, nan)));
+}
+
+template <typename T>
+void check_strict_equal() {
+  const T zero(0);
+  const T one(1);
+  const T two(2);
+  const T half = one / two;
+
+  VERIFY(numext::equal_strict(zero, zero));
+  VERIFY(numext::equal_strict(one, one));
+  VERIFY(numext::equal_strict(half, half));
+  VERIFY(!numext::equal_strict(zero, one));
+  VERIFY(!numext::equal_strict(one, two));
+
+  VERIFY(numext::not_equal_strict(zero, one));
+  VERIFY(numext::not_equal_strict(one, two));
+  VERIFY(!numext::not_equal_strict(one, one));
+
+  VERIFY(numext::is_exactly_zero(zero));
+  VERIFY(!numext::is_exactly_zero(one));
+  VERIFY(numext::is_exactly_zero_no_flush(zero));
+  VERIFY(!numext::is_exactly_zero_no_flush(one));
+  VERIFY(numext::is_exactly_one(one));
+  VERIFY(!numext::is_exactly_one(zero));
+}
+
+void check_zero_no_flush_custom_scalar() {
+  struct EqualityOnly {
+    explicit EqualityOnly(int x) : value(x) {}
+    ~EqualityOnly() {}  // Non-trivially-copyable: encoding-based classification must not be instantiated.
+    bool operator==(const EqualityOnly& other) const { return value == other.value; }
+    int value;
+  };
+  VERIFY(numext::is_exactly_zero_no_flush(EqualityOnly(0)));
+  VERIFY(!numext::is_exactly_zero_no_flush(EqualityOnly(1)));
+}
+
+template <typename Scalar>
+EIGEN_DONT_INLINE bool zero_no_flush_predicate(Scalar value) {
+  return numext::is_exactly_zero_no_flush(value);
+}
+
+template <typename Scalar>
+EIGEN_DONT_INLINE void check_zero_no_flush_values(const Scalar* values, int count) {
+  for (int i = 0; i < count; ++i) {
+    VERIFY_IS_EQUAL(numext::is_exactly_zero_no_flush(values[i]), i < 2);
+    VERIFY_IS_EQUAL(zero_no_flush_predicate(values[i]), i < 2);
+  }
+}
+
+template <typename Scalar>
+void check_zero_no_flush() {
+  using Binary = internal::binary_floating_point_traits<Scalar>;
+  const Scalar largest_subnormal = numext::bit_cast<Scalar>(Binary::kFractionMask);
+  const Scalar tiny = std::numeric_limits<Scalar>::denorm_min();
+  const Scalar minimum = (std::numeric_limits<Scalar>::min)();
+  const Scalar infinity = std::numeric_limits<Scalar>::infinity();
+  const Scalar values[] = {Scalar(0),
+                           -Scalar(0),
+                           tiny,
+                           -tiny,
+                           largest_subnormal,
+                           numext::bit_cast<Scalar>(Binary::kSignBit | Binary::kFractionMask),
+                           minimum,
+                           -minimum,
+                           Scalar(1),
+                           -Scalar(1),
+                           infinity,
+                           -infinity,
+                           std::numeric_limits<Scalar>::quiet_NaN()};
+  const int count = sizeof(values) / sizeof(values[0]);
+  for (int mode = 0; mode < 4; ++mode) {
+#if !defined(EIGEN_GPU_COMPILE_PHASE) && !defined(__SYCL_DEVICE_ONLY__) && EIGEN_ARCH_i386_OR_x86_64 && \
+    defined(_MM_SET_DENORMALS_ZERO_MODE)
+    ScopedFlushToZero restore;
+    const unsigned mask = _MM_FLUSH_ZERO_MASK | _MM_DENORMALS_ZERO_MASK;
+    const unsigned requested = ((mode & 1) ? _MM_FLUSH_ZERO_ON : 0) | ((mode & 2) ? _MM_DENORMALS_ZERO_ON : 0);
+    _mm_setcsr((_mm_getcsr() & ~mask) | requested);
+    VERIFY(restore.isSupported());
+    VERIFY_IS_EQUAL(_mm_getcsr() & mask, requested);
+    check_zero_no_flush_values(values, count);
+    VERIFY_IS_EQUAL(_mm_getcsr() & mask, requested);
+#else
+    if (mode > 1) continue;
+    if (mode == 1) {
+      ScopedFlushToZero flush;
+      if (flush.isSupported()) check_zero_no_flush_values(values, count);
+    } else {
+      check_zero_no_flush_values(values, count);
+    }
+#endif
+  }
+}
+
+// In C++14 this links only with the out-of-class definitions of the constants.
+template <typename Scalar>
+void check_binary_floating_point_traits_odr_use() {
+  using Binary = internal::binary_floating_point_traits<Scalar>;
+  using Bits = typename Binary::Bits;
+  const Bits minBits = numext::bit_cast<Bits>((std::numeric_limits<Scalar>::min)());
+  const Bits infinityBits = numext::bit_cast<Bits>(std::numeric_limits<Scalar>::infinity());
+  VERIFY_IS_EQUAL(read_through_address(Binary::kFractionBits), std::numeric_limits<Scalar>::digits - 1);
+  VERIFY_IS_EQUAL(read_through_address(Binary::kExponentBits),
+                  int(sizeof(Scalar) * CHAR_BIT) - std::numeric_limits<Scalar>::digits);
+  VERIFY_IS_EQUAL(read_through_address(Binary::kExponentBias), std::numeric_limits<Scalar>::max_exponent - 1);
+  VERIFY_IS_EQUAL(read_through_address(Binary::kSignBit), numext::bit_cast<Bits>(-Scalar(0)));
+  VERIFY_IS_EQUAL(read_through_address(Binary::kExponentUnit), minBits);
+  VERIFY_IS_EQUAL(read_through_address(Binary::kFractionMask), Bits(minBits - 1));
+  VERIFY_IS_EQUAL(read_through_address(Binary::kExponentMask), infinityBits);
+  VERIFY_IS_EQUAL(read_through_address(Binary::kMaxFiniteExponentBits), Bits(infinityBits - minBits));
+}
+
+template <typename Scalar>
+EIGEN_DONT_INLINE void check_binary_sign_no_flush_values() {
+  using Binary = internal::binary_floating_point_traits<Scalar>;
+  using Bits = typename Binary::Bits;
+  const Bits sign = Binary::kSignBit;
+  const Bits min_normal = Binary::kExponentUnit;
+  const Bits infinity = Binary::kExponentMask;
+  const Bits nan = infinity | (min_normal >> 1) | Bits(0x12345);
+  const Bits one = Binary::bits(Scalar(1));
+  const Bits input_bits[] = {Bits(0),
+                             sign,
+                             Bits(1),
+                             sign | Bits(1),
+                             min_normal - 1,
+                             sign | (min_normal - 1),
+                             min_normal,
+                             sign | min_normal,
+                             one,
+                             sign | one,
+                             infinity,
+                             sign | infinity,
+                             nan,
+                             sign | nan};
+  const Bits expected_bits[] = {Bits(0),    Bits(0), one,        sign | one, one,        sign | one, one,
+                                sign | one, one,     sign | one, one,        sign | one, nan,        sign | nan};
+  for (int i = 0; i < int(sizeof(input_bits) / sizeof(input_bits[0])); ++i) {
+    const Scalar input = numext::bit_cast<Scalar>(input_bits[i]);
+    VERIFY_IS_EQUAL(numext::bit_cast<Bits>(numext::sign(input)), expected_bits[i]);
+  }
+}
+
+template <typename Scalar>
+void check_binary_sign_no_flush() {
+  check_binary_sign_no_flush_values<Scalar>();
+  ScopedFlushToZero flush;
+  if (!flush.isSupported()) return;
+  check_binary_sign_no_flush_values<Scalar>();
+#if !defined(EIGEN_GPU_COMPILE_PHASE) && !defined(__SYCL_DEVICE_ONLY__) && EIGEN_ARCH_i386_OR_x86_64 && \
+    defined(_MM_SET_DENORMALS_ZERO_MODE)
+  _MM_SET_DENORMALS_ZERO_MODE(_MM_DENORMALS_ZERO_ON);
+  check_binary_sign_no_flush_values<Scalar>();
+#endif
+}
+
+template <typename T>
+void check_ceil_power_of_two() {
+  const T zero(0);
+  const T one(1);
+  const T two(2);
+  const T min = (std::numeric_limits<T>::min)();
+  const T denormMin = std::numeric_limits<T>::denorm_min();
+  const T inf = std::numeric_limits<T>::infinity();
+
+  VERIFY_IS_EQUAL(numext::ceil_power_of_two(zero), zero);
+  VERIFY_IS_EQUAL(numext::ceil_power_of_two(denormMin), min);
+  VERIFY_IS_EQUAL(numext::ceil_power_of_two(min), min);
+  VERIFY_IS_EQUAL(numext::ceil_power_of_two(T(0.75)), one);
+  VERIFY_IS_EQUAL(numext::ceil_power_of_two(one), one);
+  VERIFY_IS_EQUAL(numext::ceil_power_of_two(one + NumTraits<T>::epsilon()), two);
+  VERIFY_IS_EQUAL(numext::ceil_power_of_two(T(3)), T(4));
+  VERIFY_IS_EQUAL(numext::ceil_power_of_two((std::numeric_limits<T>::max)()), inf);
+}
+
+template <typename T>
 void check_shift() {
   using SignedT = typename numext::get_integer_by_size<sizeof(T)>::signed_type;
   using UnsignedT = typename numext::get_integer_by_size<sizeof(T)>::unsigned_type;
@@ -301,89 +1955,305 @@ void check_shift() {
     const T a = internal::random<T>();
     for (int s = 1; s < kNumBits; s++) {
       T a_bsll = numext::logical_shift_left(a, s);
-      T a_bsll_ref = a << s;
+      T a_bsll_ref = numext::bit_cast<T, UnsignedT>(numext::bit_cast<UnsignedT, T>(a) << s);
       VERIFY_IS_EQUAL(a_bsll, a_bsll_ref);
       T a_bsrl = numext::logical_shift_right(a, s);
       T a_bsrl_ref = numext::bit_cast<T, UnsignedT>(numext::bit_cast<UnsignedT, T>(a) >> s);
       VERIFY_IS_EQUAL(a_bsrl, a_bsrl_ref);
       T a_bsra = numext::arithmetic_shift_right(a, s);
-      T a_bsra_ref = numext::bit_cast<T, SignedT>(numext::bit_cast<SignedT, T>(a) >> s);
+      // An unsigned T has no sign bit to propagate, so the arithmetic shift must agree with the
+      // logical one; this is what every backend's parithmetic_shift_right on unsigned packets does.
+      T a_bsra_ref =
+          NumTraits<T>::IsSigned ? numext::bit_cast<T, SignedT>(numext::bit_cast<SignedT, T>(a) >> s) : a_bsrl_ref;
       VERIFY_IS_EQUAL(a_bsra, a_bsra_ref);
     }
   }
 }
 
+template <typename Scalar>
+void check_low_precision_math_rounding() {
+  for (unsigned int bits = 0; bits < 65536; ++bits) {
+    const Scalar x = numext::bit_cast<Scalar>(numext::uint16_t(bits));
+    const Scalar actual[] = {numext::tanh(x), numext::sqrt(x), numext::log2(x)};
+    const Scalar expected[] = {Scalar(std::tanh(float(x))), Scalar(std::sqrt(float(x))), Scalar(std::log2(float(x)))};
+    for (int operation = 0; operation < 3; ++operation) {
+      if ((numext::isnan)(expected[operation])) {
+        VERIFY((numext::isnan)(actual[operation]));
+      } else {
+        VERIFY_IS_EQUAL(numext::bit_cast<numext::uint16_t>(actual[operation]),
+                        numext::bit_cast<numext::uint16_t>(expected[operation]));
+      }
+    }
+  }
+}
+
+void check_scalar_tanh_saturation() {
+  check_low_precision_math_rounding<half>();
+  check_low_precision_math_rounding<bfloat16>();
+  VERIFY_IS_EQUAL(internal::ptanh_float(20.0f), 1.0f);
+  VERIFY_IS_EQUAL(internal::ptanh_float(-20.0f), -1.0f);
+  VERIFY_IS_EQUAL(internal::ptanh_double(20.0), 1.0);
+  VERIFY_IS_EQUAL(internal::ptanh_double(-20.0), -1.0);
+}
+
+namespace bit_cast_test_detail {
+struct literal_pair16 {
+  numext::uint16_t low;
+  numext::uint16_t high;
+};
+
+struct non_literal_bits16 {
+  explicit non_literal_bits16(numext::uint16_t v = 0) : bits(v) {}
+  numext::uint16_t bits;
+};
+}  // namespace bit_cast_test_detail
+
+void check_bit_cast() {
+#if (defined(__cpp_lib_bit_cast) && __cpp_lib_bit_cast >= 201806L) || EIGEN_HAS_BUILTIN(__builtin_bit_cast)
+  static_assert(numext::bit_cast<numext::uint32_t>(1.0f) == 0x3f800000u, "constexpr float -> uint32 bit_cast");
+  static_assert(numext::bit_cast<numext::uint32_t>(numext::bit_cast<float>(0xbf800000u)) == 0xbf800000u,
+                "constexpr uint32 -> float bit_cast");
+  constexpr bit_cast_test_detail::literal_pair16 kPair = {/*low=*/0x1234u, /*high=*/0x5678u};
+  static_assert(
+      numext::bit_cast<bit_cast_test_detail::literal_pair16>(numext::bit_cast<numext::uint32_t>(kPair)).low ==
+              0x1234u &&
+          numext::bit_cast<bit_cast_test_detail::literal_pair16>(numext::bit_cast<numext::uint32_t>(kPair)).high ==
+              0x5678u,
+      "constexpr struct <-> uint32 bit_cast");
+#endif
+
+  const numext::uint16_t patterns16[] = {0x0000u, 0x8000u, 0x0001u, 0x3c00u, 0x3f80u, 0x7c00u, 0x7e2au, 0xfbffu};
+  for (numext::uint16_t raw : patterns16) {
+    const half h = numext::bit_cast<half>(raw);
+    const bfloat16 bfloat = numext::bit_cast<bfloat16>(h);
+    const half h_roundtrip = numext::bit_cast<half>(bfloat);
+    VERIFY_IS_EQUAL(numext::bit_cast<numext::uint16_t>(bfloat), raw);
+    VERIFY_IS_EQUAL(numext::bit_cast<numext::uint16_t>(h_roundtrip), raw);
+
+    const bit_cast_test_detail::non_literal_bits16 non_literal =
+        numext::bit_cast<bit_cast_test_detail::non_literal_bits16>(h);
+    VERIFY_IS_EQUAL(non_literal.bits, raw);
+    VERIFY_IS_EQUAL(numext::bit_cast<numext::uint16_t>(numext::bit_cast<half>(non_literal)), raw);
+    VERIFY_IS_EQUAL(numext::bit_cast<numext::uint16_t>(numext::bit_cast<bfloat16>(non_literal)), raw);
+  }
+
+  const numext::uint32_t patterns32[] = {0x00000000u, 0x80000000u, 0x3f800000u, 0x7f800000u, 0x7fc01234u};
+  for (numext::uint32_t raw : patterns32) {
+    VERIFY_IS_EQUAL(numext::bit_cast<numext::uint32_t>(numext::bit_cast<float>(raw)), raw);
+  }
+
+  const numext::uint64_t patterns64[] = {0x0000000000000000ull, 0x8000000000000000ull, 0x3ff0000000000000ull,
+                                         0x7ff0000000000000ull, 0x7ff8000012345678ull};
+  for (numext::uint64_t raw : patterns64) {
+    VERIFY_IS_EQUAL(numext::bit_cast<numext::uint64_t>(numext::bit_cast<double>(raw)), raw);
+  }
+}
+
 EIGEN_DECLARE_TEST(numext) {
   for (int k = 0; k < g_repeat; ++k) {
-    CALL_SUBTEST(check_negate<signed char>());
-    CALL_SUBTEST(check_negate<unsigned char>());
-    CALL_SUBTEST(check_negate<short>());
-    CALL_SUBTEST(check_negate<unsigned short>());
-    CALL_SUBTEST(check_negate<int>());
-    CALL_SUBTEST(check_negate<unsigned int>());
-    CALL_SUBTEST(check_negate<long>());
-    CALL_SUBTEST(check_negate<unsigned long>());
-    CALL_SUBTEST(check_negate<half>());
-    CALL_SUBTEST(check_negate<bfloat16>());
-    CALL_SUBTEST(check_negate<float>());
-    CALL_SUBTEST(check_negate<double>());
-    CALL_SUBTEST(check_negate<long double>());
-    CALL_SUBTEST(check_negate<std::complex<float> >());
-    CALL_SUBTEST(check_negate<std::complex<double> >());
+    CALL_SUBTEST_1(check_copysign<half>());
+    CALL_SUBTEST_1(check_copysign<bfloat16>());
+    CALL_SUBTEST_1(check_copysign<float>());
+    CALL_SUBTEST_1(check_copysign<double>());
+    CALL_SUBTEST_1(check_copysign<long double>());
+    CALL_SUBTEST_1(check_copysign<std::complex<float>>());
+    CALL_SUBTEST_1(check_copysign<std::complex<double>>());
 
-    CALL_SUBTEST(check_abs<bool>());
-    CALL_SUBTEST(check_abs<signed char>());
-    CALL_SUBTEST(check_abs<unsigned char>());
-    CALL_SUBTEST(check_abs<short>());
-    CALL_SUBTEST(check_abs<unsigned short>());
-    CALL_SUBTEST(check_abs<int>());
-    CALL_SUBTEST(check_abs<unsigned int>());
-    CALL_SUBTEST(check_abs<long>());
-    CALL_SUBTEST(check_abs<unsigned long>());
-    CALL_SUBTEST(check_abs<half>());
-    CALL_SUBTEST(check_abs<bfloat16>());
-    CALL_SUBTEST(check_abs<float>());
-    CALL_SUBTEST(check_abs<double>());
-    CALL_SUBTEST(check_abs<long double>());
-    CALL_SUBTEST(check_abs<std::complex<float> >());
-    CALL_SUBTEST(check_abs<std::complex<double> >());
+    CALL_SUBTEST_1(check_copysign<bool>());
+    CALL_SUBTEST_1(check_copysign<int8_t>());
+    CALL_SUBTEST_1(check_copysign<int16_t>());
+    CALL_SUBTEST_1(check_copysign<int32_t>());
+    CALL_SUBTEST_1(check_copysign<int64_t>());
+    CALL_SUBTEST_1(check_copysign<uint8_t>());
+    CALL_SUBTEST_1(check_copysign<uint16_t>());
+    CALL_SUBTEST_1(check_copysign<uint32_t>());
+    CALL_SUBTEST_1(check_copysign<uint64_t>());
 
-    CALL_SUBTEST(check_arg<std::complex<float> >());
-    CALL_SUBTEST(check_arg<std::complex<double> >());
+    CALL_SUBTEST_1(check_negate<signed char>());
+    CALL_SUBTEST_1(check_negate<unsigned char>());
+    CALL_SUBTEST_1(check_negate<short>());
+    CALL_SUBTEST_1(check_negate<unsigned short>());
+    CALL_SUBTEST_1(check_negate<int>());
+    CALL_SUBTEST_1(check_negate<unsigned int>());
+    CALL_SUBTEST_1(check_negate<long>());
+    CALL_SUBTEST_1(check_negate<unsigned long>());
+    CALL_SUBTEST_1(check_negate<half>());
+    CALL_SUBTEST_1(check_negate<bfloat16>());
+    CALL_SUBTEST_1(check_negate<float>());
+    CALL_SUBTEST_1(check_negate<double>());
+    CALL_SUBTEST_1(check_negate<long double>());
+    CALL_SUBTEST_1(check_negate<std::complex<float>>());
+    CALL_SUBTEST_1(check_negate<std::complex<double>>());
 
-    CALL_SUBTEST(check_sqrt<float>());
-    CALL_SUBTEST(check_sqrt<double>());
-    CALL_SUBTEST(check_sqrt<std::complex<float> >());
-    CALL_SUBTEST(check_sqrt<std::complex<double> >());
+    CALL_SUBTEST_1(check_complex_exp<float>());
+    CALL_SUBTEST_1(check_complex_exp<double>());
 
-    CALL_SUBTEST(check_rsqrt<float>());
-    CALL_SUBTEST(check_rsqrt<double>());
-    CALL_SUBTEST(check_rsqrt<std::complex<float> >());
-    CALL_SUBTEST(check_rsqrt<std::complex<double> >());
+    CALL_SUBTEST_1(check_complex_exp2<float>());
+    CALL_SUBTEST_1(check_complex_exp2<double>());
+    CALL_SUBTEST_1(check_complex_exp2<long double>());
+    CALL_SUBTEST_1((check_complex_exp2_accuracy<float, double>()));
+    if (std::numeric_limits<long double>::digits > std::numeric_limits<double>::digits) {
+      CALL_SUBTEST_1((check_complex_exp2_accuracy<double, long double>()));
+    }
 
-    CALL_SUBTEST(check_signbit<half>());
-    CALL_SUBTEST(check_signbit<bfloat16>());
-    CALL_SUBTEST(check_signbit<float>());
-    CALL_SUBTEST(check_signbit<double>());
+    CALL_SUBTEST_1(check_abs<bool>());
+    CALL_SUBTEST_1(check_abs<signed char>());
+    CALL_SUBTEST_1(check_abs<unsigned char>());
+    CALL_SUBTEST_1(check_abs<short>());
+    CALL_SUBTEST_1(check_abs<unsigned short>());
+    CALL_SUBTEST_1(check_abs<int>());
+    CALL_SUBTEST_1(check_abs<unsigned int>());
+    CALL_SUBTEST_1(check_abs<long>());
+    CALL_SUBTEST_1(check_abs<unsigned long>());
+    CALL_SUBTEST_1(check_abs<half>());
+    CALL_SUBTEST_1(check_abs<bfloat16>());
+    CALL_SUBTEST_1(check_abs<float>());
+    CALL_SUBTEST_1(check_abs<double>());
+    CALL_SUBTEST_1(check_abs<long double>());
+    CALL_SUBTEST_1(check_abs<std::complex<float>>());
+    CALL_SUBTEST_1(check_abs<std::complex<double>>());
 
-    CALL_SUBTEST(check_signbit<uint8_t>());
-    CALL_SUBTEST(check_signbit<uint16_t>());
-    CALL_SUBTEST(check_signbit<uint32_t>());
-    CALL_SUBTEST(check_signbit<uint64_t>());
+    CALL_SUBTEST_1(check_complex_sign<std::complex<float>>());
+    CALL_SUBTEST_1(check_complex_sign<std::complex<double>>());
 
-    CALL_SUBTEST(check_signbit<int8_t>());
-    CALL_SUBTEST(check_signbit<int16_t>());
-    CALL_SUBTEST(check_signbit<int32_t>());
-    CALL_SUBTEST(check_signbit<int64_t>());
+    CALL_SUBTEST_1(check_complex_log<float>());
+    CALL_SUBTEST_1(check_complex_log<double>());
 
-    CALL_SUBTEST(check_shift<int8_t>());
-    CALL_SUBTEST(check_shift<int16_t>());
-    CALL_SUBTEST(check_shift<int32_t>());
-    CALL_SUBTEST(check_shift<int64_t>());
+    CALL_SUBTEST_1(check_complex_divide<float>());
+    CALL_SUBTEST_1(check_complex_divide<double>());
+    CALL_SUBTEST_1(check_complex_divide_extreme<float>());
+    CALL_SUBTEST_1(check_complex_divide_extreme<double>());
+    CALL_SUBTEST_1(check_complex_divide_ties_and_zero_signs<float>());
+    CALL_SUBTEST_1(check_complex_divide_ties_and_zero_signs<double>());
+    CALL_SUBTEST_1(check_complex_divide_exceptions<float>());
+    CALL_SUBTEST_1(check_complex_divide_exceptions<double>());
+    CALL_SUBTEST_1(check_complex_sign_exceptions<float>());
+    CALL_SUBTEST_1(check_complex_sign_exceptions<double>());
+    CALL_SUBTEST_1(check_narrow_fma_nonfinite<half>());
+    CALL_SUBTEST_1(check_narrow_fma_nonfinite<bfloat16>());
 
-    CALL_SUBTEST(check_shift<uint8_t>());
-    CALL_SUBTEST(check_shift<uint16_t>());
-    CALL_SUBTEST(check_shift<uint32_t>());
-    CALL_SUBTEST(check_shift<uint64_t>());
+    CALL_SUBTEST_1(check_complex_fuzzy<float>());
+    CALL_SUBTEST_1(check_complex_fuzzy<double>());
+
+    CALL_SUBTEST_1((check_complex_log1p_accuracy<float, double>()));
+    CALL_SUBTEST_1((check_complex_log1p_large<float, double>()));
+    if (std::numeric_limits<long double>::digits > std::numeric_limits<double>::digits) {
+      CALL_SUBTEST_1((check_complex_log1p_accuracy<double, long double>()));
+      CALL_SUBTEST_1((check_complex_log1p_large<double, long double>()));
+    }
+
+    CALL_SUBTEST_1(check_complex_digits<float>());
+    CALL_SUBTEST_1(check_complex_digits<double>());
+    CALL_SUBTEST_1(check_complex_digits<long double>());
+
+    CALL_SUBTEST_1(check_log2_powers_of_two<float>());
+    CALL_SUBTEST_1(check_log2_powers_of_two<double>());
+    CALL_SUBTEST_1(check_complex_log2_powers_of_two<float>());
+    CALL_SUBTEST_1(check_complex_log2_powers_of_two<double>());
+    CALL_SUBTEST_1((check_complex_log2_extreme_modulus<float, double>()));
+    CALL_SUBTEST_1((check_complex_log2_extreme_modulus<double, long double>()));
+
+    CALL_SUBTEST_1(check_twoprod<float>());
+    CALL_SUBTEST_1(check_twoprod<double>());
+    CALL_SUBTEST_1(check_twoprod<long double>());
+    CALL_SUBTEST_1(check_scalar_madd_fusion_policy());
+    CALL_SUBTEST_1(check_twoprod<half>());
+    CALL_SUBTEST_1(check_twoprod<bfloat16>());
+    CALL_SUBTEST_1(check_twoprod_full_range<float>());
+    CALL_SUBTEST_1(check_twoprod_full_range<double>());
+    CALL_SUBTEST_1(check_twoprod_full_range<long double>());
+    CALL_SUBTEST_1(check_twoprod_contraction<float>());
+    CALL_SUBTEST_1(check_twoprod_contraction<double>());
+#ifdef EIGEN_VECTORIZE_FMA
+    CALL_SUBTEST_1(check_twoprod_negation_expression());
+#endif
+
+    CALL_SUBTEST_1(check_arg<std::complex<float>>());
+    CALL_SUBTEST_1(check_arg<std::complex<double>>());
+
+    CALL_SUBTEST_1(check_sqrt<float>());
+    CALL_SUBTEST_1(check_sqrt<double>());
+    CALL_SUBTEST_1(check_sqrt<std::complex<float>>());
+    CALL_SUBTEST_1(check_sqrt<std::complex<double>>());
+
+    CALL_SUBTEST_1(check_rsqrt<float>());
+    CALL_SUBTEST_1(check_rsqrt<double>());
+    CALL_SUBTEST_1(check_rsqrt<std::complex<float>>());
+    CALL_SUBTEST_1(check_rsqrt<std::complex<double>>());
+
+    CALL_SUBTEST_1(check_hypot<float>());
+    CALL_SUBTEST_1(check_hypot<double>());
+    CALL_SUBTEST_1(check_hypot<long double>());
+
+    CALL_SUBTEST_1(check_signbit<half>());
+    CALL_SUBTEST_1(check_signbit<bfloat16>());
+    CALL_SUBTEST_1(check_signbit<float>());
+    CALL_SUBTEST_1(check_signbit<double>());
+
+    CALL_SUBTEST_1(check_signbit<uint8_t>());
+    CALL_SUBTEST_1(check_signbit<uint16_t>());
+    CALL_SUBTEST_1(check_signbit<uint32_t>());
+    CALL_SUBTEST_1(check_signbit<uint64_t>());
+
+    CALL_SUBTEST_1(check_signbit<int8_t>());
+    CALL_SUBTEST_1(check_signbit<int16_t>());
+    CALL_SUBTEST_1(check_signbit<int32_t>());
+    CALL_SUBTEST_1(check_signbit<int64_t>());
+
+    CALL_SUBTEST_1(check_nextafter<half>());
+    CALL_SUBTEST_1(check_nextafter<bfloat16>());
+    CALL_SUBTEST_1(check_nextafter<float>());
+    CALL_SUBTEST_1(check_nextafter<double>());
+    CALL_SUBTEST_1(check_nextafter<long double>());
+
+    CALL_SUBTEST_1(check_ceil_power_of_two<half>());
+    CALL_SUBTEST_1(check_ceil_power_of_two<bfloat16>());
+    CALL_SUBTEST_1(check_ceil_power_of_two<float>());
+    CALL_SUBTEST_1(check_ceil_power_of_two<double>());
+    CALL_SUBTEST_1(check_ceil_power_of_two<long double>());
+
+    CALL_SUBTEST_1(check_strict_equal<half>());
+    CALL_SUBTEST_1(check_strict_equal<bfloat16>());
+    CALL_SUBTEST_1(check_strict_equal<float>());
+    CALL_SUBTEST_1(check_strict_equal<double>());
+    CALL_SUBTEST_1(check_strict_equal<long double>());
+    CALL_SUBTEST_1(check_strict_equal<int>());
+    CALL_SUBTEST_1(check_strict_equal<std::complex<double>>());
+    CALL_SUBTEST_1(check_zero_no_flush<float>());
+    CALL_SUBTEST_1(check_zero_no_flush<double>());
+    CALL_SUBTEST_1(check_zero_no_flush_custom_scalar());
+    CALL_SUBTEST_1(check_binary_floating_point_traits_odr_use<half>());
+    CALL_SUBTEST_1(check_binary_floating_point_traits_odr_use<bfloat16>());
+    CALL_SUBTEST_1(check_binary_floating_point_traits_odr_use<float>());
+    CALL_SUBTEST_1(check_binary_floating_point_traits_odr_use<double>());
+    CALL_SUBTEST_1(check_binary_sign_no_flush<float>());
+    CALL_SUBTEST_1(check_binary_sign_no_flush<double>());
+
+    CALL_SUBTEST_1(check_shift<int8_t>());
+    CALL_SUBTEST_1(check_shift<int16_t>());
+    CALL_SUBTEST_1(check_shift<int32_t>());
+    CALL_SUBTEST_1(check_shift<int64_t>());
+
+    CALL_SUBTEST_1(check_shift<uint8_t>());
+    CALL_SUBTEST_1(check_shift<uint16_t>());
+    CALL_SUBTEST_1(check_shift<uint32_t>());
+    CALL_SUBTEST_1(check_shift<uint64_t>());
+
+    CALL_SUBTEST_1(check_scalar_tanh_saturation());
+    CALL_SUBTEST_1(check_bit_cast());
+    CALL_SUBTEST_1(check_generic_packet_numext_dispatch());
+    CALL_SUBTEST_1(check_adl_geometry<adl_template_math_test::Scalar>());
+    CALL_SUBTEST_1(check_adl_sparse_direct_solvers<adl_template_math_test::Scalar>());
+    CALL_SUBTEST_2(check_adl_dense_solvers<adl_template_math_test::Scalar>());
+    CALL_SUBTEST_3(check_adl_bdcsvd<adl_template_math_test::Scalar>());
+    CALL_SUBTEST_4(check_adl_selfadjoint_eigensolvers<adl_template_math_test::Scalar>());
+    CALL_SUBTEST_5(check_adl_real_schur_qz<adl_template_math_test::Scalar>());
+    CALL_SUBTEST_5(check_adl_general_eigensolvers<adl_template_math_test::Scalar>());
+    CALL_SUBTEST_6(check_adl_complex_schur<adl_template_math_test::Scalar>());
+    CALL_SUBTEST_7(check_adl_sparse_iterative_solvers<adl_template_math_test::Scalar>());
+    CALL_SUBTEST_8(check_adl_non_template_decompositions<adl_non_template_math_test::Scalar>());
+    CALL_SUBTEST_9(check_adl_non_template_complex<adl_non_template_math_test::Scalar>());
+    VERIFY_IS_EQUAL(numext::log10(log10_adl_test::Scalar{10.0}).value, 1.0);
+    VERIFY_IS_APPROX(numext::log10(std::complex<double>(2.0, 3.0)), std::log10(std::complex<double>(2.0, 3.0)));
   }
 }

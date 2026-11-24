@@ -6,6 +6,7 @@
 // This Source Code Form is subject to the terms of the Mozilla
 // Public License v. 2.0. If a copy of the MPL was not distributed
 // with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
+// SPDX-License-Identifier: MPL-2.0
 
 #ifndef EIGEN_COMPRESSED_STORAGE_H
 #define EIGEN_COMPRESSED_STORAGE_H
@@ -24,14 +25,10 @@ namespace internal {
 template <typename Scalar_, typename StorageIndex_>
 class CompressedStorage {
  public:
-  typedef Scalar_ Scalar;
-  typedef StorageIndex_ StorageIndex;
+  using Scalar = Scalar_;
+  using StorageIndex = StorageIndex_;
 
- protected:
-  typedef typename NumTraits<Scalar>::Real RealScalar;
-
- public:
-  CompressedStorage() : m_values(0), m_indices(0), m_size(0), m_allocatedSize(0) {}
+  CompressedStorage() = default;
 
   explicit CompressedStorage(Index size) : m_values(0), m_indices(0), m_size(0), m_allocatedSize(0) { resize(size); }
 
@@ -40,6 +37,7 @@ class CompressedStorage {
   }
 
   CompressedStorage& operator=(const CompressedStorage& other) {
+    if (this == &other) return *this;
     resize(other.size());
     if (other.size() > 0) {
       internal::smart_copy(other.m_values, other.m_values + m_size, m_values);
@@ -72,10 +70,9 @@ class CompressedStorage {
   void resize(Index size, double reserveSizeFactor = 0) {
     if (m_allocatedSize < size) {
       // Avoid underflow on the std::min<Index> call by choosing the smaller index type.
-      using SmallerIndexType =
-          typename std::conditional<static_cast<size_t>((std::numeric_limits<Index>::max)()) <
-                                        static_cast<size_t>((std::numeric_limits<StorageIndex>::max)()),
-                                    Index, StorageIndex>::type;
+      using SmallerIndexType = std::conditional_t<static_cast<size_t>((std::numeric_limits<Index>::max)()) <
+                                                      static_cast<size_t>((std::numeric_limits<StorageIndex>::max)()),
+                                                  Index, StorageIndex>;
       Index realloc_size =
           (std::min<Index>)(NumTraits<SmallerIndexType>::highest(), size + Index(reserveSizeFactor * double(size)));
       if (realloc_size < size) internal::throw_std_bad_alloc();
@@ -159,14 +156,11 @@ class CompressedStorage {
     if (id >= m_size || m_indices[id] != key) {
       if (m_allocatedSize < m_size + 1) {
         Index newAllocatedSize = 2 * (m_size + 1);
-        m_values = conditional_aligned_realloc_new_auto<Scalar, true>(m_values, newAllocatedSize, m_allocatedSize);
-        m_indices =
-            conditional_aligned_realloc_new_auto<StorageIndex, true>(m_indices, newAllocatedSize, m_allocatedSize);
-        m_allocatedSize = newAllocatedSize;
+        reallocate(newAllocatedSize);
       }
       if (m_size > id) {
-        internal::smart_memmove(m_values + id, m_values + m_size, m_values + id + 1);
-        internal::smart_memmove(m_indices + id, m_indices + m_size, m_indices + id + 1);
+        internal::move_or_copy_backward(m_values + id, m_values + m_size, m_values + m_size + 1);
+        std::move_backward(m_indices + id, m_indices + m_size, m_indices + m_size + 1);
       }
       m_size++;
       m_indices[id] = internal::convert_index<StorageIndex>(key);
@@ -175,28 +169,59 @@ class CompressedStorage {
     return m_values[id];
   }
 
-  inline void moveChunk(Index from, Index to, Index chunkSize) {
-    eigen_internal_assert(chunkSize >= 0 && to + chunkSize <= m_size);
-    internal::smart_memmove(m_values + from, m_values + from + chunkSize, m_values + to);
-    internal::smart_memmove(m_indices + from, m_indices + from + chunkSize, m_indices + to);
-  }
-
  protected:
   inline void reallocate(Index size) {
 #ifdef EIGEN_SPARSE_COMPRESSED_STORAGE_REALLOCATE_PLUGIN
     EIGEN_SPARSE_COMPRESSED_STORAGE_REALLOCATE_PLUGIN
 #endif
     eigen_internal_assert(size != m_allocatedSize);
-    m_values = conditional_aligned_realloc_new_auto<Scalar, true>(m_values, size, m_allocatedSize);
-    m_indices = conditional_aligned_realloc_new_auto<StorageIndex, true>(m_indices, size, m_allocatedSize);
+    EIGEN_IF_CONSTEXPR (!NumTraits<Scalar>::RequireInitialization && !NumTraits<StorageIndex>::RequireInitialization &&
+                        std::is_trivially_copyable<Scalar>::value && std::is_trivially_copyable<StorageIndex>::value) {
+      const Index old_capacity = m_allocatedSize;
+      m_values = conditional_aligned_realloc_new_auto<Scalar, true>(m_values, size, old_capacity);
+      EIGEN_TRY { m_indices = conditional_aligned_realloc_new_auto<StorageIndex, true>(m_indices, size, old_capacity); }
+      EIGEN_CATCH(...) {
+        // The value buffer may have shrunk; never advertise more capacity than either buffer holds.
+        m_allocatedSize = (std::min)(old_capacity, size);
+        EIGEN_THROW;
+      }
+      m_allocatedSize = size;
+      return;
+    }
+    // Prepare indices first: once values have moved, no allocation may throw before committing the capacity.
+    StorageIndex* new_indices = conditional_aligned_new_auto<StorageIndex, true>(size);
+    EIGEN_TRY {
+      const Index copy_size = (std::min)(m_size, size);
+      if (copy_size > 0) internal::smart_copy(m_indices, m_indices + copy_size, new_indices);
+      EIGEN_IF_CONSTEXPR (NumTraits<Scalar>::RequireInitialization) {
+        // Every slot of the old buffer holds a constructed Scalar, and every slot of the new one must.
+        m_values = conditional_aligned_realloc_new_auto<Scalar, true>(m_values, size, m_allocatedSize);
+      } else {
+        // Slots past m_size hold no entry and may be uninitialized, so only the stored entries are relocated.
+        Scalar* new_values = conditional_aligned_new_auto<Scalar, true>(size);
+        EIGEN_TRY { move_construct_elements_of_array(new_values, m_values, static_cast<std::size_t>(copy_size)); }
+        EIGEN_CATCH(...) {
+          conditional_aligned_delete_auto<Scalar, true>(new_values, size);
+          EIGEN_THROW;
+        }
+        conditional_aligned_delete_auto<Scalar, true>(m_values, m_allocatedSize);
+        m_values = new_values;
+      }
+    }
+    EIGEN_CATCH(...) {
+      conditional_aligned_delete_auto<StorageIndex, true>(new_indices, size);
+      EIGEN_THROW;
+    }
+    conditional_aligned_delete_auto<StorageIndex, true>(m_indices, m_allocatedSize);
+    m_indices = new_indices;
     m_allocatedSize = size;
   }
 
  protected:
-  Scalar* m_values;
-  StorageIndex* m_indices;
-  Index m_size;
-  Index m_allocatedSize;
+  Scalar* m_values = nullptr;
+  StorageIndex* m_indices = nullptr;
+  Index m_size = 0;
+  Index m_allocatedSize = 0;
 };
 
 }  // end namespace internal

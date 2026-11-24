@@ -8,12 +8,13 @@
 // with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
 // #define EIGEN_DONT_VECTORIZE
 // #define EIGEN_MAX_ALIGN_BYTES 0
+// SPDX-License-Identifier: MPL-2.0
 #include "sparse_solver.h"
 #include <Eigen/IterativeLinearSolvers>
 
 template <typename T, typename I_>
 void test_incomplete_cholesky_T() {
-  typedef SparseMatrix<T, 0, I_> SparseMatrixType;
+  using SparseMatrixType = SparseMatrix<T, 0, I_>;
   ConjugateGradient<SparseMatrixType, Lower, IncompleteCholesky<T, Lower, AMDOrdering<I_> > > cg_illt_lower_amd;
   ConjugateGradient<SparseMatrixType, Lower, IncompleteCholesky<T, Lower, NaturalOrdering<I_> > > cg_illt_lower_nat;
   ConjugateGradient<SparseMatrixType, Upper, IncompleteCholesky<T, Upper, AMDOrdering<I_> > > cg_illt_upper_amd;
@@ -71,6 +72,14 @@ void test_non_spd() {
   VERIFY_IS_APPROX(A.toDense(), M);
 }
 
+// A 0x0 matrix sized a work vector to n - 1 = -1.
+void test_empty() {
+  IncompleteCholesky<double> ic(SparseMatrix<double>(0, 0));
+  VERIFY_IS_EQUAL(ic.info(), Success);
+  VectorXd x = ic.solve(VectorXd());
+  VERIFY_IS_EQUAL(x.size(), 0);
+}
+
 EIGEN_DECLARE_TEST(incomplete_cholesky) {
   CALL_SUBTEST_1((test_incomplete_cholesky_T<double, int>()));
   CALL_SUBTEST_2((test_incomplete_cholesky_T<std::complex<double>, int>()));
@@ -78,4 +87,5 @@ EIGEN_DECLARE_TEST(incomplete_cholesky) {
 
   CALL_SUBTEST_4((bug1150<0>()));
   CALL_SUBTEST_4(test_non_spd());
+  CALL_SUBTEST_4(test_empty());
 }

@@ -6,6 +6,7 @@
 // This Source Code Form is subject to the terms of the Mozilla
 // Public License v. 2.0. If a copy of the MPL was not distributed
 // with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
+// SPDX-License-Identifier: MPL-2.0
 
 #ifndef EIGEN_ANGLEAXIS_H
 #define EIGEN_ANGLEAXIS_H
@@ -44,23 +45,23 @@ namespace Eigen {
 namespace internal {
 template <typename Scalar_>
 struct traits<AngleAxis<Scalar_> > {
-  typedef Scalar_ Scalar;
+  using Scalar = Scalar_;
 };
 }  // namespace internal
 
 template <typename Scalar_>
 class AngleAxis : public RotationBase<AngleAxis<Scalar_>, 3> {
-  typedef RotationBase<AngleAxis<Scalar_>, 3> Base;
+  using Base = RotationBase<AngleAxis<Scalar_>, 3>;
 
  public:
   using Base::operator*;
 
   enum { Dim = 3 };
   /** the scalar type of the coefficients */
-  typedef Scalar_ Scalar;
-  typedef Matrix<Scalar, 3, 3> Matrix3;
-  typedef Matrix<Scalar, 3, 1> Vector3;
-  typedef Quaternion<Scalar> QuaternionType;
+  using Scalar = Scalar_;
+  using Matrix3 = Matrix<Scalar, 3, 3>;
+  using Vector3 = Matrix<Scalar, 3, 1>;
+  using QuaternionType = Quaternion<Scalar>;
 
  protected:
   Vector3 m_axis;
@@ -130,6 +131,19 @@ class AngleAxis : public RotationBase<AngleAxis<Scalar_>, 3> {
   EIGEN_DEVICE_FUNC AngleAxis& fromRotationMatrix(const MatrixBase<Derived>& m);
   EIGEN_DEVICE_FUNC Matrix3 toRotationMatrix(void) const;
 
+  /** Applies the rotation to a 3D vector using Rodrigues' formula directly,
+   * without constructing the full rotation matrix. */
+  template <typename OtherVectorType>
+  EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE Vector3 _transformVector(const OtherVectorType& v) const {
+    EIGEN_INTERNAL_ASSERT_SAME_SIZE(v, m_axis);
+
+    // Rodrigues' rotation formula: v' = v*cos(θ) + (k×v)*sin(θ) + k*(k·v)*(1-cos(θ))
+    const Vector3 v3(v);
+    const Scalar c = numext::cos(m_angle);
+    const Scalar s = numext::sin(m_angle);
+    return v3 * c + m_axis.cross(v3) * s + m_axis * (m_axis.dot(v3) * (Scalar(1) - c));
+  }
+
   /** \returns \c *this with scalar type casted to \a NewScalarType
    *
    * Note that if \a NewScalarType is equal to the current scalar type of \c *this
@@ -162,10 +176,10 @@ class AngleAxis : public RotationBase<AngleAxis<Scalar_>, 3> {
 
 /** \ingroup Geometry_Module
  * single precision angle-axis type */
-typedef AngleAxis<float> AngleAxisf;
+using AngleAxisf = AngleAxis<float>;
 /** \ingroup Geometry_Module
  * double precision angle-axis type */
-typedef AngleAxis<double> AngleAxisd;
+using AngleAxisd = AngleAxis<double>;
 
 /** Set \c *this from a \b unit quaternion.
  *
@@ -176,13 +190,11 @@ typedef AngleAxis<double> AngleAxisd;
 template <typename Scalar>
 template <typename QuatDerived>
 EIGEN_DEVICE_FUNC AngleAxis<Scalar>& AngleAxis<Scalar>::operator=(const QuaternionBase<QuatDerived>& q) {
-  EIGEN_USING_STD(atan2)
-  EIGEN_USING_STD(abs)
   Scalar n = q.vec().norm();
   if (n < NumTraits<Scalar>::epsilon()) n = q.vec().stableNorm();
 
   if (n != Scalar(0)) {
-    m_angle = Scalar(2) * atan2(n, abs(q.w()));
+    m_angle = Scalar(2) * numext::atan2(n, numext::abs(q.w()));
     if (q.w() < Scalar(0)) n = -n;
     m_axis = q.vec() / n;
   } else {
@@ -197,29 +209,44 @@ EIGEN_DEVICE_FUNC AngleAxis<Scalar>& AngleAxis<Scalar>::operator=(const Quaterni
 template <typename Scalar>
 template <typename Derived>
 EIGEN_DEVICE_FUNC AngleAxis<Scalar>& AngleAxis<Scalar>::operator=(const MatrixBase<Derived>& mat) {
-  // Since a direct conversion would not be really faster,
-  // let's use the robust Quaternion implementation:
-  return *this = QuaternionType(mat);
+  // A 4D vector holds quaternion coefficients; anything else is a 3x3 rotation matrix.
+  if (mat.size() == 4) {
+    return *this = QuaternionType(mat);
+  }
+  return fromRotationMatrix(mat);
 }
 
 /**
  * \brief Sets \c *this from a 3x3 rotation matrix.
+ *
+ * The resulting axis is normalized, and the computed angle is in the [0,pi] range.
  **/
 template <typename Scalar>
 template <typename Derived>
 EIGEN_DEVICE_FUNC AngleAxis<Scalar>& AngleAxis<Scalar>::fromRotationMatrix(const MatrixBase<Derived>& mat) {
-  return *this = QuaternionType(mat);
+  EIGEN_STATIC_ASSERT(
+      (std::is_same<Scalar, typename Derived::Scalar>::value),
+      YOU_MIXED_DIFFERENT_NUMERIC_TYPES__YOU_NEED_TO_USE_THE_CAST_METHOD_OF_MATRIXBASE_TO_CAST_NUMERIC_TYPES_EXPLICITLY)
+  // operator= also instantiates this path for quaternion coefficients in C++14.
+  // TODO(C++17): use fixed-size if constexpr dispatch in operator= before adding a static 3-by-3 check here.
+  EIGEN_INTERNAL_SHAPE_ASSERT((internal::fixed_dimensions<Derived, 3, 3>::Proven), mat.cols() == 3 && mat.rows() == 3);
+
+  // Compute a (non-unit) quaternion proportional to the rotation using
+  // Shoemake's algorithm (shared with Quaternion::operator=(MatrixBase)),
+  // skipping the intermediate normalization since AngleAxis::operator=(QuaternionBase)
+  // normalizes the axis and uses atan2(|v|, |w|).
+  QuaternionType q;
+  internal::quaternionbase_assign_impl<Derived, 3, 3>::template run<false>(q, mat.derived());
+  return *this = q;
 }
 
 /** Constructs and \returns an equivalent 3x3 rotation matrix.
  */
 template <typename Scalar>
 typename AngleAxis<Scalar>::Matrix3 EIGEN_DEVICE_FUNC AngleAxis<Scalar>::toRotationMatrix(void) const {
-  EIGEN_USING_STD(sin)
-  EIGEN_USING_STD(cos)
   Matrix3 res;
-  Vector3 sin_axis = sin(m_angle) * m_axis;
-  Scalar c = cos(m_angle);
+  Vector3 sin_axis = numext::sin(m_angle) * m_axis;
+  Scalar c = numext::cos(m_angle);
   Vector3 cos1_axis = (Scalar(1) - c) * m_axis;
 
   Scalar tmp;
@@ -235,7 +262,7 @@ typename AngleAxis<Scalar>::Matrix3 EIGEN_DEVICE_FUNC AngleAxis<Scalar>::toRotat
   res.coeffRef(1, 2) = tmp - sin_axis.x();
   res.coeffRef(2, 1) = tmp + sin_axis.x();
 
-  res.diagonal() = (cos1_axis.cwiseProduct(m_axis)).array() + c;
+  res.diagonal() = cos1_axis.cwiseProduct(m_axis).array() + c;
 
   return res;
 }

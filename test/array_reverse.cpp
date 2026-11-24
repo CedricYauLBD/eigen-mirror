@@ -7,6 +7,7 @@
 // This Source Code Form is subject to the terms of the Mozilla
 // Public License v. 2.0. If a copy of the MPL was not distributed
 // with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
+// SPDX-License-Identifier: MPL-2.0
 
 #include "main.h"
 #include <iostream>
@@ -15,8 +16,8 @@ using namespace std;
 
 template <typename MatrixType>
 void reverse(const MatrixType& m) {
-  typedef typename MatrixType::Scalar Scalar;
-  typedef Matrix<Scalar, MatrixType::RowsAtCompileTime, 1> VectorType;
+  using Scalar = typename MatrixType::Scalar;
+  using VectorType = Matrix<Scalar, MatrixType::RowsAtCompileTime, 1>;
 
   Index rows = m.rows();
   Index cols = m.cols();
@@ -178,6 +179,75 @@ void bug1684() {
   // VERIFY_IS_APPROX(m2, m1.rowwise().reverse().eval());
 }
 
+// Test reverseInPlace at vectorization boundary sizes.
+// Vectorized swap used by reverseInPlace has remainder handling
+// that could fail at packet boundaries.
+template <typename Scalar>
+void reverseInPlace_boundary() {
+  const Index PS = internal::packet_traits<Scalar>::size;
+  const Index sizes[] = {1,      2,          3,      PS - 1,     PS,     PS + 1,    2 * PS - 1,
+                         2 * PS, 2 * PS + 1, 4 * PS, 4 * PS + 1, 8 * PS, 8 * PS + 1};
+  for (int si = 0; si < 13; ++si) {
+    Index n = sizes[si];
+    if (n <= 0) continue;
+    using Vec = Matrix<Scalar, Dynamic, 1>;
+    using Mat = Matrix<Scalar, Dynamic, Dynamic>;
+
+    // Vector reverseInPlace
+    Vec v1 = Vec::Random(n);
+    Vec v2 = v1;
+    v2.reverseInPlace();
+    for (Index k = 0; k < n; ++k) VERIFY_IS_APPROX(v2(k), v1(n - 1 - k));
+
+    // Matrix reverseInPlace (full)
+    Mat m1 = Mat::Random(n, n);
+    Mat m2 = m1;
+    m2.reverseInPlace();
+    for (Index j = 0; j < n; ++j)
+      for (Index i = 0; i < n; ++i) VERIFY_IS_APPROX(m2(i, j), m1(n - 1 - i, n - 1 - j));
+
+    // colwise reverseInPlace
+    m2 = m1;
+    m2.colwise().reverseInPlace();
+    for (Index j = 0; j < n; ++j)
+      for (Index i = 0; i < n; ++i) VERIFY_IS_APPROX(m2(i, j), m1(n - 1 - i, j));
+
+    // rowwise reverseInPlace
+    m2 = m1;
+    m2.rowwise().reverseInPlace();
+    for (Index j = 0; j < n; ++j)
+      for (Index i = 0; i < n; ++i) VERIFY_IS_APPROX(m2(i, j), m1(i, n - 1 - j));
+  }
+}
+
+template <typename MatrixType, int Direction>
+void reverse_destination() {
+  using Scalar = typename MatrixType::Scalar;
+  const MatrixType source = MatrixType::Random();
+  MatrixType destination, expected;
+  Reverse<MatrixType, Direction> reversed(destination);
+  for (Index j = 0; j < source.cols(); ++j)
+    for (Index i = 0; i < source.rows(); ++i)
+      expected(i, j) = source(Direction == Horizontal ? i : source.rows() - 1 - i,
+                              Direction == Vertical ? j : source.cols() - 1 - j);
+
+  reversed = source;
+  VERIFY_IS_APPROX(destination, expected);
+  destination.setConstant(Scalar(3));
+  reversed += source;
+  VERIFY_IS_APPROX(destination, (expected.array() + Scalar(3)));
+  destination.setConstant(Scalar(3));
+  reversed -= source;
+  VERIFY_IS_APPROX(destination, (Scalar(3) - expected.array()));
+}
+
+template <typename MatrixType>
+void reverse_destinations() {
+  reverse_destination<MatrixType, BothDirections>();
+  reverse_destination<MatrixType, Vertical>();
+  reverse_destination<MatrixType, Horizontal>();
+}
+
 EIGEN_DECLARE_TEST(array_reverse) {
   for (int i = 0; i < g_repeat; i++) {
     CALL_SUBTEST_1(reverse(Matrix<float, 1, 1>()));
@@ -196,4 +266,15 @@ EIGEN_DECLARE_TEST(array_reverse) {
     CALL_SUBTEST_3(bug1684<0>());
   }
   CALL_SUBTEST_3(array_reverse_extra<0>());
+
+  // reverseInPlace at vectorization boundaries (deterministic, outside g_repeat).
+  CALL_SUBTEST_10(reverseInPlace_boundary<float>());
+  CALL_SUBTEST_10(reverseInPlace_boundary<double>());
+  CALL_SUBTEST_10(reverseInPlace_boundary<int>());
+  CALL_SUBTEST_11(reverse_destinations<Vector4d>());
+  CALL_SUBTEST_11(reverse_destinations<RowVector4d>());
+  CALL_SUBTEST_11(reverse_destinations<Matrix4f>());
+  CALL_SUBTEST_11((reverse_destinations<Matrix<float, 4, 4, RowMajor>>()));
+  CALL_SUBTEST_11((reverse_destinations<Array<float, 4, 4>>()));
+  CALL_SUBTEST_11((reverse_destinations<Matrix<std::complex<float>, 4, 4>>()));
 }

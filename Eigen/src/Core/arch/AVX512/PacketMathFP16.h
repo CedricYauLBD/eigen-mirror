@@ -6,6 +6,7 @@
 // This Source Code Form is subject to the terms of the Mozilla
 // Public License v. 2.0. If a copy of the MPL was not distributed
 // with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
+// SPDX-License-Identifier: MPL-2.0
 
 #ifndef EIGEN_PACKET_MATH_FP16_AVX512_H
 #define EIGEN_PACKET_MATH_FP16_AVX512_H
@@ -17,9 +18,9 @@ namespace Eigen {
 
 namespace internal {
 
-typedef __m512h Packet32h;
-typedef __m256h Packet16h;
-typedef __m128h Packet8h;
+using Packet32h = __m512h;
+using Packet16h = __m256h;
+using Packet8h = __m128h;
 
 template <>
 struct is_arithmetic<Packet8h> {
@@ -28,8 +29,8 @@ struct is_arithmetic<Packet8h> {
 
 template <>
 struct packet_traits<half> : default_packet_traits {
-  typedef Packet32h type;
-  typedef Packet16h half;
+  using type = Packet32h;
+  using half = Packet16h;
   enum {
     Vectorizable = 1,
     AlignedOnScalar = 1,
@@ -64,9 +65,9 @@ struct packet_traits<half> : default_packet_traits {
 
 template <>
 struct unpacket_traits<Packet32h> {
-  typedef Eigen::half type;
-  typedef Packet16h half;
-  typedef Packet32s integer_packet;
+  using type = Eigen::half;
+  using half = Packet16h;
+  using integer_packet = Packet32s;
   enum {
     size = 32,
     alignment = Aligned64,
@@ -78,9 +79,9 @@ struct unpacket_traits<Packet32h> {
 
 template <>
 struct unpacket_traits<Packet16h> {
-  typedef Eigen::half type;
-  typedef Packet8h half;
-  typedef Packet16s integer_packet;
+  using type = Eigen::half;
+  using half = Packet8h;
+  using integer_packet = Packet16s;
   enum {
     size = 16,
     alignment = Aligned32,
@@ -92,9 +93,9 @@ struct unpacket_traits<Packet16h> {
 
 template <>
 struct unpacket_traits<Packet8h> {
-  typedef Eigen::half type;
-  typedef Packet8h half;
-  typedef Packet8s integer_packet;
+  using type = Eigen::half;
+  using half = Packet8h;
+  using integer_packet = Packet8s;
   enum {
     size = 8,
     alignment = Aligned16,
@@ -735,9 +736,41 @@ EIGEN_STRONG_INLINE half predux<Packet8h>(const Packet8h& a) {
   return half(_mm_reduce_add_ph(a));
 }
 
-// predux_half_dowto4
 template <>
-EIGEN_STRONG_INLINE Packet16h predux_half_dowto4<Packet32h>(const Packet32h& a) {
+EIGEN_STRONG_INLINE bool predux_any(const Packet32h& a) {
+  return avx512_predux_any(_mm512_castph_si512(a));
+}
+
+template <>
+EIGEN_STRONG_INLINE bool predux_any(const Packet16h& a) {
+  const __m256i bits = _mm256_castph_si256(a);
+  return _mm256_testz_si256(bits, bits) == 0;
+}
+
+template <>
+EIGEN_STRONG_INLINE bool predux_any(const Packet8h& a) {
+  const __m128i bits = _mm_castph_si128(a);
+  return _mm_testz_si128(bits, bits) == 0;
+}
+
+template <>
+EIGEN_STRONG_INLINE bool predux_all(const Packet32h& a) {
+  return _mm512_cmp_ph_mask(a, _mm512_setzero_ph(), _CMP_EQ_OQ) == 0;
+}
+
+template <>
+EIGEN_STRONG_INLINE bool predux_all(const Packet16h& a) {
+  return _mm256_cmp_ph_mask(a, _mm256_setzero_ph(), _CMP_EQ_OQ) == 0;
+}
+
+template <>
+EIGEN_STRONG_INLINE bool predux_all(const Packet8h& a) {
+  return _mm_cmp_ph_mask(a, _mm_setzero_ph(), _CMP_EQ_OQ) == 0;
+}
+
+// predux_half
+template <>
+EIGEN_STRONG_INLINE Packet16h predux_half<Packet32h>(const Packet32h& a) {
   const __m512i bits = _mm512_castph_si512(a);
   Packet16h lo = _mm256_castsi256_ph(_mm512_castsi512_si256(bits));
   Packet16h hi = _mm256_castsi256_ph(_mm512_extracti64x4_epi64(bits, 1));
@@ -745,7 +778,7 @@ EIGEN_STRONG_INLINE Packet16h predux_half_dowto4<Packet32h>(const Packet32h& a) 
 }
 
 template <>
-EIGEN_STRONG_INLINE Packet8h predux_half_dowto4<Packet16h>(const Packet16h& a) {
+EIGEN_STRONG_INLINE Packet8h predux_half<Packet16h>(const Packet16h& a) {
   Packet8h lo = _mm_castsi128_ph(_mm256_castsi256_si128(_mm256_castph_si256(a)));
   Packet8h hi = _mm_castps_ph(_mm256_extractf128_ps(_mm256_castph_ps(a), 1));
   return padd(lo, hi);
@@ -878,19 +911,17 @@ EIGEN_STRONG_INLINE Packet8h pnmsub(const Packet8h& a, const Packet8h& b, const 
 
 template <>
 EIGEN_STRONG_INLINE Packet32h pnegate<Packet32h>(const Packet32h& a) {
-  return _mm512_castsi512_ph(
-      _mm512_xor_si512(_mm512_castph_si512(a), _mm512_set1_epi16(static_cast<std::uint16_t>(0x8000u))));
+  return _mm512_castsi512_ph(_mm512_xor_si512(_mm512_castph_si512(a), _mm512_set1_epi16(static_cast<short>(0x8000u))));
 }
 
 template <>
 EIGEN_STRONG_INLINE Packet16h pnegate<Packet16h>(const Packet16h& a) {
-  return _mm256_castsi256_ph(
-      _mm256_xor_si256(_mm256_castph_si256(a), _mm256_set1_epi16(static_cast<std::uint16_t>(0x8000u))));
+  return _mm256_castsi256_ph(_mm256_xor_si256(_mm256_castph_si256(a), _mm256_set1_epi16(static_cast<short>(0x8000u))));
 }
 
 template <>
 EIGEN_STRONG_INLINE Packet8h pnegate<Packet8h>(const Packet8h& a) {
-  return _mm_castsi128_ph(_mm_xor_si128(_mm_castph_si128(a), _mm_set1_epi16(static_cast<std::uint16_t>(0x8000u))));
+  return _mm_castsi128_ph(_mm_xor_si128(_mm_castph_si128(a), _mm_set1_epi16(static_cast<short>(0x8000u))));
 }
 
 // pconj
@@ -984,7 +1015,7 @@ EIGEN_DEVICE_FUNC inline void ptranspose(PacketBlock<Packet32h, 32>& a) {
     q[8 * i + 7] = _mm512_unpackhi_epi64(p[8 * i + 3], p[8 * i + 7]);
   }
 
-  __m512i f[32];
+  __m512i f[32] = {};
 
 #define PACKET32H_TRANSPOSE_HELPER(X, Y)                                                            \
   do {                                                                                              \
@@ -1404,6 +1435,55 @@ EIGEN_STRONG_INLINE Packet8h pgather<Eigen::half, Packet8h>(const Eigen::half* f
   return _mm_set_ph(from[7 * stride].x, from[6 * stride].x, from[5 * stride].x, from[4 * stride].x, from[3 * stride].x,
                     from[2 * stride].x, from[1 * stride].x, from[0 * stride].x);
 }
+
+/*---------------- load/store segment support ----------------*/
+
+// There are no masked FP16 moves; the word-granular AVX-512BW ones move the same bits.
+
+template <>
+struct has_packet_segment<Packet32h> : std::true_type {};
+
+template <>
+struct has_packet_segment<Packet16h> : std::true_type {};
+
+template <>
+struct has_packet_segment<Packet8h> : std::true_type {};
+
+template <>
+inline Packet32h ploaduSegment<Packet32h>(const Eigen::half* from, Index begin, Index count) {
+  return _mm512_castsi512_ph(
+      _mm512_maskz_loadu_epi16(static_cast<__mmask32>(segment_kmask<Packet32h>(begin, count)), from));
+}
+
+template <>
+inline void pstoreuSegment<Eigen::half, Packet32h>(Eigen::half* to, const Packet32h& from, Index begin, Index count) {
+  _mm512_mask_storeu_epi16(to, static_cast<__mmask32>(segment_kmask<Packet32h>(begin, count)),
+                           _mm512_castph_si512(from));
+}
+
+template <>
+inline Packet16h ploaduSegment<Packet16h>(const Eigen::half* from, Index begin, Index count) {
+  return _mm256_castsi256_ph(
+      _mm256_maskz_loadu_epi16(static_cast<__mmask16>(segment_kmask<Packet16h>(begin, count)), from));
+}
+
+template <>
+inline void pstoreuSegment<Eigen::half, Packet16h>(Eigen::half* to, const Packet16h& from, Index begin, Index count) {
+  _mm256_mask_storeu_epi16(to, static_cast<__mmask16>(segment_kmask<Packet16h>(begin, count)),
+                           _mm256_castph_si256(from));
+}
+
+template <>
+inline Packet8h ploaduSegment<Packet8h>(const Eigen::half* from, Index begin, Index count) {
+  return _mm_castsi128_ph(_mm_maskz_loadu_epi16(static_cast<__mmask8>(segment_kmask<Packet8h>(begin, count)), from));
+}
+
+template <>
+inline void pstoreuSegment<Eigen::half, Packet8h>(Eigen::half* to, const Packet8h& from, Index begin, Index count) {
+  _mm_mask_storeu_epi16(to, static_cast<__mmask8>(segment_kmask<Packet8h>(begin, count)), _mm_castph_si128(from));
+}
+
+/*---------------- end load/store segment support ----------------*/
 
 }  // end namespace internal
 }  // end namespace Eigen

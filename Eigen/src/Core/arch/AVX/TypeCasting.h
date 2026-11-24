@@ -6,6 +6,7 @@
 // This Source Code Form is subject to the terms of the Mozilla
 // Public License v. 2.0. If a copy of the MPL was not distributed
 // with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
+// SPDX-License-Identifier: MPL-2.0
 
 #ifndef EIGEN_TYPE_CASTING_AVX_H
 #define EIGEN_TYPE_CASTING_AVX_H
@@ -22,6 +23,13 @@ template <>
 struct type_casting_traits<float, bool> : vectorized_type_casting_traits<float, bool> {};
 template <>
 struct type_casting_traits<bool, float> : vectorized_type_casting_traits<bool, float> {};
+
+template <>
+struct type_casting_traits<bool, int> : vectorized_type_casting_traits<bool, int> {};
+template <>
+struct type_casting_traits<bool, half> : vectorized_type_casting_traits<bool, half> {};
+template <>
+struct type_casting_traits<bool, bfloat16> : vectorized_type_casting_traits<bool, bfloat16> {};
 
 template <>
 struct type_casting_traits<float, int> : vectorized_type_casting_traits<float, int> {};
@@ -55,6 +63,19 @@ template <>
 struct type_casting_traits<int64_t, double> : vectorized_type_casting_traits<int64_t, double> {};
 #endif
 #endif
+
+// _mm256_set_m128{,d,i} are missing from old compilers' headers; the insert form is AVX and works everywhere.
+EIGEN_STRONG_INLINE __m256 _eigen_mm256_set_m128(__m128 hi, __m128 lo) {
+  return _mm256_insertf128_ps(_mm256_castps128_ps256(lo), hi, 1);
+}
+
+EIGEN_STRONG_INLINE __m256d _eigen_mm256_set_m128d(__m128d hi, __m128d lo) {
+  return _mm256_insertf128_pd(_mm256_castpd128_pd256(lo), hi, 1);
+}
+
+EIGEN_STRONG_INLINE __m256i _eigen_mm256_set_m128i(__m128i hi, __m128i lo) {
+  return _mm256_insertf128_si256(_mm256_castsi128_si256(lo), hi, 1);
+}
 
 template <>
 EIGEN_STRONG_INLINE Packet16b pcast<Packet8f, Packet16b>(const Packet8f& a, const Packet8f& b) {
@@ -103,13 +124,24 @@ EIGEN_STRONG_INLINE Packet8f pcast<Packet16b, Packet8f>(const Packet16b& a) {
 }
 
 template <>
+EIGEN_STRONG_INLINE Packet8i pcast<Packet16b, Packet8i>(const Packet16b& a) {
+#ifdef EIGEN_VECTORIZE_AVX2
+  __m256i a_extended = _mm256_cvtepi8_epi32(a);
+  __m256i abcd_efgh = _mm256_cmpeq_epi32(a_extended, _mm256_setzero_si256());
+  return _mm256_andnot_si256(abcd_efgh, _mm256_set1_epi32(1));
+#else
+  return _mm256_cvttps_epi32(pcast<Packet16b, Packet8f>(a));
+#endif
+}
+
+template <>
 EIGEN_STRONG_INLINE Packet8i pcast<Packet8f, Packet8i>(const Packet8f& a) {
   return _mm256_cvttps_epi32(a);
 }
 
 template <>
 EIGEN_STRONG_INLINE Packet8i pcast<Packet4d, Packet8i>(const Packet4d& a, const Packet4d& b) {
-  return _mm256_set_m128i(_mm256_cvttpd_epi32(b), _mm256_cvttpd_epi32(a));
+  return _eigen_mm256_set_m128i(_mm256_cvttpd_epi32(b), _mm256_cvttpd_epi32(a));
 }
 
 template <>
@@ -124,7 +156,7 @@ EIGEN_STRONG_INLINE Packet8f pcast<Packet8i, Packet8f>(const Packet8i& a) {
 
 template <>
 EIGEN_STRONG_INLINE Packet8f pcast<Packet4d, Packet8f>(const Packet4d& a, const Packet4d& b) {
-  return _mm256_set_m128(_mm256_cvtpd_ps(b), _mm256_cvtpd_ps(a));
+  return _eigen_mm256_set_m128(_mm256_cvtpd_ps(b), _mm256_cvtpd_ps(a));
 }
 
 template <>
@@ -197,7 +229,7 @@ EIGEN_STRONG_INLINE Packet4ui preinterpret<Packet4ui, Packet8ui>(const Packet8ui
 #ifdef EIGEN_VECTORIZE_AVX2
 template <>
 EIGEN_STRONG_INLINE Packet4l pcast<Packet4d, Packet4l>(const Packet4d& a) {
-#if defined(EIGEN_VECTORIZE_AVX512DQ) && defined(EIGEN_VECTORIZE_AVS512VL)
+#if defined(EIGEN_VECTORIZE_AVX512DQ) && defined(EIGEN_VECTORIZE_AVX512VL)
   return _mm256_cvttpd_epi64(a);
 #else
 
@@ -237,7 +269,7 @@ EIGEN_STRONG_INLINE Packet4l pcast<Packet4d, Packet4l>(const Packet4d& a) {
 
 template <>
 EIGEN_STRONG_INLINE Packet4d pcast<Packet4l, Packet4d>(const Packet4l& a) {
-#if defined(EIGEN_VECTORIZE_AVX512DQ) && defined(EIGEN_VECTORIZE_AVS512VL)
+#if defined(EIGEN_VECTORIZE_AVX512DQ) && defined(EIGEN_VECTORIZE_AVX512VL)
   return _mm256_cvtepi64_pd(a);
 #else
   int64_t aux[4];
@@ -249,7 +281,7 @@ EIGEN_STRONG_INLINE Packet4d pcast<Packet4l, Packet4d>(const Packet4l& a) {
 
 template <>
 EIGEN_STRONG_INLINE Packet4d pcast<Packet2l, Packet4d>(const Packet2l& a, const Packet2l& b) {
-  return _mm256_set_m128d((pcast<Packet2l, Packet2d>(b)), (pcast<Packet2l, Packet2d>(a)));
+  return _eigen_mm256_set_m128d((pcast<Packet2l, Packet2d>(b)), (pcast<Packet2l, Packet2d>(a)));
 }
 
 template <>
@@ -289,6 +321,13 @@ template <>
 EIGEN_STRONG_INLINE Packet8h pcast<Packet8f, Packet8h>(const Packet8f& a) {
   return float2half(a);
 }
+
+template <>
+EIGEN_STRONG_INLINE Packet8h pcast<Packet16b, Packet8h>(const Packet16b& a) {
+  __m128i eq_zero = _mm_cmpeq_epi8(a, _mm_setzero_si128());
+  __m128i mask16 = _mm_unpacklo_epi8(eq_zero, eq_zero);
+  return _mm_andnot_si128(mask16, _mm_set1_epi16(0x3c00));
+}
 #endif
 
 template <>
@@ -299,6 +338,13 @@ EIGEN_STRONG_INLINE Packet8f pcast<Packet8bf, Packet8f>(const Packet8bf& a) {
 template <>
 EIGEN_STRONG_INLINE Packet8bf pcast<Packet8f, Packet8bf>(const Packet8f& a) {
   return F32ToBf16(a);
+}
+
+template <>
+EIGEN_STRONG_INLINE Packet8bf pcast<Packet16b, Packet8bf>(const Packet16b& a) {
+  __m128i eq_zero = _mm_cmpeq_epi8(a, _mm_setzero_si128());
+  __m128i mask16 = _mm_unpacklo_epi8(eq_zero, eq_zero);
+  return _mm_andnot_si128(mask16, _mm_set1_epi16(0x3f80));
 }
 
 }  // end namespace internal

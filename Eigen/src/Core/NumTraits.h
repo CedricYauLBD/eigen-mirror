@@ -6,6 +6,7 @@
 // This Source Code Form is subject to the terms of the Mozilla
 // Public License v. 2.0. If a copy of the MPL was not distributed
 // with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
+// SPDX-License-Identifier: MPL-2.0
 
 #ifndef EIGEN_NUMTRAITS_H
 #define EIGEN_NUMTRAITS_H
@@ -18,7 +19,7 @@ namespace Eigen {
 namespace internal {
 
 // default implementation of digits(), based on numeric_limits if specialized,
-// 0 for integer types, and log2(epsilon()) otherwise.
+// 0 for integer types, and 1 - log2(epsilon()) otherwise, as epsilon() = 2^(1 - digits).
 template <typename T, bool use_numeric_limits = std::numeric_limits<T>::is_specialized,
           bool is_integer = NumTraits<T>::IsInteger>
 struct default_digits_impl {
@@ -31,14 +32,39 @@ struct default_digits_impl<T, false, false>  // Floating point
   EIGEN_DEVICE_FUNC constexpr static int run() {
     using std::ceil;
     using std::log2;
-    typedef typename NumTraits<T>::Real Real;
-    return int(ceil(-log2(NumTraits<Real>::epsilon())));
+    using Real = typename NumTraits<T>::Real;
+    return int(ceil(-log2(NumTraits<Real>::epsilon()))) + 1;
   }
 };
 
 template <typename T>
 struct default_digits_impl<T, false, true>  // Integer
 {
+  EIGEN_DEVICE_FUNC constexpr static int run() { return 0; }
+};
+
+namespace precision_detail {
+using std::ceil;
+using std::log2;
+
+template <typename T, typename = void>
+struct has_epsilon_digits : std::false_type {};
+
+// Detect the complete calculation: ADL can return another custom expression type.
+template <typename T>
+struct has_epsilon_digits<T, void_t<decltype(int(ceil(-log2(NumTraits<typename NumTraits<T>::Real>::epsilon()))) + 1)>>
+    : std::true_type {};
+}  // namespace precision_detail
+
+// Only formatting tolerates unspecified precision; numerical users of digits() still require it.
+template <typename T, bool Known = std::numeric_limits<T>::is_specialized || NumTraits<T>::IsInteger ||
+                                   precision_detail::has_epsilon_digits<T>::value>
+struct decimal_digits_source {
+  EIGEN_DEVICE_FUNC constexpr static int run() { return default_digits_impl<T>::run(); }
+};
+
+template <typename T>
+struct decimal_digits_source<T, false> {
   EIGEN_DEVICE_FUNC constexpr static int run() { return 0; }
 };
 
@@ -56,8 +82,9 @@ struct default_digits10_impl<T, false, false>  // Floating point
   EIGEN_DEVICE_FUNC constexpr static int run() {
     using std::floor;
     using std::log10;
-    typedef typename NumTraits<T>::Real Real;
-    return int(floor((internal::default_digits_impl<Real>::run() - 1) * log10(2)));
+    using Real = typename NumTraits<T>::Real;
+    const int digits = decimal_digits_source<Real>::run();
+    return digits > 0 ? int(floor((digits - 1) * log10(2))) : 0;
   }
 };
 
@@ -81,8 +108,9 @@ struct default_max_digits10_impl<T, false, false>  // Floating point
   EIGEN_DEVICE_FUNC constexpr static int run() {
     using std::ceil;
     using std::log10;
-    typedef typename NumTraits<T>::Real Real;
-    return int(ceil(internal::default_digits_impl<Real>::run() * log10(2) + 1));
+    using Real = typename NumTraits<T>::Real;
+    const int digits = decimal_digits_source<Real>::run();
+    return digits > 0 ? int(ceil(digits * log10(2) + 1)) : 0;
   }
 };
 
@@ -97,14 +125,16 @@ struct default_max_digits10_impl<T, false, true>  // Integer
 namespace numext {
 
 /** \internal bit-wise cast without changing the underlying bit representation. */
-#if defined(__cpp_lib_bit_cast) && __cpp_lib_bit_cast >= 201806L
+// std::bit_cast has no __device__ qualifier; in GPU device passes it requires relaxed constexpr
+// and, for non-literal return types such as Eigen::half, stays host-only and miscompiles under NVCC.
+#if defined(__cpp_lib_bit_cast) && __cpp_lib_bit_cast >= 201806L && !defined(EIGEN_GPU_COMPILE_PHASE)
 template <typename Tgt, typename Src>
-EIGEN_STRONG_INLINE EIGEN_DEVICE_FUNC constexpr Tgt bit_cast(const Src& src) {
+EIGEN_DEVICE_FUNC constexpr Tgt bit_cast(const Src& src) {
   return std::bit_cast<Tgt>(src);
 }
 #elif EIGEN_HAS_BUILTIN(__builtin_bit_cast)
 template <typename Tgt, typename Src>
-EIGEN_STRONG_INLINE EIGEN_DEVICE_FUNC constexpr Tgt bit_cast(const Src& src) {
+EIGEN_DEVICE_FUNC constexpr Tgt bit_cast(const Src& src) {
   EIGEN_STATIC_ASSERT(std::is_trivially_copyable<Src>::value, THIS_TYPE_IS_NOT_SUPPORTED)
   EIGEN_STATIC_ASSERT(std::is_trivially_copyable<Tgt>::value, THIS_TYPE_IS_NOT_SUPPORTED)
   EIGEN_STATIC_ASSERT(sizeof(Src) == sizeof(Tgt), THIS_TYPE_IS_NOT_SUPPORTED)
@@ -138,6 +168,11 @@ EIGEN_STRONG_INLINE EIGEN_DEVICE_FUNC Tgt bit_cast(const Src& src) {
  * \tparam T the numeric type at hand
  *
  * This class stores enums, typedefs and static methods giving information about a numeric type.
+ * The default precision queries use std::numeric_limits when specialized. Otherwise binary precision uses an
+ * epsilon-based calculation when available, and decimal precision is derived from the real type's binary precision.
+ * Decimal queries without usable precision information return zero (unspecified precision).
+ * The binary digits() query still requires usable precision information.
+ * Custom scalar types can specialize these methods when finite precision information is available.
  *
  * The provided data consists of:
  * \li A typedef \c Real, giving the "real part" type of \a T. If \a T is already real,
@@ -155,7 +190,7 @@ EIGEN_STRONG_INLINE EIGEN_DEVICE_FUNC Tgt bit_cast(const Src& src) {
  *     this means, just use \a T here.
  * \li An enum value \c IsComplex. It is equal to 1 if \a T is a \c std::complex type, and to 0 otherwise.
  * \li An enum value \c IsInteger. It is equal to \c 1 if \a T is an integer type such as \c int, and to \c 0 otherwise.
- * \li Enum values \c ReadCost, \c AddCost and \c MulCost representing a rough estimate of the number of CPU cycles needed to by
+ * \li Enum values \c ReadCost, \c AddCost and \c MulCost representing a rough estimate of the number of CPU cycles needed by
  *     move / add / mul instructions respectively, assuming the data is already stored in CPU registers. Stay vague here.
  *     No need to do architecture-specific stuff. If you don't know what this means, just use \c Eigen::HugeCost.
  * \li An enum value \c IsSigned. It is equal to \c 1 if \a T is a signed type and to 0 if \a T is unsigned.
@@ -163,8 +198,8 @@ EIGEN_STRONG_INLINE EIGEN_DEVICE_FUNC Tgt bit_cast(const Src& src) {
  *     called, and to 0 if it is safe not to call it. Default is 0 if \a T is an arithmetic type, and 1 otherwise.
  * \li An epsilon() function which, unlike <a href="http://en.cppreference.com/w/cpp/types/numeric_limits/epsilon">
  *     `std::numeric_limits::epsilon()`</a>, it returns a \c Real instead of a \a T.
- * \li A dummy_precision() function returning a weak epsilon value. It is mainly used as a default value by the fuzzy
- *     comparison operators.
+ * \li A dummy_precision() function returning a default relative tolerance for approximate comparisons.
+ *     This is distinct from epsilon() and does not describe the rounding error of an algorithm.
  * \li highest() and lowest() functions returning the highest and lowest possible values respectively.
  * \li digits() function returning the number of radix digits (non-sign digits for integers, mantissa for floating-point).
  *     This is the analogue of <a href="http://en.cppreference.com/w/cpp/types/numeric_limits/digits">
@@ -197,10 +232,10 @@ struct GenericNumTraits {
     MulCost = 1
   };
 
-  typedef T Real;
-  typedef std::conditional_t<IsInteger, std::conditional_t<sizeof(T) <= 2, float, double>, T> NonInteger;
-  typedef T Nested;
-  typedef T Literal;
+  using Real = T;
+  using NonInteger = std::conditional_t<IsInteger, std::conditional_t<sizeof(T) <= 2, float, double>, T>;
+  using Nested = T;
+  using Literal = T;
 
   EIGEN_DEVICE_FUNC constexpr static Real epsilon() { return numext::numeric_limits<T>::epsilon(); }
 
@@ -247,7 +282,7 @@ template <>
 struct NumTraits<long double> : GenericNumTraits<long double> {
   EIGEN_DEVICE_FUNC constexpr static long double dummy_precision() { return static_cast<long double>(1e-15l); }
 
-#if defined(EIGEN_ARCH_PPC) && (__LDBL_MANT_DIG__ == 106)
+#if EIGEN_ARCH_PPC && (__LDBL_MANT_DIG__ == 106)
   // PowerPC double double causes issues with some values
   EIGEN_DEVICE_FUNC constexpr static long double epsilon() {
     // 2^(-(__LDBL_MANT_DIG__)+1)
@@ -259,8 +294,8 @@ struct NumTraits<long double> : GenericNumTraits<long double> {
 
 template <typename Real_>
 struct NumTraits<std::complex<Real_> > : GenericNumTraits<std::complex<Real_> > {
-  typedef Real_ Real;
-  typedef typename NumTraits<Real_>::Literal Literal;
+  using Real = Real_;
+  using Literal = typename NumTraits<Real_>::Literal;
   enum {
     IsComplex = 1,
     IsSigned = NumTraits<Real_>::IsSigned,
@@ -278,13 +313,13 @@ struct NumTraits<std::complex<Real_> > : GenericNumTraits<std::complex<Real_> > 
 
 template <typename Scalar, int Rows, int Cols, int Options, int MaxRows, int MaxCols>
 struct NumTraits<Array<Scalar, Rows, Cols, Options, MaxRows, MaxCols> > {
-  typedef Array<Scalar, Rows, Cols, Options, MaxRows, MaxCols> ArrayType;
-  typedef typename NumTraits<Scalar>::Real RealScalar;
-  typedef Array<RealScalar, Rows, Cols, Options, MaxRows, MaxCols> Real;
-  typedef typename NumTraits<Scalar>::NonInteger NonIntegerScalar;
-  typedef Array<NonIntegerScalar, Rows, Cols, Options, MaxRows, MaxCols> NonInteger;
-  typedef ArrayType& Nested;
-  typedef typename NumTraits<Scalar>::Literal Literal;
+  using ArrayType = Array<Scalar, Rows, Cols, Options, MaxRows, MaxCols>;
+  using RealScalar = typename NumTraits<Scalar>::Real;
+  using Real = Array<RealScalar, Rows, Cols, Options, MaxRows, MaxCols>;
+  using NonIntegerScalar = typename NumTraits<Scalar>::NonInteger;
+  using NonInteger = Array<NonIntegerScalar, Rows, Cols, Options, MaxRows, MaxCols>;
+  using Nested = ArrayType&;
+  using Literal = typename NumTraits<Scalar>::Literal;
 
   enum {
     IsComplex = NumTraits<Scalar>::IsComplex,

@@ -1,8 +1,21 @@
 // IWYU pragma: private
+// SPDX-FileCopyrightText: The Eigen Authors
+// SPDX-License-Identifier: MPL-2.0
 #include "../../InternalHeaderCheck.h"
 
 namespace Eigen {
 namespace internal {
+
+#if EIGEN_ARCH_ARM
+template <>
+struct gebp_traits<double, double, false, false, Architecture::NEON, GEBPPacketFull>
+    : gebp_traits<double, double, false, false, Architecture::Generic, GEBPPacketFull> {
+  // AArch32 has 32 scalar double registers, enough for a 3x4 tile despite having only 16 NEON registers.
+  static constexpr int mr = 3;
+  // Keep scalar-aligned loads: pbroadcast4's unaligned memcpy loads spill through the stack on ARM32 GCC.
+  using RhsPacketx4 = RhsPacket;
+};
+#endif
 
 #if EIGEN_ARCH_ARM && EIGEN_COMP_CLANG
 
@@ -41,8 +54,8 @@ struct gebp_traits<float, float, false, false, Architecture::NEON, GEBPPacketFul
 template <>
 struct gebp_traits<float, float, false, false, Architecture::NEON, GEBPPacketFull>
     : gebp_traits<float, float, false, false, Architecture::Generic, GEBPPacketFull> {
-  typedef float RhsPacket;
-  typedef float32x4_t RhsPacketx4;
+  using RhsPacket = float;
+  using RhsPacketx4 = float32x4_t;
   enum { nr = EIGEN_NEON_GEBP_NR };
   EIGEN_STRONG_INLINE void loadRhs(const RhsScalar* b, RhsPacket& dest) const { dest = *b; }
 
@@ -102,7 +115,7 @@ struct gebp_traits<float, float, false, false, Architecture::NEON, GEBPPacketFul
 template <>
 struct gebp_traits<double, double, false, false, Architecture::NEON>
     : gebp_traits<double, double, false, false, Architecture::Generic> {
-  typedef double RhsPacket;
+  using RhsPacket = double;
   enum { nr = EIGEN_NEON_GEBP_NR };
   struct RhsPacketx4 {
     float64x2_t B_0, B_1;
@@ -176,21 +189,23 @@ struct gebp_traits<double, double, false, false, Architecture::NEON>
 
 // The register at operand 3 of fmla for data type half must be v0~v15, the compiler may not
 // allocate a required register for the '%2' of inline asm 'fmla %0.8h, %1.8h, %2.h[id]',
-// so inline assembly can't be used here to advoid the bug that vfmaq_lane_f16 is implemented
+// so inline assembly can't be used here to avoid the bug that vfmaq_lane_f16 is implemented
 // through a costly dup in gcc compiler.
-#if EIGEN_HAS_ARM64_FP16_VECTOR_ARITHMETIC && EIGEN_COMP_CLANG
+#if EIGEN_HAS_ARM64_FP16 && EIGEN_COMP_CLANG
 
 template <>
 struct gebp_traits<half, half, false, false, Architecture::NEON>
     : gebp_traits<half, half, false, false, Architecture::Generic> {
-  typedef half RhsPacket;
-  typedef float16x4_t RhsPacketx4;
-  typedef float16x4_t PacketHalf;
+  using RhsPacket = half;
+  using RhsPacketx4 = float16x4_t;
+  using PacketHalf = float16x4_t;
   enum { nr = EIGEN_NEON_GEBP_NR };
 
   EIGEN_STRONG_INLINE void loadRhs(const RhsScalar* b, RhsPacket& dest) const { dest = *b; }
 
-  EIGEN_STRONG_INLINE void loadRhs(const RhsScalar* b, RhsPacketx4& dest) const { dest = vld1_f16((const __fp16*)b); }
+  EIGEN_STRONG_INLINE void loadRhs(const RhsScalar* b, RhsPacketx4& dest) const {
+    dest = vld1_f16(reinterpret_cast<const float16_t*>(b));
+  }
 
   EIGEN_STRONG_INLINE void updateRhs(const RhsScalar* b, RhsPacket& dest) const { dest = *b; }
 
@@ -204,11 +219,20 @@ struct gebp_traits<half, half, false, false, Architecture::NEON>
 
   EIGEN_STRONG_INLINE void madd(const LhsPacket& a, const RhsPacket& b, AccPacket& c, RhsPacket& /*tmp*/,
                                 const FixedInt<0>&) const {
+#if EIGEN_HAS_ARM64_FP16_VECTOR_ARITHMETIC
     c = vfmaq_n_f16(c, a, b);
+#else
+    c = vcombine_f16(vcvt_f16_f32(vfmaq_n_f32(vcvt_f32_f16(vget_low_f16(c)), vcvt_f32_f16(vget_low_f16(a)), b)),
+                     vcvt_f16_f32(vfmaq_n_f32(vcvt_f32_f16(vget_high_f16(c)), vcvt_f32_f16(vget_high_f16(a)), b)));
+#endif
   }
   EIGEN_STRONG_INLINE void madd(const PacketHalf& a, const RhsPacket& b, PacketHalf& c, RhsPacket& /*tmp*/,
                                 const FixedInt<0>&) const {
+#if EIGEN_HAS_ARM64_FP16_VECTOR_ARITHMETIC
     c = vfma_n_f16(c, a, b);
+#else
+    c = vcvt_f16_f32(vfmaq_n_f32(vcvt_f32_f16(c), vcvt_f32_f16(a), b));
+#endif
   }
 
   // NOTE: Template parameter inference failed when compiled with Android NDK:
@@ -233,10 +257,29 @@ struct gebp_traits<half, half, false, false, Architecture::NEON>
  private:
   template <int LaneID>
   EIGEN_STRONG_INLINE void madd_helper(const LhsPacket& a, const RhsPacketx4& b, AccPacket& c) const {
+#if EIGEN_HAS_ARM64_FP16_VECTOR_ARITHMETIC
     c = vfmaq_lane_f16(c, a, b, LaneID);
+#else
+    float32x2_t bf = get_half<LaneID>(vcvt_f32_f16(b));
+    c = vcombine_f16(
+        vcvt_f16_f32(vfmaq_lane_f32(vcvt_f32_f16(vget_low_f16(c)), vcvt_f32_f16(vget_low_f16(a)), bf, LaneID % 2)),
+        vcvt_f16_f32(vfmaq_lane_f32(vcvt_f32_f16(vget_high_f16(c)), vcvt_f32_f16(vget_high_f16(a)), bf, LaneID % 2)));
+#endif
   }
+
+#if !EIGEN_HAS_ARM64_FP16_VECTOR_ARITHMETIC
+  template <int LaneID>
+  EIGEN_STRONG_INLINE static std::enable_if_t<(LaneID <= 1), float32x2_t> get_half(float32x4_t vec) {
+    return vget_low_f32(vec);
+  }
+
+  template <int LaneID>
+  EIGEN_STRONG_INLINE static std::enable_if_t<(LaneID > 1), float32x2_t> get_half(float32x4_t vec) {
+    return vget_high_f32(vec);
+  }
+#endif
 };
-#endif  // EIGEN_HAS_ARM64_FP16_VECTOR_ARITHMETIC && EIGEN_COMP_CLANG
+#endif  // EIGEN_HAS_ARM64_FP16 && EIGEN_COMP_CLANG
 #endif  // EIGEN_ARCH_ARM64
 
 }  // namespace internal

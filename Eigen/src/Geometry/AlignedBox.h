@@ -6,6 +6,7 @@
 // This Source Code Form is subject to the terms of the Mozilla
 // Public License v. 2.0. If a copy of the MPL was not distributed
 // with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
+// SPDX-License-Identifier: MPL-2.0
 
 // Function void Eigen::AlignedBox::transform(const Transform& transform)
 // is provided under the following license agreement:
@@ -70,13 +71,13 @@ class AlignedBox {
  public:
   EIGEN_MAKE_ALIGNED_OPERATOR_NEW_IF_VECTORIZABLE_FIXED_SIZE(Scalar_, AmbientDim_)
   enum { AmbientDimAtCompileTime = AmbientDim_ };
-  typedef Scalar_ Scalar;
-  typedef NumTraits<Scalar> ScalarTraits;
-  typedef Eigen::Index Index;  ///< \deprecated since Eigen 3.3
-  typedef typename ScalarTraits::Real RealScalar;
-  typedef typename ScalarTraits::NonInteger NonInteger;
-  typedef Matrix<Scalar, AmbientDimAtCompileTime, 1> VectorType;
-  typedef CwiseBinaryOp<internal::scalar_sum_op<Scalar>, const VectorType, const VectorType> VectorTypeSum;
+  using Scalar = Scalar_;
+  using ScalarTraits = NumTraits<Scalar>;
+  using Index = Eigen::Index;  ///< \deprecated since Eigen 3.3
+  using RealScalar = typename ScalarTraits::Real;
+  using NonInteger = typename ScalarTraits::NonInteger;
+  using VectorType = Matrix<Scalar, AmbientDimAtCompileTime, 1>;
+  using VectorTypeSum = CwiseBinaryOp<internal::scalar_sum_op<Scalar>, const VectorType, const VectorType>;
 
   /** Define constants to name the corners of a 1D, 2D or 3D axis aligned bounding box */
   enum CornerType {
@@ -123,8 +124,6 @@ class AlignedBox {
   template <typename Derived>
   EIGEN_DEVICE_FUNC inline explicit AlignedBox(const MatrixBase<Derived>& p) : m_min(p), m_max(m_min) {}
 
-  EIGEN_DEVICE_FUNC ~AlignedBox() {}
-
   /** \returns the dimension in which the box holds */
   EIGEN_DEVICE_FUNC inline Index dim() const {
     return AmbientDimAtCompileTime == Dynamic ? m_min.size() : Index(AmbientDimAtCompileTime);
@@ -157,14 +156,14 @@ class AlignedBox {
   EIGEN_DEVICE_FUNC inline VectorType&(max)() { return m_max; }
 
   /** \returns the center of the box */
-  EIGEN_DEVICE_FUNC inline const EIGEN_EXPR_BINARYOP_SCALAR_RETURN_TYPE(VectorTypeSum, RealScalar, quotient)
-      center() const {
+  EIGEN_DEVICE_FUNC inline const EIGEN_EXPR_BINARYOP_SCALAR_RETURN_TYPE(VectorTypeSum, RealScalar,
+                                                                        internal::scalar_quotient_op) center() const {
     return (m_min + m_max) / RealScalar(2);
   }
 
   /** \returns the lengths of the sides of the bounding box.
    * Note that this function does not get the same
-   * result for integral or floating scalar types: see
+   * result for integral or floating scalar types.
    */
   EIGEN_DEVICE_FUNC inline const CwiseBinaryOp<internal::scalar_difference_op<Scalar, Scalar>, const VectorType,
                                                const VectorType>
@@ -197,7 +196,7 @@ class AlignedBox {
   EIGEN_DEVICE_FUNC inline VectorType corner(CornerType corner) const {
     EIGEN_STATIC_ASSERT(AmbientDim_ <= 3, THIS_METHOD_IS_ONLY_FOR_VECTORS_OF_A_SPECIFIC_SIZE);
 
-    VectorType res;
+    VectorType res(dim());
 
     Index mult = 1;
     for (Index d = 0; d < dim(); ++d) {
@@ -215,7 +214,7 @@ class AlignedBox {
   EIGEN_DEVICE_FUNC inline VectorType sample() const {
     VectorType r(dim());
     for (Index d = 0; d < dim(); ++d) {
-      if (!ScalarTraits::IsInteger) {
+      EIGEN_IF_CONSTEXPR (!ScalarTraits::IsInteger) {
         r[d] = m_min[d] + (m_max[d] - m_min[d]) * internal::random<Scalar>(Scalar(0), Scalar(1));
       } else
         r[d] = internal::random(m_min[d], m_max[d]);
@@ -282,16 +281,20 @@ class AlignedBox {
     return AlignedBox(m_min.cwiseMin(b.m_min), m_max.cwiseMax(b.m_max));
   }
 
-  /** Translate \c *this by the vector \a t and returns a reference to \c *this. */
+  /** Translate \c *this by the vector \a t and returns a reference to \c *this.
+   * An empty box (any min > max) is left unchanged.
+   */
   template <typename Derived>
   EIGEN_DEVICE_FUNC inline AlignedBox& translate(const MatrixBase<Derived>& a_t) {
+    // The corners of an empty box are the extreme values of Scalar, so shifting them would overflow.
+    if (isEmpty()) return *this;
     const typename internal::nested_eval<Derived, 2>::type t(a_t.derived());
     m_min += t;
     m_max += t;
     return *this;
   }
 
-  /** \returns a copy of \c *this translated by the vector \a t. */
+  /** \returns a copy of \c *this translated by the vector \a t. An empty box (any min > max) is left unchanged. */
   template <typename Derived>
   EIGEN_DEVICE_FUNC inline AlignedBox translated(const MatrixBase<Derived>& a_t) const {
     AlignedBox result(m_min, m_max);
@@ -318,7 +321,7 @@ class AlignedBox {
    */
   template <typename Derived>
   EIGEN_DEVICE_FUNC inline NonInteger exteriorDistance(const MatrixBase<Derived>& p) const {
-    EIGEN_USING_STD(sqrt) return sqrt(NonInteger(squaredExteriorDistance(p)));
+    return numext::sqrt(NonInteger(squaredExteriorDistance(p)));
   }
 
   /** \returns the distance between the boxes \a b and \c *this,
@@ -326,21 +329,19 @@ class AlignedBox {
    * \sa squaredExteriorDistance(const AlignedBox&), exteriorDistance(const MatrixBase&)
    */
   EIGEN_DEVICE_FUNC inline NonInteger exteriorDistance(const AlignedBox& b) const {
-    EIGEN_USING_STD(sqrt) return sqrt(NonInteger(squaredExteriorDistance(b)));
+    return numext::sqrt(NonInteger(squaredExteriorDistance(b)));
   }
 
   /**
    * Specialization of transform for pure translation.
    */
-  template <int Mode, int Options>
-  EIGEN_DEVICE_FUNC inline void transform(
-      const typename Transform<Scalar, AmbientDimAtCompileTime, Mode, Options>::TranslationType& translation) {
-    this->translate(translation);
+  EIGEN_DEVICE_FUNC inline void transform(const Translation<Scalar, AmbientDimAtCompileTime>& translation) {
+    this->translate(translation.vector());
   }
 
   /**
    * Transforms this box by \a transform and recomputes it to
-   * still be an axis-aligned box.
+   * still be an axis-aligned box. An empty box (any min > max) is left unchanged.
    *
    * \note This method is provided under BSD license (see the top of this file).
    */
@@ -349,6 +350,9 @@ class AlignedBox {
     // Only Affine and Isometry transforms are currently supported.
     EIGEN_STATIC_ASSERT(Mode == Affine || Mode == AffineCompact || Mode == Isometry,
                         THIS_METHOD_IS_ONLY_FOR_SPECIFIC_TRANSFORMATIONS);
+
+    // For an empty box, sizes() is negative or overflows, and |linear| * sizes() can be 0 * -inf = NaN.
+    if (isEmpty()) return;
 
     // Method adapted from FCL src/shape/geometric_shapes_utility.cpp#computeBV<AABB, Box>(...)
     // https://github.com/flexible-collision-library/fcl/blob/fcl-0.4/src/shape/geometric_shapes_utility.cpp#L292
@@ -367,7 +371,7 @@ class AlignedBox {
 
   /**
    * \returns a copy of \c *this transformed by \a transform and recomputed to
-   * still be an axis-aligned box.
+   * still be an axis-aligned box. An empty box (any min > max) is left unchanged.
    */
   template <int Mode, int Options>
   EIGEN_DEVICE_FUNC AlignedBox
@@ -381,6 +385,7 @@ class AlignedBox {
    *
    * Note that if \a NewScalarType is equal to the current scalar type of \c *this
    * then this function smartly returns a const reference to \c *this.
+   * An empty box (any min > max) is converted to the empty box, with min = highest() and max = lowest().
    */
   template <typename NewScalarType>
   EIGEN_DEVICE_FUNC inline
@@ -393,6 +398,14 @@ class AlignedBox {
   /** Copy constructor with scalar type conversion */
   template <typename OtherScalarType>
   EIGEN_DEVICE_FUNC inline explicit AlignedBox(const AlignedBox<OtherScalarType, AmbientDimAtCompileTime>& other) {
+    if (other.isEmpty()) {
+      // The extreme values of OtherScalarType need not be representable as Scalar, and a saturating or wrapping
+      // conversion of both corners can produce a non-empty box.
+      m_min.resize(other.dim());
+      m_max.resize(other.dim());
+      setEmpty();
+      return;
+    }
     m_min = (other.min)().template cast<Scalar>();
     m_max = (other.max)().template cast<Scalar>();
   }
@@ -464,7 +477,7 @@ EIGEN_DEVICE_FUNC inline Scalar AlignedBox<Scalar, AmbientDim>::squaredExteriorD
 
 #define EIGEN_MAKE_TYPEDEFS(Type, TypeSuffix, Size, SizeSuffix) \
   /** \ingroup alignedboxtypedefs */                            \
-  typedef AlignedBox<Type, Size> AlignedBox##SizeSuffix##TypeSuffix;
+  using AlignedBox##SizeSuffix##TypeSuffix = AlignedBox<Type, Size>;
 
 #define EIGEN_MAKE_TYPEDEFS_ALL_SIZES(Type, TypeSuffix) \
   EIGEN_MAKE_TYPEDEFS(Type, TypeSuffix, 1, 1)           \

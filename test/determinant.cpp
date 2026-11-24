@@ -7,9 +7,119 @@
 // This Source Code Form is subject to the terms of the Mozilla
 // Public License v. 2.0. If a copy of the MPL was not distributed
 // with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
+// SPDX-License-Identifier: MPL-2.0
 
 #include "main.h"
 #include <Eigen/LU>
+#include <algorithm>
+#include <limits>
+#include <vector>
+
+template <typename Scalar>
+struct determinant_reference_scalar {
+  using type = long double;
+};
+
+template <typename RealScalar>
+struct determinant_reference_scalar<std::complex<RealScalar> > {
+  using type = std::complex<long double>;
+};
+
+template <typename MatrixType>
+typename determinant_reference_scalar<typename MatrixType::Scalar>::type brute_force_determinant(const MatrixType& m) {
+  using Scalar = typename MatrixType::Scalar;
+  using ReferenceScalar = typename determinant_reference_scalar<Scalar>::type;
+  const Index size = m.rows();
+  std::vector<Index> permutation(size);
+  for (Index i = 0; i < size; ++i) permutation[i] = i;
+
+  ReferenceScalar result(0);
+  do {
+    int inversions = 0;
+    for (Index i = 0; i < size; ++i)
+      for (Index j = i + 1; j < size; ++j)
+        if (permutation[i] > permutation[j]) ++inversions;
+
+    ReferenceScalar term(1);
+    for (Index i = 0; i < size; ++i) term *= ReferenceScalar(m(i, permutation[i]));
+    result += inversions % 2 ? -term : term;
+  } while (std::next_permutation(permutation.begin(), permutation.end()));
+
+  return result;
+}
+
+template <typename MatrixType>
+void verify_determinant_against_reference(const MatrixType& m) {
+  using Scalar = typename MatrixType::Scalar;
+  using RealScalar = typename NumTraits<Scalar>::Real;
+
+  Scalar expected = Scalar(brute_force_determinant(m));
+  Scalar actual = m.determinant();
+  const RealScalar max_abs = (std::max)(RealScalar(1), m.cwiseAbs().maxCoeff());
+  RealScalar scale = max_abs;
+  for (Index i = 1; i < m.rows(); ++i) scale *= max_abs;
+  RealScalar tolerance = RealScalar(100000) * NumTraits<RealScalar>::epsilon() * scale;
+  RealScalar error = numext::abs(actual - expected);
+  if (error > tolerance) std::cerr << "determinant error " << error << " exceeds tolerance " << tolerance << std::endl;
+  VERIFY(error <= tolerance);
+}
+
+template <typename MatrixType>
+void determinant_lu_fallback_reference(const MatrixType& m) {
+  using Scalar = typename MatrixType::Scalar;
+  using RealScalar = typename NumTraits<Scalar>::Real;
+  const Index size = m.rows();
+
+  MatrixType random(size, size);
+  random.setRandom();
+  verify_determinant_against_reference(random);
+
+  MatrixType ill_conditioned = random;
+  ill_conditioned.col(0) = ill_conditioned.col(1) + RealScalar(1e-8) * ill_conditioned.col(0);
+  verify_determinant_against_reference(ill_conditioned);
+
+  MatrixType scaled = RealScalar(1e6) * random;
+  verify_determinant_against_reference(scaled);
+
+  MatrixType tiny = MatrixType::Identity(size, size);
+  tiny(0, 0) = Scalar((std::numeric_limits<RealScalar>::min)());
+  verify_determinant_against_reference(tiny);
+  // The absolute tolerance above admits 0, the result of an underflow: the determinant is exactly the pivot.
+  VERIFY_IS_EQUAL(tiny.determinant(), tiny(0, 0));
+
+#if !EIGEN_ARCH_ARM
+  MatrixType subnormal = MatrixType::Identity(size, size);
+  subnormal(0, 0) = Scalar(std::numeric_limits<RealScalar>::denorm_min() * RealScalar(16));
+  verify_determinant_against_reference(subnormal);
+  VERIFY_IS_EQUAL(subnormal.determinant(), subnormal(0, 0));
+#endif
+}
+
+template <typename MatrixType>
+void verify_non_finite_lu_determinant(MatrixType& m) {
+  using Scalar = typename MatrixType::Scalar;
+  using RealScalar = typename NumTraits<Scalar>::Real;
+
+  m.setIdentity();
+  m(0, 0) = Scalar(std::numeric_limits<RealScalar>::quiet_NaN());
+  VERIFY((numext::isnan)(m.determinant()));
+
+  m.setIdentity();
+  m(0, 0) = Scalar(std::numeric_limits<RealScalar>::infinity());
+  VERIFY((numext::isinf)(m.determinant()));
+}
+
+void determinant_non_finite_lu_fallback() {
+  Matrix<double, 5, 5> fixed;
+  verify_non_finite_lu_determinant(fixed);
+
+  MatrixXd dynamic(5, 5);
+  verify_non_finite_lu_determinant(dynamic);
+
+  std::vector<double> storage(25);
+  Map<Matrix<double, Dynamic, Dynamic> > mapped(storage.data(), 5, 5);
+  verify_non_finite_lu_determinant(mapped);
+}
 
 template <typename MatrixType>
 void determinant(const MatrixType& m) {
@@ -21,7 +131,7 @@ void determinant(const MatrixType& m) {
   MatrixType m1(size, size), m2(size, size);
   m1.setRandom();
   m2.setRandom();
-  typedef typename MatrixType::Scalar Scalar;
+  using Scalar = typename MatrixType::Scalar;
   Scalar x = internal::random<Scalar>();
   VERIFY_IS_APPROX(MatrixType::Identity(size, size).determinant(), Scalar(1));
   VERIFY_IS_APPROX((m1 * m2).eval().determinant(), m1.determinant() * m2.determinant());
@@ -48,6 +158,14 @@ void determinant(const MatrixType& m) {
 
   // check empty matrix
   VERIFY_IS_APPROX(m2.block(0, 0, 0, 0).determinant(), Scalar(1));
+
+  // triangular views
+  VERIFY_IS_APPROX(m2.template triangularView<Upper>().determinant(), m2.diagonal().prod());
+  VERIFY_IS_EQUAL(m2.template triangularView<UnitLower>().determinant(), Scalar(1));
+  VERIFY_IS_EQUAL(m2.template triangularView<StrictlyUpper>().determinant(), Scalar(0));
+  VERIFY_IS_EQUAL(m2.block(0, 0, 0, 0).template triangularView<StrictlyLower>().determinant(), Scalar(1));
+  VERIFY_IS_EQUAL(m2.block(0, 0, 0, 0).template triangularView<UnitUpper>().determinant(), Scalar(1));
+  VERIFY_IS_EQUAL(m2.block(0, 0, 0, 0).template triangularView<Lower>().determinant(), Scalar(1));
 }
 
 EIGEN_DECLARE_TEST(determinant) {
@@ -57,9 +175,13 @@ EIGEN_DECLARE_TEST(determinant) {
     CALL_SUBTEST_2(determinant(Matrix<double, 2, 2>()));
     CALL_SUBTEST_3(determinant(Matrix<double, 3, 3>()));
     CALL_SUBTEST_4(determinant(Matrix<double, 4, 4>()));
-    CALL_SUBTEST_5(determinant(Matrix<std::complex<double>, 10, 10>()));
+    CALL_SUBTEST_5(determinant(Matrix<double, 5, 5>()));
+    CALL_SUBTEST_6(determinant(Matrix<std::complex<double>, 10, 10>()));
+    CALL_SUBTEST_7(determinant_lu_fallback_reference(Matrix<double, 5, 5>()));
+    CALL_SUBTEST_8(determinant_lu_fallback_reference(MatrixXcd(5, 5)));
+    CALL_SUBTEST_9(determinant_non_finite_lu_fallback());
     s = internal::random<int>(1, EIGEN_TEST_MAX_SIZE / 4);
-    CALL_SUBTEST_6(determinant(MatrixXd(s, s)));
-    TEST_SET_BUT_UNUSED_VARIABLE(s)
+    CALL_SUBTEST_10(determinant(MatrixXd(s, s)));
+    TEST_SET_BUT_UNUSED_VARIABLE(s);
   }
 }

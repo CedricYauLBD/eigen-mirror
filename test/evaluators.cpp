@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: The Eigen Authors
+// SPDX-License-Identifier: MPL-2.0
 
 #include "main.h"
 
@@ -33,6 +35,7 @@ EIGEN_STRONG_INLINE DstXprType& copy_using_evaluator(const PlainObjectBase<DstXp
   eigen_assert((dst.size() == 0 || (IsVectorAtCompileTime ? (dst.size() == src.size())
                                                           : (dst.rows() == src.rows() && dst.cols() == src.cols()))) &&
                "Size mismatch. Automatic resizing is disabled because EIGEN_NO_AUTOMATIC_RESIZING is defined");
+  if (dst.size() == 0) dst.const_cast_derived().resizeLike(src.derived());
 #else
   dst.const_cast_derived().resizeLike(src.derived());
 #endif
@@ -44,35 +47,35 @@ EIGEN_STRONG_INLINE DstXprType& copy_using_evaluator(const PlainObjectBase<DstXp
 
 template <typename DstXprType, typename SrcXprType>
 void add_assign_using_evaluator(const DstXprType& dst, const SrcXprType& src) {
-  typedef typename DstXprType::Scalar Scalar;
+  using Scalar = typename DstXprType::Scalar;
   call_assignment(const_cast<DstXprType&>(dst), src.derived(),
                   internal::add_assign_op<Scalar, typename SrcXprType::Scalar>());
 }
 
 template <typename DstXprType, typename SrcXprType>
 void subtract_assign_using_evaluator(const DstXprType& dst, const SrcXprType& src) {
-  typedef typename DstXprType::Scalar Scalar;
+  using Scalar = typename DstXprType::Scalar;
   call_assignment(const_cast<DstXprType&>(dst), src.derived(),
                   internal::sub_assign_op<Scalar, typename SrcXprType::Scalar>());
 }
 
 template <typename DstXprType, typename SrcXprType>
 void multiply_assign_using_evaluator(const DstXprType& dst, const SrcXprType& src) {
-  typedef typename DstXprType::Scalar Scalar;
+  using Scalar = typename DstXprType::Scalar;
   call_assignment(dst.const_cast_derived(), src.derived(),
                   internal::mul_assign_op<Scalar, typename SrcXprType::Scalar>());
 }
 
 template <typename DstXprType, typename SrcXprType>
 void divide_assign_using_evaluator(const DstXprType& dst, const SrcXprType& src) {
-  typedef typename DstXprType::Scalar Scalar;
+  using Scalar = typename DstXprType::Scalar;
   call_assignment(dst.const_cast_derived(), src.derived(),
                   internal::div_assign_op<Scalar, typename SrcXprType::Scalar>());
 }
 
 template <typename DstXprType, typename SrcXprType>
 void swap_using_evaluator(const DstXprType& dst, const SrcXprType& src) {
-  typedef typename DstXprType::Scalar Scalar;
+  using Scalar = typename DstXprType::Scalar;
   call_assignment(dst.const_cast_derived(), src.const_cast_derived(), internal::swap_assign_op<Scalar>());
 }
 

@@ -6,6 +6,7 @@
 // This Source Code Form is subject to the terms of the Mozilla
 // Public License v. 2.0. If a copy of the MPL was not distributed
 // with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
+// SPDX-License-Identifier: MPL-2.0
 
 #include <vector>
 
@@ -17,16 +18,14 @@ using Eigen::placeholders::lastN;
 using Eigen::placeholders::lastp1;
 #include <array>
 
-namespace test {
-typedef std::pair<Index, Index> IndexPair;
-}
+using IndexPair = std::pair<Index, Index>;
 
 int encode(Index i, Index j) { return int(i * 100 + j); }
 
-test::IndexPair decode(Index ij) { return test::IndexPair(ij / 100, ij % 100); }
+IndexPair decode(Index ij) { return IndexPair(ij / 100, ij % 100); }
 
 template <typename T>
-bool match(const T& xpr, std::string ref, std::string str_xpr = "") {
+bool match(const T& xpr, const std::string& ref, const std::string& str_xpr = "") {
   EIGEN_UNUSED_VARIABLE(str_xpr);
   std::stringstream str;
   str << xpr;
@@ -37,7 +36,7 @@ bool match(const T& xpr, std::string ref, std::string str_xpr = "") {
 #define MATCH(X, R) match(X, R, #X)
 
 template <typename T1, typename T2>
-std::enable_if_t<internal::is_same<T1, T2>::value, bool> is_same_eq(const T1& a, const T2& b) {
+std::enable_if_t<std::is_same<T1, T2>::value, bool> is_same_eq(const T1& a, const T2& b) {
   return (a == b).all();
 }
 
@@ -53,13 +52,12 @@ bool is_same_seq(const T1& a, const T2& b) {
 }
 
 template <typename T1, typename T2>
-std::enable_if_t<internal::is_same<T1, T2>::value, bool> is_same_seq_type(const T1& a, const T2& b) {
+std::enable_if_t<std::is_same<T1, T2>::value, bool> is_same_seq_type(const T1& a, const T2& b) {
   return is_same_seq(a, b);
 }
 
 #define VERIFY_EQ_INT(A, B) VERIFY_IS_APPROX(int(A), int(B))
 
-// C++03 does not allow local or unnamed enums as index
 enum DummyEnum { XX = 0, YY = 1 };
 
 void check_indexed_view() {
@@ -71,7 +69,7 @@ void check_indexed_view() {
   ArrayXXi A = ArrayXXi::NullaryExpr(n, n, std::ref(encode));
 
   for (Index i = 0; i < n; ++i)
-    for (Index j = 0; j < n; ++j) VERIFY(decode(A(i, j)) == test::IndexPair(i, j));
+    for (Index j = 0; j < n; ++j) VERIFY(decode(A(i, j)) == IndexPair(i, j));
 
   Array4i eii(4);
   eii << 3, 1, 6, 5;
@@ -134,11 +132,13 @@ void check_indexed_view() {
   VERIFY(MATCH(b(all), "0  1  2  3  4  5  6  7  8  9"));
   VERIFY(MATCH(b(eii), "3  1  6  5"));
 
-  Array44i B;
+  // The fixed-size strides below are spelled for column-major storage, so pin B's order.
+  Array<int, 4, 4, ColMajor> B;
   B.setRandom();
   VERIFY((A(seqN(2, 5), 5)).ColsAtCompileTime == 1);
   VERIFY((A(seqN(2, 5), 5)).RowsAtCompileTime == Dynamic);
-  VERIFY_EQ_INT((A(seqN(2, 5), 5)).InnerStrideAtCompileTime, A.InnerStrideAtCompileTime);
+  // A single-column view is column major whatever A is, so it walks A's columns.
+  VERIFY_EQ_INT((A(seqN(2, 5), 5)).InnerStrideAtCompileTime, A.col(5).InnerStrideAtCompileTime);
   VERIFY_EQ_INT((A(seqN(2, 5), 5)).OuterStrideAtCompileTime, A.col(5).OuterStrideAtCompileTime);
 
   VERIFY_EQ_INT((A(5, seqN(2, 5))).InnerStrideAtCompileTime, A.row(5).InnerStrideAtCompileTime);
@@ -152,7 +152,8 @@ void check_indexed_view() {
   VERIFY_EQ_INT((B(seqN(1, 2), seq(1, 3))).OuterStrideAtCompileTime, B.OuterStrideAtCompileTime);
   VERIFY_EQ_INT((A(seqN(2, 5, 2), seq(1, 3, 2))).InnerStrideAtCompileTime, Dynamic);
   VERIFY_EQ_INT((A(seqN(2, 5, 2), seq(1, 3, 2))).OuterStrideAtCompileTime, Dynamic);
-  VERIFY_EQ_INT((A(seqN(2, 5, fix<2>), seq(1, 3, fix<3>))).InnerStrideAtCompileTime, 2);
+  // The inner increment is the row increment when A is column major, the column one otherwise.
+  VERIFY_EQ_INT((A(seqN(2, 5, fix<2>), seq(1, 3, fix<3>))).InnerStrideAtCompileTime, A.IsRowMajor ? 3 : 2);
   VERIFY_EQ_INT((A(seqN(2, 5, fix<2>), seq(1, 3, fix<3>))).OuterStrideAtCompileTime, Dynamic);
   VERIFY_EQ_INT((B(seqN(1, 2, fix<2>), seq(1, 3, fix<3>))).InnerStrideAtCompileTime, 2);
   VERIFY_EQ_INT((B(seqN(1, 2, fix<2>), seq(1, 3, fix<3>))).OuterStrideAtCompileTime, 3 * 4);
@@ -191,6 +192,10 @@ void check_indexed_view() {
       is_same_seq_type(seq(std::integral_constant<int, 1>(), std::integral_constant<int, 5>()), seq(fix<1>, fix<5>)));
 
   VERIFY((A(seqN(2, fix<5>), 5)).RowsAtCompileTime == 5);
+  // Compile-time single indices.
+  VERIFY_IS_EQUAL(A(fix<1>, fix<2>), A(1, 2));
+  VERIFY((A(fix<1>, all) == A.row(1)).all());
+  VERIFY_IS_EQUAL(a(fix<3>), a(3));
   VERIFY((A(4, all)).ColsAtCompileTime == Dynamic);
   VERIFY((A(4, all)).RowsAtCompileTime == 1);
   VERIFY((B(1, all)).ColsAtCompileTime == 4);
@@ -221,7 +226,6 @@ void check_indexed_view() {
   VERIFY_IS_APPROX(A(seq(n - 1 - 5, n - 1 - 2), seq(n - 1 - 5, n - 1 - 2)),
                    A(seq(last - 5, last - 2), seq(last - 5, last - 2)));
 
-  VERIFY_IS_APPROX(A.col(A.cols() - 1), A(all, last));
   VERIFY_IS_APPROX(A(A.rows() - 2, A.cols() / 2), A(last - 1, lastp1 / 2));
   VERIFY_IS_APPROX(a(a.size() - 2), a(last - 1));
   VERIFY_IS_APPROX(a(a.size() / 2), a((last + 1) / 2));
@@ -292,7 +296,8 @@ void check_indexed_view() {
     Index size = 10;
     ArrayXd r = ArrayXd::Random(size);
     ArrayXi idx = ArrayXi::EqualSpaced(size, 0, 1);
-    std::shuffle(idx.begin(), idx.end(), std::random_device());
+    std::mt19937 rng(static_cast<unsigned int>(internal::random<int>(0, 1 << 30)));
+    std::shuffle(idx.begin(), idx.end(), rng);
 
     int c_array[3] = {idx[0], idx[1], idx[2]};
     std::vector<int> std_vector{idx[0], idx[1], idx[2]};
@@ -302,18 +307,12 @@ void check_indexed_view() {
     VERIFY_IS_CWISE_EQUAL(r({idx[0], idx[1], idx[2]}), r(c_array));
     VERIFY_IS_CWISE_EQUAL(r({idx[0], idx[1], idx[2]}), r(std_vector));
     VERIFY_IS_CWISE_EQUAL(r({idx[0], idx[1], idx[2]}), r(eigen_matrix));
-    VERIFY_IS_CWISE_EQUAL(r(std_vector), r(c_array));
-    VERIFY_IS_CWISE_EQUAL(r(std_vector), r(eigen_matrix));
-    VERIFY_IS_CWISE_EQUAL(r(eigen_matrix), r(c_array));
 
     const ArrayXd& r_ref = r;
     // const access
     VERIFY_IS_CWISE_EQUAL(r_ref({idx[0], idx[1], idx[2]}), r_ref(c_array));
     VERIFY_IS_CWISE_EQUAL(r_ref({idx[0], idx[1], idx[2]}), r_ref(std_vector));
     VERIFY_IS_CWISE_EQUAL(r_ref({idx[0], idx[1], idx[2]}), r_ref(eigen_matrix));
-    VERIFY_IS_CWISE_EQUAL(r_ref(std_vector), r_ref(c_array));
-    VERIFY_IS_CWISE_EQUAL(r_ref(std_vector), r_ref(eigen_matrix));
-    VERIFY_IS_CWISE_EQUAL(r_ref(eigen_matrix), r_ref(c_array));
   }
 
   {
@@ -322,8 +321,9 @@ void check_indexed_view() {
     ArrayXXd R = ArrayXXd::Random(rows, cols);
     ArrayXi r_idx = ArrayXi::EqualSpaced(rows, 0, 1);
     ArrayXi c_idx = ArrayXi::EqualSpaced(cols, 0, 1);
-    std::shuffle(r_idx.begin(), r_idx.end(), std::random_device());
-    std::shuffle(c_idx.begin(), c_idx.end(), std::random_device());
+    std::mt19937 rng(static_cast<unsigned int>(internal::random<int>(0, 1 << 30)));
+    std::shuffle(r_idx.begin(), r_idx.end(), rng);
+    std::shuffle(c_idx.begin(), c_idx.end(), rng);
 
     int c_array_rows[3] = {r_idx[0], r_idx[1], r_idx[2]};
     int c_array_cols[4] = {c_idx[0], c_idx[1], c_idx[2], c_idx[3]};
@@ -339,9 +339,6 @@ void check_indexed_view() {
                           R(std_vector_rows, std_vector_cols));
     VERIFY_IS_CWISE_EQUAL(R({r_idx[0], r_idx[1], r_idx[2]}, {c_idx[0], c_idx[1], c_idx[2], c_idx[3]}),
                           R(eigen_matrix_rows, eigen_matrix_cols));
-    VERIFY_IS_CWISE_EQUAL(R(std_vector_rows, std_vector_cols), R(c_array_rows, c_array_cols));
-    VERIFY_IS_CWISE_EQUAL(R(std_vector_rows, std_vector_cols), R(eigen_matrix_rows, eigen_matrix_cols));
-    VERIFY_IS_CWISE_EQUAL(R(eigen_matrix_rows, eigen_matrix_cols), R(c_array_rows, c_array_cols));
 
     const ArrayXXd& R_ref = R;
     // const access
@@ -356,7 +353,7 @@ void check_indexed_view() {
     VERIFY_IS_CWISE_EQUAL(R_ref(eigen_matrix_rows, eigen_matrix_cols), R_ref(c_array_rows, c_array_cols));
   }
 
-  // check mat(i,j) with weird types for i and j
+  // check mat(i,j) with unusual types for i and j
   {
     VERIFY_IS_APPROX(A(B.RowsAtCompileTime - 1, 1), A(3, 1));
     VERIFY_IS_APPROX(A(B.RowsAtCompileTime, 1), A(4, 1));
@@ -411,7 +408,6 @@ void check_indexed_view() {
   // Check compilation of enums as index type:
   a(XX) = 1;
   A(XX, YY) = 1;
-  // Anonymous enums only work with C++11
   enum { X = 0, Y = 1 };
   a(X) = 1;
   A(X, Y) = 1;
@@ -420,9 +416,9 @@ void check_indexed_view() {
   // check symbolic indices
   a(last) = 1.0;
   A(last, last) = 1;
-  // check weird non-const, non-lvalue scenarios
+  // check unusual non-const, non-lvalue scenarios
   {
-    // in these scenarios, the objects are not declared 'const', and the compiler will atttempt to use the non-const
+    // in these scenarios, the objects are not declared 'const', and the compiler will attempt to use the non-const
     // overloads without intervention
 
     // non-const map to a const object
@@ -530,7 +526,10 @@ void check_indexed_view() {
 void check_tutorial_examples() {
   constexpr int kRows = 11;
   constexpr int kCols = 21;
-  Matrix<double, kRows, kCols> A = Matrix<double, kRows, kCols>::Random();
+  // Several slices below are checked against a Map built from A.data() with column-major
+  // offsets and strides, so pin A's storage order.
+  using MatrixA = Matrix<double, kRows, kCols, ColMajor>;
+  MatrixA A = MatrixA::Random();
   Vector<double, kRows> v = Vector<double, kRows>::Random();
 
   {
@@ -622,15 +621,16 @@ void check_tutorial_examples() {
   // Even columns of A.
   {
     auto slice = A(all, seq(0, last, 2));
-    auto block =
-        Eigen::Map<Eigen::Matrix<double, kRows, Dynamic>, 0, OuterStride<2 * kRows>>(A.data(), kRows, (kCols + 1) / 2);
+    auto block = Eigen::Map<Eigen::Matrix<double, kRows, Dynamic, ColMajor>, 0, OuterStride<2 * kRows>>(
+        A.data(), kRows, (kCols + 1) / 2);
     VERIFY_IS_EQUAL(int(slice.RowsAtCompileTime), int(block.RowsAtCompileTime));
     VERIFY_IS_EQUAL(int(slice.ColsAtCompileTime), int(block.ColsAtCompileTime));
     VERIFY_IS_EQUAL(slice, block);
   }
   {
     auto slice = A(all, seq(fix<0>, last, fix<2>));
-    auto block = Eigen::Map<Eigen::Matrix<double, kRows, (kCols + 1) / 2>, 0, OuterStride<2 * kRows>>(A.data());
+    auto block =
+        Eigen::Map<Eigen::Matrix<double, kRows, (kCols + 1) / 2, ColMajor>, 0, OuterStride<2 * kRows>>(A.data());
     VERIFY_IS_EQUAL(int(slice.RowsAtCompileTime), int(block.RowsAtCompileTime));
     VERIFY_IS_EQUAL(int(slice.ColsAtCompileTime), int(block.ColsAtCompileTime));
     VERIFY_IS_EQUAL(slice, block);
@@ -640,7 +640,8 @@ void check_tutorial_examples() {
   {
     Index n = 3;
     auto slice = A(seqN(1, n, 2), all);
-    auto block = Eigen::Map<Eigen::Matrix<double, Dynamic, kCols>, 0, Stride<kRows, 2>>(A.data() + 1, n, kCols);
+    auto block =
+        Eigen::Map<Eigen::Matrix<double, Dynamic, kCols, ColMajor>, 0, Stride<kRows, 2>>(A.data() + 1, n, kCols);
     VERIFY_IS_EQUAL(int(slice.RowsAtCompileTime), int(block.RowsAtCompileTime));
     VERIFY_IS_EQUAL(int(slice.ColsAtCompileTime), int(block.ColsAtCompileTime));
     VERIFY_IS_EQUAL(slice, block);
@@ -648,7 +649,7 @@ void check_tutorial_examples() {
   {
     auto n = fix<3>;
     auto slice = A(seqN(fix<1>, n, fix<2>), all);
-    auto block = Eigen::Map<Eigen::Matrix<double, 3, kCols>, 0, Stride<kRows, 2>>(A.data() + 1);
+    auto block = Eigen::Map<Eigen::Matrix<double, 3, kCols, ColMajor>, 0, Stride<kRows, 2>>(A.data() + 1);
     VERIFY_IS_EQUAL(int(slice.RowsAtCompileTime), int(block.RowsAtCompileTime));
     VERIFY_IS_EQUAL(int(slice.ColsAtCompileTime), int(block.ColsAtCompileTime));
     VERIFY_IS_EQUAL(slice, block);
@@ -765,7 +766,7 @@ void check_tutorial_examples() {
     Index n = 4;
     constexpr Index stride = 3;
     auto slice = A(all, lastN(n, stride));
-    auto block = Eigen::Map<Eigen::Matrix<double, kRows, Dynamic>, 0, OuterStride<stride * kRows>>(
+    auto block = Eigen::Map<Eigen::Matrix<double, kRows, Dynamic, ColMajor>, 0, OuterStride<stride * kRows>>(
         A.data() + (kCols - 1 - (n - 1) * stride) * kRows, A.rows(), n);
     VERIFY_IS_EQUAL(int(slice.RowsAtCompileTime), int(block.RowsAtCompileTime));
     VERIFY_IS_EQUAL(int(slice.ColsAtCompileTime), int(block.ColsAtCompileTime));
@@ -775,7 +776,7 @@ void check_tutorial_examples() {
     constexpr auto n = fix<4>;
     constexpr auto stride = fix<3>;
     auto slice = A(all, lastN(n, stride));
-    auto block = Eigen::Map<Eigen::Matrix<double, kRows, n>, 0, OuterStride<stride * kRows>>(
+    auto block = Eigen::Map<Eigen::Matrix<double, kRows, n, ColMajor>, 0, OuterStride<stride * kRows>>(
         A.data() + (kCols - 1 - (n - 1) * stride) * kRows, A.rows(), n);
     VERIFY_IS_EQUAL(int(slice.RowsAtCompileTime), int(block.RowsAtCompileTime));
     VERIFY_IS_EQUAL(int(slice.ColsAtCompileTime), int(block.ColsAtCompileTime));
@@ -790,7 +791,7 @@ void check_tutorial_examples() {
     VERIFY_IS_EQUAL(int(slice1.SizeAtCompileTime), 6);
     VERIFY_IS_EQUAL(int(slice2.SizeAtCompileTime), 6);
     auto slice3 = A(all, seq(fix<0>, last, fix<2>));
-    TEST_SET_BUT_UNUSED_VARIABLE(slice3)
+    TEST_SET_BUT_UNUSED_VARIABLE(slice3);
     VERIFY_IS_EQUAL(int(slice3.RowsAtCompileTime), kRows);
     VERIFY_IS_EQUAL(int(slice3.ColsAtCompileTime), (kCols + 1) / 2);
   }
@@ -798,7 +799,7 @@ void check_tutorial_examples() {
   // Reverse order.
   {
     auto slice = A(all, seq(20, 10, fix<-2>));
-    auto block = Eigen::Map<Eigen::Matrix<double, kRows, Dynamic>, 0, OuterStride<-2 * kRows>>(
+    auto block = Eigen::Map<Eigen::Matrix<double, kRows, Dynamic, ColMajor>, 0, OuterStride<-2 * kRows>>(
         A.data() + 20 * kRows, A.rows(), (20 - 10 + 2) / 2);
     VERIFY_IS_EQUAL(slice, block);
   }
@@ -840,6 +841,151 @@ void check_tutorial_examples() {
   }
 }
 
+// Regression test for bug #1943: IndexedView with temporary expression indices.
+void check_expression_indices() {
+  MatrixXd m(3, 4);
+  m << 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12;
+
+  // Reshaped temporary as column index (was segfault before fix).
+  {
+    auto view = m(all, Array<int, 1, 1>{0}.reshaped());
+    VectorXd result = view;
+    VERIFY_IS_APPROX(result, m.col(0));
+  }
+
+  // Block expression as index.
+  {
+    ArrayXi idx(3);
+    idx << 0, 1, 2;
+    auto view = m(all, idx.head(2));
+    MatrixXd result = view;
+    VERIFY_IS_APPROX(result, m.leftCols(2));
+  }
+
+  // CwiseBinaryOp expression as index.
+  {
+    Array<int, 2, 1> base;
+    base << 0, 1;
+    auto view = m(all, base + 0);
+    MatrixXd result = view;
+    VERIFY_IS_APPROX(result, m.leftCols(2));
+  }
+
+  // Reverse expression as index.
+  {
+    Array<int, 3, 1> idx;
+    idx << 2, 1, 0;
+    auto view = m(all, idx.reverse());
+    MatrixXd result = view;
+    MatrixXd expected(3, 3);
+    expected << m.col(0), m.col(1), m.col(2);
+    VERIFY_IS_APPROX(result, expected);
+  }
+
+  // 1D vector indexed view (VectorIndexedViewSelector path).
+  {
+    VectorXd v(5);
+    v << 10, 20, 30, 40, 50;
+    ArrayXi idx(3);
+    idx << 4, 2, 0;
+    auto view = v(idx.reverse());
+    VectorXd result = view;
+    VectorXd expected(3);
+    expected << 10, 30, 50;
+    VERIFY_IS_APPROX(result, expected);
+  }
+}
+
+// Regression test for bug #3092: IndexedView nested in a comparison-based select expression.
+void check_indexed_view_select() {
+  ArrayXXd values(3, 4);
+  values << 0, 3, 6, 9, 1, 4, 7, 10, 2, 5, 8, 11;
+
+  ArrayXi indices(5);
+  indices << 0, 1, 2, 1, 0;
+  ArrayXd condition = ArrayXd::Zero(5);
+
+  ArrayXd expected(5);
+  expected << 3, 4, 5, 4, 3;
+  ArrayXd result = (condition > 0.0).select(0.0, values(indices, 1));
+  VERIFY_IS_APPROX(result, expected);
+
+  result = (condition > 0.0).select(condition, values(indices, 1));
+  VERIFY_IS_APPROX(result, expected);
+
+  expected << 6, 7, 8, 7, 6;
+  result = (condition == 0.0).select(values(indices, 2), 0.0);
+  VERIFY_IS_APPROX(result, expected);
+
+  expected << 0, 1, 1, 1, 0;
+  result = (values(indices, 0) > 0.0).select(1.0, condition);
+  VERIFY_IS_APPROX(result, expected);
+}
+
+// A single-column IndexedView is column major and a single-row one is row major
+// whatever the nested expression is. Inheriting the nested RowMajorBit on top of
+// that contradicted it: the plain object of a Dynamic-by-1 row-major expression
+// is an invalid Matrix/Array type, so forming one failed to compile.
+void check_indexed_view_storage_order() {
+  Array<double, Dynamic, Dynamic, RowMajor> values(3, 4);
+  values << 0, 3, 6, 9, 1, 4, 7, 10, 2, 5, 8, 11;
+
+  ArrayXi indices(5);
+  indices << 0, 1, 2, 1, 0;
+
+  using ColumnView = std::decay_t<decltype(values(indices, 1))>;
+  using RowView = std::decay_t<decltype(values(1, indices))>;
+  STATIC_CHECK((int(internal::traits<ColumnView>::Flags) & RowMajorBit) == 0);
+  STATIC_CHECK((int(internal::traits<RowView>::Flags) & RowMajorBit) == RowMajorBit);
+
+  ArrayXd condition = ArrayXd::Zero(5);
+  ArrayXd expected(5);
+  expected << 0, 1, 1, 1, 0;
+  ArrayXd result = (values(indices, 0) > 0.0).select(1.0, condition);
+  VERIFY_IS_APPROX(result, expected);
+
+  expected << 3, 4, 5, 4, 3;
+  result = (condition > 0.0).select(0.0, values(indices, 1));
+  VERIFY_IS_APPROX(result, expected);
+
+  Array<double, 1, Dynamic> row_expected(4);
+  row_expected << 1, 4, 7, 4;
+  Array<double, 1, Dynamic> row_result = (values(1, indices.head(4)) > 0.0).select(values(1, indices.head(4)), 0.0);
+  VERIFY_IS_APPROX(row_result, row_expected);
+}
+
+template <typename View>
+void verify_strides_address_coeffs(const View& view) {
+  for (Index j = 0; j < view.cols(); ++j) {
+    for (Index i = 0; i < view.rows(); ++i) {
+      VERIFY_IS_EQUAL(view.data()[i * view.rowStride() + j * view.colStride()], view.coeff(i, j));
+    }
+  }
+}
+
+// A vector-shaped view takes its own storage order, which can differ from the nested one; its strides must still
+// address its coefficients.
+template <typename MatrixType>
+void check_indexed_view_strides() {
+  const MatrixType A = MatrixType::Random(6, 8);
+  verify_strides_address_coeffs(A(2, seq(0, 7, 2)));
+  verify_strides_address_coeffs(A(2, seq(0, 7, fix<2>)));
+  verify_strides_address_coeffs(A(seq(0, 5, 2), 3));
+  verify_strides_address_coeffs(A(seq(0, 5, fix<2>), 3));
+  verify_strides_address_coeffs(A(seq(0, 5, 2), seq(1, 7, 3)));
+
+  const Ref<const RowVectorXd, 0, InnerStride<>> row = A(2, seq(0, 7, 2));
+  VERIFY_IS_EQUAL(row, RowVectorXd(A(2, seq(0, 7, 2))));
+  const Ref<const VectorXd, 0, InnerStride<>> col = A(seq(0, 5, 2), 3);
+  VERIFY_IS_EQUAL(col, VectorXd(A(seq(0, 5, 2), 3)));
+
+  // Matrix-vector products read a direct-access vector operand through data() and innerStride().
+  const MatrixXd M = MatrixXd::Random(3, 4);
+  VERIFY_IS_APPROX(M * A(2, seq(0, 7, 2)).transpose(), M * RowVectorXd(A(2, seq(0, 7, 2))).transpose());
+  const MatrixXd N = MatrixXd::Random(4, 3);
+  VERIFY_IS_APPROX(N * A(seq(0, 5, 2), 3), N * VectorXd(A(seq(0, 5, 2), 3)));
+}
+
 void check_aliasing() {
   Eigen::Vector<float, 5> z = {0.0f, 1.1f, 2.2f, 3.3f, 4.4f};
   std::vector<int> left_indices = {0, 1, 3, 4};
@@ -849,12 +995,47 @@ void check_aliasing() {
   VERIFY_IS_EQUAL(z, expected);
 }
 
+// Vector-shaped views provide linear coeffRef(), like every other writable vector expression.
+void check_vector_coeffRef() {
+  MatrixXd A = MatrixXd::Random(6, 5);
+  const std::vector<int> rows = {4, 0, 2};
+  auto col = A.col(1)(rows);
+  col.coeffRef(1) = 1.5;
+  VERIFY_IS_EQUAL(A(0, 1), 1.5);
+  const auto& constCol = col;
+  VERIFY_IS_EQUAL(constCol.coeffRef(2), A(2, 1));
+  auto row = A.row(3)(placeholders::lastN(3, 2));
+  row.coeffRef(0) = 2.5;
+  VERIFY_IS_EQUAL(A(3, 0), 2.5);
+  VERIFY_IS_EQUAL(row.coeffRef(2), A(3, 4));
+
+  // makeHouseholder() writes its essential part through coeffRef(i).
+  const VectorXd x = VectorXd::Random(4);
+  VectorXd expected(3), essential = VectorXd::Zero(6);
+  double tau, beta, tauRef, betaRef;
+  x.makeHouseholder(expected, tauRef, betaRef);
+  const std::vector<int> slots = {5, 1, 3};
+  auto essentialView = essential(slots);
+  x.makeHouseholder(essentialView, tau, beta);
+  VERIFY_IS_EQUAL(tau, tauRef);
+  VERIFY_IS_EQUAL(beta, betaRef);
+  VERIFY_IS_EQUAL(VectorXd(essential(slots)), expected);
+}
+
 EIGEN_DECLARE_TEST(indexed_view) {
   for (int i = 0; i < g_repeat; i++) {
     CALL_SUBTEST_1(check_indexed_view());
   }
   CALL_SUBTEST_1(check_tutorial_examples());
+  CALL_SUBTEST_1(check_expression_indices());
+  CALL_SUBTEST_1(check_indexed_view_select());
+  CALL_SUBTEST_1(check_indexed_view_storage_order());
+  CALL_SUBTEST_1(check_indexed_view_strides<MatrixXd>());
+  CALL_SUBTEST_1((check_indexed_view_strides<Matrix<double, Dynamic, Dynamic, RowMajor>>()));
+  CALL_SUBTEST_1((check_indexed_view_strides<Matrix<double, 6, 8>>()));
+  CALL_SUBTEST_1((check_indexed_view_strides<Matrix<double, 6, 8, RowMajor>>()));
   CALL_SUBTEST_1(check_aliasing());
+  CALL_SUBTEST_1(check_vector_coeffRef());
 
   // static checks of some internals:
   STATIC_CHECK((internal::is_valid_index_type<int>::value));

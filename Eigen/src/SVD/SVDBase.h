@@ -12,6 +12,7 @@
 // This Source Code Form is subject to the terms of the Mozilla
 // Public License v. 2.0. If a copy of the MPL was not distributed
 // with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
+// SPDX-License-Identifier: MPL-2.0
 
 #ifndef EIGEN_SVDBASE_H
 #define EIGEN_SVDBASE_H
@@ -32,6 +33,17 @@ enum OptionsMasks {
 constexpr int get_qr_preconditioner(int options) { return options & QRPreconditionerBits; }
 
 constexpr int get_computation_options(int options) { return options & ComputationOptionsBits; }
+
+// The number of leading entries of the descending singular values that are not exactly 0 (a subnormal counts as nonzero
+// also under FTZ/DAZ).
+template <typename ValuesType>
+Index count_nonzero_singular_values(const ValuesType& values) {
+  Index i = 0;
+  while (i < values.size() && !numext::is_exactly_zero_no_flush(values.coeff(i))) ++i;
+  return i;
+}
+
+constexpr bool should_svd_precondition_square_matrix(int options) { return (options & PreconditionSquareMatrix) != 0; }
 
 constexpr bool should_svd_compute_thin_u(int options) { return (options & ComputeThinU) != 0; }
 constexpr bool should_svd_compute_full_u(int options) { return (options & ComputeFullU) != 0; }
@@ -58,9 +70,9 @@ void check_svd_options_assertions(unsigned int computationOptions, Index rows, I
 
 template <typename Derived>
 struct traits<SVDBase<Derived> > : traits<Derived> {
-  typedef MatrixXpr XprKind;
-  typedef SolverStorage StorageKind;
-  typedef int StorageIndex;
+  using XprKind = MatrixXpr;
+  using StorageKind = SolverStorage;
+  using StorageIndex = int;
   enum { Flags = 0 };
 };
 
@@ -121,10 +133,10 @@ class SVDBase : public SolverBase<SVDBase<Derived> > {
   template <typename Derived_>
   friend struct internal::solve_assertion;
 
-  typedef typename internal::traits<Derived>::MatrixType MatrixType;
-  typedef typename MatrixType::Scalar Scalar;
-  typedef typename NumTraits<typename MatrixType::Scalar>::Real RealScalar;
-  typedef typename Eigen::internal::traits<SVDBase>::StorageIndex StorageIndex;
+  using MatrixType = typename internal::traits<Derived>::MatrixType;
+  using Scalar = typename MatrixType::Scalar;
+  using RealScalar = typename NumTraits<typename MatrixType::Scalar>::Real;
+  using StorageIndex = typename Eigen::internal::traits<SVDBase>::StorageIndex;
 
   static constexpr bool ShouldComputeFullU = internal::traits<Derived>::ShouldComputeFullU;
   static constexpr bool ShouldComputeThinU = internal::traits<Derived>::ShouldComputeThinU;
@@ -148,14 +160,14 @@ class SVDBase : public SolverBase<SVDBase<Derived> > {
   EIGEN_STATIC_ASSERT(!(ShouldComputeFullU && ShouldComputeThinU), "SVDBase: Cannot request both full and thin U")
   EIGEN_STATIC_ASSERT(!(ShouldComputeFullV && ShouldComputeThinV), "SVDBase: Cannot request both full and thin V")
 
-  typedef
+  using MatrixUType =
       typename internal::make_proper_matrix_type<Scalar, RowsAtCompileTime, MatrixUColsAtCompileTime, MatrixOptions,
-                                                 MaxRowsAtCompileTime, MatrixUMaxColsAtCompileTime>::type MatrixUType;
-  typedef
+                                                 MaxRowsAtCompileTime, MatrixUMaxColsAtCompileTime>::type;
+  using MatrixVType =
       typename internal::make_proper_matrix_type<Scalar, ColsAtCompileTime, MatrixVColsAtCompileTime, MatrixOptions,
-                                                 MaxColsAtCompileTime, MatrixVMaxColsAtCompileTime>::type MatrixVType;
+                                                 MaxColsAtCompileTime, MatrixVMaxColsAtCompileTime>::type;
 
-  typedef typename internal::plain_diag_type<MatrixType, RealScalar>::type SingularValuesType;
+  using SingularValuesType = typename internal::plain_diag_type<MatrixType, RealScalar>::type;
 
   Derived& derived() { return *static_cast<Derived*>(this); }
   const Derived& derived() const { return *static_cast<const Derived*>(this); }
@@ -215,7 +227,6 @@ class SVDBase : public SolverBase<SVDBase<Derived> > {
    *       setThreshold(const RealScalar&).
    */
   inline Index rank() const {
-    using std::abs;
     _check_compute_assertions();
     if (m_singularValues.size() == 0) return 0;
     RealScalar premultiplied_threshold =
@@ -230,7 +241,7 @@ class SVDBase : public SolverBase<SVDBase<Derived> > {
    * This is not used for the SVD decomposition itself.
    *
    * When it needs to get the threshold value, Eigen calls threshold().
-   * The default is \c NumTraits<Scalar>::epsilon()
+   * The default is \c NumTraits<Scalar>::epsilon() scaled by the number of singular values, \c max(1,min(rows,cols)).
    *
    * \param threshold The new value to use as the threshold.
    *
@@ -290,7 +301,7 @@ class SVDBase : public SolverBase<SVDBase<Derived> > {
    * A x - b \Vert \f$.
    */
   template <typename Rhs>
-  inline const Solve<Derived, Rhs> solve(const MatrixBase<Rhs>& b) const;
+  inline Solve<Derived, Rhs> solve(const MatrixBase<Rhs>& b) const;
 #endif
 
   /** \brief Reports whether previous computation was successful.
@@ -317,12 +328,11 @@ class SVDBase : public SolverBase<SVDBase<Derived> > {
 
   template <bool Transpose_, typename Rhs>
   void _check_solve_assertion(const Rhs& b) const {
-    EIGEN_ONLY_USED_FOR_DEBUG(b);
     _check_compute_assertions();
     eigen_assert(computeU() && computeV() &&
                  "SVDBase::solve(): Both unitaries U and V are required to be computed (thin unitaries suffice).");
-    eigen_assert((Transpose_ ? cols() : rows()) == b.rows() &&
-                 "SVDBase::solve(): invalid number of rows of the right hand side matrix b");
+    EIGEN_INTERNAL_ASSERT_SOLVER_RHS_MSG(derived(), b, Transpose_,
+                                         "SVDBase::solve(): invalid number of rows of the right hand side matrix b");
   }
 
   // return true if already allocated
@@ -403,13 +413,14 @@ template <typename Derived>
 bool SVDBase<Derived>::allocate(Index rows, Index cols, unsigned int computationOptions) {
   eigen_assert(rows >= 0 && cols >= 0);
 
+  // Reset the status on every call: a recompute of the same shape must not keep the InvalidInput of a previous one.
+  m_info = Success;
   if (m_isAllocated && rows == m_rows.value() && cols == m_cols.value() && computationOptions == m_computationOptions) {
     return true;
   }
 
   m_rows.setValue(rows);
   m_cols.setValue(cols);
-  m_info = Success;
   m_isInitialized = false;
   m_isAllocated = true;
   m_computationOptions = computationOptions;
@@ -423,10 +434,12 @@ bool SVDBase<Derived>::allocate(Index rows, Index cols, unsigned int computation
 
   m_diagSize.setValue(numext::mini(m_rows.value(), m_cols.value()));
   m_singularValues.resize(m_diagSize.value());
-  if (RowsAtCompileTime == Dynamic)
+  EIGEN_IF_CONSTEXPR (RowsAtCompileTime == Dynamic) {
     m_matrixU.resize(m_rows.value(), m_computeFullU ? m_rows.value() : m_computeThinU ? m_diagSize.value() : 0);
-  if (ColsAtCompileTime == Dynamic)
+  }
+  EIGEN_IF_CONSTEXPR (ColsAtCompileTime == Dynamic) {
     m_matrixV.resize(m_cols.value(), m_computeFullV ? m_cols.value() : m_computeThinV ? m_diagSize.value() : 0);
+  }
 
   return false;
 }

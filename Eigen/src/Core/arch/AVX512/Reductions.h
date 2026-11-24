@@ -6,6 +6,7 @@
 // This Source Code Form is subject to the terms of the Mozilla
 // Public License v. 2.0. If a copy of the MPL was not distributed
 // with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
+// SPDX-License-Identifier: MPL-2.0
 
 #ifndef EIGEN_REDUCTIONS_AVX512_H
 #define EIGEN_REDUCTIONS_AVX512_H
@@ -16,6 +17,9 @@
 namespace Eigen {
 
 namespace internal {
+
+// Preserve this backend's any-bit semantics by testing 32-bit chunks for every scalar width.
+EIGEN_STRONG_INLINE bool avx512_predux_any(const Packet16i& bits) { return _mm512_test_epi32_mask(bits, bits) != 0; }
 
 /* -- -- -- -- -- -- -- -- -- -- -- -- Packet16i -- -- -- -- -- -- -- -- -- -- -- -- */
 
@@ -41,7 +45,12 @@ EIGEN_STRONG_INLINE int predux_max(const Packet16i& a) {
 
 template <>
 EIGEN_STRONG_INLINE bool predux_any(const Packet16i& a) {
-  return _mm512_reduce_or_epi32(a) != 0;
+  return avx512_predux_any(a);
+}
+
+template <>
+EIGEN_STRONG_INLINE bool predux_all(const Packet16i& a) {
+  return _mm512_cmp_epi32_mask(a, _mm512_setzero_epi32(), _MM_CMPINT_EQ) == 0;
 }
 
 /* -- -- -- -- -- -- -- -- -- -- -- -- Packet8l -- -- -- -- -- -- -- -- -- -- -- -- */
@@ -55,7 +64,7 @@ EIGEN_STRONG_INLINE int64_t predux(const Packet8l& a) {
 // MSVC's _mm512_reduce_mul_epi64 is borked, at least up to and including 1939.
 //    alignas(64) int64_t data[] = { 1,1,-1,-1,1,-1,-1,-1 };
 //    int64_t out = _mm512_reduce_mul_epi64(_mm512_load_epi64(data));
-// produces garbage: 4294967295.  It seems to happen whenever the output is supposed to be negative.
+// produces garbage: 4294967295.  This occurs when the result should be negative.
 // Fall back to a manual approach:
 template <>
 EIGEN_STRONG_INLINE int64_t predux_mul(const Packet8l& a) {
@@ -82,7 +91,12 @@ EIGEN_STRONG_INLINE int64_t predux_max(const Packet8l& a) {
 
 template <>
 EIGEN_STRONG_INLINE bool predux_any(const Packet8l& a) {
-  return _mm512_reduce_or_epi64(a) != 0;
+  return avx512_predux_any(a);
+}
+
+template <>
+EIGEN_STRONG_INLINE bool predux_all(const Packet8l& a) {
+  return _mm512_cmp_epi64_mask(a, _mm512_setzero_si512(), _MM_CMPINT_EQ) == 0;
 }
 
 /* -- -- -- -- -- -- -- -- -- -- -- -- Packet16f -- -- -- -- -- -- -- -- -- -- -- -- */
@@ -104,15 +118,15 @@ EIGEN_STRONG_INLINE float predux_min(const Packet16f& a) {
 
 template <>
 EIGEN_STRONG_INLINE float predux_min<PropagateNumbers>(const Packet16f& a) {
-  Packet8f lane0 = _mm512_extractf32x8_ps(a, 0);
-  Packet8f lane1 = _mm512_extractf32x8_ps(a, 1);
+  Packet8f lane0 = extract256<0>(a);
+  Packet8f lane1 = extract256<1>(a);
   return predux_min<PropagateNumbers>(pmin<PropagateNumbers>(lane0, lane1));
 }
 
 template <>
 EIGEN_STRONG_INLINE float predux_min<PropagateNaN>(const Packet16f& a) {
-  Packet8f lane0 = _mm512_extractf32x8_ps(a, 0);
-  Packet8f lane1 = _mm512_extractf32x8_ps(a, 1);
+  Packet8f lane0 = extract256<0>(a);
+  Packet8f lane1 = extract256<1>(a);
   return predux_min<PropagateNaN>(pmin<PropagateNaN>(lane0, lane1));
 }
 
@@ -123,21 +137,31 @@ EIGEN_STRONG_INLINE float predux_max(const Packet16f& a) {
 
 template <>
 EIGEN_STRONG_INLINE float predux_max<PropagateNumbers>(const Packet16f& a) {
-  Packet8f lane0 = _mm512_extractf32x8_ps(a, 0);
-  Packet8f lane1 = _mm512_extractf32x8_ps(a, 1);
+  Packet8f lane0 = extract256<0>(a);
+  Packet8f lane1 = extract256<1>(a);
   return predux_max<PropagateNumbers>(pmax<PropagateNumbers>(lane0, lane1));
 }
 
 template <>
 EIGEN_STRONG_INLINE float predux_max<PropagateNaN>(const Packet16f& a) {
-  Packet8f lane0 = _mm512_extractf32x8_ps(a, 0);
-  Packet8f lane1 = _mm512_extractf32x8_ps(a, 1);
+  Packet8f lane0 = extract256<0>(a);
+  Packet8f lane1 = extract256<1>(a);
   return predux_max<PropagateNaN>(pmax<PropagateNaN>(lane0, lane1));
 }
 
 template <>
 EIGEN_STRONG_INLINE bool predux_any(const Packet16f& a) {
-  return _mm512_reduce_or_epi32(_mm512_castps_si512(a)) != 0;
+  return avx512_predux_any(_mm512_castps_si512(a));
+}
+
+template <>
+EIGEN_STRONG_INLINE bool predux_all(const Packet16f& a) {
+  return _mm512_cmp_ps_mask(a, _mm512_setzero_ps(), _CMP_EQ_OQ) == 0;
+}
+
+template <>
+EIGEN_STRONG_INLINE Index predux_count(const Packet16f& a) {
+  return Index(popcount(static_cast<unsigned int>(_mm512_cmp_ps_mask(a, _mm512_setzero_ps(), _CMP_NEQ_UQ))));
 }
 
 /* -- -- -- -- -- -- -- -- -- -- -- -- Packet8d -- -- -- -- -- -- -- -- -- -- -- -- */
@@ -192,7 +216,31 @@ EIGEN_STRONG_INLINE double predux_max<PropagateNaN>(const Packet8d& a) {
 
 template <>
 EIGEN_STRONG_INLINE bool predux_any(const Packet8d& a) {
-  return _mm512_reduce_or_epi64(_mm512_castpd_si512(a)) != 0;
+  return avx512_predux_any(_mm512_castpd_si512(a));
+}
+
+template <>
+EIGEN_STRONG_INLINE bool predux_all(const Packet8d& a) {
+  return _mm512_cmp_pd_mask(a, _mm512_setzero_pd(), _CMP_EQ_OQ) == 0;
+}
+
+template <>
+EIGEN_STRONG_INLINE Index predux_count(const Packet8d& a) {
+  return Index(popcount(static_cast<unsigned int>(_mm512_cmp_pd_mask(a, _mm512_setzero_pd(), _CMP_NEQ_UQ))));
+}
+
+// Count 16-bit floating-point lanes through integer bits so fast-math cannot treat NaN masks as zero.
+EIGEN_STRONG_INLINE Index predux_count_16bit(const __m256i& a) {
+#if defined(EIGEN_VECTORIZE_AVX512VL) && defined(__AVX512BW__)
+  // A cast rather than _cvtmask16_u32, whose nvc++ definition calls a __builtin_ia32_kmovw that nvc++ cannot link.
+  const unsigned int nonzero_lanes = static_cast<unsigned int>(_mm256_test_epi16_mask(a, _mm256_set1_epi16(0x7fff)));
+  return Index(popcount(nonzero_lanes));
+#else
+  const __m256i magnitude = _mm256_and_si256(a, _mm256_set1_epi16(0x7fff));
+  const __m256i zeros = _mm256_cmpeq_epi16(magnitude, _mm256_setzero_si256());
+  const unsigned int zero_bytes = static_cast<unsigned int>(_mm256_movemask_epi8(zeros));
+  return Index(16 - popcount(zero_bytes) / 2);
+#endif
 }
 
 #ifndef EIGEN_VECTORIZE_AVX512FP16
@@ -242,6 +290,16 @@ template <>
 EIGEN_STRONG_INLINE bool predux_any(const Packet16h& a) {
   return predux_any<Packet8i>(a.m_val);
 }
+
+template <>
+EIGEN_STRONG_INLINE bool predux_all(const Packet16h& a) {
+  return predux_count_16bit(a.m_val) == 16;
+}
+
+template <>
+EIGEN_STRONG_INLINE Index predux_count(const Packet16h& a) {
+  return predux_count_16bit(a.m_val);
+}
 #endif
 
 /* -- -- -- -- -- -- -- -- -- -- -- -- Packet16bf -- -- -- -- -- -- -- -- -- -- -- -- */
@@ -289,6 +347,16 @@ EIGEN_STRONG_INLINE bfloat16 predux_max<PropagateNaN>(const Packet16bf& from) {
 template <>
 EIGEN_STRONG_INLINE bool predux_any(const Packet16bf& a) {
   return predux_any<Packet8i>(a.m_val);
+}
+
+template <>
+EIGEN_STRONG_INLINE bool predux_all(const Packet16bf& a) {
+  return predux_count_16bit(a.m_val) == 16;
+}
+
+template <>
+EIGEN_STRONG_INLINE Index predux_count(const Packet16bf& a) {
+  return predux_count_16bit(a.m_val);
 }
 
 }  // end namespace internal

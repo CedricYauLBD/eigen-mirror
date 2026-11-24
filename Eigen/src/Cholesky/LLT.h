@@ -6,6 +6,7 @@
 // This Source Code Form is subject to the terms of the Mozilla
 // Public License v. 2.0. If a copy of the MPL was not distributed
 // with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
+// SPDX-License-Identifier: MPL-2.0
 
 #ifndef EIGEN_LLT_H
 #define EIGEN_LLT_H
@@ -13,15 +14,28 @@
 // IWYU pragma: private
 #include "./InternalHeaderCheck.h"
 
+// Smallest n at which LLT::inverse() runs the POTRI sequence on a real scalar rather than solving
+// against an explicit identity. POTRI's n^3/3 runs in the unblocked TRTRI and LAUUM kernels at small
+// n, the solve's 3x at the blocked TRSM rate, so a wider ISA helps the competitor more and moves the
+// crossover right: on Zen 4 it is n = 32 under SSE2 and AVX2, 128 (double) to 256 (float) under
+// AVX-512. Complex is not thresholded: POTRI leads from n = 8 in all twelve configurations measured.
+#ifndef EIGEN_LLT_INVERSE_POTRI_THRESHOLD
+#if defined(EIGEN_VECTORIZE_AVX512)
+#define EIGEN_LLT_INVERSE_POTRI_THRESHOLD 256
+#else
+#define EIGEN_LLT_INVERSE_POTRI_THRESHOLD 32
+#endif
+#endif
+
 namespace Eigen {
 
 namespace internal {
 
 template <typename MatrixType_, int UpLo_>
 struct traits<LLT<MatrixType_, UpLo_> > : traits<MatrixType_> {
-  typedef MatrixXpr XprKind;
-  typedef SolverStorage StorageKind;
-  typedef int StorageIndex;
+  using XprKind = MatrixXpr;
+  using StorageKind = SolverStorage;
+  using StorageIndex = int;
   enum { Flags = 0 };
 };
 
@@ -62,15 +76,16 @@ struct LLT_Traits;
  * This class supports the \link InplaceDecomposition inplace decomposition \endlink mechanism.
  *
  * Note that during the decomposition, only the lower (or upper, as defined by UpLo_) triangular part of A is
- * considered. Therefore, the strict lower part does not have to store correct values.
+ * considered. Therefore, the strict upper part (or the strict lower part when UpLo_ is Upper) does not have to
+ * store correct values.
  *
  * \sa MatrixBase::llt(), SelfAdjointView::llt(), class LDLT
  */
 template <typename MatrixType_, int UpLo_>
 class LLT : public SolverBase<LLT<MatrixType_, UpLo_> > {
  public:
-  typedef MatrixType_ MatrixType;
-  typedef SolverBase<LLT> Base;
+  using MatrixType = MatrixType_;
+  using Base = SolverBase<LLT>;
   friend class SolverBase<LLT>;
 
   EIGEN_GENERIC_PUBLIC_INTERFACE(LLT)
@@ -78,7 +93,8 @@ class LLT : public SolverBase<LLT<MatrixType_, UpLo_> > {
 
   enum { PacketSize = internal::packet_traits<Scalar>::size, AlignmentMask = int(PacketSize) - 1, UpLo = UpLo_ };
 
-  typedef internal::LLT_Traits<MatrixType, UpLo> Traits;
+  using Traits = internal::LLT_Traits<MatrixType, UpLo>;
+  using PlainObject = typename MatrixType::PlainObject;
 
   /**
    * \brief Default Constructor.
@@ -86,7 +102,7 @@ class LLT : public SolverBase<LLT<MatrixType_, UpLo_> > {
    * The default constructor is useful in cases in which the user intends to
    * perform decompositions via LLT::compute(const MatrixType&).
    */
-  LLT() : m_matrix(), m_isInitialized(false) {}
+  LLT() : m_matrix(), m_l1_norm(0), m_isInitialized(false), m_info(InvalidInput) {}
 
   /** \brief Default Constructor with memory preallocation
    *
@@ -94,10 +110,11 @@ class LLT : public SolverBase<LLT<MatrixType_, UpLo_> > {
    * according to the specified problem \a size.
    * \sa LLT()
    */
-  explicit LLT(Index size) : m_matrix(size, size), m_isInitialized(false) {}
+  explicit LLT(Index size) : m_matrix(size, size), m_l1_norm(0), m_isInitialized(false), m_info(InvalidInput) {}
 
   template <typename InputType>
-  explicit LLT(const EigenBase<InputType>& matrix) : m_matrix(matrix.rows(), matrix.cols()), m_isInitialized(false) {
+  explicit LLT(const EigenBase<InputType>& matrix)
+      : m_matrix(matrix.rows(), matrix.cols()), m_l1_norm(0), m_isInitialized(false), m_info(InvalidInput) {
     compute(matrix.derived());
   }
 
@@ -109,7 +126,8 @@ class LLT : public SolverBase<LLT<MatrixType_, UpLo_> > {
    * \sa LLT(const EigenBase&)
    */
   template <typename InputType>
-  explicit LLT(EigenBase<InputType>& matrix) : m_matrix(matrix.derived()), m_isInitialized(false) {
+  explicit LLT(EigenBase<InputType>& matrix)
+      : m_matrix(matrix.derived()), m_l1_norm(0), m_isInitialized(false), m_info(InvalidInput) {
     compute(matrix.derived());
   }
 
@@ -137,7 +155,7 @@ class LLT : public SolverBase<LLT<MatrixType_, UpLo_> > {
    * \sa solveInPlace(), MatrixBase::llt(), SelfAdjointView::llt()
    */
   template <typename Rhs>
-  inline const Solve<LLT, Rhs> solve(const MatrixBase<Rhs>& b) const;
+  inline Solve<LLT, Rhs> solve(const MatrixBase<Rhs>& b) const;
 #endif
 
   template <typename Derived>
@@ -164,12 +182,40 @@ class LLT : public SolverBase<LLT<MatrixType_, UpLo_> > {
     return m_matrix;
   }
 
+  /** \returns the inverse of the matrix of which \c *this is the Cholesky decomposition.
+   *
+   * The result is computed as \f$ A^{-1} = L^{-*} L^{-1} \f$ by inverting the stored factor in place and
+   * squaring it, the LAPACK \c *POTRI sequence, for 2n^3/3 flops against the 2n^3 of solving with an
+   * explicit identity right hand side. Beyond the destination, only a block-sized scratch panel of at most
+   * 128x128 coefficients is used, whatever the matrix size. On the POTRI path, as in \c *POTRI, the inverted factor
+   * bounds the right residual of the stored factor: \f$ |X L - I| \f$ for \c Lower and \f$ |X U - I| \f$ for \c Upper,
+   * the latter being the left residual of \f$ L = U^* \f$.
+   *
+   * Fewer flops is not fewer seconds at every size: for a real scalar below
+   * \c EIGEN_LLT_INVERSE_POTRI_THRESHOLD (32, or 256 where AVX-512 is enabled) the POTRI sequence runs in
+   * its unblocked kernels while the solve against an identity runs its 3x at the blocked TRSM rate, so that
+   * is what this method does there. Complex scalars always take the POTRI path. The result is exactly
+   * self-adjoint either way: one triangle is computed and mirrored onto the other.
+   *
+   * An in-place decomposition (see the class documentation) may overwrite its own factor with the result,
+   * as in <tt>storage = llt.inverse()</tt>; like any other write to the referenced matrix, that leaves the
+   * decomposition unusable afterwards.
+   *
+   * The matrix must be positive definite, that is, info() must be \c Success.
+   *
+   * \sa solve(), MatrixBase::inverse()
+   */
+  inline Inverse<LLT> inverse() const {
+    eigen_assert(m_isInitialized && "LLT is not initialized.");
+    return Inverse<LLT>(*this);
+  }
+
   MatrixType reconstructedMatrix() const;
 
   /** \brief Reports whether previous computation was successful.
    *
    * \returns \c Success if computation was successful,
-   *          \c NumericalIssue if the matrix.appears not to be positive definite.
+   *          \c NumericalIssue if the matrix appears not to be positive definite.
    */
   ComputationInfo info() const {
     eigen_assert(m_isInitialized && "LLT is not initialized.");
@@ -190,6 +236,64 @@ class LLT : public SolverBase<LLT<MatrixType_, UpLo_> > {
   template <typename VectorType>
   LLT& rankUpdate(const VectorType& vec, const RealScalar& sigma = 1);
 
+  /** \returns the determinant of the matrix of which *this is the Cholesky decomposition.
+   *
+   * It has only linear complexity (that is, O(n) where n is the dimension of the square matrix)
+   * as the Cholesky decomposition has already been computed.
+   *
+   * \warning a determinant can be very big or small, so for matrices
+   * of large enough dimension, there is a risk of overflow/underflow.
+   * One way to work around that is to use logAbsDeterminant() instead.
+   *
+   * \pre info() returns \c Success. A failed factorization does not represent the input matrix.
+   *
+   * \sa absDeterminant(), logAbsDeterminant(), signDeterminant(), MatrixBase::determinant()
+   */
+  Scalar determinant() const;
+
+  /** \returns the absolute value of the determinant of the matrix of which *this is the Cholesky decomposition.
+   *
+   * It has only linear complexity (that is, O(n) where n is the dimension of the square matrix)
+   * as the Cholesky decomposition has already been computed.
+   *
+   * \note The decomposed matrix is positive definite, so this is the determinant itself.
+   *
+   * \warning a determinant can be very big or small, so for matrices
+   * of large enough dimension, there is a risk of overflow/underflow.
+   * One way to work around that is to use logAbsDeterminant() instead.
+   *
+   * \pre info() returns \c Success. A failed factorization does not represent the input matrix.
+   *
+   * \sa determinant(), logAbsDeterminant(), signDeterminant(), MatrixBase::determinant()
+   */
+  RealScalar absDeterminant() const;
+
+  /** \returns the natural log of the absolute value of the determinant of the matrix of which *this is the Cholesky
+   * decomposition.
+   *
+   * It has only linear complexity (that is, O(n) where n is the dimension of the square matrix)
+   * as the Cholesky decomposition has already been computed.
+   *
+   * \note This method is useful to work around the risk of overflow/underflow that's inherent
+   * to determinant computation.
+   *
+   * \pre info() returns \c Success. A failed factorization does not represent the input matrix.
+   *
+   * \sa determinant(), absDeterminant(), signDeterminant(), MatrixBase::determinant()
+   */
+  RealScalar logAbsDeterminant() const;
+
+  /** \returns the sign of the determinant of the matrix of which *this is the Cholesky decomposition,
+   * which is \c 1 since that matrix is positive definite.
+   *
+   * This method is provided for compatibility with the other decompositions, thus enabling generic code.
+   *
+   * \pre info() returns \c Success. A failed factorization does not represent the input matrix.
+   *
+   * \sa determinant(), absDeterminant(), logAbsDeterminant(), MatrixBase::determinant()
+   */
+  Scalar signDeterminant() const;
+
 #ifndef EIGEN_PARSED_BY_DOXYGEN
   template <typename RhsType, typename DstType>
   void _solve_impl(const RhsType& rhs, DstType& dst) const;
@@ -202,8 +306,8 @@ class LLT : public SolverBase<LLT<MatrixType_, UpLo_> > {
   EIGEN_STATIC_ASSERT_NON_INTEGER(Scalar)
 
   /** \internal
-   * Used to compute and store L
-   * The strict upper part is not used and even not initialized.
+   * Used to compute and store L, or U when UpLo_ is Upper.
+   * The strict part of the other triangle is not used and even not initialized.
    */
   MatrixType m_matrix;
   RealScalar m_l1_norm;
@@ -219,17 +323,17 @@ struct llt_inplace;
 template <typename MatrixType, typename VectorType>
 static Index llt_rank_update_lower(MatrixType& mat, const VectorType& vec,
                                    const typename MatrixType::RealScalar& sigma) {
-  using std::sqrt;
-  typedef typename MatrixType::Scalar Scalar;
-  typedef typename MatrixType::RealScalar RealScalar;
-  typedef typename MatrixType::ColXpr ColXpr;
-  typedef internal::remove_all_t<ColXpr> ColXprCleaned;
-  typedef typename ColXprCleaned::SegmentReturnType ColXprSegment;
-  typedef Matrix<Scalar, Dynamic, 1> TempVectorType;
-  typedef typename TempVectorType::SegmentReturnType TempVecSegment;
+  using Scalar = typename MatrixType::Scalar;
+  using RealScalar = typename MatrixType::RealScalar;
+  using ColXpr = typename MatrixType::ColXpr;
+  using ColXprCleaned = internal::remove_all_t<ColXpr>;
+  using ColXprSegment = typename ColXprCleaned::SegmentReturnType;
+  using TempVectorType = Matrix<Scalar, MatrixType::RowsAtCompileTime, 1, 0, MatrixType::MaxRowsAtCompileTime, 1>;
+  using TempVecSegment = typename TempVectorType::SegmentReturnType;
 
   Index n = mat.cols();
-  eigen_assert(mat.rows() == n && vec.size() == n);
+  EIGEN_INTERNAL_ASSERT_SQUARE(mat);
+  EIGEN_INTERNAL_ASSERT_SIZE_MATCHES_COLS(vec, mat);
 
   TempVectorType temp;
 
@@ -237,7 +341,7 @@ static Index llt_rank_update_lower(MatrixType& mat, const VectorType& vec,
     // This version is based on Givens rotations.
     // It is faster than the other one below, but only works for updates,
     // i.e., for sigma > 0
-    temp = sqrt(sigma) * vec;
+    temp = numext::sqrt(sigma) * vec;
 
     for (Index i = 0; i < n; ++i) {
       JacobiRotation<Scalar> g;
@@ -261,8 +365,8 @@ static Index llt_rank_update_lower(MatrixType& mat, const VectorType& vec,
       RealScalar gamma = dj * beta + swj2;
 
       RealScalar x = dj + swj2 / beta;
-      if (x <= RealScalar(0)) return j;
-      RealScalar nLjj = sqrt(x);
+      if (!(numext::isfinite)(x) || x <= RealScalar(0)) return j;
+      RealScalar nLjj = numext::sqrt(x);
       mat.coeffRef(j, j) = nLjj;
       beta += swj2 / dj;
 
@@ -281,12 +385,10 @@ static Index llt_rank_update_lower(MatrixType& mat, const VectorType& vec,
 
 template <typename Scalar>
 struct llt_inplace<Scalar, Lower> {
-  typedef typename NumTraits<Scalar>::Real RealScalar;
+  using RealScalar = typename NumTraits<Scalar>::Real;
   template <typename MatrixType>
   static Index unblocked(MatrixType& mat) {
-    using std::sqrt;
-
-    eigen_assert(mat.rows() == mat.cols());
+    EIGEN_INTERNAL_ASSERT_SQUARE(mat);
     const Index size = mat.rows();
     for (Index k = 0; k < size; ++k) {
       Index rs = size - k - 1;  // remaining size
@@ -297,8 +399,8 @@ struct llt_inplace<Scalar, Lower> {
 
       RealScalar x = numext::real(mat.coeff(k, k));
       if (k > 0) x -= A10.squaredNorm();
-      if (x <= RealScalar(0)) return k;
-      mat.coeffRef(k, k) = x = sqrt(x);
+      if (!(numext::isfinite)(x) || x <= RealScalar(0)) return k;
+      mat.coeffRef(k, k) = x = numext::sqrt(x);
       if (k > 0 && rs > 0) A21.noalias() -= A20 * A10.adjoint();
       if (rs > 0) A21 /= x;
     }
@@ -307,13 +409,15 @@ struct llt_inplace<Scalar, Lower> {
 
   template <typename MatrixType>
   static Index blocked(MatrixType& m) {
-    eigen_assert(m.rows() == m.cols());
+    EIGEN_INTERNAL_ASSERT_SQUARE(m);
     Index size = m.rows();
-    if (size < 32) return unblocked(m);
+    // The unblocked kernel walks row k of the factor, which strides through memory: it wins up to about 48 columns,
+    // and beyond that 16-column blocks keep those walks short while amortizing the level-3 updates.
+    if (size <= 48) return unblocked(m);
 
     Index blockSize = size / 8;
     blockSize = (blockSize / 16) * 16;
-    blockSize = (std::min)((std::max)(blockSize, Index(8)), Index(128));
+    blockSize = (std::min)((std::max)(blockSize, Index(16)), Index(128));
 
     for (Index k = 0; k < size; k += blockSize) {
       // partition the matrix:
@@ -326,8 +430,8 @@ struct llt_inplace<Scalar, Lower> {
       Block<MatrixType, Dynamic, Dynamic> A21(m, k + bs, k, rs, bs);
       Block<MatrixType, Dynamic, Dynamic> A22(m, k + bs, k + bs, rs, rs);
 
-      Index ret;
-      if ((ret = unblocked(A11)) >= 0) return k + ret;
+      const Index ret = unblocked(A11);
+      if (ret >= 0) return k + ret;
       if (rs > 0) A11.adjoint().template triangularView<Upper>().template solveInPlace<OnTheRight>(A21);
       if (rs > 0)
         A22.template selfadjointView<Lower>().rankUpdate(A21,
@@ -344,7 +448,7 @@ struct llt_inplace<Scalar, Lower> {
 
 template <typename Scalar>
 struct llt_inplace<Scalar, Upper> {
-  typedef typename NumTraits<Scalar>::Real RealScalar;
+  using RealScalar = typename NumTraits<Scalar>::Real;
 
   template <typename MatrixType>
   static EIGEN_STRONG_INLINE Index unblocked(MatrixType& mat) {
@@ -365,8 +469,8 @@ struct llt_inplace<Scalar, Upper> {
 
 template <typename MatrixType>
 struct LLT_Traits<MatrixType, Lower> {
-  typedef const TriangularView<const MatrixType, Lower> MatrixL;
-  typedef const TriangularView<const typename MatrixType::AdjointReturnType, Upper> MatrixU;
+  using MatrixL = const TriangularView<const MatrixType, Lower>;
+  using MatrixU = const TriangularView<const typename MatrixType::AdjointReturnType, Upper>;
   static inline MatrixL getL(const MatrixType& m) { return MatrixL(m); }
   static inline MatrixU getU(const MatrixType& m) { return MatrixU(m.adjoint()); }
   static bool inplace_decomposition(MatrixType& m) {
@@ -376,8 +480,8 @@ struct LLT_Traits<MatrixType, Lower> {
 
 template <typename MatrixType>
 struct LLT_Traits<MatrixType, Upper> {
-  typedef const TriangularView<const typename MatrixType::AdjointReturnType, Lower> MatrixL;
-  typedef const TriangularView<const MatrixType, Upper> MatrixU;
+  using MatrixL = const TriangularView<const typename MatrixType::AdjointReturnType, Lower>;
+  using MatrixU = const TriangularView<const MatrixType, Upper>;
   static inline MatrixL getL(const MatrixType& m) { return MatrixL(m.adjoint()); }
   static inline MatrixU getU(const MatrixType& m) { return MatrixU(m); }
   static bool inplace_decomposition(MatrixType& m) {
@@ -397,24 +501,13 @@ struct LLT_Traits<MatrixType, Upper> {
 template <typename MatrixType, int UpLo_>
 template <typename InputType>
 LLT<MatrixType, UpLo_>& LLT<MatrixType, UpLo_>::compute(const EigenBase<InputType>& a) {
-  eigen_assert(a.rows() == a.cols());
+  EIGEN_INTERNAL_ASSERT_SQUARE(a);
   const Index size = a.rows();
   m_matrix.resize(size, size);
   if (!internal::is_same_dense(m_matrix, a.derived())) m_matrix = a.derived();
 
-  // Compute matrix L1 norm = max abs column sum.
-  m_l1_norm = RealScalar(0);
-  // TODO move this code to SelfAdjointView
-  for (Index col = 0; col < size; ++col) {
-    RealScalar abs_col_sum;
-    if (UpLo_ == Lower)
-      abs_col_sum =
-          m_matrix.col(col).tail(size - col).template lpNorm<1>() + m_matrix.row(col).head(col).template lpNorm<1>();
-    else
-      abs_col_sum =
-          m_matrix.col(col).head(col).template lpNorm<1>() + m_matrix.row(col).tail(size - col).template lpNorm<1>();
-    if (abs_col_sum > m_l1_norm) m_l1_norm = abs_col_sum;
-  }
+  // Compute matrix L1 norm = max abs column sum over the implicit self-adjoint matrix.
+  m_l1_norm = m_matrix.template selfadjointView<UpLo_>().l1Norm();
 
   m_isInitialized = true;
   bool ok = Traits::inplace_decomposition(m_matrix);
@@ -423,7 +516,7 @@ LLT<MatrixType, UpLo_>& LLT<MatrixType, UpLo_>::compute(const EigenBase<InputTyp
   return *this;
 }
 
-/** Performs a rank one update (or dowdate) of the current decomposition.
+/** Performs a rank one update (or downdate) of the current decomposition.
  * If A = LL^* before the rank one update,
  * then after it we have LL^* = A + sigma * v v^* where \a v must be a vector
  * of same dimension.
@@ -432,7 +525,7 @@ template <typename MatrixType_, int UpLo_>
 template <typename VectorType>
 LLT<MatrixType_, UpLo_>& LLT<MatrixType_, UpLo_>::rankUpdate(const VectorType& v, const RealScalar& sigma) {
   EIGEN_STATIC_ASSERT_VECTOR_ONLY(VectorType);
-  eigen_assert(v.size() == m_matrix.cols());
+  EIGEN_INTERNAL_ASSERT_SIZE_MATCHES_COLS(v, m_matrix);
   eigen_assert(m_isInitialized);
   if (internal::llt_inplace<typename MatrixType::Scalar, UpLo>::rankUpdate(m_matrix, v, sigma) >= 0)
     m_info = NumericalIssue;
@@ -440,6 +533,34 @@ LLT<MatrixType_, UpLo_>& LLT<MatrixType_, UpLo_>::rankUpdate(const VectorType& v
     m_info = Success;
 
   return *this;
+}
+
+// A = L L^*, with L real and positive on the diagonal, so det(A) = prod(L_ii)^2 > 0.
+
+template <typename MatrixType_, int UpLo_>
+typename LLT<MatrixType_, UpLo_>::Scalar LLT<MatrixType_, UpLo_>::determinant() const {
+  return Scalar(absDeterminant());
+}
+
+template <typename MatrixType_, int UpLo_>
+typename LLT<MatrixType_, UpLo_>::RealScalar LLT<MatrixType_, UpLo_>::absDeterminant() const {
+  eigen_assert(m_isInitialized && "LLT is not initialized.");
+  eigen_assert(m_info == Success && "LLT failed because matrix appears to be negative");
+  return internal::scaled_prod_squared(m_matrix.diagonal().real()).value();
+}
+
+template <typename MatrixType_, int UpLo_>
+typename LLT<MatrixType_, UpLo_>::RealScalar LLT<MatrixType_, UpLo_>::logAbsDeterminant() const {
+  eigen_assert(m_isInitialized && "LLT is not initialized.");
+  eigen_assert(m_info == Success && "LLT failed because matrix appears to be negative");
+  return RealScalar(2) * internal::log_abs_prod(m_matrix.diagonal().real());
+}
+
+template <typename MatrixType_, int UpLo_>
+typename LLT<MatrixType_, UpLo_>::Scalar LLT<MatrixType_, UpLo_>::signDeterminant() const {
+  eigen_assert(m_isInitialized && "LLT is not initialized.");
+  eigen_assert(m_info == Success && "LLT failed because matrix appears to be negative");
+  return Scalar(1);
 }
 
 #ifndef EIGEN_PARSED_BY_DOXYGEN
@@ -476,10 +597,54 @@ template <typename MatrixType, int UpLo_>
 template <typename Derived>
 void LLT<MatrixType, UpLo_>::solveInPlace(const MatrixBase<Derived>& bAndX) const {
   eigen_assert(m_isInitialized && "LLT is not initialized.");
-  eigen_assert(m_matrix.rows() == bAndX.rows());
+  EIGEN_INTERNAL_ASSERT_SAME_ROWS(m_matrix, bAndX);
   matrixL().solveInPlace(bAndX);
   matrixU().solveInPlace(bAndX);
 }
+
+namespace internal {
+
+/***** Implementation of inverse() *****************************************************/
+template <typename DstXprType, typename MatrixType, int UpLo_>
+struct Assignment<DstXprType, Inverse<LLT<MatrixType, UpLo_> >,
+                  internal::assign_op<typename DstXprType::Scalar, typename LLT<MatrixType, UpLo_>::Scalar>,
+                  Dense2Dense> {
+  using LltType = LLT<MatrixType, UpLo_>;
+  using SrcXprType = Inverse<LltType>;
+  static constexpr unsigned int kMirrorMode = UpLo_ == Lower ? StrictlyUpper : StrictlyLower;
+  static void run(DstXprType& dst, const SrcXprType& src,
+                  const internal::assign_op<typename DstXprType::Scalar, typename LltType::Scalar>&) {
+    const LltType& llt = src.nestedExpression();
+    eigen_assert(llt.info() == Success && "LLT::inverse(): the factorization failed.");
+    const Index size = llt.rows();
+    if ((dst.rows() != size) || (dst.cols() != size)) dst.resize(size, size);
+
+    // Complex is never thresholded; see EIGEN_LLT_INVERSE_POTRI_THRESHOLD.
+    constexpr Index kPotriThreshold =
+        NumTraits<typename LltType::Scalar>::IsComplex ? Index(0) : Index(EIGEN_LLT_INVERSE_POTRI_THRESHOLD);
+    // An in-place LLT<Ref<...>> may be asked to overwrite its own factor. The POTRI sequence does exactly
+    // that, so it takes the alias at every size; the solve fallback would read a factor that setIdentity()
+    // had already destroyed. extract_data() is null for a destination whose inner stride is not known to
+    // be 1 at compile time, which leaves the alias unknown rather than excluded, so that goes the same way.
+    const typename DstXprType::Scalar* dst_data = extract_data(dst);
+    const bool overwrites_factor = dst_data == nullptr || dst_data == llt.matrixLLT().data();
+    if (overwrites_factor || size >= kPotriThreshold) {
+      // A = L L^*, hence A^-1 = L^-* L^-1: invert the factor (xTRTRI), then square it (xLAUUM).
+      dst.template triangularView<UpLo_>() = llt.matrixLLT().template triangularView<UpLo_>();
+      dst.template triangularView<UpLo_>().inverseInPlace();
+      internal::triangular_adjoint_square_in_place<UpLo_>(dst);
+    } else {
+      dst.setIdentity();
+      llt.solveInPlace(dst);
+    }
+    // Mirror; (i, j) reads (j, i), which lies in the computed triangle and is never written here, so
+    // the aliasing is benign. LAUUM makes the computed diagonal exactly real, as does the real-scalar
+    // solve below the threshold, so the result is exactly self-adjoint.
+    dst.template triangularView<kMirrorMode>() = dst.adjoint();
+  }
+};
+
+}  // end namespace internal
 
 /** \returns the matrix represented by the decomposition,
  * i.e., it returns the product: L L^*.
@@ -495,7 +660,7 @@ MatrixType LLT<MatrixType, UpLo_>::reconstructedMatrix() const {
  * \sa SelfAdjointView::llt()
  */
 template <typename Derived>
-inline const LLT<typename MatrixBase<Derived>::PlainObject> MatrixBase<Derived>::llt() const {
+inline LLT<typename MatrixBase<Derived>::PlainObject> MatrixBase<Derived>::llt() const {
   return LLT<PlainObject>(derived());
 }
 
@@ -504,7 +669,7 @@ inline const LLT<typename MatrixBase<Derived>::PlainObject> MatrixBase<Derived>:
  * \sa SelfAdjointView::llt()
  */
 template <typename MatrixType, unsigned int UpLo>
-inline const LLT<typename SelfAdjointView<MatrixType, UpLo>::PlainObject, UpLo> SelfAdjointView<MatrixType, UpLo>::llt()
+inline LLT<typename SelfAdjointView<MatrixType, UpLo>::PlainObject, UpLo> SelfAdjointView<MatrixType, UpLo>::llt()
     const {
   return LLT<PlainObject, UpLo>(m_matrix);
 }

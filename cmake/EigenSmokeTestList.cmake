@@ -1,6 +1,8 @@
 # List of tests that will be build and run during Eigen's smoke testing. If one
 # of these tests doesn't exists or cannot be build with the current configuration
 # it will just be skipped.
+# SPDX-FileCopyrightText: The Eigen Authors
+# SPDX-License-Identifier: MPL-2.0
 set(ei_smoke_test_list
   adjoint_1
   alignedvector3
@@ -14,18 +16,25 @@ set(ei_smoke_test_list
   autodiff_scalar_1
   bandmatrix
   bdcsvd_9
+  bdcsvd_fastmath
   bessel_functions_1
+  bfloat16_classification
+  bfloat16_classification_fastmath
   bfloat16_float
   blasutil_1
   block_5
+  block_sparse_matrix_2
+  block_sparse_matrix_9
+  bunchkaufman_5
   BVH
   cholesky_1
-  cholmod_support_23
-  cholmod_support_24
+  cholmod_support_21
+  cholmod_support_22
   conservative_resize_1
   constructor_1
   corners_1
-  ctorleakmiscmatrices_4
+  ctorleak
+  miscmatrices_4
   dense_storage
   determinant_1
   diagonal_1
@@ -47,7 +56,8 @@ set(ei_smoke_test_list
   geo_transformations_7
   half_float
   hessenberg_1
-  hessenberg_6qr_10
+  hessenberg_6
+  qr_10
   householder_8
   indexed_view_1
   inplace_decomposition_1
@@ -58,25 +68,29 @@ set(ei_smoke_test_list
   jacobisvd_1
   kronecker_product
   linearstructure_1
+  lru_cache
+  lsmr_1
   mapped_matrix_1
   mapstaticmethods_1
   mapstride_1
-  unaryviewstride_1
-  unaryviewstride_2
-  unaryviewstride_3
+  unaryview_1
+  unaryview_2
+  unaryview_3
   matrix_square_root_1
   meta
-  minres_2
+  minres_1
   miscmatrices_1
-  mixingtypes_7
+  mixingtypes_4
   nestbyvalue
   nesting_ops_1
   nomalloc_1
   nullary_1
   num_dimensions
   NumericalDiff
-  numext
+  numext_fma_off
   packetmath
+  packetmath_fastmath
+  packetmath_fastmath_generic_16
   permutationmatrices_1
   polynomialsolver_1
   prec_inverse_4x4_1
@@ -91,6 +105,7 @@ set(ei_smoke_test_list
   qr_1
   qr_colpivoting_7
   qr_fullpivoting_4
+  qr_rand_colpivoting_2
   rand_1
   real_qz_1
   redux_1
@@ -111,12 +126,15 @@ set(ei_smoke_test_list
   sparse_product_4
   sparse_ref_1
   sparse_solvers_1
+  sparse_threaded_product_2
   sparse_vector_1
   special_functions_1
   special_numbers_1
   special_packetmath_1
   spqr_support_2
   stable_norm_1
+  stable_norm_fastmath
+  stack_allocation_limit
   stddeque_1
   stddeque_overload_1
   stdlist_1
@@ -124,12 +142,20 @@ set(ei_smoke_test_list
   stdvector_1
   stdvector_overload_1
   stl_iterators_1
+  structured_cauchy
+  structured_dpr1_1
+  structured_matrices_1
+  structured_matrices_5
+  structured_matrices_13
   swap_1
   symbolic_index_1
   triangular_1
-  type_aliaslu_9
+  tridiagonal_eigensolver_1
+  tridiagonal_eigensolver_3
+  trig_reduction_fastmath
+  type_alias
+  lu_9
   umeyama_3
-  unalignedassert
   unalignedcount
   vectorwiseop_1
   visitor_1

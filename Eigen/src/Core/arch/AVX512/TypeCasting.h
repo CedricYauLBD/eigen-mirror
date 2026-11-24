@@ -1,11 +1,12 @@
 // This file is part of Eigen, a lightweight C++ template library
 // for linear algebra.
 //
-// Copyright (C) 2019 Rasmus Munk Larsen <rmlarsen@google.com>
+// Copyright (C) 2019 Rasmus Munk Larsen <rmlarsen@gmail.com>
 //
 // This Source Code Form is subject to the terms of the Mozilla
 // Public License v. 2.0. If a copy of the MPL was not distributed
 // with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
+// SPDX-License-Identifier: MPL-2.0
 
 #ifndef EIGEN_TYPE_CASTING_AVX512_H
 #define EIGEN_TYPE_CASTING_AVX512_H
@@ -21,6 +22,13 @@ template <>
 struct type_casting_traits<float, bool> : vectorized_type_casting_traits<float, bool> {};
 template <>
 struct type_casting_traits<bool, float> : vectorized_type_casting_traits<bool, float> {};
+
+template <>
+struct type_casting_traits<bool, int> : vectorized_type_casting_traits<bool, int> {};
+template <>
+struct type_casting_traits<bool, half> : vectorized_type_casting_traits<bool, half> {};
+template <>
+struct type_casting_traits<bool, bfloat16> : vectorized_type_casting_traits<bool, bfloat16> {};
 
 template <>
 struct type_casting_traits<float, int> : vectorized_type_casting_traits<float, int> {};
@@ -52,15 +60,24 @@ struct type_casting_traits<bfloat16, float> : vectorized_type_casting_traits<bfl
 template <>
 struct type_casting_traits<float, bfloat16> : vectorized_type_casting_traits<float, bfloat16> {};
 
+EIGEN_STRONG_INLINE __mmask16 _eigen_mm512_cmpneq_ps_mask(__m512 a, __m512 b) {
+  return _mm512_cmp_ps_mask(a, b, _CMP_NEQ_UQ);
+}
+
 template <>
 EIGEN_STRONG_INLINE Packet16b pcast<Packet16f, Packet16b>(const Packet16f& a) {
-  __mmask16 mask = _mm512_cmpneq_ps_mask(a, pzero(a));
+  __mmask16 mask = _eigen_mm512_cmpneq_ps_mask(a, pzero(a));
   return _mm512_maskz_cvtepi32_epi8(mask, _mm512_set1_epi32(1));
 }
 
 template <>
 EIGEN_STRONG_INLINE Packet16f pcast<Packet16b, Packet16f>(const Packet16b& a) {
   return _mm512_cvtepi32_ps(_mm512_and_si512(_mm512_cvtepi8_epi32(a), _mm512_set1_epi32(1)));
+}
+
+template <>
+EIGEN_STRONG_INLINE Packet16i pcast<Packet16b, Packet16i>(const Packet16b& a) {
+  return _mm512_and_si512(_mm512_cvtepi8_epi32(a), _mm512_set1_epi32(1));
 }
 
 template <>
@@ -151,7 +168,7 @@ EIGEN_STRONG_INLINE Packet16i pcast<Packet8d, Packet16i>(const Packet8d& a, cons
 
 template <>
 EIGEN_STRONG_INLINE Packet8i pcast<Packet8d, Packet8i>(const Packet8d& a) {
-  return _mm512_cvtpd_epi32(a);
+  return _mm512_cvttpd_epi32(a);
 }
 template <>
 EIGEN_STRONG_INLINE Packet8f pcast<Packet8d, Packet8f>(const Packet8d& a) {
@@ -253,6 +270,12 @@ EIGEN_STRONG_INLINE Packet16h pcast<Packet16f, Packet16h>(const Packet16f& a) {
   return float2half(a);
 }
 
+template <>
+EIGEN_STRONG_INLINE Packet16h pcast<Packet16b, Packet16h>(const Packet16b& a) {
+  __m256i mask16 = _mm256_cmpeq_epi16(_mm256_cvtepi8_epi16(a), _mm256_setzero_si256());
+  return _mm256_andnot_si256(mask16, _mm256_set1_epi16(0x3c00));
+}
+
 #endif
 
 template <>
@@ -268,6 +291,12 @@ EIGEN_STRONG_INLINE Packet16f pcast<Packet16bf, Packet16f>(const Packet16bf& a) 
 template <>
 EIGEN_STRONG_INLINE Packet16bf pcast<Packet16f, Packet16bf>(const Packet16f& a) {
   return F32ToBf16(a);
+}
+
+template <>
+EIGEN_STRONG_INLINE Packet16bf pcast<Packet16b, Packet16bf>(const Packet16b& a) {
+  __m256i mask16 = _mm256_cmpeq_epi16(_mm256_cvtepi8_epi16(a), _mm256_setzero_si256());
+  return _mm256_andnot_si256(mask16, _mm256_set1_epi16(0x3f80));
 }
 
 }  // end namespace internal

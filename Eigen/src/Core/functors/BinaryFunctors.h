@@ -6,6 +6,7 @@
 // This Source Code Form is subject to the terms of the Mozilla
 // Public License v. 2.0. If a copy of the MPL was not distributed
 // with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
+// SPDX-License-Identifier: MPL-2.0
 
 #ifndef EIGEN_BINARY_FUNCTORS_H
 #define EIGEN_BINARY_FUNCTORS_H
@@ -21,8 +22,8 @@ namespace internal {
 
 template <typename Arg1, typename Arg2>
 struct binary_op_base {
-  typedef Arg1 first_argument_type;
-  typedef Arg2 second_argument_type;
+  using first_argument_type = Arg1;
+  using second_argument_type = Arg2;
 };
 
 /** \internal
@@ -32,11 +33,11 @@ struct binary_op_base {
  */
 template <typename LhsScalar, typename RhsScalar>
 struct scalar_sum_op : binary_op_base<LhsScalar, RhsScalar> {
-  typedef typename ScalarBinaryOpTraits<LhsScalar, RhsScalar, scalar_sum_op>::ReturnType result_type;
+  using result_type = typename ScalarBinaryOpTraits<LhsScalar, RhsScalar, scalar_sum_op>::ReturnType;
 #ifdef EIGEN_SCALAR_BINARY_OP_PLUGIN
   scalar_sum_op(){EIGEN_SCALAR_BINARY_OP_PLUGIN}
 #endif
-  EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE result_type
+  EIGEN_DEVICE_FUNC constexpr EIGEN_STRONG_INLINE result_type
   operator()(const LhsScalar& a, const RhsScalar& b) const {
     return a + b;
   }
@@ -53,15 +54,22 @@ template <typename LhsScalar, typename RhsScalar>
 struct functor_traits<scalar_sum_op<LhsScalar, RhsScalar>> {
   enum {
     Cost = (int(NumTraits<LhsScalar>::AddCost) + int(NumTraits<RhsScalar>::AddCost)) / 2,  // rough estimate!
-    PacketAccess =
-        is_same<LhsScalar, RhsScalar>::value && packet_traits<LhsScalar>::HasAdd && packet_traits<RhsScalar>::HasAdd
-    // TODO vectorize mixed sum
+    PacketAccess = std::is_same<LhsScalar, RhsScalar>::value && packet_traits<LhsScalar>::HasAdd &&
+                   packet_traits<RhsScalar>::HasAdd
+    // TODO: vectorize mixed sum
   };
 };
 
+// Addition commutes for arithmetic and complex scalars. A user-defined Scalar may define a
+// non-commutative operator+ (e.g. concatenation), so it keeps the order-preserving default.
+template <typename Scalar>
+struct functor_is_commutative<scalar_sum_op<Scalar, Scalar>>
+    : bool_constant<is_arithmetic<Scalar>::value || NumTraits<Scalar>::IsComplex> {};
+
 template <>
-EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE bool scalar_sum_op<bool, bool>::operator()(const bool& a, const bool& b) const {
-  return a || b;
+EIGEN_DEVICE_FUNC constexpr EIGEN_STRONG_INLINE bool scalar_sum_op<bool, bool>::operator()(const bool& a,
+                                                                                           const bool& b) const {
+  return a | b;
 }
 
 /** \internal
@@ -71,13 +79,13 @@ EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE bool scalar_sum_op<bool, bool>::operator()
  */
 template <typename LhsScalar, typename RhsScalar>
 struct scalar_product_op : binary_op_base<LhsScalar, RhsScalar> {
-  typedef typename ScalarBinaryOpTraits<LhsScalar, RhsScalar, scalar_product_op>::ReturnType result_type;
+  using result_type = typename ScalarBinaryOpTraits<LhsScalar, RhsScalar, scalar_product_op>::ReturnType;
 #ifdef EIGEN_SCALAR_BINARY_OP_PLUGIN
   scalar_product_op(){EIGEN_SCALAR_BINARY_OP_PLUGIN}
 #endif
-  EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE result_type
+  EIGEN_DEVICE_FUNC constexpr EIGEN_STRONG_INLINE result_type
   operator()(const LhsScalar& a, const RhsScalar& b) const {
-    return a * b;
+    return internal::mul(a, b);
   }
   template <typename Packet>
   EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE Packet packetOp(const Packet& a, const Packet& b) const {
@@ -92,16 +100,73 @@ template <typename LhsScalar, typename RhsScalar>
 struct functor_traits<scalar_product_op<LhsScalar, RhsScalar>> {
   enum {
     Cost = (int(NumTraits<LhsScalar>::MulCost) + int(NumTraits<RhsScalar>::MulCost)) / 2,  // rough estimate!
-    PacketAccess =
-        is_same<LhsScalar, RhsScalar>::value && packet_traits<LhsScalar>::HasMul && packet_traits<RhsScalar>::HasMul
-    // TODO vectorize mixed product
+    PacketAccess = std::is_same<LhsScalar, RhsScalar>::value && packet_traits<LhsScalar>::HasMul &&
+                   packet_traits<RhsScalar>::HasMul
+    // TODO: vectorize mixed product
   };
 };
 
+template <typename LhsScalar, typename RhsScalar, typename = void>
+struct scalar_product_commutativity
+    : bool_constant<is_arithmetic<LhsScalar>::value && is_arithmetic<RhsScalar>::value> {};
+
+template <typename LhsScalar, typename RhsScalar>
+struct scalar_product_commutativity<
+    LhsScalar, RhsScalar,
+    void_t<
+        decltype(ScalarBinaryOpTraits<LhsScalar, RhsScalar, scalar_product_op<LhsScalar, RhsScalar>>::IsCommutative)>>
+    : bool_constant<
+          ScalarBinaryOpTraits<LhsScalar, RhsScalar, scalar_product_op<LhsScalar, RhsScalar>>::IsCommutative> {};
+
+// IsComplex does not imply commutativity; custom scalars opt in through ScalarBinaryOpTraits.
+template <typename LhsScalar, typename RhsScalar>
+struct functor_is_commutative<scalar_product_op<LhsScalar, RhsScalar>>
+    : scalar_product_commutativity<LhsScalar, RhsScalar> {};
+
+template <typename RealScalar>
+struct functor_is_commutative<scalar_product_op<std::complex<RealScalar>, std::complex<RealScalar>>>
+    : bool_constant<is_arithmetic<RealScalar>::value ||
+                    scalar_product_commutativity<std::complex<RealScalar>, std::complex<RealScalar>>::value> {};
+
+template <typename RealScalar>
+struct functor_is_commutative<scalar_product_op<std::complex<RealScalar>, RealScalar>>
+    : bool_constant<is_arithmetic<RealScalar>::value ||
+                    scalar_product_commutativity<std::complex<RealScalar>, RealScalar>::value> {};
+
+template <typename RealScalar>
+struct functor_is_commutative<scalar_product_op<RealScalar, std::complex<RealScalar>>>
+    : bool_constant<is_arithmetic<RealScalar>::value ||
+                    scalar_product_commutativity<RealScalar, std::complex<RealScalar>>::value> {};
+
+// Same as scalar_product_op, but its scalar path uses pmul instead of operator*. For complex scalars
+// pmul is Eigen's explicit (non-Annex-G) complex multiply, so this avoids std::complex::operator*,
+// which GCC lowers to the slow libgcc __mul?c3 call. The packet path (packetOp/predux) is inherited
+// unchanged -- it already uses pmul -- so the vectorized reduction and its precision are identical to
+// scalar_product_op (this only matters for the non-vectorized scalar tail). Used by the coeff-based
+// product's coeff(); pmul requires matching operand types, so mixed types use internal::mul,
+// which also keeps real*complex multiplication component-wise with MSVC's standard library.
+template <typename LhsScalar, typename RhsScalar>
+struct fast_mult_op : scalar_product_op<LhsScalar, RhsScalar> {
+  using result_type = typename scalar_product_op<LhsScalar, RhsScalar>::result_type;
+  EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE result_type operator()(const LhsScalar& a, const RhsScalar& b) const {
+    return mul(a, b, bool_constant<std::is_same<LhsScalar, RhsScalar>::value>());
+  }
+
+ private:
+  EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE result_type mul(const LhsScalar& a, const RhsScalar& b, std::true_type) const {
+    return pmul(a, b);
+  }
+  EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE result_type mul(const LhsScalar& a, const RhsScalar& b, std::false_type) const {
+    return internal::mul(a, b);
+  }
+};
+template <typename LhsScalar, typename RhsScalar>
+struct functor_traits<fast_mult_op<LhsScalar, RhsScalar>> : functor_traits<scalar_product_op<LhsScalar, RhsScalar>> {};
+
 template <>
-EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE bool scalar_product_op<bool, bool>::operator()(const bool& a,
-                                                                                     const bool& b) const {
-  return a && b;
+EIGEN_DEVICE_FUNC constexpr EIGEN_STRONG_INLINE bool scalar_product_op<bool, bool>::operator()(const bool& a,
+                                                                                               const bool& b) const {
+  return a & b;
 }
 
 /** \internal
@@ -114,9 +179,9 @@ template <typename LhsScalar, typename RhsScalar>
 struct scalar_conj_product_op : binary_op_base<LhsScalar, RhsScalar> {
   enum { Conj = NumTraits<LhsScalar>::IsComplex };
 
-  typedef typename ScalarBinaryOpTraits<LhsScalar, RhsScalar, scalar_conj_product_op>::ReturnType result_type;
+  using result_type = typename ScalarBinaryOpTraits<LhsScalar, RhsScalar, scalar_conj_product_op>::ReturnType;
 
-  EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE result_type operator()(const LhsScalar& a, const RhsScalar& b) const {
+  EIGEN_DEVICE_FUNC constexpr EIGEN_STRONG_INLINE result_type operator()(const LhsScalar& a, const RhsScalar& b) const {
     return conj_helper<LhsScalar, RhsScalar, Conj, false>().pmul(a, b);
   }
 
@@ -129,7 +194,7 @@ template <typename LhsScalar, typename RhsScalar>
 struct functor_traits<scalar_conj_product_op<LhsScalar, RhsScalar>> {
   enum {
     Cost = NumTraits<LhsScalar>::MulCost,
-    PacketAccess = internal::is_same<LhsScalar, RhsScalar>::value && packet_traits<LhsScalar>::HasMul
+    PacketAccess = std::is_same<LhsScalar, RhsScalar>::value && packet_traits<LhsScalar>::HasMul
   };
 };
 
@@ -140,8 +205,8 @@ struct functor_traits<scalar_conj_product_op<LhsScalar, RhsScalar>> {
  */
 template <typename LhsScalar, typename RhsScalar, int NaNPropagation>
 struct scalar_min_op : binary_op_base<LhsScalar, RhsScalar> {
-  typedef typename ScalarBinaryOpTraits<LhsScalar, RhsScalar, scalar_min_op>::ReturnType result_type;
-  EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE result_type operator()(const LhsScalar& a, const RhsScalar& b) const {
+  using result_type = typename ScalarBinaryOpTraits<LhsScalar, RhsScalar, scalar_min_op>::ReturnType;
+  EIGEN_DEVICE_FUNC constexpr EIGEN_STRONG_INLINE result_type operator()(const LhsScalar& a, const RhsScalar& b) const {
     return internal::pmin<NaNPropagation>(a, b);
   }
   template <typename Packet>
@@ -158,9 +223,18 @@ template <typename LhsScalar, typename RhsScalar, int NaNPropagation>
 struct functor_traits<scalar_min_op<LhsScalar, RhsScalar, NaNPropagation>> {
   enum {
     Cost = (NumTraits<LhsScalar>::AddCost + NumTraits<RhsScalar>::AddCost) / 2,
-    PacketAccess = internal::is_same<LhsScalar, RhsScalar>::value && packet_traits<LhsScalar>::HasMin
+    PacketAccess = std::is_same<LhsScalar, RhsScalar>::value && packet_traits<LhsScalar>::HasMin
   };
 };
+
+// min/max commute for arithmetic scalars only: PropagateNumbers and PropagateNaN treat NaN
+// operands symmetrically, PropagateFast leaves NaN results unspecified, and -0.0/+0.0 ties may
+// already resolve either way in the packet reduction paths. A custom scalar is excluded even
+// though it compares with operator<, because the generic std::min/std::max keep the first
+// operand when values compare equivalent, and equivalent custom values may be observably
+// distinct (e.g. carry a payload the comparison ignores).
+template <typename Scalar, int NaNPropagation>
+struct functor_is_commutative<scalar_min_op<Scalar, Scalar, NaNPropagation>> : is_arithmetic<Scalar> {};
 
 /** \internal
  * \brief Template functor to compute the max of two scalars
@@ -169,8 +243,8 @@ struct functor_traits<scalar_min_op<LhsScalar, RhsScalar, NaNPropagation>> {
  */
 template <typename LhsScalar, typename RhsScalar, int NaNPropagation>
 struct scalar_max_op : binary_op_base<LhsScalar, RhsScalar> {
-  typedef typename ScalarBinaryOpTraits<LhsScalar, RhsScalar, scalar_max_op>::ReturnType result_type;
-  EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE result_type operator()(const LhsScalar& a, const RhsScalar& b) const {
+  using result_type = typename ScalarBinaryOpTraits<LhsScalar, RhsScalar, scalar_max_op>::ReturnType;
+  EIGEN_DEVICE_FUNC constexpr EIGEN_STRONG_INLINE result_type operator()(const LhsScalar& a, const RhsScalar& b) const {
     return internal::pmax<NaNPropagation>(a, b);
   }
   template <typename Packet>
@@ -187,9 +261,12 @@ template <typename LhsScalar, typename RhsScalar, int NaNPropagation>
 struct functor_traits<scalar_max_op<LhsScalar, RhsScalar, NaNPropagation>> {
   enum {
     Cost = (NumTraits<LhsScalar>::AddCost + NumTraits<RhsScalar>::AddCost) / 2,
-    PacketAccess = internal::is_same<LhsScalar, RhsScalar>::value && packet_traits<LhsScalar>::HasMax
+    PacketAccess = std::is_same<LhsScalar, RhsScalar>::value && packet_traits<LhsScalar>::HasMax
   };
 };
+
+template <typename Scalar, int NaNPropagation>
+struct functor_is_commutative<scalar_max_op<Scalar, Scalar, NaNPropagation>> : is_arithmetic<Scalar> {};
 
 /** \internal
  * \brief Template functors for comparison of two scalars
@@ -202,20 +279,20 @@ template <typename LhsScalar, typename RhsScalar, ComparisonName cmp, bool UseTy
 struct functor_traits<scalar_cmp_op<LhsScalar, RhsScalar, cmp, UseTypedComparators>> {
   enum {
     Cost = (NumTraits<LhsScalar>::AddCost + NumTraits<RhsScalar>::AddCost) / 2,
-    PacketAccess = (UseTypedComparators || is_same<LhsScalar, bool>::value) && is_same<LhsScalar, RhsScalar>::value &&
-                   packet_traits<LhsScalar>::HasCmp
+    PacketAccess = (UseTypedComparators || std::is_same<LhsScalar, bool>::value) &&
+                   std::is_same<LhsScalar, RhsScalar>::value && packet_traits<LhsScalar>::HasCmp
   };
 };
 
 template <typename LhsScalar, typename RhsScalar, bool UseTypedComparators>
 struct scalar_cmp_op<LhsScalar, RhsScalar, cmp_EQ, UseTypedComparators> : binary_op_base<LhsScalar, RhsScalar> {
   using result_type = std::conditional_t<UseTypedComparators, LhsScalar, bool>;
-  EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE result_type operator()(const LhsScalar& a, const RhsScalar& b) const {
-    return a == b ? result_type(1) : result_type(0);
+  EIGEN_DEVICE_FUNC constexpr EIGEN_STRONG_INLINE result_type operator()(const LhsScalar& a, const RhsScalar& b) const {
+    return result_type(a == b);
   }
   template <typename Packet>
   EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE Packet packetOp(const Packet& a, const Packet& b) const {
-    const Packet cst_one = pset1<Packet>(result_type(1));
+    const Packet cst_one = pset1<Packet>(result_type(true));
     return pand(pcmp_eq(a, b), cst_one);
   }
 };
@@ -223,12 +300,12 @@ struct scalar_cmp_op<LhsScalar, RhsScalar, cmp_EQ, UseTypedComparators> : binary
 template <typename LhsScalar, typename RhsScalar, bool UseTypedComparators>
 struct scalar_cmp_op<LhsScalar, RhsScalar, cmp_LT, UseTypedComparators> : binary_op_base<LhsScalar, RhsScalar> {
   using result_type = std::conditional_t<UseTypedComparators, LhsScalar, bool>;
-  EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE result_type operator()(const LhsScalar& a, const RhsScalar& b) const {
-    return a < b ? result_type(1) : result_type(0);
+  EIGEN_DEVICE_FUNC constexpr EIGEN_STRONG_INLINE result_type operator()(const LhsScalar& a, const RhsScalar& b) const {
+    return result_type(a < b);
   }
   template <typename Packet>
   EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE Packet packetOp(const Packet& a, const Packet& b) const {
-    const Packet cst_one = pset1<Packet>(result_type(1));
+    const Packet cst_one = pset1<Packet>(result_type(true));
     return pand(pcmp_lt(a, b), cst_one);
   }
 };
@@ -236,12 +313,12 @@ struct scalar_cmp_op<LhsScalar, RhsScalar, cmp_LT, UseTypedComparators> : binary
 template <typename LhsScalar, typename RhsScalar, bool UseTypedComparators>
 struct scalar_cmp_op<LhsScalar, RhsScalar, cmp_LE, UseTypedComparators> : binary_op_base<LhsScalar, RhsScalar> {
   using result_type = std::conditional_t<UseTypedComparators, LhsScalar, bool>;
-  EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE result_type operator()(const LhsScalar& a, const RhsScalar& b) const {
-    return a <= b ? result_type(1) : result_type(0);
+  EIGEN_DEVICE_FUNC constexpr EIGEN_STRONG_INLINE result_type operator()(const LhsScalar& a, const RhsScalar& b) const {
+    return result_type(a <= b);
   }
   template <typename Packet>
   EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE Packet packetOp(const Packet& a, const Packet& b) const {
-    const Packet cst_one = pset1<Packet>(result_type(1));
+    const Packet cst_one = pset1<Packet>(result_type(true));
     return pand(cst_one, pcmp_le(a, b));
   }
 };
@@ -249,12 +326,12 @@ struct scalar_cmp_op<LhsScalar, RhsScalar, cmp_LE, UseTypedComparators> : binary
 template <typename LhsScalar, typename RhsScalar, bool UseTypedComparators>
 struct scalar_cmp_op<LhsScalar, RhsScalar, cmp_GT, UseTypedComparators> : binary_op_base<LhsScalar, RhsScalar> {
   using result_type = std::conditional_t<UseTypedComparators, LhsScalar, bool>;
-  EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE result_type operator()(const LhsScalar& a, const RhsScalar& b) const {
-    return a > b ? result_type(1) : result_type(0);
+  EIGEN_DEVICE_FUNC constexpr EIGEN_STRONG_INLINE result_type operator()(const LhsScalar& a, const RhsScalar& b) const {
+    return result_type(a > b);
   }
   template <typename Packet>
   EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE Packet packetOp(const Packet& a, const Packet& b) const {
-    const Packet cst_one = pset1<Packet>(result_type(1));
+    const Packet cst_one = pset1<Packet>(result_type(true));
     return pand(cst_one, pcmp_lt(b, a));
   }
 };
@@ -262,12 +339,12 @@ struct scalar_cmp_op<LhsScalar, RhsScalar, cmp_GT, UseTypedComparators> : binary
 template <typename LhsScalar, typename RhsScalar, bool UseTypedComparators>
 struct scalar_cmp_op<LhsScalar, RhsScalar, cmp_GE, UseTypedComparators> : binary_op_base<LhsScalar, RhsScalar> {
   using result_type = std::conditional_t<UseTypedComparators, LhsScalar, bool>;
-  EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE result_type operator()(const LhsScalar& a, const RhsScalar& b) const {
-    return a >= b ? result_type(1) : result_type(0);
+  EIGEN_DEVICE_FUNC constexpr EIGEN_STRONG_INLINE result_type operator()(const LhsScalar& a, const RhsScalar& b) const {
+    return result_type(a >= b);
   }
   template <typename Packet>
   EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE Packet packetOp(const Packet& a, const Packet& b) const {
-    const Packet cst_one = pset1<Packet>(result_type(1));
+    const Packet cst_one = pset1<Packet>(result_type(true));
     return pand(cst_one, pcmp_le(b, a));
   }
 };
@@ -275,12 +352,12 @@ struct scalar_cmp_op<LhsScalar, RhsScalar, cmp_GE, UseTypedComparators> : binary
 template <typename LhsScalar, typename RhsScalar, bool UseTypedComparators>
 struct scalar_cmp_op<LhsScalar, RhsScalar, cmp_UNORD, UseTypedComparators> : binary_op_base<LhsScalar, RhsScalar> {
   using result_type = std::conditional_t<UseTypedComparators, LhsScalar, bool>;
-  EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE result_type operator()(const LhsScalar& a, const RhsScalar& b) const {
-    return !(a <= b || b <= a) ? result_type(1) : result_type(0);
+  EIGEN_DEVICE_FUNC constexpr EIGEN_STRONG_INLINE result_type operator()(const LhsScalar& a, const RhsScalar& b) const {
+    return result_type(!(a <= b || b <= a));
   }
   template <typename Packet>
   EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE Packet packetOp(const Packet& a, const Packet& b) const {
-    const Packet cst_one = pset1<Packet>(result_type(1));
+    const Packet cst_one = pset1<Packet>(result_type(true));
     return pandnot(cst_one, por(pcmp_le(a, b), pcmp_le(b, a)));
   }
 };
@@ -288,12 +365,12 @@ struct scalar_cmp_op<LhsScalar, RhsScalar, cmp_UNORD, UseTypedComparators> : bin
 template <typename LhsScalar, typename RhsScalar, bool UseTypedComparators>
 struct scalar_cmp_op<LhsScalar, RhsScalar, cmp_NEQ, UseTypedComparators> : binary_op_base<LhsScalar, RhsScalar> {
   using result_type = std::conditional_t<UseTypedComparators, LhsScalar, bool>;
-  EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE result_type operator()(const LhsScalar& a, const RhsScalar& b) const {
-    return a != b ? result_type(1) : result_type(0);
+  EIGEN_DEVICE_FUNC constexpr EIGEN_STRONG_INLINE result_type operator()(const LhsScalar& a, const RhsScalar& b) const {
+    return result_type(a != b);
   }
   template <typename Packet>
   EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE Packet packetOp(const Packet& a, const Packet& b) const {
-    const Packet cst_one = pset1<Packet>(result_type(1));
+    const Packet cst_one = pset1<Packet>(result_type(true));
     return pandnot(cst_one, pcmp_eq(a, b));
   }
 };
@@ -305,7 +382,7 @@ struct scalar_cmp_op<LhsScalar, RhsScalar, cmp_NEQ, UseTypedComparators> : binar
  */
 template <typename Scalar>
 struct scalar_hypot_op<Scalar, Scalar> : binary_op_base<Scalar, Scalar> {
-  EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE const Scalar operator()(const Scalar& x, const Scalar& y) const {
+  EIGEN_DEVICE_FUNC constexpr EIGEN_STRONG_INLINE Scalar operator()(const Scalar& x, const Scalar& y) const {
     // This functor is used by hypotNorm only for which it is faster to first apply abs
     // on all coefficients prior to reduction through hypot.
     // This way we avoid calling abs on positive and real entries, and this also permits
@@ -328,21 +405,21 @@ struct functor_traits<scalar_hypot_op<Scalar, Scalar>> {
  */
 template <typename Scalar, typename Exponent>
 struct scalar_pow_op : binary_op_base<Scalar, Exponent> {
-  typedef typename ScalarBinaryOpTraits<Scalar, Exponent, scalar_pow_op>::ReturnType result_type;
+  using result_type = typename ScalarBinaryOpTraits<Scalar, Exponent, scalar_pow_op>::ReturnType;
 #ifdef EIGEN_SCALAR_BINARY_OP_PLUGIN
   scalar_pow_op() {
-    typedef Scalar LhsScalar;
-    typedef Exponent RhsScalar;
+    using LhsScalar = Scalar;
+    using RhsScalar = Exponent;
     EIGEN_SCALAR_BINARY_OP_PLUGIN
   }
 #endif
 
-  EIGEN_DEVICE_FUNC inline result_type operator()(const Scalar& a, const Exponent& b) const {
+  EIGEN_DEVICE_FUNC constexpr inline result_type operator()(const Scalar& a, const Exponent& b) const {
     return numext::pow(a, b);
   }
 
   template <typename Packet>
-  EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE const Packet packetOp(const Packet& a, const Packet& b) const {
+  EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE Packet packetOp(const Packet& a, const Packet& b) const {
     return generic_pow(a, b);
   }
 };
@@ -364,16 +441,18 @@ struct functor_traits<scalar_pow_op<Scalar, Exponent>> {
  */
 template <typename LhsScalar, typename RhsScalar>
 struct scalar_difference_op : binary_op_base<LhsScalar, RhsScalar> {
-  typedef typename ScalarBinaryOpTraits<LhsScalar, RhsScalar, scalar_difference_op>::ReturnType result_type;
+  EIGEN_STATIC_ASSERT((!std::is_same<LhsScalar, bool>::value || !std::is_same<RhsScalar, bool>::value),
+                      BOOLEAN_SUBTRACTION_IS_NOT_SUPPORTED__CAST_TO_A_SIGNED_INTEGER_TYPE)
+  using result_type = typename ScalarBinaryOpTraits<LhsScalar, RhsScalar, scalar_difference_op>::ReturnType;
 #ifdef EIGEN_SCALAR_BINARY_OP_PLUGIN
   scalar_difference_op(){EIGEN_SCALAR_BINARY_OP_PLUGIN}
 #endif
-  EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE const result_type
+  EIGEN_DEVICE_FUNC constexpr EIGEN_STRONG_INLINE result_type
   operator()(const LhsScalar& a, const RhsScalar& b) const {
     return a - b;
   }
   template <typename Packet>
-  EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE const Packet packetOp(const Packet& a, const Packet& b) const {
+  EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE Packet packetOp(const Packet& a, const Packet& b) const {
     return internal::psub(a, b);
   }
 };
@@ -381,20 +460,20 @@ template <typename LhsScalar, typename RhsScalar>
 struct functor_traits<scalar_difference_op<LhsScalar, RhsScalar>> {
   enum {
     Cost = (int(NumTraits<LhsScalar>::AddCost) + int(NumTraits<RhsScalar>::AddCost)) / 2,
-    PacketAccess =
-        is_same<LhsScalar, RhsScalar>::value && packet_traits<LhsScalar>::HasSub && packet_traits<RhsScalar>::HasSub
+    PacketAccess = std::is_same<LhsScalar, RhsScalar>::value && packet_traits<LhsScalar>::HasSub &&
+                   packet_traits<RhsScalar>::HasSub
   };
 };
 
 template <typename Packet, bool IsInteger = NumTraits<typename unpacket_traits<Packet>::type>::IsInteger>
 struct maybe_raise_div_by_zero {
-  static EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE void run(Packet x) { EIGEN_UNUSED_VARIABLE(x); }
+  static EIGEN_DEVICE_FUNC constexpr EIGEN_STRONG_INLINE void run(Packet x) { EIGEN_UNUSED_VARIABLE(x); }
 };
 
 #ifndef EIGEN_GPU_COMPILE_PHASE
 template <typename Packet>
 struct maybe_raise_div_by_zero<Packet, true> {
-  static EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE void run(Packet x) {
+  static EIGEN_DEVICE_FUNC constexpr EIGEN_STRONG_INLINE void run(Packet x) {
     if (EIGEN_PREDICT_FALSE(predux_any(pcmp_eq(x, pzero(x))))) {
       // Use volatile variables to force a division by zero, which will
       // result in the default platform behaviour (usually SIGFPE).
@@ -413,27 +492,56 @@ struct maybe_raise_div_by_zero<Packet, true> {
  */
 template <typename LhsScalar, typename RhsScalar>
 struct scalar_quotient_op : binary_op_base<LhsScalar, RhsScalar> {
-  typedef typename ScalarBinaryOpTraits<LhsScalar, RhsScalar, scalar_quotient_op>::ReturnType result_type;
+  using result_type = typename ScalarBinaryOpTraits<LhsScalar, RhsScalar, scalar_quotient_op>::ReturnType;
 #ifdef EIGEN_SCALAR_BINARY_OP_PLUGIN
   scalar_quotient_op(){EIGEN_SCALAR_BINARY_OP_PLUGIN}
 #endif
-  EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE const result_type
+  EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE result_type
   operator()(const LhsScalar& a, const RhsScalar& b) const {
-    return a / b;
+    return numext::divide(a, b);
   }
   template <typename Packet>
-  EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE const Packet packetOp(const Packet& a, const Packet& b) const {
+  EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE Packet packetOp(const Packet& a, const Packet& b) const {
     return internal::pdiv(a, b);
   }
 };
 template <typename LhsScalar, typename RhsScalar>
 struct functor_traits<scalar_quotient_op<LhsScalar, RhsScalar>> {
-  typedef typename scalar_quotient_op<LhsScalar, RhsScalar>::result_type result_type;
+  using result_type = typename scalar_quotient_op<LhsScalar, RhsScalar>::result_type;
   enum {
-    PacketAccess =
-        is_same<LhsScalar, RhsScalar>::value && packet_traits<LhsScalar>::HasDiv && packet_traits<RhsScalar>::HasDiv,
+    PacketAccess = std::is_same<LhsScalar, RhsScalar>::value && packet_traits<LhsScalar>::HasDiv &&
+                   packet_traits<RhsScalar>::HasDiv,
     Cost = scalar_div_cost<result_type, PacketAccess>::value
   };
+};
+
+// Packet16b is currently Eigen's only Boolean packet. Its loads contain valid bool objects, and its casts,
+// comparisons, and Boolean packet operations canonicalize every lane to 0 or 1. The direct bitwise fast paths below
+// rely on this invariant.
+
+/** \internal
+ * \brief Template functor to compute the modulus of two integer scalars
+ *
+ * \sa class CwiseBinaryOp, ArrayBase::operator%()
+ */
+template <typename LhsScalar, typename RhsScalar>
+struct scalar_modulus_op : binary_op_base<LhsScalar, RhsScalar> {
+  using result_type = typename ScalarBinaryOpTraits<LhsScalar, RhsScalar, scalar_modulus_op>::ReturnType;
+  static constexpr bool Enable = std::is_same<LhsScalar, RhsScalar>::value && NumTraits<LhsScalar>::IsInteger;
+  EIGEN_STATIC_ASSERT(Enable, "LhsScalar and RhsScalar must be the same integer type")
+#ifdef EIGEN_SCALAR_BINARY_OP_PLUGIN
+  scalar_modulus_op(){EIGEN_SCALAR_BINARY_OP_PLUGIN}
+#endif
+  EIGEN_DEVICE_FUNC constexpr EIGEN_STRONG_INLINE result_type
+  operator()(const LhsScalar& a, const RhsScalar& b) const {
+    return a % b;
+  }
+};
+template <typename LhsScalar, typename RhsScalar>
+struct functor_traits<scalar_modulus_op<LhsScalar, RhsScalar>> {
+  using result_type = typename scalar_modulus_op<LhsScalar, RhsScalar>::result_type;
+  static constexpr bool PacketAccess = false;
+  static constexpr int Cost = scalar_div_cost<result_type, false>::value;
 };
 
 /** \internal
@@ -446,19 +554,29 @@ struct scalar_boolean_and_op {
   using result_type = Scalar;
   // `false` any value `a` that satisfies `a == Scalar(0)`
   // `true` is the complement of `false`
-  EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE Scalar operator()(const Scalar& a, const Scalar& b) const {
-    return (a != Scalar(0)) && (b != Scalar(0)) ? Scalar(1) : Scalar(0);
+  EIGEN_DEVICE_FUNC constexpr EIGEN_STRONG_INLINE Scalar operator()(const Scalar& a, const Scalar& b) const {
+    return Scalar((a != Scalar(0)) && (b != Scalar(0)));
   }
   template <typename Packet>
   EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE Packet packetOp(const Packet& a, const Packet& b) const {
-    const Packet cst_one = pset1<Packet>(Scalar(1));
-    // and(a,b) == !or(!a,!b)
-    Packet not_a = pcmp_eq(a, pzero(a));
-    Packet not_b = pcmp_eq(b, pzero(b));
-    Packet a_nand_b = por(not_a, not_b);
-    return pandnot(cst_one, a_nand_b);
+    EIGEN_IF_CONSTEXPR ((std::is_same<Scalar, bool>::value)) {
+      return pand(a, b);
+    } else {
+      const Packet cst_one = pset1<Packet>(Scalar(true));
+      // and(a,b) == !or(!a,!b)
+      Packet not_a = pcmp_eq(a, pzero(a));
+      Packet not_b = pcmp_eq(b, pzero(b));
+      Packet a_nand_b = por(not_a, not_b);
+      return pandnot(cst_one, a_nand_b);
+    }
   }
 };
+// Keep bool logical functors eager so scalar evaluator loops remain branch-free.
+template <>
+EIGEN_DEVICE_FUNC constexpr EIGEN_STRONG_INLINE bool scalar_boolean_and_op<bool>::operator()(const bool& a,
+                                                                                             const bool& b) const {
+  return a & b;
+}
 template <typename Scalar>
 struct functor_traits<scalar_boolean_and_op<Scalar>> {
   enum { Cost = NumTraits<Scalar>::AddCost, PacketAccess = packet_traits<Scalar>::HasCmp };
@@ -474,18 +592,27 @@ struct scalar_boolean_or_op {
   using result_type = Scalar;
   // `false` any value `a` that satisfies `a == Scalar(0)`
   // `true` is the complement of `false`
-  EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE Scalar operator()(const Scalar& a, const Scalar& b) const {
-    return (a != Scalar(0)) || (b != Scalar(0)) ? Scalar(1) : Scalar(0);
+  EIGEN_DEVICE_FUNC constexpr EIGEN_STRONG_INLINE Scalar operator()(const Scalar& a, const Scalar& b) const {
+    return Scalar((a != Scalar(0)) || (b != Scalar(0)));
   }
   template <typename Packet>
-  EIGEN_STRONG_INLINE Packet packetOp(const Packet& a, const Packet& b) const {
-    const Packet cst_one = pset1<Packet>(Scalar(1));
-    // if or(a,b) == 0, then a == 0 and b == 0
-    // or(a,b) == !nor(a,b)
-    Packet a_nor_b = pcmp_eq(por(a, b), pzero(a));
-    return pandnot(cst_one, a_nor_b);
+  EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE Packet packetOp(const Packet& a, const Packet& b) const {
+    EIGEN_IF_CONSTEXPR ((std::is_same<Scalar, bool>::value)) {
+      return por(a, b);
+    } else {
+      const Packet cst_one = pset1<Packet>(Scalar(true));
+      // if or(a,b) == 0, then a == 0 and b == 0
+      // or(a,b) == !nor(a,b)
+      Packet a_nor_b = pcmp_eq(por(a, b), pzero(a));
+      return pandnot(cst_one, a_nor_b);
+    }
   }
 };
+template <>
+EIGEN_DEVICE_FUNC constexpr EIGEN_STRONG_INLINE bool scalar_boolean_or_op<bool>::operator()(const bool& a,
+                                                                                            const bool& b) const {
+  return a | b;
+}
 template <typename Scalar>
 struct functor_traits<scalar_boolean_or_op<Scalar>> {
   enum { Cost = NumTraits<Scalar>::AddCost, PacketAccess = packet_traits<Scalar>::HasCmp };
@@ -501,17 +628,21 @@ struct scalar_boolean_xor_op {
   using result_type = Scalar;
   // `false` any value `a` that satisfies `a == Scalar(0)`
   // `true` is the complement of `false`
-  EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE Scalar operator()(const Scalar& a, const Scalar& b) const {
-    return (a != Scalar(0)) != (b != Scalar(0)) ? Scalar(1) : Scalar(0);
+  EIGEN_DEVICE_FUNC constexpr EIGEN_STRONG_INLINE Scalar operator()(const Scalar& a, const Scalar& b) const {
+    return Scalar((a != Scalar(0)) != (b != Scalar(0)));
   }
   template <typename Packet>
-  EIGEN_STRONG_INLINE Packet packetOp(const Packet& a, const Packet& b) const {
-    const Packet cst_one = pset1<Packet>(Scalar(1));
-    // xor(a,b) == xor(!a,!b)
-    Packet not_a = pcmp_eq(a, pzero(a));
-    Packet not_b = pcmp_eq(b, pzero(b));
-    Packet a_xor_b = pxor(not_a, not_b);
-    return pand(cst_one, a_xor_b);
+  EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE Packet packetOp(const Packet& a, const Packet& b) const {
+    EIGEN_IF_CONSTEXPR ((std::is_same<Scalar, bool>::value)) {
+      return pxor(a, b);
+    } else {
+      const Packet cst_one = pset1<Packet>(Scalar(true));
+      // xor(a,b) == xor(!a,!b)
+      Packet not_a = pcmp_eq(a, pzero(a));
+      Packet not_b = pcmp_eq(b, pzero(b));
+      Packet a_xor_b = pxor(not_a, not_b);
+      return pand(cst_one, a_xor_b);
+    }
   }
 };
 template <typename Scalar>
@@ -523,19 +654,19 @@ template <typename Scalar, bool IsComplex = NumTraits<Scalar>::IsComplex>
 struct bitwise_binary_impl {
   static constexpr size_t Size = sizeof(Scalar);
   using uint_t = typename numext::get_integer_by_size<Size>::unsigned_type;
-  static EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE Scalar run_and(const Scalar& a, const Scalar& b) {
+  static EIGEN_DEVICE_FUNC constexpr EIGEN_STRONG_INLINE Scalar run_and(const Scalar& a, const Scalar& b) {
     uint_t a_as_uint = numext::bit_cast<uint_t, Scalar>(a);
     uint_t b_as_uint = numext::bit_cast<uint_t, Scalar>(b);
     uint_t result = a_as_uint & b_as_uint;
     return numext::bit_cast<Scalar, uint_t>(result);
   }
-  static EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE Scalar run_or(const Scalar& a, const Scalar& b) {
+  static EIGEN_DEVICE_FUNC constexpr EIGEN_STRONG_INLINE Scalar run_or(const Scalar& a, const Scalar& b) {
     uint_t a_as_uint = numext::bit_cast<uint_t, Scalar>(a);
     uint_t b_as_uint = numext::bit_cast<uint_t, Scalar>(b);
     uint_t result = a_as_uint | b_as_uint;
     return numext::bit_cast<Scalar, uint_t>(result);
   }
-  static EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE Scalar run_xor(const Scalar& a, const Scalar& b) {
+  static EIGEN_DEVICE_FUNC constexpr EIGEN_STRONG_INLINE Scalar run_xor(const Scalar& a, const Scalar& b) {
     uint_t a_as_uint = numext::bit_cast<uint_t, Scalar>(a);
     uint_t b_as_uint = numext::bit_cast<uint_t, Scalar>(b);
     uint_t result = a_as_uint ^ b_as_uint;
@@ -546,17 +677,17 @@ struct bitwise_binary_impl {
 template <typename Scalar>
 struct bitwise_binary_impl<Scalar, true> {
   using Real = typename NumTraits<Scalar>::Real;
-  static EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE Scalar run_and(const Scalar& a, const Scalar& b) {
+  static EIGEN_DEVICE_FUNC constexpr EIGEN_STRONG_INLINE Scalar run_and(const Scalar& a, const Scalar& b) {
     Real real_result = bitwise_binary_impl<Real>::run_and(numext::real(a), numext::real(b));
     Real imag_result = bitwise_binary_impl<Real>::run_and(numext::imag(a), numext::imag(b));
     return Scalar(real_result, imag_result);
   }
-  static EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE Scalar run_or(const Scalar& a, const Scalar& b) {
+  static EIGEN_DEVICE_FUNC constexpr EIGEN_STRONG_INLINE Scalar run_or(const Scalar& a, const Scalar& b) {
     Real real_result = bitwise_binary_impl<Real>::run_or(numext::real(a), numext::real(b));
     Real imag_result = bitwise_binary_impl<Real>::run_or(numext::imag(a), numext::imag(b));
     return Scalar(real_result, imag_result);
   }
-  static EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE Scalar run_xor(const Scalar& a, const Scalar& b) {
+  static EIGEN_DEVICE_FUNC constexpr EIGEN_STRONG_INLINE Scalar run_xor(const Scalar& a, const Scalar& b) {
     Real real_result = bitwise_binary_impl<Real>::run_xor(numext::real(a), numext::real(b));
     Real imag_result = bitwise_binary_impl<Real>::run_xor(numext::imag(a), numext::imag(b));
     return Scalar(real_result, imag_result);
@@ -572,9 +703,9 @@ template <typename Scalar>
 struct scalar_bitwise_and_op {
   EIGEN_STATIC_ASSERT(!NumTraits<Scalar>::RequireInitialization,
                       BITWISE OPERATIONS MAY ONLY BE PERFORMED ON PLAIN DATA TYPES)
-  EIGEN_STATIC_ASSERT((!internal::is_same<Scalar, bool>::value), DONT USE BITWISE OPS ON BOOLEAN TYPES)
+  EIGEN_STATIC_ASSERT((!std::is_same<Scalar, bool>::value), DONT USE BITWISE OPS ON BOOLEAN TYPES)
   using result_type = Scalar;
-  EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE Scalar operator()(const Scalar& a, const Scalar& b) const {
+  EIGEN_DEVICE_FUNC constexpr EIGEN_STRONG_INLINE Scalar operator()(const Scalar& a, const Scalar& b) const {
     return bitwise_binary_impl<Scalar>::run_and(a, b);
   }
   template <typename Packet>
@@ -596,9 +727,9 @@ template <typename Scalar>
 struct scalar_bitwise_or_op {
   EIGEN_STATIC_ASSERT(!NumTraits<Scalar>::RequireInitialization,
                       BITWISE OPERATIONS MAY ONLY BE PERFORMED ON PLAIN DATA TYPES)
-  EIGEN_STATIC_ASSERT((!internal::is_same<Scalar, bool>::value), DONT USE BITWISE OPS ON BOOLEAN TYPES)
+  EIGEN_STATIC_ASSERT((!std::is_same<Scalar, bool>::value), DONT USE BITWISE OPS ON BOOLEAN TYPES)
   using result_type = Scalar;
-  EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE Scalar operator()(const Scalar& a, const Scalar& b) const {
+  EIGEN_DEVICE_FUNC constexpr EIGEN_STRONG_INLINE Scalar operator()(const Scalar& a, const Scalar& b) const {
     return bitwise_binary_impl<Scalar>::run_or(a, b);
   }
   template <typename Packet>
@@ -620,9 +751,9 @@ template <typename Scalar>
 struct scalar_bitwise_xor_op {
   EIGEN_STATIC_ASSERT(!NumTraits<Scalar>::RequireInitialization,
                       BITWISE OPERATIONS MAY ONLY BE PERFORMED ON PLAIN DATA TYPES)
-  EIGEN_STATIC_ASSERT((!internal::is_same<Scalar, bool>::value), DONT USE BITWISE OPS ON BOOLEAN TYPES)
+  EIGEN_STATIC_ASSERT((!std::is_same<Scalar, bool>::value), DONT USE BITWISE OPS ON BOOLEAN TYPES)
   using result_type = Scalar;
-  EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE Scalar operator()(const Scalar& a, const Scalar& b) const {
+  EIGEN_DEVICE_FUNC constexpr EIGEN_STRONG_INLINE Scalar operator()(const Scalar& a, const Scalar& b) const {
     return bitwise_binary_impl<Scalar>::run_xor(a, b);
   }
   template <typename Packet>
@@ -642,16 +773,16 @@ struct functor_traits<scalar_bitwise_xor_op<Scalar>> {
  */
 template <typename LhsScalar, typename RhsScalar>
 struct scalar_absolute_difference_op : binary_op_base<LhsScalar, RhsScalar> {
-  typedef typename ScalarBinaryOpTraits<LhsScalar, RhsScalar, scalar_absolute_difference_op>::ReturnType result_type;
+  using result_type = typename ScalarBinaryOpTraits<LhsScalar, RhsScalar, scalar_absolute_difference_op>::ReturnType;
 #ifdef EIGEN_SCALAR_BINARY_OP_PLUGIN
   scalar_absolute_difference_op(){EIGEN_SCALAR_BINARY_OP_PLUGIN}
 #endif
-  EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE const result_type
+  EIGEN_DEVICE_FUNC constexpr EIGEN_STRONG_INLINE result_type
   operator()(const LhsScalar& a, const RhsScalar& b) const {
     return numext::absdiff(a, b);
   }
   template <typename Packet>
-  EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE const Packet packetOp(const Packet& a, const Packet& b) const {
+  EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE Packet packetOp(const Packet& a, const Packet& b) const {
     return internal::pabsdiff(a, b);
   }
 };
@@ -659,7 +790,7 @@ template <typename LhsScalar, typename RhsScalar>
 struct functor_traits<scalar_absolute_difference_op<LhsScalar, RhsScalar>> {
   enum {
     Cost = (NumTraits<LhsScalar>::AddCost + NumTraits<RhsScalar>::AddCost) / 2,
-    PacketAccess = is_same<LhsScalar, RhsScalar>::value && packet_traits<LhsScalar>::HasAbsDiff
+    PacketAccess = std::is_same<LhsScalar, RhsScalar>::value && packet_traits<LhsScalar>::HasAbsDiff
   };
 };
 
@@ -668,10 +799,10 @@ struct scalar_atan2_op {
   using Scalar = LhsScalar;
 
   static constexpr bool Enable =
-      is_same<LhsScalar, RhsScalar>::value && !NumTraits<Scalar>::IsInteger && !NumTraits<Scalar>::IsComplex;
+      std::is_same<LhsScalar, RhsScalar>::value && !NumTraits<Scalar>::IsInteger && !NumTraits<Scalar>::IsComplex;
   EIGEN_STATIC_ASSERT(Enable, "LhsScalar and RhsScalar must be the same non-integer, non-complex type")
 
-  EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE Scalar operator()(const Scalar& y, const Scalar& x) const {
+  EIGEN_DEVICE_FUNC constexpr EIGEN_STRONG_INLINE Scalar operator()(const Scalar& y, const Scalar& x) const {
     return numext::atan2(y, x);
   }
   template <typename Packet>
@@ -684,7 +815,7 @@ template <typename LhsScalar, typename RhsScalar>
 struct functor_traits<scalar_atan2_op<LhsScalar, RhsScalar>> {
   using Scalar = LhsScalar;
   enum {
-    PacketAccess = is_same<LhsScalar, RhsScalar>::value && packet_traits<Scalar>::HasATan &&
+    PacketAccess = std::is_same<LhsScalar, RhsScalar>::value && packet_traits<Scalar>::HasATan &&
                    packet_traits<Scalar>::HasDiv && !NumTraits<Scalar>::IsInteger && !NumTraits<Scalar>::IsComplex,
     Cost = int(scalar_div_cost<Scalar, PacketAccess>::value) + int(functor_traits<scalar_atan_op<Scalar>>::Cost)
   };
@@ -693,23 +824,21 @@ struct functor_traits<scalar_atan2_op<LhsScalar, RhsScalar>> {
 //---------- binary functors bound to a constant, thus appearing as a unary functor ----------
 
 // The following two classes permits to turn any binary functor into a unary one with one argument bound to a constant
-// value. They are analogues to std::binder1st/binder2nd but with the following differences:
-//  - they are compatible with packetOp
-//  - they are portable across C++ versions (the std::binder* are deprecated in C++11)
+// value. They are analogues to the removed std::binder1st/binder2nd and are also compatible with packetOp.
 template <typename BinaryOp>
 struct bind1st_op : BinaryOp {
-  typedef typename BinaryOp::first_argument_type first_argument_type;
-  typedef typename BinaryOp::second_argument_type second_argument_type;
-  typedef typename BinaryOp::result_type result_type;
+  using first_argument_type = typename BinaryOp::first_argument_type;
+  using second_argument_type = typename BinaryOp::second_argument_type;
+  using result_type = typename BinaryOp::result_type;
 
-  EIGEN_DEVICE_FUNC explicit bind1st_op(const first_argument_type& val) : m_value(val) {}
+  EIGEN_DEVICE_FUNC constexpr explicit bind1st_op(const first_argument_type& val) : m_value(val) {}
 
-  EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE const result_type operator()(const second_argument_type& b) const {
+  EIGEN_DEVICE_FUNC constexpr EIGEN_STRONG_INLINE result_type operator()(const second_argument_type& b) const {
     return BinaryOp::operator()(m_value, b);
   }
 
   template <typename Packet>
-  EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE const Packet packetOp(const Packet& b) const {
+  EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE Packet packetOp(const Packet& b) const {
     return BinaryOp::packetOp(internal::pset1<Packet>(m_value), b);
   }
 
@@ -720,18 +849,18 @@ struct functor_traits<bind1st_op<BinaryOp>> : functor_traits<BinaryOp> {};
 
 template <typename BinaryOp>
 struct bind2nd_op : BinaryOp {
-  typedef typename BinaryOp::first_argument_type first_argument_type;
-  typedef typename BinaryOp::second_argument_type second_argument_type;
-  typedef typename BinaryOp::result_type result_type;
+  using first_argument_type = typename BinaryOp::first_argument_type;
+  using second_argument_type = typename BinaryOp::second_argument_type;
+  using result_type = typename BinaryOp::result_type;
 
-  EIGEN_DEVICE_FUNC explicit bind2nd_op(const second_argument_type& val) : m_value(val) {}
+  EIGEN_DEVICE_FUNC constexpr explicit bind2nd_op(const second_argument_type& val) : m_value(val) {}
 
-  EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE const result_type operator()(const first_argument_type& a) const {
+  EIGEN_DEVICE_FUNC constexpr EIGEN_STRONG_INLINE result_type operator()(const first_argument_type& a) const {
     return BinaryOp::operator()(a, m_value);
   }
 
   template <typename Packet>
-  EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE const Packet packetOp(const Packet& a) const {
+  EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE Packet packetOp(const Packet& a) const {
     return BinaryOp::packetOp(a, internal::pset1<Packet>(m_value));
   }
 

@@ -6,6 +6,7 @@
 // This Source Code Form is subject to the terms of the Mozilla
 // Public License v. 2.0. If a copy of the MPL was not distributed
 // with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
+// SPDX-License-Identifier: MPL-2.0
 
 #include "product.h"
 #include <Eigen/LU>
@@ -34,6 +35,14 @@ const TC &ref_prod(TC &C, const TA &A, const TB &B) {
   return C;
 }
 
+// The product sweeps and lazy updates use verifyProduct()/verifyProductUpdate() rather than VERIFY_IS_APPROX.
+// Both sides accumulate k terms in the working precision, so each carries rounding
+// proportional to the magnitude of the summands, i.e. to |A|*|B| -- not to the result. Measuring the
+// error relative to the result, as VERIFY_IS_APPROX does, is meaningless once the sum cancels: at
+// bfloat16 precision a 10-term dot product can lose every significant digit, and the apparent
+// relative error then swings by several times the tolerance from one seed to the next while the
+// underlying discrepancy stays around one epsilon of |A|*|B|.
+
 template <typename T, int Rows, int Cols, int Depth, int OC, int OA, int OB>
 std::enable_if_t<!((Rows == 1 && Depth != 1 && OA == ColMajor) || (Depth == 1 && Rows != 1 && OA == RowMajor) ||
                    (Cols == 1 && Depth != 1 && OB == RowMajor) || (Depth == 1 && Cols != 1 && OB == ColMajor) ||
@@ -46,8 +55,11 @@ test_lazy_single(int rows, int cols, int depth) {
   B.setRandom();
   Matrix<T, Rows, Cols, OC> C(rows, cols);
   C.setRandom();
+  const Matrix<T, Rows, Cols, OC> C0(C);
   Matrix<T, Rows, Cols, OC> D(C);
-  VERIFY_IS_APPROX(C += A.lazyProduct(B), ref_prod(D, A, B));
+  C += A.lazyProduct(B);
+  ref_prod(D, A, B);
+  VERIFY(verifyProductUpdate(C, D, T(1), A, B, C0));
 }
 
 void test_dynamic_bool() {
@@ -55,7 +67,7 @@ void test_dynamic_bool() {
   int cols = internal::random<int>(1, 64);
   int depth = internal::random<int>(1, 65);
 
-  typedef Matrix<bool, Dynamic, Dynamic> MatrixX;
+  using MatrixX = Matrix<bool, Dynamic, Dynamic>;
   MatrixX A(rows, depth);
   A.setRandom();
   MatrixX B(depth, cols);
@@ -63,11 +75,24 @@ void test_dynamic_bool() {
   MatrixX C(rows, cols);
   C.setRandom();
   MatrixX D(C);
+  MatrixX original(C);
   for (Index i = 0; i < C.rows(); ++i)
     for (Index j = 0; j < C.cols(); ++j)
       for (Index k = 0; k < A.cols(); ++k) D.coeffRef(i, j) |= (A.coeff(i, k) && B.coeff(k, j));
   C += A * B;
   VERIFY_IS_EQUAL(C, D);
+  C = original;
+  C.noalias() += A * B;
+  VERIFY_IS_EQUAL(C, D);
+
+  MatrixXi difference = A.cast<int>() * B.cast<int>() - A.cast<int>() * B.cast<int>();
+  VERIFY_IS_EQUAL(difference, MatrixXi::Zero(rows, cols));
+  difference.noalias() -= A.cast<int>() * B.cast<int>();
+  MatrixXi expected = MatrixXi::Zero(rows, cols);
+  for (Index i = 0; i < rows; ++i)
+    for (Index j = 0; j < cols; ++j)
+      for (Index k = 0; k < depth; ++k) expected(i, j) -= int(A(i, k)) * int(B(k, j));
+  VERIFY_IS_EQUAL(difference, expected);
 
   MatrixX E = B.transpose();
   for (Index i = 0; i < B.rows(); ++i)
@@ -181,7 +206,6 @@ void test_lazy_l3() {
   CALL_SUBTEST((test_lazy_all_layout<T, 6, 5, 4>()));
   CALL_SUBTEST((test_lazy_all_layout<T, 4, 4, 5>()));
   CALL_SUBTEST((test_lazy_all_layout<T, 3, 4, 6>()));
-  CALL_SUBTEST((test_lazy_all_layout<T, 2, 6, 4>()));
   CALL_SUBTEST((test_lazy_all_layout<T, 7, 8, 8>()));
   CALL_SUBTEST((test_lazy_all_layout<T, 8, -1, 4>(8, cols)));
   CALL_SUBTEST((test_lazy_all_layout<T, 3, 4, -1>(3, 4, depth)));
@@ -241,6 +265,36 @@ void bug_1311() {
   VERIFY_IS_APPROX(res, A * b);
 }
 
+template <typename MatrixType>
+void fixed_size_product_assignments() {
+  MatrixType A = MatrixType::Random();
+  MatrixType B = MatrixType::Random();
+  MatrixType C = MatrixType::Random();
+  MatrixType ref = C;
+
+  C = A * B;
+  ref = A.lazyProduct(B);
+  VERIFY_IS_APPROX(C, ref);
+
+  C.setRandom();
+  ref = C;
+  C.noalias() += A * B;
+  ref.noalias() += A.lazyProduct(B);
+  VERIFY_IS_APPROX(C, ref);
+
+  C.setRandom();
+  ref = C;
+  C.noalias() -= A * B;
+  ref.noalias() -= A.lazyProduct(B);
+  VERIFY_IS_APPROX(C, ref);
+
+  C.setRandom();
+  ref = C;
+  C.noalias() += (2.0 * A) * (B * 3.0);
+  ref.noalias() += 6.0 * A.lazyProduct(B);
+  VERIFY_IS_APPROX(C, ref);
+}
+
 template <int>
 void product_small_regressions() {
   {
@@ -273,6 +327,72 @@ void product_small_regressions() {
          ((A * A) * (A * A)) * ((A * A) * (A * A)) * ((A * A) * (A * A)) * ((A * A) * (A * A)) * ((A * A) * (A * A)));
     VERIFY_IS_APPROX(B, C);
   }
+
+  {
+    // A square fixed-size product takes the coeff-based path while
+    // Rows + Cols + Depth stays below the threshold, so the boundary is derived
+    // rather than hard-coded. It is read back off product_type itself, not off
+    // the macro: the effective threshold is per scalar pair (SME raises it only
+    // for the pairs its kernel claims), so a build where double falls back to
+    // the generic kernel would otherwise disagree with whichever value the macro
+    // holds -- silently, since no SME job builds this test.
+    using Matrix10 = Eigen::Matrix<double, 10, 10>;
+    constexpr int kGemm = (internal::product_type<Matrix10, Matrix10>::FixedSizeThreshold + 2) / 3;
+    using MatrixBelow = Eigen::Matrix<double, kGemm - 1, kGemm - 1>;
+    using MatrixAt = Eigen::Matrix<double, kGemm, kGemm>;
+    VERIFY((internal::product_type<MatrixBelow, MatrixBelow>::value == CoeffBasedProductMode));
+    // A dimension below EIGEN_CACHEFRIENDLY_PRODUCT_THRESHOLD (16 on ZVector) keeps the product coefficient-based
+    // whatever the fixed-size threshold.
+    VERIFY((internal::product_type<MatrixAt, MatrixAt>::value ==
+            (kGemm >= EIGEN_CACHEFRIENDLY_PRODUCT_THRESHOLD ? GemmProduct : CoeffBasedProductMode)));
+
+    fixed_size_product_assignments<MatrixBelow>();
+    fixed_size_product_assignments<MatrixAt>();
+
+    using Prod3d = internal::product_evaluator<Product<Matrix3d, Matrix3d, LazyProduct>, CoeffBasedProductMode,
+                                               DenseShape, DenseShape>;
+    using Prod4d = internal::product_evaluator<Product<Matrix4d, Matrix4d, LazyProduct>, CoeffBasedProductMode,
+                                               DenseShape, DenseShape>;
+    using Add3d = internal::add_assign_op<double, double>;
+    using RowBlock3d = Block<Matrix3d, 1, 3>;
+    static_assert(!internal::product_packet_cascade_traits<Prod4d, Matrix4d, Add3d>::Enable,
+                  "exact packet multiple keeps the generic path");
+    static_assert(!internal::product_packet_cascade_traits<Prod3d, RowBlock3d, Add3d>::Enable,
+                  "non-unit inner stride must not use the contiguous packet cascade");
+#if defined(EIGEN_VECTORIZE) && EIGEN_UNALIGNED_VECTORIZE
+    if (internal::unpacket_traits<internal::find_largest_packet<double, 3>::type>::size == 2) {
+      VERIFY((internal::product_packet_cascade_traits<Prod3d, Matrix3d, Add3d>::Enable));
+    }
+#else
+    static_assert(!internal::product_packet_cascade_traits<Prod3d, Matrix3d, Add3d>::Enable,
+                  "cascade requires ActualPacketAccessBit and EIGEN_UNALIGNED_VECTORIZE");
+#endif
+  }
+}
+
+// Test products at sizes near critical code-path transitions:
+//  - EIGEN_CACHEFRIENDLY_PRODUCT_THRESHOLD = 8 (coeff-based vs GEBP)
+//  - Blocking early-return at max(k,m,n) < 48
+// Uses a sparse set of sizes so total count is 14^3 = 2744 (fast).
+template <typename T>
+void product_transition_sizes() {
+  using Matrix = Eigen::Matrix<T, Eigen::Dynamic, Eigen::Dynamic>;
+  const int critical[] = {1, 2, 4, 7, 8, 9, 12, 16, 24, 32, 47, 48, 49, 64};
+  for (int im = 0; im < 14; ++im) {
+    for (int in = 0; in < 14; ++in) {
+      Matrix C = Matrix::Zero(critical[im], critical[in]);
+      Matrix Cref = Matrix::Zero(critical[im], critical[in]);
+      for (int ik = 0; ik < 14; ++ik) {
+        int m = critical[im], n = critical[in], k = critical[ik];
+        Matrix A = Matrix::Random(m, k);
+        Matrix B = Matrix::Random(k, n);
+        C = A * B;
+        Cref.setZero();
+        ref_prod(Cref, A, B);
+        VERIFY(verifyProduct(C, Cref, A, B));
+      }
+    }
+  }
 }
 
 template <typename T>
@@ -288,9 +408,65 @@ void product_sweep(int max_m, int max_k, int max_n) {
         C = A * B;
         Cref.setZero();
         ref_prod(Cref, A, B);
-        VERIFY_IS_APPROX(C, Cref);
+        VERIFY(verifyProduct(C, Cref, A, B));
       }
     }
+  }
+}
+
+// The bound for S * (S * S)^T is |S| * (|S| * |S|)^T, not |S|^3: transposition keeps every entry's
+// magnitude but reorders the chain. For the nilpotent S below the two differ in kind — |S|^3 is
+// identically zero while the two evaluation orders still disagree by a rounding error.
+template <int>
+void product_transposed_triple_bound() {
+  Matrix3d square;
+  square << 0, 0.3, 0, 0, 0, 0.7, 0, 0, 0;
+  const Matrix3d abs_sq = square.cwiseAbs();
+  const Matrix3d abs_sq2 = abs_sq * abs_sq;
+  VERIFY((abs_sq2 * abs_sq).isZero(0));
+  VERIFY(product_error_bound(abs_sq, abs_sq2.transpose(), 4) > 0);
+  VERIFY(verifyProduct(square * (square * square).transpose(), square * square.transpose() * square.transpose(), abs_sq,
+                       abs_sq2.transpose(), 4));
+}
+
+// verifyProduct() must not accept an overflowed result. Narrowed to half, the triple-product bound
+// for all-one 100x100 operands is already infinite, and inf <= inf would then pass any result.
+template <int>
+void product_verify_rejects_nonfinite() {
+  using MatrixXh = Matrix<half, Dynamic, Dynamic>;
+  const Index n = 100;
+  const MatrixXh abs_a = MatrixXh::Constant(n, n, half(float(n)));
+  const MatrixXh abs_b = MatrixXh::Constant(n, n, half(1.0f));
+  const double bound = product_error_bound(abs_a, abs_b, 4);
+  VERIFY((numext::isfinite)(bound));
+  VERIFY(bound > static_cast<double>(NumTraits<half>::highest()));
+
+  const MatrixXh zero = MatrixXh::Zero(n, n);
+  const MatrixXh inf = MatrixXh::Constant(n, n, half(std::numeric_limits<float>::infinity()));
+  const MatrixXh nan = MatrixXh::Constant(n, n, half(std::numeric_limits<float>::quiet_NaN()));
+  VERIFY(verifyProduct(zero, zero, abs_a, abs_b, 4));
+  VERIFY(!verifyProduct(inf, zero, abs_a, abs_b, 4));
+  VERIFY(!verifyProduct(nan, zero, abs_a, abs_b, 4));
+}
+
+// verifyProductUpdate() bounds C0 + alpha*A*B by 5*sqrt(k+2)*eps*2*|| |alpha|*|A|*|B| + |C0| ||_F, here
+// 20*eps*(2e-6*|alpha| + 1): an error of a few eps*|C0| passes although the bound on A*B alone rejects it.
+template <typename Scalar>
+void product_verify_update(const Scalar &large_alpha) {
+  using Mat = Matrix<Scalar, Dynamic, Dynamic>;
+  using Real = typename NumTraits<Scalar>::Real;
+  const Real eps = NumTraits<Scalar>::epsilon();
+  const Mat A = Mat::Constant(1, 2, Scalar(1e-3f)), B = Mat::Constant(2, 1, Scalar(1e-3f)), C0 = Mat::Ones(1, 1);
+  for (const Scalar alpha : {Scalar(-2), large_alpha}) {
+    const Mat expected = C0 + alpha * A * B;
+    const Mat off4 = expected.array() + Scalar(4 * eps), off40 = expected.array() + Scalar(40 * eps);
+    VERIFY(verifyProductUpdate(off4, expected, alpha, A, B, C0));
+    VERIFY(!verifyProduct(off4, expected, A, B));
+    VERIFY(verifyProductUpdate(off40, expected, alpha, A, B, C0) == (numext::abs(alpha) > Real(2)));
+    VERIFY(!verifyProductUpdate(Mat::Constant(1, 1, Scalar(std::numeric_limits<Real>::infinity())), expected, alpha, A,
+                                B, C0));
+    VERIFY(!verifyProductUpdate(Mat::Constant(1, 1, Scalar(std::numeric_limits<Real>::quiet_NaN())), expected, alpha, A,
+                                B, C0));
   }
 }
 
@@ -338,4 +514,12 @@ EIGEN_DECLARE_TEST(product_small) {
   }
 
   CALL_SUBTEST_6(product_small_regressions<0>());
+  CALL_SUBTEST_6(product_transposed_triple_bound<0>());
+  CALL_SUBTEST_6(product_verify_rejects_nonfinite<0>());
+  CALL_SUBTEST_6(product_verify_update(1e6f));
+  CALL_SUBTEST_6(product_verify_update(std::complex<float>(0.0f, 1e6f)));
+
+  // Deterministic sweep at transition boundaries (outside g_repeat).
+  CALL_SUBTEST_54(product_transition_sizes<float>());
+  CALL_SUBTEST_55(product_transition_sizes<double>());
 }

@@ -6,14 +6,15 @@
 // This Source Code Form is subject to the terms of the Mozilla
 // Public License v. 2.0. If a copy of the MPL was not distributed
 // with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
+// SPDX-License-Identifier: MPL-2.0
 
 #include "main.h"
 
 template <typename MatrixType>
 void array_for_matrix(const MatrixType& m) {
-  typedef typename MatrixType::Scalar Scalar;
-  typedef Matrix<Scalar, MatrixType::RowsAtCompileTime, 1> ColVectorType;
-  typedef Matrix<Scalar, 1, MatrixType::ColsAtCompileTime> RowVectorType;
+  using Scalar = typename MatrixType::Scalar;
+  using ColVectorType = Matrix<Scalar, MatrixType::RowsAtCompileTime, 1>;
+  using RowVectorType = Matrix<Scalar, 1, MatrixType::ColsAtCompileTime>;
 
   Index rows = m.rows();
   Index cols = m.cols();
@@ -73,12 +74,12 @@ void array_for_matrix(const MatrixType& m) {
   VERIFY_IS_EQUAL(m1.block(0, 0, rows, 0).rowwise().prod(), ColVectorType::Ones(rows));
 
   // verify the const accessors exist
-  const Scalar& ref_m1 = m.matrix().array().coeffRef(0);
-  const Scalar& ref_m2 = m.matrix().array().coeffRef(0, 0);
-  const Scalar& ref_a1 = m.array().matrix().coeffRef(0);
-  const Scalar& ref_a2 = m.array().matrix().coeffRef(0, 0);
-  VERIFY(&ref_a1 == &ref_m1);
-  VERIFY(&ref_a2 == &ref_m2);
+  const Scalar* ptr_m1 = &m.matrix().array().coeffRef(0);
+  const Scalar* ptr_m2 = &m.matrix().array().coeffRef(0, 0);
+  const Scalar* ptr_a1 = &m.array().matrix().coeffRef(0);
+  const Scalar* ptr_a2 = &m.array().matrix().coeffRef(0, 0);
+  VERIFY(ptr_a1 == ptr_m1);
+  VERIFY(ptr_a2 == ptr_m2);
 
   // Check write accessors:
   m1.array().coeffRef(0, 0) = 1;
@@ -94,8 +95,8 @@ void array_for_matrix(const MatrixType& m) {
 template <typename MatrixType>
 void comparisons(const MatrixType& m) {
   using std::abs;
-  typedef typename MatrixType::Scalar Scalar;
-  typedef typename NumTraits<Scalar>::Real RealScalar;
+  using Scalar = typename MatrixType::Scalar;
+  using RealScalar = typename NumTraits<Scalar>::Real;
 
   Index rows = m.rows();
   Index cols = m.cols();
@@ -143,7 +144,7 @@ void comparisons(const MatrixType& m) {
   VERIFY(((m1.array() < -mid).matrix() || (m1.array() > mid).matrix()).count() ==
          (m1.cwiseAbs().array() > mid).count());
 
-  typedef Matrix<Index, Dynamic, 1> VectorOfIndices;
+  using VectorOfIndices = Matrix<Index, Dynamic, 1>;
 
   // TODO allows colwise/rowwise for array
   VERIFY_IS_APPROX(((m1.array().abs() + 1) > RealScalar(0.1)).matrix().colwise().count(),
@@ -155,7 +156,7 @@ void comparisons(const MatrixType& m) {
 template <typename VectorType>
 void lpNorm(const VectorType& v) {
   using std::sqrt;
-  typedef typename VectorType::RealScalar RealScalar;
+  using RealScalar = typename VectorType::RealScalar;
   VectorType u = VectorType::Random(v.size());
 
   if (v.size() == 0) {
@@ -175,7 +176,7 @@ void lpNorm(const VectorType& v) {
 
 template <typename MatrixType>
 void cwise_min_max(const MatrixType& m) {
-  typedef typename MatrixType::Scalar Scalar;
+  using Scalar = typename MatrixType::Scalar;
 
   Index rows = m.rows();
   Index cols = m.cols();
@@ -185,6 +186,10 @@ void cwise_min_max(const MatrixType& m) {
   // min/max with array
   Scalar maxM1 = m1.maxCoeff();
   Scalar minM1 = m1.minCoeff();
+  // Reduce here: GCC 10 for AArch64 can keep an unreduced 128-bit partial result in v8 across the calls below,
+  // although AAPCS64 preserves only its low 64 bits.
+  EIGEN_OPTIMIZATION_BARRIER(maxM1);
+  EIGEN_OPTIMIZATION_BARRIER(minM1);
 
   VERIFY_IS_APPROX(MatrixType::Constant(rows, cols, minM1), m1.cwiseMin(MatrixType::Constant(rows, cols, minM1)));
   VERIFY_IS_APPROX(m1, m1.cwiseMin(MatrixType::Constant(rows, cols, maxM1)));
@@ -250,11 +255,11 @@ void cwise_min_max(const MatrixType& m) {
 
 template <typename MatrixTraits>
 void resize(const MatrixTraits& t) {
-  typedef typename MatrixTraits::Scalar Scalar;
-  typedef Matrix<Scalar, Dynamic, Dynamic> MatrixType;
-  typedef Array<Scalar, Dynamic, Dynamic> Array2DType;
-  typedef Matrix<Scalar, Dynamic, 1> VectorType;
-  typedef Array<Scalar, Dynamic, 1> Array1DType;
+  using Scalar = typename MatrixTraits::Scalar;
+  using MatrixType = Matrix<Scalar, Dynamic, Dynamic>;
+  using Array2DType = Array<Scalar, Dynamic, Dynamic>;
+  using VectorType = Matrix<Scalar, Dynamic, 1>;
+  using Array1DType = Array<Scalar, Dynamic, 1>;
 
   Index rows = t.rows(), cols = t.cols();
 
@@ -271,6 +276,45 @@ void resize(const MatrixTraits& t) {
   VERIFY(v.size() == cols);
   a1.matrix().resize(cols);
   VERIFY(a1.size() == cols);
+}
+
+// Test lpNorm for matrices (not just vectors).
+// lpNorm treats the matrix as a flat coefficient vector,
+// so the reference is computed element-by-element.
+template <typename MatrixType>
+void lpNorm_matrix(const MatrixType& m) {
+  using std::abs;
+  using std::pow;
+  using std::sqrt;
+  using RealScalar = typename MatrixType::RealScalar;
+
+  Index rows = m.rows();
+  Index cols = m.cols();
+  MatrixType u = MatrixType::Random(rows, cols);
+
+  // L1 norm
+  RealScalar ref_l1(0);
+  for (Index j = 0; j < cols; ++j)
+    for (Index i = 0; i < rows; ++i) ref_l1 += abs(u(i, j));
+  VERIFY_IS_APPROX(u.template lpNorm<1>(), ref_l1);
+
+  // L2 norm
+  RealScalar ref_l2_sq(0);
+  for (Index j = 0; j < cols; ++j)
+    for (Index i = 0; i < rows; ++i) ref_l2_sq += numext::abs2(u(i, j));
+  VERIFY_IS_APPROX(u.template lpNorm<2>(), sqrt(ref_l2_sq));
+
+  // L-Infinity norm
+  RealScalar ref_linf(0);
+  for (Index j = 0; j < cols; ++j)
+    for (Index i = 0; i < rows; ++i) ref_linf = (std::max)(ref_linf, abs(u(i, j)));
+  VERIFY_IS_APPROX(u.template lpNorm<Infinity>(), ref_linf);
+
+  // L5 norm
+  RealScalar ref_l5(0);
+  for (Index j = 0; j < cols; ++j)
+    for (Index i = 0; i < rows; ++i) ref_l5 += pow(abs(u(i, j)), RealScalar(5));
+  VERIFY_IS_APPROX(u.template lpNorm<5>(), pow(ref_l5, RealScalar(1) / RealScalar(5)));
 }
 
 template <int>
@@ -346,4 +390,17 @@ EIGEN_DECLARE_TEST(array_for_matrix) {
   }
   CALL_SUBTEST_6(regression_bug_654<0>());
   CALL_SUBTEST_6(regrrssion_bug_1410<0>());
+
+  // lpNorm for matrices (not just vectors)
+  for (int i = 0; i < g_repeat; i++) {
+    CALL_SUBTEST_9(lpNorm_matrix(Matrix2f()));
+    CALL_SUBTEST_9(lpNorm_matrix(Matrix4d()));
+    CALL_SUBTEST_9(lpNorm_matrix(
+        MatrixXf(internal::random<int>(1, EIGEN_TEST_MAX_SIZE), internal::random<int>(1, EIGEN_TEST_MAX_SIZE))));
+    CALL_SUBTEST_9(lpNorm_matrix(MatrixXcd(internal::random<int>(1, EIGEN_TEST_MAX_SIZE / 2),
+                                           internal::random<int>(1, EIGEN_TEST_MAX_SIZE / 2))));
+  }
+  // empty matrix
+  CALL_SUBTEST_9(lpNorm_matrix(MatrixXf(0, 0)));
+  CALL_SUBTEST_9(lpNorm_matrix(MatrixXf(0, 3)));
 }

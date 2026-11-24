@@ -6,6 +6,7 @@
 // This Source Code Form is subject to the terms of the Mozilla
 // Public License v. 2.0. If a copy of the MPL was not distributed
 // with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
+// SPDX-License-Identifier: MPL-2.0
 
 // discard stack allocation as that too bypasses malloc
 #define EIGEN_STACK_ALLOCATION_LIMIT 0
@@ -13,29 +14,34 @@
 #define EIGEN_RUNTIME_NO_MALLOC
 
 #include "main.h"
+#include <Eigen/Core>
+#include "MovableScalar.h"
+#include "NonCommutativeScalar.h"
+#include "random_for_arithmetic.h"
 using namespace std;
 template <typename MatrixType>
 void diagonalmatrices(const MatrixType& m) {
-  typedef typename MatrixType::Scalar Scalar;
+  using RealScalar = typename MatrixType::RealScalar;
+  using Scalar = typename MatrixType::Scalar;
   enum { Rows = MatrixType::RowsAtCompileTime, Cols = MatrixType::ColsAtCompileTime };
-  typedef Matrix<Scalar, Rows, 1> VectorType;
-  typedef Matrix<Scalar, 1, Cols> RowVectorType;
-  typedef Matrix<Scalar, Rows, Rows> SquareMatrixType;
-  typedef Matrix<Scalar, Dynamic, Dynamic> DynMatrixType;
-  typedef DiagonalMatrix<Scalar, Rows> LeftDiagonalMatrix;
-  typedef DiagonalMatrix<Scalar, Cols> RightDiagonalMatrix;
-  typedef Matrix<Scalar, Rows == Dynamic ? Dynamic : 2 * Rows, Cols == Dynamic ? Dynamic : 2 * Cols> BigMatrix;
+  using VectorType = Matrix<Scalar, Rows, 1>;
+  using RowVectorType = Matrix<Scalar, 1, Cols>;
+  using SquareMatrixType = Matrix<Scalar, Rows, Rows>;
+  using DynMatrixType = Matrix<Scalar, Dynamic, Dynamic>;
+  using LeftDiagonalMatrix = DiagonalMatrix<Scalar, Rows>;
+  using RightDiagonalMatrix = DiagonalMatrix<Scalar, Cols>;
+  using BigMatrix = Matrix<Scalar, Rows == Dynamic ? Dynamic : 2 * Rows, Cols == Dynamic ? Dynamic : 2 * Cols>;
   Index rows = m.rows();
   Index cols = m.cols();
 
-  MatrixType m1 = MatrixType::Random(rows, cols), m2 = MatrixType::Random(rows, cols);
-  VectorType v1 = VectorType::Random(rows), v2 = VectorType::Random(rows);
-  RowVectorType rv1 = RowVectorType::Random(cols), rv2 = RowVectorType::Random(cols);
+  MatrixType m1 = random_for_arithmetic<MatrixType>(rows, cols), m2 = random_for_arithmetic<MatrixType>(rows, cols);
+  VectorType v1 = random_for_arithmetic<VectorType>(rows), v2 = random_for_arithmetic<VectorType>(rows);
+  RowVectorType rv1 = random_for_arithmetic<RowVectorType>(cols), rv2 = random_for_arithmetic<RowVectorType>(cols);
 
   LeftDiagonalMatrix ldm1(v1), ldm2(v2);
   RightDiagonalMatrix rdm1(rv1), rdm2(rv2);
 
-  Scalar s1 = internal::random<Scalar>();
+  Scalar s1 = random_scalar_for_arithmetic<Scalar>();
 
   SquareMatrixType sq_m1(v1.asDiagonal());
   VERIFY_IS_APPROX(sq_m1, v1.asDiagonal().toDenseMatrix());
@@ -109,13 +115,13 @@ void diagonalmatrices(const MatrixType& m) {
   VERIFY_IS_APPROX(m1 * (s1 * rdm1), (m1 * rdm1) * s1);
 
   // Diagonal to dense
-  sq_m1.setRandom();
+  sq_m1 = random_for_arithmetic<SquareMatrixType>(rows, rows);
   sq_m2 = sq_m1;
   VERIFY_IS_APPROX((sq_m1 += (s1 * v1).asDiagonal()), sq_m2 += (s1 * v1).asDiagonal().toDenseMatrix());
   VERIFY_IS_APPROX((sq_m1 -= (s1 * v1).asDiagonal()), sq_m2 -= (s1 * v1).asDiagonal().toDenseMatrix());
   VERIFY_IS_APPROX((sq_m1 = (s1 * v1).asDiagonal()), (s1 * v1).asDiagonal().toDenseMatrix());
 
-  sq_m1.setRandom();
+  sq_m1 = random_for_arithmetic<SquareMatrixType>(rows, rows);
   sq_m2 = v1.asDiagonal();
   sq_m2 = sq_m1 * sq_m2;
   VERIFY_IS_APPROX((sq_m1 * v1.asDiagonal()).col(i), sq_m2.col(i));
@@ -128,28 +134,169 @@ void diagonalmatrices(const MatrixType& m) {
   VERIFY_IS_APPROX(sq_m3 = v1.asDiagonal() - v2.asDiagonal(), sq_m1 - sq_m2);
   VERIFY_IS_APPROX(sq_m3 = v1.asDiagonal() - 2 * v2.asDiagonal() + v1.asDiagonal(), sq_m1 - 2 * sq_m2 + sq_m1);
 
+  // transpose(), conjugate() and adjoint() are diagonal expressions: D^T = D and D^H = conj(D).
+  {
+    const SquareMatrixType dense1 = ldm1.toDenseMatrix();
+    VERIFY_IS_EQUAL(SquareMatrixType(ldm1.transpose().toDenseMatrix()), SquareMatrixType(dense1.transpose()));
+    VERIFY_IS_EQUAL(SquareMatrixType(ldm1.conjugate().toDenseMatrix()), SquareMatrixType(dense1.conjugate()));
+    VERIFY_IS_EQUAL(SquareMatrixType(ldm1.adjoint().toDenseMatrix()), SquareMatrixType(dense1.adjoint()));
+    VERIFY_IS_EQUAL(VectorType((v1 + v2).asDiagonal().adjoint().diagonal()), VectorType((v1 + v2).conjugate()));
+    VERIFY_IS_APPROX(ldm1.adjoint() * m1, dense1.adjoint() * m1);
+    VERIFY_IS_APPROX(m1 * rdm1.adjoint(), m1 * rdm1.toDenseMatrix().adjoint());
+    VERIFY_IS_APPROX(VectorType((ldm1.adjoint() * ldm2).diagonal()),
+                     VectorType((dense1.adjoint() * ldm2.toDenseMatrix()).diagonal()));
+    internal::set_is_malloc_allowed(false);
+    VERIFY_IS_APPROX((ldm1.adjoint() * m1)(i, j), numext::conj(v1(i)) * m1(i, j));
+    VERIFY_IS_APPROX((m1 * rdm1.transpose())(i, j), m1(i, j) * rv1(j));
+    internal::set_is_malloc_allowed(true);
+    // For real scalars the conjugate is the diagonal itself, with no conjugation functor.
+    STATIC_CHECK((NumTraits<Scalar>::IsComplex ||
+                  internal::is_same<std::decay_t<decltype(ldm1.conjugate())>,
+                                    DiagonalWrapper<const typename LeftDiagonalMatrix::DiagonalVectorType>>::value));
+  }
+
   // Zero and Identity
   LeftDiagonalMatrix zero = LeftDiagonalMatrix::Zero(rows);
   LeftDiagonalMatrix identity = LeftDiagonalMatrix::Identity(rows);
   VERIFY_IS_APPROX(identity.diagonal().sum(), Scalar(rows));
   VERIFY_IS_APPROX(zero.diagonal().sum(), Scalar(0));
   VERIFY_IS_APPROX((zero + 2 * LeftDiagonalMatrix::Identity(rows)).diagonal().sum(), Scalar(2 * rows));
+
+  // Lazy sums and differences with a dense matrix: the expression is a CwiseBinaryOp over the diagonal itself,
+  // so building it and reading one coefficient allocates nothing.
+  STATIC_CHECK((internal::is_same<decltype(sq_m1 + ldm1),
+                                  const CwiseBinaryOp<internal::scalar_sum_op<Scalar, Scalar>, const SquareMatrixType,
+                                                      const LeftDiagonalMatrix>>::value));
+  sq_m1 = random_for_arithmetic<SquareMatrixType>(rows, rows);
+  const SquareMatrixType ldm1Dense = ldm1.toDenseMatrix();
+  internal::set_is_malloc_allowed(false);
+  VERIFY_IS_EQUAL((sq_m1 + ldm1)(i, i), sq_m1(i, i) + v1(i));
+  VERIFY_IS_EQUAL((ldm1 - sq_m1)(i, i), v1(i) - sq_m1(i, i));
+  const Index k = (i + 1) % rows;  // off the diagonal unless rows == 1
+  VERIFY_IS_EQUAL((sq_m1 + v1.asDiagonal())(i, k), sq_m1(i, k) + (i == k ? v1(i) : Scalar(0)));
+  internal::set_is_malloc_allowed(true);
+  VERIFY_IS_EQUAL(sq_m2 = sq_m1 + ldm1, SquareMatrixType(sq_m1 + ldm1Dense));
+  VERIFY_IS_EQUAL(sq_m2 = ldm1 + sq_m1, SquareMatrixType(ldm1Dense + sq_m1));
+  VERIFY_IS_EQUAL(sq_m2 = sq_m1 - ldm1, SquareMatrixType(sq_m1 - ldm1Dense));
+  VERIFY_IS_EQUAL(sq_m2 = ldm1 - sq_m1, SquareMatrixType(ldm1Dense - sq_m1));
+  VERIFY_IS_EQUAL(sq_m2 = sq_m1 + v1.asDiagonal(), SquareMatrixType(sq_m1 + ldm1Dense));
+  VERIFY_IS_EQUAL(sq_m2 = (v1 + v2).asDiagonal() - sq_m1,
+                  SquareMatrixType((v1 + v2).asDiagonal().toDenseMatrix() - sq_m1));
+  VERIFY_IS_EQUAL(sq_m2 = sq_m1.transpose() + ldm1 + ldm2,
+                  SquareMatrixType(sq_m1.transpose() + ldm1Dense + ldm2.toDenseMatrix()));
+  VERIFY_IS_APPROX((sq_m1 + ldm1) * v2, (sq_m1 + ldm1Dense) * v2);
+  RealScalar sum_abs(0);
+  for (Index col = 0; col < rows; ++col)
+    for (Index row = 0; row < rows; ++row) sum_abs += numext::abs(sq_m1(row, col) + (row == col ? v1(row) : Scalar(0)));
+  // The lazy and dense reductions use different summation orders. Bound their absolute error by
+  // 2*gamma_n*sum(abs(x)), accounting also for rounding in the accumulated magnitude.
+  const RealScalar rounding = RealScalar(rows * rows) * NumTraits<RealScalar>::epsilon();
+  VERIFY(RealScalar(2) * rounding < RealScalar(1));
+  const RealScalar sum_bound = RealScalar(2) * rounding / (RealScalar(1) - RealScalar(2) * rounding) * sum_abs;
+  VERIFY(numext::abs((sq_m1 + ldm1).sum() - (sq_m1 + ldm1Dense).sum()) <= sum_bound);
+  VERIFY_IS_APPROX((s1 * (sq_m1 - ldm1)).eval(), s1 * (sq_m1 - ldm1Dense));
+
+  // Direct assignment writes each column as vectorized segments of the dense operand around the diagonal
+  // coefficient: compound assignment, the negated forms, self-assignment of the dense operand, and a product
+  // operand on either side (the right one keeps the "xpr + product" rule).
+  sq_m2 = random_for_arithmetic<SquareMatrixType>(rows, rows);
+  sq_m3 = sq_m2;
+  sq_m2 += sq_m1 + ldm1;
+  sq_m3 += sq_m1 + ldm1Dense;
+  VERIFY_IS_EQUAL(sq_m2, sq_m3);
+  sq_m2 -= ldm1 - sq_m1;
+  sq_m3 -= ldm1Dense - sq_m1;
+  VERIFY_IS_EQUAL(sq_m2, sq_m3);
+  sq_m2 -= sq_m1 - ldm1;
+  sq_m3 -= sq_m1 - ldm1Dense;
+  VERIFY_IS_EQUAL(sq_m2, sq_m3);
+  sq_m2 = sq_m1;
+  sq_m2 = sq_m2 + ldm1;
+  VERIFY_IS_EQUAL(sq_m2, SquareMatrixType(sq_m1 + ldm1Dense));
+  sq_m2 = sq_m1;
+  sq_m2 = ldm1 - sq_m2;
+  VERIFY_IS_EQUAL(sq_m2, SquareMatrixType(ldm1Dense - sq_m1));
+  VERIFY_IS_APPROX(sq_m2 = sq_m1 * sq_m1 + ldm1, SquareMatrixType(sq_m1 * sq_m1 + ldm1Dense));
+  VERIFY_IS_APPROX(sq_m2 = ldm1 + sq_m1 * sq_m1, SquareMatrixType(ldm1Dense + sq_m1 * sq_m1));
+  VERIFY_IS_APPROX(sq_m2 = ldm1 - sq_m1 * sq_m1, SquareMatrixType(ldm1Dense - sq_m1 * sq_m1));
+  VERIFY_IS_APPROX(sq_m2 = sq_m1 * sq_m1 - ldm1, SquareMatrixType(sq_m1 * sq_m1 - ldm1Dense));
+  sq_m2 = sq_m1;
+  VERIFY_IS_APPROX(sq_m2 = sq_m2 * sq_m2 + ldm1, SquareMatrixType(sq_m1 * sq_m1 + ldm1Dense));
+
+  // The result is the coefficient-wise one, bit for bit. With dst scaled by 1024, dst + a drops low bits of a,
+  // so += and -= must add the exact sum at the diagonal; and a diagonal taken from the destination is read
+  // before it is overwritten.
+  const SquareMatrixType dst0 = Scalar(1024) * random_for_arithmetic<SquareMatrixType>(rows, rows);
+  const SquareMatrixType dst0Diagonal = dst0.diagonal().asDiagonal();
+  sq_m2 = dst0;
+  sq_m3 = dst0;
+  sq_m2 += sq_m1 + ldm1;
+  sq_m3 += sq_m1 + ldm1Dense;
+  VERIFY_IS_EQUAL(sq_m2, sq_m3);
+  sq_m2 -= ldm1 - sq_m1;
+  sq_m3 -= ldm1Dense - sq_m1;
+  VERIFY_IS_EQUAL(sq_m2, sq_m3);
+  sq_m2 = dst0;
+  sq_m2 = sq_m1 + sq_m2.diagonal().asDiagonal();
+  VERIFY_IS_EQUAL(sq_m2, SquareMatrixType(sq_m1 + dst0Diagonal));
+  sq_m2 = dst0;
+  sq_m2 = sq_m2.diagonal().asDiagonal() - sq_m1;
+  VERIFY_IS_EQUAL(sq_m2, SquareMatrixType(dst0Diagonal - sq_m1));
+  sq_m2 = dst0;
+  sq_m2 += sq_m1 - sq_m2.diagonal().asDiagonal();
+  VERIFY_IS_EQUAL(sq_m2, SquareMatrixType(dst0 + (sq_m1 - dst0Diagonal)));
+  sq_m2 = dst0;
+  sq_m2 = sq_m2.diagonal().asDiagonal();
+  VERIFY_IS_EQUAL(sq_m2, dst0Diagonal);
+}
+
+// Operands for which a two-pass assignment (dense operand, then the diagonal) differs from the coefficient-wise sum.
+template <int>
+void dense_diagonal_sum_assignment_regressions() {
+  // dst + (a + d) is finite, (dst + a) + d is not.
+  Matrix<double, 1, 1> dst, a, d;
+  dst << 1e308;
+  a << 1e308;
+  d << -1e308;
+  dst += a + d.asDiagonal();
+  VERIFY_IS_EQUAL(dst(0, 0), 1e308);
+  // d - a is defined for d = a = INT_MIN, -a is not (-fsanitize=undefined reports it).
+  Matrix<int, 1, 1> ai, r;
+  ai << NumTraits<int>::lowest();
+  const Matrix<int, 1, 1> di = ai;
+  r = di.asDiagonal() - ai;
+  VERIFY_IS_EQUAL(r(0, 0), 0);
+  // dst - (a - d) is defined for dst = INT_MIN and a = d = 1, dst - a is not.
+  r << NumTraits<int>::lowest();
+  ai << 1;
+  r -= ai - ai.asDiagonal();
+  VERIFY_IS_EQUAL(r(0, 0), NumTraits<int>::lowest());
+  // bool has no negation or subtraction, so a sum must not instantiate them.
+  Matrix<bool, 3, 3> b = Matrix<bool, 3, 3>::Zero();
+  b(0, 1) = true;
+  const DiagonalMatrix<bool, 3> bd(true, false, true);
+  Matrix<bool, 3, 3> expected = b;
+  expected(0, 0) = expected(2, 2) = true;
+  Matrix<bool, 3, 3> bs = b + bd;
+  VERIFY((bs.array() == expected.array()).all());
+  bs = bd + b;
+  VERIFY((bs.array() == expected.array()).all());
 }
 
 template <typename MatrixType>
 void as_scalar_product(const MatrixType& m) {
-  typedef typename MatrixType::Scalar Scalar;
-  typedef Matrix<Scalar, MatrixType::RowsAtCompileTime, 1> VectorType;
-  typedef Matrix<Scalar, Dynamic, Dynamic> DynMatrixType;
-  typedef Matrix<Scalar, Dynamic, 1> DynVectorType;
-  typedef Matrix<Scalar, 1, Dynamic> DynRowVectorType;
+  using Scalar = typename MatrixType::Scalar;
+  using VectorType = Matrix<Scalar, MatrixType::RowsAtCompileTime, 1>;
+  using DynMatrixType = Matrix<Scalar, Dynamic, Dynamic>;
+  using DynVectorType = Matrix<Scalar, Dynamic, 1>;
+  using DynRowVectorType = Matrix<Scalar, 1, Dynamic>;
 
   Index rows = m.rows();
   Index depth = internal::random<Index>(1, EIGEN_TEST_MAX_SIZE);
 
-  VectorType v1 = VectorType::Random(rows);
-  DynVectorType dv1 = DynVectorType::Random(depth);
-  DynRowVectorType drv1 = DynRowVectorType::Random(depth);
+  VectorType v1 = random_for_arithmetic<VectorType>(rows);
+  DynVectorType dv1 = random_for_arithmetic<DynVectorType>(depth);
+  DynRowVectorType drv1 = random_for_arithmetic<DynRowVectorType>(depth);
   DynMatrixType dm1 = dv1;
   DynMatrixType drm1 = drv1;
 
@@ -162,6 +309,19 @@ void as_scalar_product(const MatrixType& m) {
   VERIFY_IS_APPROX(dm1 * v1.asDiagonal(), dm1 * s);
 }
 
+// A non-square dst has a diagonal of the right size, but not the shape of the diagonal matrix.
+template <int>
+void diagonal_update_shape_mismatch() {
+  const Vector3d d = Vector3d::Random();
+  MatrixXd wide = MatrixXd::Zero(3, 4), tall = MatrixXd::Zero(4, 3);
+  VERIFY_RAISES_ASSERT(wide += d.asDiagonal());
+  VERIFY_RAISES_ASSERT(wide -= d.asDiagonal());
+  VERIFY_RAISES_ASSERT(tall += d.asDiagonal());
+  VERIFY_RAISES_ASSERT(tall -= d.asDiagonal());
+  VERIFY_IS_EQUAL(wide, MatrixXd::Zero(3, 4));
+  VERIFY_IS_EQUAL(tall, MatrixXd::Zero(4, 3));
+}
+
 template <int>
 void bug987() {
   Matrix3Xd points = Matrix3Xd::Random(3, 3);
@@ -170,6 +330,584 @@ void bug987() {
   VERIFY_IS_APPROX(res1 = diag.asDiagonal() * points.topRows<2>(), res2 = diag.asDiagonal() * tmp1);
   Matrix2d tmp2 = points.topLeftCorner<2, 2>();
   VERIFY_IS_APPROX((res1 = points.topLeftCorner<2, 2>() * diag.asDiagonal()), res2 = tmp2 * diag.asDiagonal());
+}
+
+template <int>
+void bug2013() {
+  Matrix3d m = Matrix3d::Random();
+  Vector3d d = Vector3d::Random();
+
+  Matrix3d ref_unit_lower = m.template triangularView<UnitLower>();
+  Matrix3d ref_unit_upper = m.template triangularView<UnitUpper>();
+  Matrix3d ref_lower = m.template triangularView<Lower>();
+  Matrix3d ref_upper = m.template triangularView<Upper>();
+
+  VERIFY_IS_APPROX((m.template triangularView<UnitLower>() * d.asDiagonal()).eval(), ref_unit_lower * d.asDiagonal());
+  VERIFY_IS_APPROX((d.asDiagonal() * m.template triangularView<UnitLower>()).eval(), d.asDiagonal() * ref_unit_lower);
+
+  VERIFY_IS_APPROX((m.template triangularView<UnitUpper>() * d.asDiagonal()).eval(), ref_unit_upper * d.asDiagonal());
+  VERIFY_IS_APPROX((d.asDiagonal() * m.template triangularView<UnitUpper>()).eval(), d.asDiagonal() * ref_unit_upper);
+
+  Matrix3d actual = Matrix3d::Random();
+  Matrix3d expected = actual;
+  actual = m;
+  expected = m;
+  actual.template triangularView<Upper>() = actual.template triangularView<Upper>() * d.asDiagonal();
+  expected.template triangularView<Upper>() = Matrix3d(ref_upper * d.asDiagonal());
+  VERIFY_IS_APPROX(actual, expected);
+
+  actual = m;
+  expected = m;
+  actual.template triangularView<Lower>() = d.asDiagonal() * actual.template triangularView<Lower>();
+  expected.template triangularView<Lower>() = Matrix3d(d.asDiagonal() * ref_lower);
+  VERIFY_IS_APPROX(actual, expected);
+
+  actual.setRandom();
+  expected = actual;
+  actual.noalias() += m.template triangularView<UnitLower>() * d.asDiagonal();
+  expected.noalias() += ref_unit_lower * d.asDiagonal();
+  VERIFY_IS_APPROX(actual, expected);
+
+  actual.setRandom();
+  expected = actual;
+  actual.noalias() -= d.asDiagonal() * m.template triangularView<UnitUpper>();
+  expected.noalias() -= d.asDiagonal() * ref_unit_upper;
+  VERIFY_IS_APPROX(actual, expected);
+
+  MatrixXd dynamic_m = MatrixXd::Random(4, 4);
+  VectorXd dynamic_d = VectorXd::Random(4);
+  MatrixXd dynamic_expected(4, 4);
+  MatrixXd no_malloc_result(4, 4);
+
+  dynamic_expected = MatrixXd(dynamic_m.template triangularView<UnitLower>()) * dynamic_d.asDiagonal();
+  internal::set_is_malloc_allowed(false);
+  no_malloc_result.noalias() = dynamic_m.template triangularView<UnitLower>() * dynamic_d.asDiagonal();
+  internal::set_is_malloc_allowed(true);
+  VERIFY_IS_APPROX(no_malloc_result, dynamic_expected);
+
+  dynamic_expected = dynamic_d.asDiagonal() * MatrixXd(dynamic_m.template triangularView<UnitUpper>());
+  internal::set_is_malloc_allowed(false);
+  no_malloc_result.noalias() = dynamic_d.asDiagonal() * dynamic_m.template triangularView<UnitUpper>();
+  internal::set_is_malloc_allowed(true);
+  VERIFY_IS_APPROX(no_malloc_result, dynamic_expected);
+
+  // Triangular destination assignment from a structured*diagonal product must go through the
+  // lazy product_evaluator and avoid materializing a full PlainObject temporary.
+  no_malloc_result = dynamic_m;
+  dynamic_expected = dynamic_m;
+  dynamic_expected.template triangularView<Upper>() =
+      MatrixXd(dynamic_m.template triangularView<Upper>()) * dynamic_d.asDiagonal();
+  internal::set_is_malloc_allowed(false);
+  no_malloc_result.template triangularView<Upper>() =
+      dynamic_m.template triangularView<Upper>() * dynamic_d.asDiagonal();
+  internal::set_is_malloc_allowed(true);
+  VERIFY_IS_APPROX(no_malloc_result, dynamic_expected);
+
+  no_malloc_result = dynamic_m;
+  dynamic_expected = dynamic_m;
+  dynamic_expected.template triangularView<Lower>() =
+      dynamic_d.asDiagonal() * MatrixXd(dynamic_m.template triangularView<Lower>());
+  internal::set_is_malloc_allowed(false);
+  no_malloc_result.template triangularView<Lower>() =
+      dynamic_d.asDiagonal() * dynamic_m.template triangularView<Lower>();
+  internal::set_is_malloc_allowed(true);
+  VERIFY_IS_APPROX(no_malloc_result, dynamic_expected);
+}
+
+template <int>
+void selfadjoint_diagonal_products() {
+  Matrix3cd m = Matrix3cd::Random();
+  m.diagonal() = m.diagonal().real();
+  Vector3cd d = Vector3cd::Random();
+
+  Matrix3cd ref_lower = m.template selfadjointView<Lower>();
+  Matrix3cd ref_upper = m.template selfadjointView<Upper>();
+
+  VERIFY_IS_APPROX((m.template selfadjointView<Lower>() * d.asDiagonal()).eval(), ref_lower * d.asDiagonal());
+  VERIFY_IS_APPROX((d.asDiagonal() * m.template selfadjointView<Lower>()).eval(), d.asDiagonal() * ref_lower);
+
+  VERIFY_IS_APPROX((m.template selfadjointView<Upper>() * d.asDiagonal()).eval(), ref_upper * d.asDiagonal());
+  VERIFY_IS_APPROX((d.asDiagonal() * m.template selfadjointView<Upper>()).eval(), d.asDiagonal() * ref_upper);
+
+  Matrix3cd actual = Matrix3cd::Random();
+  Matrix3cd expected = actual;
+  actual = m;
+  expected = m;
+  actual.template selfadjointView<Upper>() = actual.template selfadjointView<Upper>() * d.asDiagonal();
+  expected.template triangularView<Upper>() = Matrix3cd(ref_upper * d.asDiagonal());
+  VERIFY_IS_APPROX(actual, expected);
+
+  actual = m;
+  expected = m;
+  actual.template selfadjointView<Lower>() = d.asDiagonal() * actual.template selfadjointView<Lower>();
+  expected.template triangularView<Lower>() = Matrix3cd(d.asDiagonal() * ref_lower);
+  VERIFY_IS_APPROX(actual, expected);
+
+  actual.setRandom();
+  expected = actual;
+  actual.noalias() += m.template selfadjointView<Lower>() * d.asDiagonal();
+  expected.noalias() += ref_lower * d.asDiagonal();
+  VERIFY_IS_APPROX(actual, expected);
+
+  actual.setRandom();
+  expected = actual;
+  actual.noalias() -= d.asDiagonal() * m.template selfadjointView<Upper>();
+  expected.noalias() -= d.asDiagonal() * ref_upper;
+  VERIFY_IS_APPROX(actual, expected);
+
+  MatrixXcd dynamic_m = MatrixXcd::Random(4, 4);
+  dynamic_m.diagonal() = dynamic_m.diagonal().real();
+  VectorXcd dynamic_d = VectorXcd::Random(4);
+  MatrixXcd dynamic_expected(4, 4);
+  MatrixXcd no_malloc_result(4, 4);
+
+  dynamic_expected = MatrixXcd(dynamic_m.template selfadjointView<Lower>()) * dynamic_d.asDiagonal();
+  internal::set_is_malloc_allowed(false);
+  no_malloc_result.noalias() = dynamic_m.template selfadjointView<Lower>() * dynamic_d.asDiagonal();
+  internal::set_is_malloc_allowed(true);
+  VERIFY_IS_APPROX(no_malloc_result, dynamic_expected);
+
+  dynamic_expected = dynamic_d.asDiagonal() * MatrixXcd(dynamic_m.template selfadjointView<Upper>());
+  internal::set_is_malloc_allowed(false);
+  no_malloc_result.noalias() = dynamic_d.asDiagonal() * dynamic_m.template selfadjointView<Upper>();
+  internal::set_is_malloc_allowed(true);
+  VERIFY_IS_APPROX(no_malloc_result, dynamic_expected);
+
+  // Triangular destination assignment from selfadjoint*diagonal must use the lazy
+  // product_evaluator (with conjugate-mirror coeffs) and not materialize a temporary.
+  no_malloc_result = dynamic_m;
+  dynamic_expected = dynamic_m;
+  dynamic_expected.template triangularView<Lower>() =
+      MatrixXcd(dynamic_m.template selfadjointView<Upper>()) * dynamic_d.asDiagonal();
+  internal::set_is_malloc_allowed(false);
+  no_malloc_result.template triangularView<Lower>() =
+      dynamic_m.template selfadjointView<Upper>() * dynamic_d.asDiagonal();
+  internal::set_is_malloc_allowed(true);
+  VERIFY_IS_APPROX(no_malloc_result, dynamic_expected);
+
+  no_malloc_result = dynamic_m;
+  dynamic_expected = dynamic_m;
+  dynamic_expected.template triangularView<Upper>() =
+      dynamic_d.asDiagonal() * MatrixXcd(dynamic_m.template selfadjointView<Lower>());
+  internal::set_is_malloc_allowed(false);
+  no_malloc_result.template triangularView<Upper>() =
+      dynamic_d.asDiagonal() * dynamic_m.template selfadjointView<Lower>();
+  internal::set_is_malloc_allowed(true);
+  VERIFY_IS_APPROX(no_malloc_result, dynamic_expected);
+}
+
+// Exercise the block-tile path of the dense selfadjoint x diagonal kernel
+// (BlockSize = 32 in ProductEvaluators.h). Picks a few sizes that hit
+// full blocks (size = 64), partial blocks (size = 33, 65), and a tiny size
+// that bypasses the block loop entirely (size = 8). Also verifies the
+// overwrite path leaves no stale data when dst is pre-filled.
+template <typename Scalar>
+void selfadjoint_diagonal_products_at(Index n) {
+  using MatType = Matrix<Scalar, Dynamic, Dynamic>;
+  using VecType = Matrix<Scalar, Dynamic, 1>;
+
+  MatType m = MatType::Random(n, n);
+  m.diagonal() = m.diagonal().real().template cast<Scalar>();  // Hermitian diagonal
+  VecType d = VecType::Random(n);
+
+  MatType ref_lower = m.template selfadjointView<Lower>();
+  MatType ref_upper = m.template selfadjointView<Upper>();
+
+  // Plain assignment goes through evalTo (overwrite kernel).
+  // Pre-fill dst with garbage to verify no stale entries remain.
+  MatType dst = MatType::Constant(n, n, Scalar(42));
+  dst.noalias() = m.template selfadjointView<Upper>() * d.asDiagonal();
+  VERIFY_IS_APPROX(dst, ref_upper * d.asDiagonal());
+
+  dst = MatType::Constant(n, n, Scalar(-7));
+  dst.noalias() = m.template selfadjointView<Lower>() * d.asDiagonal();
+  VERIFY_IS_APPROX(dst, ref_lower * d.asDiagonal());
+
+  dst = MatType::Constant(n, n, Scalar(13));
+  dst.noalias() = d.asDiagonal() * m.template selfadjointView<Upper>();
+  VERIFY_IS_APPROX(dst, d.asDiagonal() * ref_upper);
+
+  dst = MatType::Constant(n, n, Scalar(99));
+  dst.noalias() = d.asDiagonal() * m.template selfadjointView<Lower>();
+  VERIFY_IS_APPROX(dst, d.asDiagonal() * ref_lower);
+
+  // Accumulating paths (scaleAndAddTo).
+  MatType base = MatType::Random(n, n);
+  dst = base;
+  dst.noalias() += m.template selfadjointView<Upper>() * d.asDiagonal();
+  VERIFY_IS_APPROX(dst, base + ref_upper * d.asDiagonal());
+
+  dst = base;
+  dst.noalias() -= d.asDiagonal() * m.template selfadjointView<Lower>();
+  VERIFY_IS_APPROX(dst, base - d.asDiagonal() * ref_lower);
+
+  // Scalar-scaled products: the "Dense ?= scalar * Product" rewriting rule
+  // folds alpha into the SelfAdjointView. For a complex alpha that fold is
+  // not Hermitian, so the dispatch must restore alpha rather than apply it
+  // straight to the kernel — verify all four orientation x triangle combos.
+  Scalar alpha = internal::random<Scalar>();
+  dst = base;
+  dst.noalias() += alpha * (m.template selfadjointView<Lower>() * d.asDiagonal());
+  VERIFY_IS_APPROX(dst, base + alpha * (ref_lower * d.asDiagonal()));
+
+  dst = base;
+  dst.noalias() -= alpha * (m.template selfadjointView<Upper>() * d.asDiagonal());
+  VERIFY_IS_APPROX(dst, base - alpha * (ref_upper * d.asDiagonal()));
+
+  dst = base;
+  dst.noalias() += alpha * (d.asDiagonal() * m.template selfadjointView<Upper>());
+  VERIFY_IS_APPROX(dst, base + alpha * (d.asDiagonal() * ref_upper));
+
+  dst = base;
+  dst.noalias() -= alpha * (d.asDiagonal() * m.template selfadjointView<Lower>());
+  VERIFY_IS_APPROX(dst, base - alpha * (d.asDiagonal() * ref_lower));
+
+  // Overwrite-with-scalar path: hits evalTo's HasScalarFactor branch.
+  dst = MatType::Constant(n, n, Scalar(17));
+  dst.noalias() = alpha * (m.template selfadjointView<Lower>() * d.asDiagonal());
+  VERIFY_IS_APPROX(dst, alpha * (ref_lower * d.asDiagonal()));
+
+  dst = MatType::Constant(n, n, Scalar(-3));
+  dst.noalias() = alpha * (d.asDiagonal() * m.template selfadjointView<Upper>());
+  VERIFY_IS_APPROX(dst, alpha * (d.asDiagonal() * ref_upper));
+
+  // Conjugated nested expressions go through the same blas_traits extraction
+  // path. The extracted matrix must keep NeedToConjugate, otherwise the kernel
+  // computes with m instead of m.conjugate().
+  MatType conj_ref_lower = m.conjugate().template selfadjointView<Lower>();
+  MatType conj_ref_upper = m.conjugate().template selfadjointView<Upper>();
+
+  dst = MatType::Constant(n, n, Scalar(23));
+  dst.noalias() = m.conjugate().template selfadjointView<Upper>() * d.asDiagonal();
+  VERIFY_IS_APPROX(dst, conj_ref_upper * d.asDiagonal());
+
+  dst = MatType::Constant(n, n, Scalar(-29));
+  dst.noalias() = d.asDiagonal() * m.conjugate().template selfadjointView<Lower>();
+  VERIFY_IS_APPROX(dst, d.asDiagonal() * conj_ref_lower);
+
+  dst = base;
+  dst.noalias() += alpha * (m.conjugate().template selfadjointView<Lower>() * d.asDiagonal());
+  VERIFY_IS_APPROX(dst, base + alpha * (conj_ref_lower * d.asDiagonal()));
+
+  dst = base;
+  dst.noalias() -= alpha * (d.asDiagonal() * m.conjugate().template selfadjointView<Upper>());
+  VERIFY_IS_APPROX(dst, base - alpha * (d.asDiagonal() * conj_ref_upper));
+}
+
+template <int>
+void selfadjoint_diagonal_products_block_path() {
+  selfadjoint_diagonal_products_at<double>(8);
+  selfadjoint_diagonal_products_at<double>(33);  // partial off-diagonal block
+  selfadjoint_diagonal_products_at<double>(64);  // exact multiple of BlockSize
+  selfadjoint_diagonal_products_at<double>(65);  // off-by-one
+  selfadjoint_diagonal_products_at<std::complex<double>>(33);
+  selfadjoint_diagonal_products_at<std::complex<double>>(65);
+}
+
+// In-place patterns where the diagonal operand shares storage with the destination view.
+// The fast path in triangular_product_assignment_dispatcher detects the run-time overlap
+// and materializes a temporary, so the result must match a reference computed against a
+// materialized source. The structured (triangular/selfadjoint) operand can safely share
+// storage with dst because the kernel reads each cell before writing it.
+template <unsigned int Mode, typename Mat>
+void verify_triangular_in_place_with_aliased_diagonal(const Mat& m) {
+  // diagonal * tri_view
+  {
+    Mat actual = m, expected = m;
+    Mat ref_diag = actual.diagonal().asDiagonal();
+    Mat ref_tri = actual.template triangularView<Mode>();
+    expected.template triangularView<Mode>() = (ref_diag * ref_tri).eval();
+    actual.template triangularView<Mode>() = actual.diagonal().asDiagonal() * actual.template triangularView<Mode>();
+    VERIFY_IS_APPROX(actual, expected);
+  }
+  // tri_view * diagonal
+  {
+    Mat actual = m, expected = m;
+    Mat ref_diag = actual.diagonal().asDiagonal();
+    Mat ref_tri = actual.template triangularView<Mode>();
+    expected.template triangularView<Mode>() = (ref_tri * ref_diag).eval();
+    actual.template triangularView<Mode>() = actual.template triangularView<Mode>() * actual.diagonal().asDiagonal();
+    VERIFY_IS_APPROX(actual, expected);
+  }
+}
+
+template <unsigned int Mode, typename Mat>
+void verify_selfadjoint_in_place_with_aliased_diagonal(const Mat& m) {
+  // diagonal * sa_view
+  {
+    Mat actual = m, expected = m;
+    Mat ref_diag = actual.diagonal().asDiagonal();
+    Mat ref_sa = actual.template selfadjointView<Mode>();
+    expected.template triangularView<Mode>() = (ref_diag * ref_sa).eval();
+    actual.template selfadjointView<Mode>() = actual.diagonal().asDiagonal() * actual.template selfadjointView<Mode>();
+    VERIFY_IS_APPROX(actual.template triangularView<Mode>().toDenseMatrix(),
+                     expected.template triangularView<Mode>().toDenseMatrix());
+  }
+  // sa_view * diagonal
+  {
+    Mat actual = m, expected = m;
+    Mat ref_diag = actual.diagonal().asDiagonal();
+    Mat ref_sa = actual.template selfadjointView<Mode>();
+    expected.template triangularView<Mode>() = (ref_sa * ref_diag).eval();
+    actual.template selfadjointView<Mode>() = actual.template selfadjointView<Mode>() * actual.diagonal().asDiagonal();
+    VERIFY_IS_APPROX(actual.template triangularView<Mode>().toDenseMatrix(),
+                     expected.template triangularView<Mode>().toDenseMatrix());
+  }
+}
+
+template <int>
+void structured_diagonal_aliasing() {
+  for (int n : {3, 5, 8, 17, 32, 33, 64, 65}) {
+    MatrixXcd m = MatrixXcd::Random(n, n);
+    m.diagonal() = m.diagonal().real();  // Hermitian-friendly diagonal
+
+    verify_triangular_in_place_with_aliased_diagonal<Upper>(m);
+    verify_triangular_in_place_with_aliased_diagonal<Lower>(m);
+    verify_selfadjoint_in_place_with_aliased_diagonal<Upper>(m);
+    verify_selfadjoint_in_place_with_aliased_diagonal<Lower>(m);
+  }
+}
+
+template <typename DiagonalType>
+void diagonal_matrix_move(Index size) {
+  using Scalar = typename DiagonalType::Scalar;
+  using VectorType = typename DiagonalType::DiagonalVectorType;
+  STATIC_CHECK(std::is_nothrow_move_constructible<DiagonalType>::value ==
+               std::is_nothrow_move_constructible<VectorType>::value);
+  STATIC_CHECK(VectorType::MaxSizeAtCompileTime != Dynamic || std::is_nothrow_move_assignable<DiagonalType>::value ==
+                                                                  std::is_nothrow_move_assignable<VectorType>::value);
+
+  DiagonalType source;
+  source.resize(size);
+  for (Index i = 0; i < size; ++i) {
+    const Scalar value = Scalar(i + 1);
+    source.diagonal()(i) = value;
+  }
+  const DiagonalType expected(source);
+  DiagonalType copied;
+  copied = source;
+  const Scalar* original_data = source.diagonal().data();
+
+  internal::set_is_malloc_allowed(false);
+  DiagonalType constructed(std::move(source));
+  internal::set_is_malloc_allowed(true);
+  VERIFY_IS_EQUAL(constructed.rows(), size);
+  if (VectorType::MaxSizeAtCompileTime == Dynamic) VERIFY(constructed.diagonal().data() == original_data);
+  for (Index i = 0; i < size; ++i) {
+    VERIFY_IS_EQUAL(constructed.diagonal()(i), expected.diagonal()(i));
+    VERIFY_IS_EQUAL(copied.diagonal()(i), expected.diagonal()(i));
+  }
+
+  source = expected;
+  DiagonalType assigned;
+  internal::set_is_malloc_allowed(false);
+  assigned = std::move(constructed);
+  internal::set_is_malloc_allowed(true);
+  VERIFY_IS_EQUAL(assigned.rows(), size);
+  if (VectorType::MaxSizeAtCompileTime == Dynamic) VERIFY(assigned.diagonal().data() == original_data);
+  for (Index i = 0; i < size; ++i) VERIFY_IS_EQUAL(assigned.diagonal()(i), expected.diagonal()(i));
+
+  constructed = expected;
+  // Also move into an existing allocation, with a different size when storage is dynamic.
+  if (VectorType::SizeAtCompileTime == Dynamic) assigned.resize(size == 0 ? 1 : size - 1);
+  original_data = constructed.diagonal().data();
+  internal::set_is_malloc_allowed(false);
+  assigned = std::move(constructed);
+  internal::set_is_malloc_allowed(true);
+  VERIFY_IS_EQUAL(assigned.rows(), size);
+  if (VectorType::MaxSizeAtCompileTime == Dynamic) VERIFY(assigned.diagonal().data() == original_data);
+  for (Index i = 0; i < size; ++i) VERIFY_IS_EQUAL(assigned.diagonal()(i), expected.diagonal()(i));
+
+  constructed = expected;
+  for (Index i = 0; i < size; ++i) {
+    VERIFY_IS_EQUAL(source.diagonal()(i), expected.diagonal()(i));
+    VERIFY_IS_EQUAL(constructed.diagonal()(i), expected.diagonal()(i));
+  }
+}
+
+template <typename Scalar>
+void diagonal_matrix_moves() {
+  diagonal_matrix_move<DiagonalMatrix<Scalar, 0>>(0);
+  diagonal_matrix_move<DiagonalMatrix<Scalar, 1>>(1);
+  diagonal_matrix_move<DiagonalMatrix<Scalar, 4>>(4);
+  for (Index size : {0, 1, 4, 17}) {
+    diagonal_matrix_move<DiagonalMatrix<Scalar, Dynamic>>(size);
+    diagonal_matrix_move<DiagonalMatrix<Scalar, Dynamic, 17>>(size);
+  }
+}
+
+template <typename Scalar, int Size>
+void check_unaligned_diagonal_product_size(Index n = Size) {
+  using Vec = Matrix<Scalar, Size, 1>;
+  using RowVec = Matrix<Scalar, 1, Size>;
+  using ColMat = Matrix<Scalar, Size, Size, ColMajor>;
+  using RowMat = Matrix<Scalar, Size, Size, RowMajor>;
+  using StorageVec = Matrix<Scalar, Dynamic, 1>;
+
+  StorageVec storage = random_for_arithmetic<StorageVec>(n + 3);
+  ColMat cm = random_for_arithmetic<ColMat>(n, n);
+  RowMat rm = random_for_arithmetic<RowMat>(n, n);
+  Vec cv = random_for_arithmetic<Vec>(n);
+  RowVec rv = random_for_arithmetic<RowVec>(n);
+
+  for (Index offset = 1; offset <= 3; ++offset) {
+    Map<const Vec> umap(storage.data() + offset, n);
+    Vec ref_diag = umap;
+    DiagonalMatrix<Scalar, Size> ref_dm(ref_diag);
+
+    ColMat cm_res(n, n);
+    RowMat rm_res(n, n);
+    Vec cv_res(n);
+    RowVec rv_res(n);
+
+    ColMat dm_cm_ref = ref_dm * cm;
+    ColMat cm_dm_ref = cm * ref_dm;
+    RowMat rm_dm_ref = rm * ref_dm;
+    RowMat dm_rm_ref = ref_dm * rm;
+    Vec dm_cv_ref = ref_dm * cv;
+    RowVec rv_dm_ref = rv * ref_dm;
+    ColMat cm_add_ref = cm + dm_cm_ref;
+    RowMat rm_sub_ref = rm - rm_dm_ref;
+
+    internal::set_is_malloc_allowed(false);
+    cm_res.noalias() = umap.asDiagonal() * cm;
+    VERIFY_IS_APPROX(cm_res, dm_cm_ref);
+
+    cm_res.noalias() = cm * umap.asDiagonal();
+    VERIFY_IS_APPROX(cm_res, cm_dm_ref);
+
+    rm_res.noalias() = rm * umap.asDiagonal();
+    VERIFY_IS_APPROX(rm_res, rm_dm_ref);
+
+    rm_res.noalias() = umap.asDiagonal() * rm;
+    VERIFY_IS_APPROX(rm_res, dm_rm_ref);
+
+    cv_res.noalias() = umap.asDiagonal() * cv;
+    VERIFY_IS_APPROX(cv_res, dm_cv_ref);
+
+    rv_res.noalias() = rv * umap.asDiagonal();
+    VERIFY_IS_APPROX(rv_res, rv_dm_ref);
+
+    if (Size != Dynamic) {
+      cm_res.noalias() = storage.template segment<Size>(offset).asDiagonal() * cm;
+      VERIFY_IS_APPROX(cm_res, dm_cm_ref);
+
+      rm_res.noalias() = rm * storage.template segment<Size>(offset).asDiagonal();
+      VERIFY_IS_APPROX(rm_res, rm_dm_ref);
+    } else {
+      cm_res.noalias() = storage.segment(offset, n).asDiagonal() * cm;
+      VERIFY_IS_APPROX(cm_res, dm_cm_ref);
+
+      rm_res.noalias() = rm * storage.segment(offset, n).asDiagonal();
+      VERIFY_IS_APPROX(rm_res, rm_dm_ref);
+    }
+
+    cm_res = cm;
+    cm_res.noalias() += umap.asDiagonal() * cm;
+    VERIFY_IS_APPROX(cm_res, cm_add_ref);
+
+    rm_res = rm;
+    rm_res.noalias() -= rm * umap.asDiagonal();
+    VERIFY_IS_APPROX(rm_res, rm_sub_ref);
+
+    // Random signed sums can nearly cancel, so bound the difference relative to the summed magnitudes, not to the sum.
+    // Each of two differently associated sums of N = n^2 products rounds by (N - 1 + sqrt(5)) u, with u = eps / 2.
+    using RealScalar = typename NumTraits<Scalar>::Real;
+    const RealScalar sum_tolerance = RealScalar(n * n + 2) * NumTraits<RealScalar>::epsilon();
+    VERIFY(numext::abs((umap.asDiagonal() * cm).sum() - dm_cm_ref.sum()) <= sum_tolerance * dm_cm_ref.cwiseAbs().sum());
+    VERIFY(numext::abs((rm * umap.asDiagonal()).sum() - rm_dm_ref.sum()) <= sum_tolerance * rm_dm_ref.cwiseAbs().sum());
+    internal::set_is_malloc_allowed(true);
+  }
+}
+
+template <typename Scalar>
+void unaligned_diagonal_products() {
+  check_unaligned_diagonal_product_size<Scalar, 1>();
+  check_unaligned_diagonal_product_size<Scalar, 2>();
+  check_unaligned_diagonal_product_size<Scalar, 3>();
+  check_unaligned_diagonal_product_size<Scalar, 4>();
+  check_unaligned_diagonal_product_size<Scalar, 6>();
+  check_unaligned_diagonal_product_size<Scalar, 8>();
+  check_unaligned_diagonal_product_size<Scalar, 16>();
+  for (Index n : {Index(4), Index(7), Index(8), Index(16), Index(19)}) {
+    check_unaligned_diagonal_product_size<Scalar, Dynamic>(n);
+  }
+}
+
+template <int Mode, int Order>
+void diagonal_product_result_types() {
+  using Tag0 = noncommutative_scalar::TaggedScalar<0>;
+  using Tag1 = noncommutative_scalar::TaggedScalar<1>;
+  using Tag2 = noncommutative_scalar::TaggedScalar<2>;
+  using Tag3 = noncommutative_scalar::TaggedScalar<3>;
+  DiagonalMatrix<Tag0, 2> diagonal;
+  diagonal.diagonal()(0) = Tag0(2);
+  // With m(i, j) = 1 + i + 2j, d(i) m(i, j) differs from d(j) m(j, i) off the diagonal, so a transposed read fails.
+  diagonal.diagonal()(1) = Tag0(5);
+  Matrix<Tag1, 2, 2, Order> matrix;
+  for (Index j = 0; j < 2; ++j)
+    for (Index i = 0; i < 2; ++i) matrix(i, j) = Tag1(int(1 + i + 2 * j));
+  const Matrix<Tag2, 2, 2> denseLeft = diagonal * matrix;
+  const Matrix<Tag3, 2, 2> denseRight = matrix * diagonal;
+  const auto triangularLeft = diagonal * matrix.template triangularView<Mode>();
+  const auto triangularRight = matrix.template triangularView<Mode>() * diagonal;
+  internal::evaluator<decltype(triangularLeft)> left(triangularLeft);
+  internal::evaluator<decltype(triangularRight)> right(triangularRight);
+  static_assert(std::is_same<typename decltype(left)::Scalar, Tag2>::value, "left result type");
+  static_assert(std::is_same<typename decltype(right)::Scalar, Tag3>::value, "right result type");
+  const auto selfadjointLeft = diagonal * matrix.template selfadjointView<Mode&(Upper | Lower)>();
+  const auto selfadjointRight = matrix.template selfadjointView<Mode&(Upper | Lower)>() * diagonal;
+  internal::evaluator<decltype(selfadjointLeft)> symmetricLeft(selfadjointLeft);
+  internal::evaluator<decltype(selfadjointRight)> symmetricRight(selfadjointRight);
+  for (Index j = 0; j < 2; ++j)
+    for (Index i = 0; i < 2; ++i) {
+      VERIFY_IS_EQUAL(denseLeft(i, j).value, diagonal.diagonal()(i).value * matrix(i, j).value);
+      VERIFY_IS_EQUAL(denseRight(i, j).value, matrix(i, j).value * diagonal.diagonal()(j).value);
+      const bool active = (Mode & Upper) ? i <= j : i >= j;
+      const bool zero = !active || (i == j && (Mode & ZeroDiag));
+      const int triangular = i == j && (Mode & UnitDiag) ? 1 : matrix(i, j).value;
+      VERIFY_IS_EQUAL(left.coeff(i, j).value, zero ? 0 : diagonal.diagonal()(i).value * triangular);
+      VERIFY_IS_EQUAL(right.coeff(i, j).value, zero ? 0 : triangular * diagonal.diagonal()(j).value);
+      const int symmetric = active ? matrix(i, j).value : matrix(j, i).value;
+      VERIFY_IS_EQUAL(symmetricLeft.coeff(i, j).value, diagonal.diagonal()(i).value * symmetric);
+      VERIFY_IS_EQUAL(symmetricRight.coeff(i, j).value, symmetric * diagonal.diagonal()(j).value);
+    }
+}
+
+template <int Size>
+void diagonal_product_operand_order() {
+  using Scalar = noncommutative_scalar::NoncommutingBlock;
+  const Index size = Size == Dynamic ? 2 : Size;
+  Matrix<Scalar, 1, Size> row(size);
+  DiagonalMatrix<Scalar, Size> diagonal(size);
+  for (Index i = 0; i < size; ++i) {
+    row(i).values = {{int(i) + 1, 2, 0, 1}};
+    diagonal.diagonal()(i).values = {{1, 0, 3, int(i) + 1}};
+  }
+  const auto right = row * diagonal;
+  const auto left = diagonal * row.transpose();
+  const Matrix<Scalar, 1, Size> materializedRight = right;
+  const Matrix<Scalar, Size, 1> materializedLeft = left;
+  for (Index i = 0; i < size; ++i) {
+    const Scalar expectedRight = row(i) * diagonal.diagonal()(i);
+    const Scalar expectedLeft = diagonal.diagonal()(i) * row(i);
+    VERIFY(expectedRight.values != expectedLeft.values);
+    VERIFY(right.coeff(i).values == expectedRight.values);
+    VERIFY(left.coeff(i).values == expectedLeft.values);
+    VERIFY(materializedRight(i).values == expectedRight.values);
+    VERIFY(materializedLeft(i).values == expectedLeft.values);
+  }
+
+  DiagonalMatrix<Scalar, Dynamic> singleton(1);
+  singleton.diagonal()(0) = diagonal.diagonal()(0);
+  const Matrix<Scalar, Size, 1> column = row.transpose();
+  const auto scaled = column * singleton;
+  const Matrix<Scalar, Size, 1> materializedScaled = scaled;
+  for (Index i = 0; i < size; ++i) {
+    const Scalar expected = column(i) * singleton.diagonal()(0);
+    VERIFY(scaled.coeff(i).values == expected.values);
+    VERIFY(materializedScaled(i).values == expected.values);
+  }
 }
 
 EIGEN_DECLARE_TEST(diagonalmatrices) {
@@ -194,4 +932,27 @@ EIGEN_DECLARE_TEST(diagonalmatrices) {
     CALL_SUBTEST_9(as_scalar_product(MatrixXf(1, 1)));
   }
   CALL_SUBTEST_10(bug987<0>());
+  CALL_SUBTEST_10(diagonal_update_shape_mismatch<0>());
+  CALL_SUBTEST_10(bug2013<0>());
+  CALL_SUBTEST_10(selfadjoint_diagonal_products<0>());
+  CALL_SUBTEST_10(selfadjoint_diagonal_products_block_path<0>());
+  CALL_SUBTEST_10(structured_diagonal_aliasing<0>());
+  CALL_SUBTEST_10(dense_diagonal_sum_assignment_regressions<0>());
+  CALL_SUBTEST_10(unaligned_diagonal_products<float>());
+  CALL_SUBTEST_10(unaligned_diagonal_products<double>());
+  CALL_SUBTEST_10(unaligned_diagonal_products<int>());
+  CALL_SUBTEST_10(unaligned_diagonal_products<std::complex<float>>());
+  CALL_SUBTEST_10(unaligned_diagonal_products<std::complex<double>>());
+  CALL_SUBTEST_11(diagonal_matrix_moves<float>());
+  CALL_SUBTEST_11(diagonal_matrix_moves<double>());
+  CALL_SUBTEST_11(diagonal_matrix_moves<int>());
+  CALL_SUBTEST_11(diagonal_matrix_moves<std::complex<double>>());
+  CALL_SUBTEST_11(diagonal_matrix_moves<MovableScalar<float>>());
+  CALL_SUBTEST_12((diagonal_product_result_types<Lower, ColMajor>()));
+  CALL_SUBTEST_12((diagonal_product_result_types<Upper, RowMajor>()));
+  CALL_SUBTEST_12((diagonal_product_result_types<UnitLower, RowMajor>()));
+  CALL_SUBTEST_12((diagonal_product_result_types<StrictlyUpper, ColMajor>()));
+  CALL_SUBTEST_13((diagonal_product_operand_order<1>()));
+  CALL_SUBTEST_13((diagonal_product_operand_order<2>()));
+  CALL_SUBTEST_13((diagonal_product_operand_order<Dynamic>()));
 }

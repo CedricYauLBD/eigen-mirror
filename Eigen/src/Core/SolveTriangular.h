@@ -6,6 +6,7 @@
 // This Source Code Form is subject to the terms of the Mozilla
 // Public License v. 2.0. If a copy of the MPL was not distributed
 // with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
+// SPDX-License-Identifier: MPL-2.0
 
 #ifndef EIGEN_SOLVETRIANGULAR_H
 #define EIGEN_SOLVETRIANGULAR_H
@@ -50,13 +51,14 @@ struct triangular_solver_selector;
 
 template <typename Lhs, typename Rhs, int Side, int Mode>
 struct triangular_solver_selector<Lhs, Rhs, Side, Mode, NoUnrolling, 1> {
-  typedef typename Lhs::Scalar LhsScalar;
-  typedef typename Rhs::Scalar RhsScalar;
-  typedef blas_traits<Lhs> LhsProductTraits;
-  typedef typename LhsProductTraits::ExtractType ActualLhsType;
-  typedef Map<Matrix<RhsScalar, Dynamic, 1>, Aligned> MappedRhs;
+  using LhsScalar = typename Lhs::Scalar;
+  using RhsScalar = typename Rhs::Scalar;
+  using LhsProductTraits = blas_traits<Lhs>;
+  using ActualLhsType = typename LhsProductTraits::DirectLinearAccessType;
+  using ActualLhsTypeCleaned = remove_all_t<ActualLhsType>;
+  using MappedRhs = Map<Matrix<RhsScalar, Dynamic, 1>, Aligned>;
   static EIGEN_DEVICE_FUNC void run(const Lhs& lhs, Rhs& rhs) {
-    ActualLhsType actualLhs = LhsProductTraits::extract(lhs);
+    add_const_on_value_type_t<ActualLhsType> actualLhs = LhsProductTraits::extract(lhs);
 
     // FIXME find a way to allow an inner stride if packet_traits<Scalar>::size==1
 
@@ -67,10 +69,11 @@ struct triangular_solver_selector<Lhs, Rhs, Side, Mode, NoUnrolling, 1> {
     if (!useRhsDirectly) MappedRhs(actualRhs, rhs.size()) = rhs;
 
     triangular_solve_vector<LhsScalar, RhsScalar, Index, Side, Mode, LhsProductTraits::NeedToConjugate,
-                            (int(Lhs::Flags) & RowMajorBit) ? RowMajor : ColMajor>::run(actualLhs.cols(),
-                                                                                        actualLhs.data(),
-                                                                                        actualLhs.outerStride(),
-                                                                                        actualRhs);
+                            (int(ActualLhsTypeCleaned::Flags) & RowMajorBit) ? RowMajor
+                                                                             : ColMajor>::run(actualLhs.cols(),
+                                                                                              actualLhs.data(),
+                                                                                              actualLhs.outerStride(),
+                                                                                              actualRhs);
 
     if (!useRhsDirectly) rhs = MappedRhs(actualRhs, rhs.size());
   }
@@ -79,9 +82,9 @@ struct triangular_solver_selector<Lhs, Rhs, Side, Mode, NoUnrolling, 1> {
 // the rhs is a matrix
 template <typename Lhs, typename Rhs, int Side, int Mode>
 struct triangular_solver_selector<Lhs, Rhs, Side, Mode, NoUnrolling, Dynamic> {
-  typedef typename Rhs::Scalar Scalar;
-  typedef blas_traits<Lhs> LhsProductTraits;
-  typedef typename LhsProductTraits::DirectLinearAccessType ActualLhsType;
+  using Scalar = typename Rhs::Scalar;
+  using LhsProductTraits = blas_traits<Lhs>;
+  using ActualLhsType = typename LhsProductTraits::DirectLinearAccessType;
 
   static EIGEN_DEVICE_FUNC void run(const Lhs& lhs, Rhs& rhs) {
     add_const_on_value_type_t<ActualLhsType> actualLhs = LhsProductTraits::extract(lhs);
@@ -89,10 +92,9 @@ struct triangular_solver_selector<Lhs, Rhs, Side, Mode, NoUnrolling, Dynamic> {
     const Index size = lhs.rows();
     const Index othersize = Side == OnTheLeft ? rhs.cols() : rhs.rows();
 
-    typedef internal::gemm_blocking_space<(Rhs::Flags & RowMajorBit) ? RowMajor : ColMajor, Scalar, Scalar,
-                                          Rhs::MaxRowsAtCompileTime, Rhs::MaxColsAtCompileTime,
-                                          Lhs::MaxRowsAtCompileTime, 4>
-        BlockingType;
+    using BlockingType = internal::gemm_blocking_space<(Rhs::Flags & RowMajorBit) ? RowMajor : ColMajor, Scalar, Scalar,
+                                                       Rhs::MaxRowsAtCompileTime, Rhs::MaxColsAtCompileTime,
+                                                       Lhs::MaxRowsAtCompileTime, 4>;
 
     // Nothing to solve.
     if (actualLhs.size() == 0 || rhs.size() == 0) {
@@ -132,7 +134,7 @@ struct triangular_solver_unroller<Lhs, Rhs, Mode, LoopIndex, Size, false> {
                                      .cwiseProduct(rhs.template segment<LoopIndex>(StartIndex))
                                      .sum();
 
-    if (!(Mode & UnitDiag)) rhs.coeffRef(DiagIndex) /= lhs.coeff(DiagIndex, DiagIndex);
+    EIGEN_IF_CONSTEXPR (!(Mode & UnitDiag)) rhs.coeffRef(DiagIndex) /= lhs.coeff(DiagIndex, DiagIndex);
 
     triangular_solver_unroller<Lhs, Rhs, Mode, LoopIndex + 1, Size>::run(lhs, rhs);
   }
@@ -162,6 +164,24 @@ struct triangular_solver_selector<Lhs, Rhs, OnTheRight, Mode, CompleteUnrolling,
   }
 };
 
+// What a triangular solve reads its matrix from: the view itself when it must be evaluated, which reads only the
+// triangle, or else its nested expression.
+template <bool EvalLhs>
+struct triangular_solve_lhs_source {
+  template <typename TriangularType>
+  EIGEN_DEVICE_FUNC static const TriangularType& run(const TriangularType& tri) {
+    return tri;
+  }
+};
+
+template <>
+struct triangular_solve_lhs_source<false> {
+  template <typename TriangularType>
+  EIGEN_DEVICE_FUNC static const typename TriangularType::NestedExpression& run(const TriangularType& tri) {
+    return tri.nestedExpression();
+  }
+};
+
 }  // end namespace internal
 
 /***************************************************************************
@@ -174,22 +194,42 @@ template <int Side, typename OtherDerived>
 EIGEN_DEVICE_FUNC void TriangularViewImpl<MatrixType, Mode, Dense>::solveInPlace(
     const MatrixBase<OtherDerived>& _other) const {
   OtherDerived& other = _other.const_cast_derived();
-  eigen_assert(derived().cols() == derived().rows() && ((Side == OnTheLeft && derived().cols() == other.rows()) ||
-                                                        (Side == OnTheRight && derived().cols() == other.cols())));
+  EIGEN_INTERNAL_ASSERT_SQUARE(derived());
+  // TODO(C++17): use if constexpr (Side == OnTheLeft) with PRODUCT_SHAPE/SAME_COLS checks directly.
+  EIGEN_INTERNAL_CHECK_SHAPE(
+      (Side == OnTheLeft ? derived().cols() == other.rows() : derived().cols() == other.cols()),
+      YOU_MIXED_MATRICES_OF_DIFFERENT_SIZES,
+      std::conditional_t<Side == OnTheLeft, internal::product_dimensions<MatrixType, OtherDerived>,
+                         internal::matching_cols<MatrixType, OtherDerived>>);
   eigen_assert((!(int(Mode) & int(ZeroDiag))) && bool(int(Mode) & (int(Upper) | int(Lower))));
   // If solving for a 0x0 matrix, nothing to do, simply return.
   if (derived().cols() == 0) return;
 
   enum {
-    copy = (internal::traits<OtherDerived>::Flags & RowMajorBit) && OtherDerived::IsVectorAtCompileTime &&
-           OtherDerived::SizeAtCompileTime != 1
+    OtherFlags = internal::traits<OtherDerived>::Flags,
+    IsRowMajorVector =
+        (OtherFlags & RowMajorBit) && OtherDerived::IsVectorAtCompileTime && OtherDerived::SizeAtCompileTime != 1,
+    copy = IsRowMajorVector || ((OtherFlags & DirectAccessBit) == 0)
   };
-  typedef std::conditional_t<copy, typename internal::plain_matrix_type_column_major<OtherDerived>::type, OtherDerived&>
-      OtherCopy;
+  using OtherPlainObject =
+      std::conditional_t<IsRowMajorVector, typename internal::plain_matrix_type_column_major<OtherDerived>::type,
+                         typename internal::plain_matrix_type<OtherDerived>::type>;
+  using OtherCopy = std::conditional_t<copy, OtherPlainObject, OtherDerived&>;
   OtherCopy otherCopy(other);
+  using OtherCopyCleaned = std::remove_reference_t<OtherCopy>;
 
-  internal::triangular_solver_selector<MatrixType, std::remove_reference_t<OtherCopy>, Side, Mode>::run(
-      derived().nestedExpression(), otherCopy);
+  // The kernels read the matrix blas_traits extracts, without its scalar factor. A unit diagonal does not
+  // scale with that factor, so a scaled matrix is evaluated rather than its factor applied to the solution.
+  // Only the triangle is evaluated: the other coefficients, and an implicit unit diagonal, need not be readable.
+  // The unrolled solver reads the scaled coefficients itself and needs no evaluated copy.
+  constexpr bool EvalLhs =
+      internal::blas_traits<MatrixType>::HasScalarFactor &&
+      int(internal::trsolve_traits<MatrixType, OtherCopyCleaned, Side>::Unrolling) != int(CompleteUnrolling);
+  using Lhs = std::conditional_t<EvalLhs, typename MatrixType::PlainObject, MatrixType>;
+  std::conditional_t<EvalLhs, const Lhs, const MatrixType&> lhs(
+      internal::triangular_solve_lhs_source<EvalLhs>::run(derived()));
+
+  internal::triangular_solver_selector<Lhs, OtherCopyCleaned, Side, Mode>::run(lhs, otherCopy);
 
   if (copy) other = otherCopy;
 }
@@ -206,13 +246,12 @@ namespace internal {
 
 template <int Side, typename TriangularType, typename Rhs>
 struct traits<triangular_solve_retval<Side, TriangularType, Rhs> > {
-  typedef typename internal::plain_matrix_type_column_major<Rhs>::type ReturnType;
+  using ReturnType = typename internal::plain_matrix_type_column_major<Rhs>::type;
 };
 
 template <int Side, typename TriangularType, typename Rhs>
 struct triangular_solve_retval : public ReturnByValue<triangular_solve_retval<Side, TriangularType, Rhs> > {
-  typedef remove_all_t<typename Rhs::Nested> RhsNestedCleaned;
-  typedef ReturnByValue<triangular_solve_retval> Base;
+  using Base = ReturnByValue<triangular_solve_retval>;
 
   triangular_solve_retval(const TriangularType& tri, const Rhs& rhs) : m_triangularMatrix(tri), m_rhs(rhs) {}
 

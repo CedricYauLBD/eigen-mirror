@@ -6,6 +6,7 @@
 // This Source Code Form is subject to the terms of the Mozilla
 // Public License v. 2.0. If a copy of the MPL was not distributed
 // with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
+// SPDX-License-Identifier: MPL-2.0
 
 #include "main.h"
 #include <Eigen/LU>
@@ -25,15 +26,12 @@ void inverse_permutation_4x4() {
 template <typename MatrixType>
 void inverse_general_4x4(int repeat) {
   using std::abs;
-  typedef typename MatrixType::Scalar Scalar;
+  using Scalar = typename MatrixType::Scalar;
   double error_sum = 0., error_max = 0.;
   for (int i = 0; i < repeat; ++i) {
-    MatrixType m;
-    bool is_invertible;
-    do {
-      m = MatrixType::Random();
-      is_invertible = Eigen::FullPivLU<MatrixType>(m).isInvertible();
-    } while (!is_invertible);
+    // Create a random diagonally dominant (thus invertible) matrix.
+    MatrixType m = MatrixType::Random();
+    m.diagonal().array() += Scalar(8);  // 2 * 4 for a 4x4 matrix.
     MatrixType inv = m.inverse();
     double error = double((m * inv - MatrixType::Identity()).norm());
     error_sum += error;
@@ -43,8 +41,7 @@ void inverse_general_4x4(int repeat) {
   double error_avg = error_sum / repeat;
   EIGEN_DEBUG_VAR(error_avg);
   EIGEN_DEBUG_VAR(error_max);
-  // FIXME that 1.25 used to be a 1.0 until the NumTraits changes on 28 April 2010, what's going wrong??
-  // FIXME that 1.25 used to be 1.2 until we tested gcc 4.1 on 30 June 2010 and got 1.21.
+  // Keep the historical 1.25 tolerance after NumTraits and compiler-codegen changes observed in 2010.
   VERIFY(error_avg < (NumTraits<Scalar>::IsComplex ? 8.0 : 1.25));
   VERIFY(error_max < (NumTraits<Scalar>::IsComplex ? 64.0 : 20.0));
 

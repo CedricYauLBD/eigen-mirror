@@ -6,6 +6,7 @@
 // This Source Code Form is subject to the terms of the Mozilla
 // Public License v. 2.0. If a copy of the MPL was not distributed
 // with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
+// SPDX-License-Identifier: MPL-2.0
 
 #include "main.h"
 
@@ -118,9 +119,61 @@ struct packet_segment_test_impl {
 
     verify_data(aligned_data_in, aligned_data_out, b, begin, count);
   }
+  static void test_all_ranges() {
+    // every (begin, count) with begin + count <= PacketSize: lanes in the range are copied, the rest are untouched
+    VectorX<Scalar> data_in(PacketSize), data_out(PacketSize), data_ref(PacketSize);
+    for (Index begin = 0; begin <= PacketSize; begin++) {
+      for (Index count = 0; begin + count <= PacketSize; count++) {
+        data_in.setRandom();
+        data_out.setRandom();
+        data_ref = data_out;
+        // A scalar loop: a segment assignment would run the primitives under test.
+        for (Index i = begin; i < begin + count; ++i) data_ref(i) = data_in(i);
+        Packet a = internal::ploaduSegment<Packet>(data_in.data(), begin, count);
+        internal::pstoreuSegment<Scalar, Packet>(data_out.data(), a, begin, count);
+        VERIFY_IS_CWISE_EQUAL(data_out, data_ref);
+      }
+    }
+  }
+  static void test_zero_fill() {
+    // ploaduSegment zeroes the lanes outside [begin, begin + count), even when the memory there holds nonzero values;
+    // the GEMV kernels sum whole segment packets.
+    VectorX<Scalar> data_in = VectorX<Scalar>::Constant(PacketSize, Scalar(1));
+    VectorX<Scalar> lanes(PacketSize);
+    for (Index begin = 0; begin <= PacketSize; begin++) {
+      for (Index count = 0; begin + count <= PacketSize; count++) {
+        internal::pstoreu(lanes.data(), internal::ploaduSegment<Packet>(data_in.data(), begin, count));
+        for (Index i = 0; i < PacketSize; ++i) {
+          const bool in_range = i >= begin && i < begin + count;
+          VERIFY_IS_EQUAL(lanes(i), in_range ? Scalar(1) : Scalar(0));
+        }
+      }
+    }
+  }
+  static EIGEN_DONT_INLINE void verify_invalid_range(Index begin, Index count) {
+    // The range is meant to fail the assertion. Hidden from the optimizer, it cannot be propagated into the copy loops,
+    // where GCC 10 would report the out-of-range iterations with -Waggressive-loop-optimizations.
+    EIGEN_OPTIMIZATION_BARRIER(begin);
+    EIGEN_OPTIMIZATION_BARRIER(count);
+    VectorX<Scalar> data = VectorX<Scalar>::Zero(PacketSize);
+    const Packet a = internal::pset1<Packet>(Scalar(0));
+    VERIFY_RAISES_ASSERT(internal::ploaduSegment<Packet>(data.data(), begin, count));
+    VERIFY_RAISES_ASSERT((internal::pstoreuSegment<Scalar, Packet>(data.data(), a, begin, count)));
+  }
+  static void test_invalid_ranges() {
+    // Every specialization asserts 0 <= begin, 0 <= count, begin + count <= PacketSize.
+    verify_invalid_range(-1, 1);
+    verify_invalid_range(0, -1);
+    verify_invalid_range(0, PacketSize + 1);
+    verify_invalid_range(1, PacketSize);
+    verify_invalid_range(PacketSize + 1, 0);
+  }
   static void run() {
     test_unaligned();
     test_aligned();
+    test_all_ranges();
+    test_zero_fill();
+    test_invalid_ranges();
   }
 };
 
@@ -163,6 +216,14 @@ void test_packet_segment() {
 }
 
 EIGEN_DECLARE_TEST(packet_segment) {
+#if defined(EIGEN_VECTORIZE_AVX) && !defined(EIGEN_VECTORIZE_AVX512VL)
+  std::complex<float> data[2] = {};
+  VERIFY_RAISES_ASSERT(internal::ploaduSegment<internal::Packet2cf>(data, 0, 3));
+  VERIFY_RAISES_ASSERT(internal::ploaduSegment<internal::Packet2cf>(data, 0, -1));
+  VERIFY_RAISES_ASSERT(internal::ploaduSegment<internal::Packet2cf>(data, -1, 0));
+  VERIFY_RAISES_ASSERT(internal::ploaduSegment<internal::Packet2cf>(data, 3, 0));
+  VERIFY_RAISES_ASSERT(internal::ploaduSegment<internal::Packet2cf>(data, (std::numeric_limits<Index>::max)(), 1));
+#endif
   for (int i = 0; i < g_repeat; i++) {
     test_packet_segment<bool>();
     test_packet_segment<int8_t>();

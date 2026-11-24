@@ -6,6 +6,7 @@
 // This Source Code Form is subject to the terms of the Mozilla
 // Public License v. 2.0. If a copy of the MPL was not distributed
 // with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
+// SPDX-License-Identifier: MPL-2.0
 
 #ifndef EIGEN_FILL_H
 #define EIGEN_FILL_H
@@ -20,27 +21,28 @@ namespace internal {
 template <typename Xpr>
 struct eigen_fill_helper : std::false_type {};
 
+// Only enable std::fill_n for trivially copyable scalars.  GCC's libstdc++
+// fill_n pessimizes non-trivially-copyable types (extra moves per iteration),
+// causing measurable regressions for types like AutoDiffScalar (issue #2956).
 template <typename Scalar, int Rows, int Cols, int Options, int MaxRows, int MaxCols>
-struct eigen_fill_helper<Matrix<Scalar, Rows, Cols, Options, MaxRows, MaxCols>> : std::true_type {};
+struct eigen_fill_helper<Matrix<Scalar, Rows, Cols, Options, MaxRows, MaxCols>> : std::is_trivially_copyable<Scalar> {};
 
 template <typename Scalar, int Rows, int Cols, int Options, int MaxRows, int MaxCols>
-struct eigen_fill_helper<Array<Scalar, Rows, Cols, Options, MaxRows, MaxCols>> : std::true_type {};
+struct eigen_fill_helper<Array<Scalar, Rows, Cols, Options, MaxRows, MaxCols>> : std::is_trivially_copyable<Scalar> {};
 
 template <typename Xpr, int BlockRows, int BlockCols>
 struct eigen_fill_helper<Block<Xpr, BlockRows, BlockCols, /*InnerPanel*/ true>> : eigen_fill_helper<Xpr> {};
 
 template <typename Xpr, int BlockRows, int BlockCols>
 struct eigen_fill_helper<Block<Xpr, BlockRows, BlockCols, /*InnerPanel*/ false>>
-    : std::integral_constant<bool, eigen_fill_helper<Xpr>::value &&
-                                       (Xpr::IsRowMajor ? (BlockRows == 1) : (BlockCols == 1))> {};
+    : bool_constant<eigen_fill_helper<Xpr>::value && (Xpr::IsRowMajor ? (BlockRows == 1) : (BlockCols == 1))> {};
 
 template <typename Xpr, int Options>
 struct eigen_fill_helper<Map<Xpr, Options, Stride<0, 0>>> : eigen_fill_helper<Xpr> {};
 
 template <typename Xpr, int Options, int OuterStride_>
 struct eigen_fill_helper<Map<Xpr, Options, Stride<OuterStride_, 0>>>
-    : std::integral_constant<bool, eigen_fill_helper<Xpr>::value &&
-                                       enum_eq_not_dynamic(OuterStride_, Xpr::InnerSizeAtCompileTime)> {};
+    : bool_constant<eigen_fill_helper<Xpr>::value && enum_eq_not_dynamic(OuterStride_, Xpr::InnerSizeAtCompileTime)> {};
 
 template <typename Xpr, int Options, int OuterStride_>
 struct eigen_fill_helper<Map<Xpr, Options, Stride<OuterStride_, 1>>>
@@ -57,15 +59,14 @@ struct eigen_fill_helper<Map<Xpr, Options, OuterStride<OuterStride_>>>
 template <typename Xpr>
 struct eigen_fill_impl<Xpr, /*use_fill*/ false> {
   using Scalar = typename Xpr::Scalar;
-  using Func = scalar_constant_op<Scalar>;
   using PlainObject = typename Xpr::PlainObject;
   using Constant = typename PlainObject::ConstantReturnType;
-  static EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE constexpr void run(Xpr& dst, const Scalar& val) {
+  static EIGEN_DEVICE_FUNC constexpr void run(Xpr& dst, const Scalar& val) {
     const Constant src(dst.rows(), dst.cols(), val);
     run(dst, src);
   }
   template <typename SrcXpr>
-  static EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE constexpr void run(Xpr& dst, const SrcXpr& src) {
+  static EIGEN_DEVICE_FUNC constexpr void run(Xpr& dst, const SrcXpr& src) {
     call_dense_assignment_loop(dst, src, assign_op<Scalar, Scalar>());
   }
 };
@@ -79,6 +80,19 @@ struct eigen_fill_impl<Xpr, /*use_fill*/ true> {
   using Scalar = typename Xpr::Scalar;
   static EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE void run(Xpr& dst, const Scalar& val) {
     const Scalar val_copy = val;
+#if EIGEN_GCC15_SLP_BUG
+    // GCC 15.1/15.2 SLP-vectorize the stores of fill_n into wrong code when val is a complex product computed in the
+    // same function and the size is visible, e.g. Vector2cd::Constant(a * b); see EIGEN_GCC15_SLP_BUG. Copying val as
+    // one unit of sizeof(Scalar) bytes stores VIEW_CONVERT<uint64_t or uint128_t>(COMPLEX_EXPR <re, im>), so no group
+    // of float lanes {re, im, re, im} forms.
+    EIGEN_IF_CONSTEXPR (NumTraits<Scalar>::IsComplex) {
+      EIGEN_USING_STD(memcpy);
+      Scalar* data = dst.data();
+      const Index size = dst.size();
+      for (Index i = 0; i < size; ++i) memcpy(static_cast<void*>(data + i), &val_copy, sizeof(Scalar));
+      return;
+    }
+#endif
     using std::fill_n;
     fill_n(dst.data(), dst.size(), val_copy);
   }
@@ -93,8 +107,10 @@ struct eigen_fill_impl<Xpr, /*use_fill*/ true> {
 
 template <typename Xpr>
 struct eigen_memset_helper {
-  static constexpr bool value =
-      std::is_trivially_copyable<typename Xpr::Scalar>::value && eigen_fill_helper<Xpr>::value;
+  using Scalar = typename Xpr::Scalar;
+  static constexpr bool value = std::is_trivially_copyable<Scalar>::value &&
+                                !static_cast<bool>(NumTraits<Scalar>::RequireInitialization) &&
+                                eigen_fill_helper<Xpr>::value;
 };
 
 template <typename Xpr>
@@ -102,12 +118,12 @@ struct eigen_zero_impl<Xpr, /*use_memset*/ false> {
   using Scalar = typename Xpr::Scalar;
   using PlainObject = typename Xpr::PlainObject;
   using Zero = typename PlainObject::ZeroReturnType;
-  static EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE constexpr void run(Xpr& dst) {
+  static EIGEN_DEVICE_FUNC constexpr void run(Xpr& dst) {
     const Zero src(dst.rows(), dst.cols());
     run(dst, src);
   }
   template <typename SrcXpr>
-  static EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE constexpr void run(Xpr& dst, const SrcXpr& src) {
+  static EIGEN_DEVICE_FUNC constexpr void run(Xpr& dst, const SrcXpr& src) {
     call_dense_assignment_loop(dst, src, assign_op<Scalar, Scalar>());
   }
 };
@@ -116,14 +132,21 @@ template <typename Xpr>
 struct eigen_zero_impl<Xpr, /*use_memset*/ true> {
   using Scalar = typename Xpr::Scalar;
   static EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE void run(Xpr& dst) {
-    const std::ptrdiff_t num_bytes = dst.size() * static_cast<std::ptrdiff_t>(sizeof(Scalar));
-    if (num_bytes <= 0) return;
+    Index size = dst.size();
+    if (size <= 0) return;
+    EIGEN_IF_CONSTEXPR (Xpr::MaxSizeAtCompileTime != Dynamic) {
+      if (size > Xpr::MaxSizeAtCompileTime) {
+        eigen_internal_assert(false && "invalid dense object size");
+        return;
+      }
+    }
+    const std::size_t num_bytes = static_cast<std::size_t>(size) * sizeof(Scalar);
     void* dst_ptr = static_cast<void*>(dst.data());
 #ifndef EIGEN_NO_DEBUG
     eigen_assert((dst_ptr != nullptr) && "null pointer dereference error!");
 #endif
     EIGEN_USING_STD(memset);
-    memset(dst_ptr, 0, static_cast<std::size_t>(num_bytes));
+    memset(dst_ptr, 0, num_bytes);
   }
   template <typename SrcXpr>
   static EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE void run(Xpr& dst, const SrcXpr& src) {

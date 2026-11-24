@@ -29,6 +29,7 @@
  *    Self-adjoint eigenvalues/eigenvectors.
  ********************************************************************************
 */
+// SPDX-License-Identifier: BSD-3-Clause
 
 #ifndef EIGEN_SAEIGENSOLVER_LAPACKE_H
 #define EIGEN_SAEIGENSOLVER_LAPACKE_H
@@ -52,11 +53,11 @@ namespace Eigen {
     bool computeEigenvectors = (options & ComputeEigenvectors) == ComputeEigenvectors;                               \
     lapack_int n = internal::convert_index<lapack_int>(matrix.cols()), lda, info;                                    \
     m_eivalues.resize(n, 1);                                                                                         \
-    m_subdiag.resize(n - 1);                                                                                         \
+    m_subdiag.resize(n > 1 ? n - 1 : 0);                                                                             \
     m_eivec = matrix;                                                                                                \
                                                                                                                      \
-    if (n == 1) {                                                                                                    \
-      m_eivalues.coeffRef(0, 0) = numext::real(m_eivec.coeff(0, 0));                                                 \
+    if (n <= 1) {                                                                                                    \
+      if (n == 1) m_eivalues.coeffRef(0, 0) = numext::real(m_eivec.coeff(0, 0));                                     \
       if (computeEigenvectors) m_eivec.setOnes(n, n);                                                                \
       m_info = Success;                                                                                              \
       m_isInitialized = true;                                                                                        \
@@ -85,6 +86,9 @@ EIGEN_LAPACKE_EIG_SELFADJ(float, float, float, ssyev)
 EIGEN_LAPACKE_EIG_SELFADJ(dcomplex, lapack_complex_double, double, zheev)
 EIGEN_LAPACKE_EIG_SELFADJ(scomplex, lapack_complex_float, float, cheev)
 
+#undef EIGEN_LAPACKE_EIG_SELFADJ
+#undef EIGEN_LAPACKE_EIG_SELFADJ_2
+
 }  // end namespace Eigen
 
-#endif  // EIGEN_SAEIGENSOLVER_H
+#endif  // EIGEN_SAEIGENSOLVER_LAPACKE_H

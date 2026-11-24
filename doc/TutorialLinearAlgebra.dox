@@ -43,23 +43,39 @@ depending on your matrix, the problem you are trying to solve, and the trade-off
         <th>Requirements<br/>on the matrix</th>
         <th>Speed<br/> (small-to-medium)</th>
         <th>Speed<br/> (large)</th>
-        <th>Accuracy</th>
+        <th>Robustness<sup><a href="#note_robust">*</a></sup></th>
     </tr>
     <tr>
+        <td>LLT</td>
+        <td>llt()</td>
+        <td>Positive definite</td>
+        <td>+++</td>
+        <td>+++</td>
+        <td>+</td>
+    </tr>
+    <tr class="alt">
+        <td>LDLT</td>
+        <td>ldlt()</td>
+        <td>Positive or negative<br/> semidefinite</td>
+        <td>+++</td>
+        <td>+</td>
+        <td>++</td>
+    </tr>
+    <tr>
+        <td>BunchKaufman</td>
+        <td>bunchKaufman()</td>
+        <td>Self-adjoint</td>
+        <td>+++</td>
+        <td>++</td>
+        <td>++</td>
+    </tr>
+    <tr class="alt">
         <td>PartialPivLU</td>
         <td>partialPivLu()</td>
         <td>Invertible</td>
         <td>++</td>
         <td>++</td>
         <td>+</td>
-    </tr>
-    <tr class="alt">
-        <td>FullPivLU</td>
-        <td>fullPivLu()</td>
-        <td>None</td>
-        <td>-</td>
-        <td>- -</td>
-        <td>+++</td>
     </tr>
     <tr>
         <td>HouseholderQR</td>
@@ -78,14 +94,6 @@ depending on your matrix, the problem you are trying to solve, and the trade-off
         <td>+++</td>
     </tr>
     <tr>
-        <td>FullPivHouseholderQR</td>
-        <td>fullPivHouseholderQr()</td>
-        <td>None</td>
-        <td>-</td>
-        <td>- -</td>
-        <td>+++</td>
-    </tr>
-    <tr class="alt">
         <td>CompleteOrthogonalDecomposition</td>
         <td>completeOrthogonalDecomposition()</td>
         <td>None</td>
@@ -94,22 +102,14 @@ depending on your matrix, the problem you are trying to solve, and the trade-off
         <td>+++</td>
     </tr>
     <tr class="alt">
-        <td>LLT</td>
-        <td>llt()</td>
-        <td>Positive definite</td>
-        <td>+++</td>
-        <td>+++</td>
+        <td>RandCompleteOrthogonalDecomposition</td>
+        <td>randCompleteOrthogonalDecomposition()</td>
+        <td>None</td>
+        <td>-</td>
         <td>+</td>
+        <td>+++</td>
     </tr>
     <tr>
-        <td>LDLT</td>
-        <td>ldlt()</td>
-        <td>Positive or negative<br/> semidefinite</td>
-        <td>+++</td>
-        <td>+</td>
-        <td>++</td>
-    </tr>
-    <tr class="alt">
         <td>BDCSVD</td>
         <td>bdcSvd()</td>
         <td>None</td>
@@ -126,15 +126,49 @@ depending on your matrix, the problem you are trying to solve, and the trade-off
         <td>+++</td>
     </tr>
 </table>
+
+<a name="note_robust"><b>*</b></a> The <b>Robustness</b> column indicates how well the decomposition handles
+ill-conditioned or rank-deficient matrices. All decompositions give excellent accuracy when their
+requirements on the matrix are met and the problem is well-conditioned.
+
 To get an overview of the true relative speed of the different decompositions, check this \link DenseDecompositionBenchmark benchmark \endlink.
 
-All of these decompositions offer a solve() method that works as in the above example. 
+All of these decompositions offer a solve() method that works as in the above example.
 
-If you know more about the properties of your matrix, you can use the above table to select the best method.
-For example, a good choice for solving linear systems with a non-symmetric matrix of full rank is PartialPivLU.
-If you know that your matrix is also symmetric and positive definite, the above table says that
-a very good choice is the LLT or LDLT decomposition. Here's an example, also demonstrating that using a general
-matrix (not a vector) as right hand side is possible:
+\b Practical \b recommendations:
+\li If your matrix is symmetric positive definite, use \b LLT. It is the fastest and is perfectly accurate
+    for this class of problems. If your matrix is only positive or negative semidefinite, use \b LDLT,
+    whose symmetric pivoting keeps the factorization stable in the presence of tiny or zero pivots.
+    \b LDLT produces a purely diagonal D and so cannot handle indefinite matrices; for a self-adjoint
+    matrix that is indefinite, use \b BunchKaufman, which produces a block-diagonal D at LDLT-like speed
+    and also reveals the inertia.
+\li For a general invertible matrix, \b PartialPivLU is the best choice. It is fast (uses cache-friendly
+    blocking) and reliable for the vast majority of problems.
+\li For least squares problems (over- or under-determined systems), \b CompleteOrthogonalDecomposition
+    is the recommended default. Like the SVD, it robustly computes the minimum-norm solution for
+    rank-deficient and under-determined problems, but at the cost of a QR decomposition rather than
+    an SVD. Use \b ColPivHouseholderQR if you only need least squares for full-rank overdetermined
+    systems and don't need the minimum-norm property.
+\li For \em large least squares problems, consider \b RandCompleteOrthogonalDecomposition. It computes
+    the same kind of factorization as CompleteOrthogonalDecomposition, but its rank-revealing QR step
+    selects pivots from a small random sketch, which lets nearly all of the work be done by level-3
+    BLAS kernels instead of the memory-bound column scan used by classical column pivoting. On small
+    matrices the sketch overhead dominates and plain CompleteOrthogonalDecomposition is preferable.
+\li \b SVD decompositions (BDCSVD, JacobiSVD) are the most robust but also the slowest. Use these when
+    you need singular values/vectors, not just the solution.
+\li \b HouseholderQR is the fastest option for full-rank least squares problems, but it does not
+    reveal rank and cannot compute minimum-norm solutions for rank-deficient problems.
+\li FullPivLU and FullPivHouseholderQR use complete pivoting, which rules out blocking and so makes
+    them substantially slower, increasingly so as the matrix grows. What it buys -- a smaller growth
+    factor for LU, a more reliable rank decision for QR -- rarely repays that cost on its own, so
+    PartialPivLU and ColPivHouseholderQR are the better default; LAPACK made the same call, offering
+    no complete-pivoting LU or QR driver. Where complete pivoting does earn its cost is rank
+    determination, since column pivoting is reliable in practice but not guaranteed. If your
+    application depends on getting the rank right, the full-pivoting classes are a reasonable choice,
+    especially for small matrices, where the lost blocking costs comparatively little.
+
+Here's an example showing the use of LLT for a symmetric positive definite system, also demonstrating
+that using a general matrix (not a vector) as right hand side is possible:
 
 <table class="example">
 <tr><th>Example:</th><th>Output:</th></tr>
@@ -151,14 +185,17 @@ supports many other decompositions), see our special page on
 
 \section TutorialLinAlgLeastsquares Least squares solving
 
-The most general and accurate method to solve under- or over-determined linear systems
-in the least squares sense, is the SVD decomposition. Eigen provides two implementations.
-The recommended one is the BDCSVD class, which scales well for large problems
-and automatically falls back to the JacobiSVD class for smaller problems.
-For both classes, their solve() method solved the linear system in the least-squares
-sense. 
+The recommended method to solve under- or over-determined linear systems in the least squares sense is
+\b CompleteOrthogonalDecomposition. Like the SVD, it robustly computes the minimum-norm least squares
+solution, correctly handling rank-deficient and under-determined problems, but it is significantly faster
+since it is based on a rank-revealing QR decomposition rather than a full SVD. For large problems,
+\b RandCompleteOrthogonalDecomposition computes the same kind of factorization with a randomized blocked
+rank-revealing QR that spends nearly all of its time in level-3 BLAS kernels.
 
-Here is an example:
+If you also need the singular values or vectors themselves (not just the least squares solution), use
+\b BDCSVD, which scales well for large problems and automatically falls back to JacobiSVD for smaller ones.
+
+Here is an example using the SVD:
 <table class="example">
 <tr><th>Example:</th><th>Output:</th></tr>
 <tr>
@@ -167,11 +204,9 @@ Here is an example:
 </tr>
 </table>
 
-An alternative to the SVD, which is usually faster and about as accurate, is CompleteOrthogonalDecomposition. 
-
-Again, if you know more about the problem, the table above contains methods that are potentially faster.
-If your matrix is full rank, HouseHolderQR is the method of choice. If your matrix is full rank and well conditioned,
-using the Cholesky decomposition (LLT) on the matrix of the normal equations can be faster still.
+If you know more about the problem, faster methods are available.
+If your matrix is full rank, HouseholderQR is the fastest method. If your matrix is full rank and
+well conditioned, using the Cholesky decomposition (LLT) on the normal equations can be faster still.
 Our page on \link LeastSquares least squares solving \endlink has more details.
 
 
@@ -267,8 +302,13 @@ singular matrix). On \ref TopicLinearAlgebraDecompositions "this table" you can 
 whether they are rank-revealing or not.
 
 Rank-revealing decompositions offer at least a rank() method. They can also offer convenience methods such as isInvertible(),
-and some are also providing methods to compute the kernel (null-space) and image (column-space) of the matrix, as is the
-case with FullPivLU:
+and FullPivLU is the only one that additionally computes the kernel (null-space) and the image (column-space) of the matrix,
+through kernel() and image(). ColPivHouseholderQR and CompleteOrthogonalDecomposition are faster rank-revealing
+factorizations providing rank() and isInvertible() but no null-space basis. CompleteOrthogonalDecomposition and
+RandCompleteOrthogonalDecomposition additionally offer pseudoInverse(); they are the only decompositions in %Eigen
+that do, so they are also the cheapest route to a Moore-Penrose pseudo-inverse, which would otherwise have to be
+assembled by hand from an SVD. Note that solve() should still be preferred over multiplying by an explicitly formed
+pseudo-inverse. Here is an example using FullPivLU:
 
 <table class="example">
 <tr><th>Example:</th><th>Output:</th></tr>
@@ -279,12 +319,18 @@ case with FullPivLU:
 </table>
 
 Of course, any rank computation depends on the choice of an arbitrary threshold, since practically no
-floating-point matrix is \em exactly rank-deficient. Eigen picks a sensible default threshold, which depends
-on the decomposition but is typically the diagonal size times machine epsilon. While this is the best default we
-could pick, only you know what is the right threshold for your application. You can set this by calling setThreshold()
-on your decomposition object before calling rank() or any other method that needs to use such a threshold.
-The decomposition itself, i.e. the compute() method, is independent of the threshold. You don't need to recompute the
-decomposition after you've changed the threshold.
+floating-point matrix is \em exactly rank-deficient. Eigen picks a sensible default threshold, which is relative
+to the biggest pivot (or, for the SVD classes, the biggest singular value). For FullPivLU, ColPivHouseholderQR,
+RandColPivHouseholderQR, FullPivHouseholderQR and CompleteOrthogonalDecomposition it is
+\f$ 4 \, \min(rows, cols) \, \epsilon \f$, where \f$ \epsilon \f$ is \c NumTraits<Scalar>::epsilon(). JacobiSVD and
+BDCSVD have their own default, \f$ \min(rows, cols) \, \epsilon \f$, a factor of 4 smaller, so the ranks they report
+can differ from those of the other decompositions for matrices with singular values near the threshold.
+While this is the best default we could pick, only you know what is the right threshold for your application.
+You can set this by calling setThreshold() on your decomposition object before calling rank() or any other method
+that needs to use such a threshold.
+The decomposition itself, i.e. the compute() method, is independent of the threshold, so you don't need to recompute
+the decomposition after you've changed the threshold. The exception is CompleteOrthogonalDecomposition, which fixes
+its rank in compute(): a threshold set afterwards applies to the next compute().
 
 <table class="example">
 <tr><th>Example:</th><th>Output:</th></tr>

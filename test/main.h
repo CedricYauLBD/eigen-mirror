@@ -7,6 +7,7 @@
 // This Source Code Form is subject to the terms of the Mozilla
 // Public License v. 2.0. If a copy of the MPL was not distributed
 // with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
+// SPDX-License-Identifier: MPL-2.0
 
 #include <cstdlib>
 #include <cerrno>
@@ -43,7 +44,6 @@
 // included before any Eigen header and because the STL headers are guarded
 // against multiple inclusions, no STL header will see our own min/max macro
 // definitions.
-#include <limits>
 #include <algorithm>
 // Disable ICC's std::complex operator specializations so we can use our own.
 #define _OVERRIDE_COMPLEX_SPECIALIZATION_ 1
@@ -52,10 +52,13 @@
 #include <queue>
 #include <cassert>
 #include <list>
-#if __cplusplus >= 201103L || (defined(_MSVC_LANG) && _MSVC_LANG >= 201103L)
 #include <random>
 #include <chrono>
-#endif
+// libstdc++'s <unordered_map> uses std::numeric_limits<size_t>::max() internally
+// (in <bits/hashtable_policy.h>); pre-include here so the macro definitions of
+// min/max below don't break it on toolchains where it isn't pulled in by
+// another pre-included header (e.g. cuda-11.5 / gcc-10).
+#include <unordered_map>
 #if __cplusplus > 201703L
 // libstdc++ 9's <memory> indirectly uses max() via <bit>.
 // libstdc++ 10's <memory> indirectly uses max() via ranges headers.
@@ -76,9 +79,7 @@
 #include <cuda.h>
 #include <cuda_runtime.h>
 #include <cuda_runtime_api.h>
-#if CUDA_VERSION >= 7050
 #include <cuda_fp16.h>
-#endif
 #endif
 
 #if defined(EIGEN_CUDACC) || defined(EIGEN_HIPCC)
@@ -130,8 +131,15 @@ struct imag {};
 // _res is defined by resolv.h
 #define _res FORBIDDEN_IDENTIFIER
 
-// Unit tests calling Eigen's blas library must preserve the default blocking size
-// to avoid troubles.
+// Shrink the cache model used by computeProductBlockingSizes so that test-sized
+// products (see EIGEN_TEST_MAX_SIZE) exercise multi-pass GEMM blocking; with real
+// cache sizes nothing in the suite would ever block. Any new architecture-specific
+// blocking heuristic must honor this macro, or the blocking sentinels in
+// product_extra.cpp (compute_block_size) will fail on that target.
+// Exception: tests linking the eigen_blas/eigen_lapack shim libraries (the
+// *_support sparse-solver tests) must opt out via EIGEN_NO_DEBUG_SMALL_PRODUCT_BLOCKS.
+// Those libraries are compiled without this macro, and mixing the two configurations
+// in one binary is an ODR violation on the inline blocking/kernel code.
 #ifndef EIGEN_NO_DEBUG_SMALL_PRODUCT_BLOCKS
 #define EIGEN_DEBUG_SMALL_PRODUCT_BLOCKS
 #endif
@@ -223,8 +231,6 @@ class EigenTest {
   static EigenTest EIGEN_CAT(test_handler_, X)(EIGEN_MAKESTRING(X), &EIGEN_CAT(test_, X)); \
   void EIGEN_CAT(test_, X)()
 }  // namespace Eigen
-
-#define TRACK std::cerr << __FILE__ << " " << __LINE__ << std::endl
 
 #define EIGEN_DEFAULT_IO_FORMAT IOFormat(4, 0, "  ", "\n", "", "", "", "")
 
@@ -330,10 +336,6 @@ static std::vector<std::string> eigen_assert_list;
 #define VERIFY_RAISES_ASSERT(a) std::cout << "Can't VERIFY_RAISES_ASSERT( " #a " ) with exceptions disabled\n";
 #endif
 
-#if !defined(__CUDACC__) && !defined(__HIPCC__) && !defined(SYCL_DEVICE_ONLY)
-#define EIGEN_USE_CUSTOM_ASSERT
-#endif
-
 #else  // EIGEN_NO_ASSERTION_CHECKING
 
 #define VERIFY_RAISES_ASSERT(a) \
@@ -365,19 +367,6 @@ inline void verify_impl(bool condition, const char* testname, const char* file, 
 #define VERIFY_GE(a, b) ::verify_impl(a >= b, g_test_stack.back().c_str(), __FILE__, __LINE__, EIGEN_MAKESTRING(a >= b))
 #define VERIFY_LE(a, b) ::verify_impl(a <= b, g_test_stack.back().c_str(), __FILE__, __LINE__, EIGEN_MAKESTRING(a <= b))
 
-#define VERIFY_IS_EQUAL(a, b) VERIFY(test_is_equal(a, b, true))
-#define VERIFY_IS_NOT_EQUAL(a, b) VERIFY(test_is_equal(a, b, false))
-#define VERIFY_IS_APPROX(a, b) VERIFY(verifyIsApprox(a, b))
-#define VERIFY_IS_NOT_APPROX(a, b) VERIFY(!test_isApprox(a, b))
-#define VERIFY_IS_MUCH_SMALLER_THAN(a, b) VERIFY(test_isMuchSmallerThan(a, b))
-#define VERIFY_IS_NOT_MUCH_SMALLER_THAN(a, b) VERIFY(!test_isMuchSmallerThan(a, b))
-#define VERIFY_IS_APPROX_OR_LESS_THAN(a, b) VERIFY(test_isApproxOrLessThan(a, b))
-#define VERIFY_IS_NOT_APPROX_OR_LESS_THAN(a, b) VERIFY(!test_isApproxOrLessThan(a, b))
-#define VERIFY_IS_CWISE_EQUAL(a, b) VERIFY(verifyIsCwiseApprox(a, b, true))
-#define VERIFY_IS_CWISE_APPROX(a, b) VERIFY(verifyIsCwiseApprox(a, b, false))
-
-#define VERIFY_IS_UNITARY(a) VERIFY(test_isUnitary(a))
-
 #define STATIC_CHECK(COND) EIGEN_STATIC_ASSERT((COND), EIGEN_INTERNAL_ERROR_PLEASE_FILE_A_BUG_REPORT)
 
 #define CALL_SUBTEST(FUNC)                          \
@@ -387,444 +376,11 @@ inline void verify_impl(bool condition, const char* testname, const char* file, 
     g_test_stack.pop_back();                        \
   } while (0)
 
-// Forward declarations to avoid ICC warnings
-#if EIGEN_COMP_ICC
-
-template <typename T>
-std::string type_name();
-
-namespace Eigen {
-
-template <typename T, typename U>
-bool test_is_equal(const T& actual, const U& expected, bool expect_equal = true);
-
-}  // end namespace Eigen
-
-#endif  // EIGEN_COMP_ICC
-
-namespace Eigen {
-
-template <typename T1, typename T2>
-std::enable_if_t<internal::is_same<T1, T2>::value, bool> is_same_type(const T1&, const T2&) {
-  return true;
-}
-
-template <typename T>
-inline typename NumTraits<T>::Real test_precision() {
-  return NumTraits<T>::dummy_precision();
-}
-template <>
-inline float test_precision<float>() {
-  return 1e-3f;
-}
-template <>
-inline double test_precision<double>() {
-  return 1e-6;
-}
-template <>
-inline long double test_precision<long double>() {
-  return 1e-6l;
-}
-template <>
-inline float test_precision<std::complex<float> >() {
-  return test_precision<float>();
-}
-template <>
-inline double test_precision<std::complex<double> >() {
-  return test_precision<double>();
-}
-template <>
-inline long double test_precision<std::complex<long double> >() {
-  return test_precision<long double>();
-}
-
-#define EIGEN_TEST_SCALAR_TEST_OVERLOAD(TYPE)                                          \
-  inline bool test_isApprox(TYPE a, TYPE b) {                                          \
-    return numext::equal_strict(a, b) || ((numext::isnan)(a) && (numext::isnan)(b)) || \
-           (internal::isApprox(a, b, test_precision<TYPE>()));                         \
-  }                                                                                    \
-  inline bool test_isCwiseApprox(TYPE a, TYPE b, bool exact) {                         \
-    return numext::equal_strict(a, b) || ((numext::isnan)(a) && (numext::isnan)(b)) || \
-           (!exact && internal::isApprox(a, b, test_precision<TYPE>()));               \
-  }                                                                                    \
-  inline bool test_isMuchSmallerThan(TYPE a, TYPE b) {                                 \
-    return internal::isMuchSmallerThan(a, b, test_precision<TYPE>());                  \
-  }                                                                                    \
-  inline bool test_isApproxOrLessThan(TYPE a, TYPE b) {                                \
-    return internal::isApproxOrLessThan(a, b, test_precision<TYPE>());                 \
-  }
-
-EIGEN_TEST_SCALAR_TEST_OVERLOAD(short)
-EIGEN_TEST_SCALAR_TEST_OVERLOAD(unsigned short)
-EIGEN_TEST_SCALAR_TEST_OVERLOAD(int)
-EIGEN_TEST_SCALAR_TEST_OVERLOAD(unsigned int)
-EIGEN_TEST_SCALAR_TEST_OVERLOAD(long)
-EIGEN_TEST_SCALAR_TEST_OVERLOAD(unsigned long)
-EIGEN_TEST_SCALAR_TEST_OVERLOAD(long long)
-EIGEN_TEST_SCALAR_TEST_OVERLOAD(unsigned long long)
-EIGEN_TEST_SCALAR_TEST_OVERLOAD(float)
-EIGEN_TEST_SCALAR_TEST_OVERLOAD(double)
-EIGEN_TEST_SCALAR_TEST_OVERLOAD(half)
-EIGEN_TEST_SCALAR_TEST_OVERLOAD(bfloat16)
-
-#undef EIGEN_TEST_SCALAR_TEST_OVERLOAD
-
-#ifndef EIGEN_TEST_NO_COMPLEX
-inline bool test_isApprox(const std::complex<float>& a, const std::complex<float>& b) {
-  return internal::isApprox(a, b, test_precision<std::complex<float> >());
-}
-inline bool test_isMuchSmallerThan(const std::complex<float>& a, const std::complex<float>& b) {
-  return internal::isMuchSmallerThan(a, b, test_precision<std::complex<float> >());
-}
-
-inline bool test_isApprox(const std::complex<double>& a, const std::complex<double>& b) {
-  return internal::isApprox(a, b, test_precision<std::complex<double> >());
-}
-inline bool test_isMuchSmallerThan(const std::complex<double>& a, const std::complex<double>& b) {
-  return internal::isMuchSmallerThan(a, b, test_precision<std::complex<double> >());
-}
-
-#ifndef EIGEN_TEST_NO_LONGDOUBLE
-inline bool test_isApprox(const std::complex<long double>& a, const std::complex<long double>& b) {
-  return internal::isApprox(a, b, test_precision<std::complex<long double> >());
-}
-inline bool test_isMuchSmallerThan(const std::complex<long double>& a, const std::complex<long double>& b) {
-  return internal::isMuchSmallerThan(a, b, test_precision<std::complex<long double> >());
-}
-#endif
-#endif
-
-#ifndef EIGEN_TEST_NO_LONGDOUBLE
-inline bool test_isApprox(const long double& a, const long double& b) {
-  bool ret = internal::isApprox(a, b, test_precision<long double>());
-  if (!ret)
-    std::cerr << std::endl << "    actual   = " << a << std::endl << "    expected = " << b << std::endl << std::endl;
-  return ret;
-}
-
-inline bool test_isMuchSmallerThan(const long double& a, const long double& b) {
-  return internal::isMuchSmallerThan(a, b, test_precision<long double>());
-}
-inline bool test_isApproxOrLessThan(const long double& a, const long double& b) {
-  return internal::isApproxOrLessThan(a, b, test_precision<long double>());
-}
-#endif  // EIGEN_TEST_NO_LONGDOUBLE
-
-// test_relative_error returns the relative difference between a and b as a real scalar as used in isApprox.
-template <typename T1, typename T2>
-typename NumTraits<typename T1::RealScalar>::NonInteger test_relative_error(const EigenBase<T1>& a,
-                                                                            const EigenBase<T2>& b) {
-  using std::sqrt;
-  typedef typename NumTraits<typename T1::RealScalar>::NonInteger RealScalar;
-  typename internal::nested_eval<T1, 2>::type ea(a.derived());
-  typename internal::nested_eval<T2, 2>::type eb(b.derived());
-  return sqrt(RealScalar((ea.matrix() - eb.matrix()).cwiseAbs2().sum()) /
-              RealScalar((std::min)(eb.cwiseAbs2().sum(), ea.cwiseAbs2().sum())));
-}
-
-template <typename T1, typename T2>
-typename T1::RealScalar test_relative_error(const T1& a, const T2& b, const typename T1::Coefficients* = 0) {
-  return test_relative_error(a.coeffs(), b.coeffs());
-}
-
-template <typename T1, typename T2>
-typename T1::Scalar test_relative_error(const T1& a, const T2& b, const typename T1::MatrixType* = 0) {
-  return test_relative_error(a.matrix(), b.matrix());
-}
-
-template <typename S, int D>
-S test_relative_error(const Translation<S, D>& a, const Translation<S, D>& b) {
-  return test_relative_error(a.vector(), b.vector());
-}
-
-template <typename S, int D, int O>
-S test_relative_error(const ParametrizedLine<S, D, O>& a, const ParametrizedLine<S, D, O>& b) {
-  return (std::max)(test_relative_error(a.origin(), b.origin()), test_relative_error(a.origin(), b.origin()));
-}
-
-template <typename S, int D>
-S test_relative_error(const AlignedBox<S, D>& a, const AlignedBox<S, D>& b) {
-  return (std::max)(test_relative_error((a.min)(), (b.min)()), test_relative_error((a.max)(), (b.max)()));
-}
-
-template <typename Derived>
-class SparseMatrixBase;
-template <typename T1, typename T2>
-typename T1::RealScalar test_relative_error(const MatrixBase<T1>& a, const SparseMatrixBase<T2>& b) {
-  return test_relative_error(a, b.toDense());
-}
-
-template <typename Derived>
-class SparseMatrixBase;
-template <typename T1, typename T2>
-typename T1::RealScalar test_relative_error(const SparseMatrixBase<T1>& a, const MatrixBase<T2>& b) {
-  return test_relative_error(a.toDense(), b);
-}
-
-template <typename Derived>
-class SparseMatrixBase;
-template <typename T1, typename T2>
-typename T1::RealScalar test_relative_error(const SparseMatrixBase<T1>& a, const SparseMatrixBase<T2>& b) {
-  return test_relative_error(a.toDense(), b.toDense());
-}
-
-template <typename T1, typename T2>
-typename NumTraits<typename NumTraits<T1>::Real>::NonInteger test_relative_error(
-    const T1& a, const T2& b, std::enable_if_t<internal::is_arithmetic<typename NumTraits<T1>::Real>::value, T1>* = 0) {
-  typedef typename NumTraits<typename NumTraits<T1>::Real>::NonInteger RealScalar;
-  return numext::sqrt(RealScalar(numext::abs2(a - b)) /
-                      (numext::mini)(RealScalar(numext::abs2(a)), RealScalar(numext::abs2(b))));
-}
-
-template <typename T>
-T test_relative_error(const Rotation2D<T>& a, const Rotation2D<T>& b) {
-  return test_relative_error(a.angle(), b.angle());
-}
-
-template <typename T>
-T test_relative_error(const AngleAxis<T>& a, const AngleAxis<T>& b) {
-  return (std::max)(test_relative_error(a.angle(), b.angle()), test_relative_error(a.axis(), b.axis()));
-}
-
-template <typename Type1, typename Type2>
-inline bool test_isApprox(const Type1& a, const Type2& b, typename Type1::Scalar* = 0)  // Enabled for Eigen's type only
-{
-  return a.isApprox(b, test_precision<typename Type1::Scalar>());
-}
-
-// get_test_precision is a small wrapper to test_precision allowing to return the scalar precision for either scalars or
-// expressions
-template <typename T>
-typename NumTraits<typename T::Scalar>::Real get_test_precision(const T&, const typename T::Scalar* = 0) {
-  return test_precision<typename NumTraits<typename T::Scalar>::Real>();
-}
-
-template <typename T>
-typename NumTraits<T>::Real get_test_precision(
-    const T&, std::enable_if_t<internal::is_arithmetic<typename NumTraits<T>::Real>::value, T>* = 0) {
-  return test_precision<typename NumTraits<T>::Real>();
-}
-
-// verifyIsApprox is a wrapper to test_isApprox that outputs the relative difference magnitude if the test fails.
-template <typename Type1, typename Type2>
-inline bool verifyIsApprox(const Type1& a, const Type2& b) {
-  bool ret = test_isApprox(a, b);
-  if (!ret) {
-    std::cerr << "Difference too large wrt tolerance " << get_test_precision(a)
-              << ", relative error is: " << test_relative_error(a, b) << std::endl;
-  }
-  return ret;
-}
-
-// verifyIsCwiseApprox is a wrapper to test_isCwiseApprox that outputs the relative difference magnitude if the test
-// fails.
-template <typename Type1, typename Type2>
-inline bool verifyIsCwiseApprox(const Type1& a, const Type2& b, bool exact) {
-  bool ret = test_isCwiseApprox(a, b, exact);
-  if (!ret) {
-    if (exact) {
-      std::cerr << "Values are not an exact match";
-    } else {
-      std::cerr << "Difference too large wrt tolerance " << get_test_precision(a);
-    }
-    std::cerr << ", relative error is: " << test_relative_error(a, b) << std::endl;
-  }
-  return ret;
-}
-
-// The idea behind this function is to compare the two scalars a and b where
-// the scalar ref is a hint about the expected order of magnitude of a and b.
-// WARNING: the scalar a and b must be positive
-// Therefore, if for some reason a and b are very small compared to ref,
-// we won't issue a false negative.
-// This test could be: abs(a-b) <= eps * ref
-// However, it seems that simply comparing a+ref and b+ref is more sensitive to true error.
-template <typename Scalar, typename ScalarRef>
-inline bool test_isApproxWithRef(const Scalar& a, const Scalar& b, const ScalarRef& ref) {
-  return test_isApprox(a + ref, b + ref);
-}
-
-template <typename Derived1, typename Derived2>
-inline bool test_isMuchSmallerThan(const MatrixBase<Derived1>& m1, const MatrixBase<Derived2>& m2) {
-  return m1.isMuchSmallerThan(m2, test_precision<typename internal::traits<Derived1>::Scalar>());
-}
-
-template <typename Derived>
-inline bool test_isMuchSmallerThan(const MatrixBase<Derived>& m,
-                                   const typename NumTraits<typename internal::traits<Derived>::Scalar>::Real& s) {
-  return m.isMuchSmallerThan(s, test_precision<typename internal::traits<Derived>::Scalar>());
-}
-
-template <typename Derived>
-inline bool test_isUnitary(const MatrixBase<Derived>& m) {
-  return m.isUnitary(test_precision<typename internal::traits<Derived>::Scalar>());
-}
-
-// Checks component-wise, works with infs and nans.
-template <typename Derived1, typename Derived2>
-bool test_isCwiseApprox(const DenseBase<Derived1>& m1, const DenseBase<Derived2>& m2, bool exact) {
-  if (m1.rows() != m2.rows()) {
-    return false;
-  }
-  if (m1.cols() != m2.cols()) {
-    return false;
-  }
-  for (Index r = 0; r < m1.rows(); ++r) {
-    for (Index c = 0; c < m1.cols(); ++c) {
-      if (m1(r, c) != m2(r, c) && !((numext::isnan)(m1(r, c)) && (numext::isnan)(m2(r, c))) &&
-          (exact || !test_isApprox(m1(r, c), m2(r, c)))) {
-        return false;
-      }
-    }
-  }
-  return true;
-}
-
-template <typename Derived1, typename Derived2>
-bool test_isCwiseApprox(const SparseMatrixBase<Derived1>& m1, const SparseMatrixBase<Derived2>& m2, bool exact) {
-  return test_isCwiseApprox(m1.toDense(), m2.toDense(), exact);
-}
-
-template <typename T, typename U>
-bool test_is_equal(const T& actual, const U& expected, bool expect_equal) {
-  if (numext::equal_strict(actual, expected) == expect_equal) return true;
-  // false:
-  std::cerr << "\n    actual   = " << actual << "\n    expected " << (expect_equal ? "= " : "!=") << expected << "\n\n";
-  return false;
-}
-
-/**
- * Check if number is "not a number" (NaN).
- *
- * @tparam T input type
- * @param x input value
- * @return true, if input value is "not a number" (NaN)
- */
-template <typename T>
-bool isNotNaN(const T& x) {
-  return x == x;
-}
-
-/**
- * Check if number is plus infinity.
- *
- * @tparam T input type
- * @param x input value
- * @return true, if input value is plus infinity
- */
-template <typename T>
-bool isPlusInf(const T& x) {
-  return x > NumTraits<T>::highest();
-}
-
-/**
- * Check if number is minus infinity.
- *
- * @tparam T input type
- * @param x input value
- * @return true, if input value is minus infinity
- */
-template <typename T>
-bool isMinusInf(const T& x) {
-  return x < NumTraits<T>::lowest();
-}
-
-}  // end namespace Eigen
+#include "numerical_test_helpers.h"
 
 #include "random_matrix_helper.h"
 
-template <typename T>
-struct GetDifferentType;
-
-template <>
-struct GetDifferentType<float> {
-  typedef double type;
-};
-template <>
-struct GetDifferentType<double> {
-  typedef float type;
-};
-template <typename T>
-struct GetDifferentType<std::complex<T> > {
-  typedef std::complex<typename GetDifferentType<T>::type> type;
-};
-
-template <typename T>
-std::string type_name(T) {
-  return typeid(T).name();
-}
-template <>
-std::string type_name<float>(float) {
-  return "float";
-}
-template <>
-std::string type_name<double>(double) {
-  return "double";
-}
-template <>
-std::string type_name<long double>(long double) {
-  return "long double";
-}
-template <>
-std::string type_name<Eigen::half>(Eigen::half) {
-  return "half";
-}
-template <>
-std::string type_name<Eigen::bfloat16>(Eigen::bfloat16) {
-  return "bfloat16";
-}
-template <>
-std::string type_name<int8_t>(int8_t) {
-  return "int8_t";
-}
-template <>
-std::string type_name<int16_t>(int16_t) {
-  return "int16_t";
-}
-template <>
-std::string type_name<int32_t>(int32_t) {
-  return "int32_t";
-}
-template <>
-std::string type_name<int64_t>(int64_t) {
-  return "int64_t";
-}
-template <>
-std::string type_name<uint8_t>(uint8_t) {
-  return "uint8_t";
-}
-template <>
-std::string type_name<uint16_t>(uint16_t) {
-  return "uint16_t";
-}
-template <>
-std::string type_name<uint32_t>(uint32_t) {
-  return "uint32_t";
-}
-template <>
-std::string type_name<uint64_t>(uint64_t) {
-  return "uint64_t";
-}
-template <>
-std::string type_name<std::complex<float> >(std::complex<float>) {
-  return "complex<float>";
-}
-template <>
-std::string type_name<std::complex<double> >(std::complex<double>) {
-  return "complex<double>";
-}
-template <>
-std::string type_name<std::complex<long double> >(std::complex<long double>) {
-  return "complex<long double>";
-}
-template <>
-std::string type_name<std::complex<int> >(std::complex<int>) {
-  return "complex<int>";
-}
-template <typename T>
-std::string type_name() {
-  return type_name(T());
-}
+#include "type_test_helpers.h"
 
 using namespace Eigen;
 
@@ -863,6 +419,63 @@ inline void set_seed_from_time() {
   long long ns = duration_cast<nanoseconds>(high_resolution_clock::now().time_since_epoch()).count();
   g_seed = static_cast<decltype(g_seed)>(ns);
 }
+
+// Reports the test as skipped and exits with 77, the code CTest maps to "skipped"
+// (SKIP_RETURN_CODE in cmake/EigenTesting.cmake).
+[[noreturn]] inline void skip_test(const char* reason) {
+  std::cout << "SKIP: " << reason << std::endl;
+  std::exit(77);
+}
+
+#if defined(EIGEN_USE_GPU)
+inline int maybe_skip_gpu_tests() {
+#if defined(EIGEN_USE_HIP)
+  int device_count = 0;
+  hipError_t status = hipGetDeviceCount(&device_count);
+  if (status != hipSuccess) {
+    std::cout << "SKIP: HIP GPU tests require a visible ROCm device. hipGetDeviceCount failed with: "
+              << hipGetErrorString(status) << std::endl;
+    return 77;
+  }
+  if (device_count <= 0) {
+    std::cout << "SKIP: HIP GPU tests require a visible ROCm device." << std::endl;
+    return 77;
+  }
+#elif defined(EIGEN_CUDACC)
+  int device_count = 0;
+  cudaError_t status = cudaGetDeviceCount(&device_count);
+  if (status != cudaSuccess) {
+    std::cout << "SKIP: CUDA GPU tests require a visible CUDA device. cudaGetDeviceCount failed with: "
+              << cudaGetErrorString(status) << std::endl;
+    return 77;
+  }
+  if (device_count <= 0) {
+    std::cout << "SKIP: CUDA GPU tests require a visible CUDA device." << std::endl;
+    return 77;
+  }
+#endif
+  return 0;
+}
+#endif
+
+// GCC's AddressSanitizer instrumentation relocates a function's locals into the fake stack it uses
+// for stack-use-after-return detection, and it lays that frame out on a 32-byte grid. A frame GCC
+// aligned to more than that then faults on its own aligned vector accesses, since vmovdqa64 raises
+// #GP off an address that is not 64-byte aligned. An AVX-512 build under ASan therefore dies with
+// a SEGV unrelated to the code under test, in whichever frame the layout happens to hit. Opt those
+// builds out of the fake stack; clang aligns its fake frames correctly and keeps the detector.
+// ASAN_OPTIONS from the environment still overrides this.
+//
+// The condition asks what alignment compiled stack objects require, which is
+// EIGEN_MAX_STATIC_ALIGN_BYTES rather than the dynamic-allocation bound EIGEN_MAX_ALIGN_BYTES --
+// the latter is only an upper bound for it, so it is 64 even in a default-ISA build that aligns no
+// local past 16. EIGEN_VECTORIZE_AVX512 is checked as well because the AVX-512 backend declares
+// EIGEN_ALIGN64 locals and spills 64-byte vectors unconditionally, whatever the user caps the
+// Eigen alignment macros at.
+#if defined(__SANITIZE_ADDRESS__) && EIGEN_COMP_GNUC_STRICT && \
+    (EIGEN_MAX_STATIC_ALIGN_BYTES > 32 || defined(EIGEN_VECTORIZE_AVX512))
+extern "C" const char* __asan_default_options() { return "detect_stack_use_after_return=0"; }
+#endif
 
 int main(int argc, char* argv[]) {
   g_has_set_repeat = false;
@@ -912,7 +525,14 @@ int main(int argc, char* argv[]) {
   srand(g_seed);
   std::cout << "Repeating each test " << g_repeat << " times" << std::endl;
 
-  VERIFY(EigenTest::all().size() > 0);
+#if defined(EIGEN_USE_GPU)
+  {
+    const int skip_code = maybe_skip_gpu_tests();
+    if (skip_code != 0) return skip_code;
+  }
+#endif
+
+  VERIFY(!EigenTest::all().empty());
 
   for (std::size_t i = 0; i < EigenTest::all().size(); ++i) {
     const EigenTest& current_test = *EigenTest::all()[i];

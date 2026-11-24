@@ -7,6 +7,8 @@
 // This Source Code Form is subject to the terms of the Mozilla
 // Public License v. 2.0. If a copy of the MPL was not distributed
 // with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
+// SPDX-FileCopyrightText: The Eigen Authors
+// SPDX-License-Identifier: MPL-2.0
 
 #ifndef EIGEN_COMPLEX_LSX_H
 #define EIGEN_COMPLEX_LSX_H
@@ -18,6 +20,8 @@ namespace Eigen {
 
 namespace internal {
 
+EIGEN_GCC_FAST_MATH_COMPLEX_VECTORIZE_WORKAROUND_PUSH
+
 //---------- float ----------
 struct Packet2cf {
   EIGEN_STRONG_INLINE Packet2cf() {}
@@ -27,8 +31,8 @@ struct Packet2cf {
 
 template <>
 struct packet_traits<std::complex<float> > : default_packet_traits {
-  typedef Packet2cf type;
-  typedef Packet2cf half;
+  using type = Packet2cf;
+  using half = Packet2cf;
   enum {
     Vectorizable = 1,
     AlignedOnScalar = 1,
@@ -52,9 +56,9 @@ struct packet_traits<std::complex<float> > : default_packet_traits {
 
 template <>
 struct unpacket_traits<Packet2cf> {
-  typedef std::complex<float> type;
-  typedef Packet2cf half;
-  typedef Packet4f as_real;
+  using type = std::complex<float>;
+  using half = Packet2cf;
+  using as_real = Packet4f;
   enum {
     size = 2,
     alignment = Aligned16,
@@ -227,11 +231,6 @@ EIGEN_STRONG_INLINE Packet2cf pdiv<Packet2cf>(const Packet2cf& a, const Packet2c
 }
 
 template <>
-EIGEN_STRONG_INLINE Packet2cf plog<Packet2cf>(const Packet2cf& a) {
-  return plog_complex(a);
-}
-
-template <>
 EIGEN_STRONG_INLINE Packet2cf pzero(const Packet2cf& /* a */) {
   __m128 v = {0.0f, 0.0f, 0.0f, 0.0f};
   return (Packet2cf)v;
@@ -251,11 +250,6 @@ EIGEN_STRONG_INLINE Packet2cf pmadd<Packet2cf>(const Packet2cf& a, const Packet2
   return result;
 }
 
-template <>
-EIGEN_STRONG_INLINE Packet2cf pexp<Packet2cf>(const Packet2cf& a) {
-  return pexp_complex(a);
-}
-
 //---------- double ----------
 struct Packet1cd {
   EIGEN_STRONG_INLINE Packet1cd() {}
@@ -265,8 +259,8 @@ struct Packet1cd {
 
 template <>
 struct packet_traits<std::complex<double> > : default_packet_traits {
-  typedef Packet1cd type;
-  typedef Packet1cd half;
+  using type = Packet1cd;
+  using half = Packet1cd;
   enum {
     Vectorizable = 1,
     AlignedOnScalar = 0,
@@ -289,9 +283,9 @@ struct packet_traits<std::complex<double> > : default_packet_traits {
 
 template <>
 struct unpacket_traits<Packet1cd> {
-  typedef std::complex<double> type;
-  typedef Packet1cd half;
-  typedef Packet2d as_real;
+  using type = std::complex<double>;
+  using half = Packet1cd;
+  using as_real = Packet2d;
   enum {
     size = 1,
     alignment = Aligned16,
@@ -364,7 +358,6 @@ EIGEN_STRONG_INLINE Packet1cd pandnot<Packet1cd>(const Packet1cd& a, const Packe
   return res;
 }
 
-// FIXME force unaligned load, this is a temporary fix
 template <>
 EIGEN_STRONG_INLINE Packet1cd pload<Packet1cd>(const std::complex<double>* from) {
   EIGEN_DEBUG_ALIGNED_LOAD return Packet1cd(pload<Packet2d>((const double*)from));
@@ -379,12 +372,13 @@ pset1<Packet1cd>(const std::complex<double>& from) { /* here we really have to u
   return ploadu<Packet1cd>(&from);
 }
 
+// The generic ploaddup broadcasts a copy made by pload1_scalar, which GCC spills and reloads
+// around __lsx_vld instead of loading *from once; binding *from directly does not.
 template <>
 EIGEN_STRONG_INLINE Packet1cd ploaddup<Packet1cd>(const std::complex<double>* from) {
   return pset1<Packet1cd>(*from);
 }
 
-// FIXME force unaligned store, this is a temporary fix
 template <>
 EIGEN_STRONG_INLINE void pstore<std::complex<double> >(std::complex<double>* to, const Packet1cd& from) {
   EIGEN_DEBUG_ALIGNED_STORE pstore((double*)to, Packet2d(from.v));
@@ -404,21 +398,6 @@ EIGEN_STRONG_INLINE std::complex<double> pfirst<Packet1cd>(const Packet1cd& a) {
   EIGEN_ALIGN16 double res[2];
   __lsx_vst(a.v, res, 0);
   return std::complex<double>(res[0], res[1]);
-}
-
-template <>
-EIGEN_STRONG_INLINE Packet1cd preverse(const Packet1cd& a) {
-  return a;
-}
-
-template <>
-EIGEN_STRONG_INLINE std::complex<double> predux<Packet1cd>(const Packet1cd& a) {
-  return pfirst(a);
-}
-
-template <>
-EIGEN_STRONG_INLINE std::complex<double> predux_mul<Packet1cd>(const Packet1cd& a) {
-  return pfirst(a);
 }
 
 EIGEN_MAKE_CONJ_HELPER_CPLX_REAL(Packet1cd, Packet2d)
@@ -458,20 +437,8 @@ EIGEN_DEVICE_FUNC inline Packet2cf pselect(const Packet2cf& mask, const Packet2c
   return res;
 }
 
-template <>
-EIGEN_STRONG_INLINE Packet1cd psqrt<Packet1cd>(const Packet1cd& a) {
-  return psqrt_complex<Packet1cd>(a);
-}
-
-template <>
-EIGEN_STRONG_INLINE Packet2cf psqrt<Packet2cf>(const Packet2cf& a) {
-  return psqrt_complex<Packet2cf>(a);
-}
-
-template <>
-EIGEN_STRONG_INLINE Packet1cd plog<Packet1cd>(const Packet1cd& a) {
-  return plog_complex(a);
-}
+EIGEN_INSTANTIATE_COMPLEX_MATH_FUNCS(Packet2cf)
+EIGEN_INSTANTIATE_COMPLEX_MATH_FUNCS_NO_EXP(Packet1cd)
 
 template <>
 EIGEN_STRONG_INLINE Packet1cd pzero<Packet1cd>(const Packet1cd& /* a */) {
@@ -513,6 +480,8 @@ EIGEN_STRONG_INLINE void ptranspose(PacketBlock<Packet1cd, 2>& kernel) {
   kernel.packet[1].v = (__m128d)__lsx_vilvh_d((__m128i)kernel.packet[1].v, (__m128i)kernel.packet[0].v);
   kernel.packet[0].v = tmp;
 }
+
+EIGEN_GCC_FAST_MATH_COMPLEX_VECTORIZE_WORKAROUND_POP
 
 }  // end namespace internal
 }  // end namespace Eigen

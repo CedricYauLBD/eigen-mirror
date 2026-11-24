@@ -6,19 +6,36 @@
 // This Source Code Form is subject to the terms of the Mozilla
 // Public License v. 2.0. If a copy of the MPL was not distributed
 // with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
+// SPDX-License-Identifier: MPL-2.0
+
+// Silence warnings about the deprecated shiftLeft()/shiftRight(), which are still being tested.
+#define EIGEN_NO_DEPRECATED_WARNING
 
 #include <vector>
 #include "main.h"
+#include "random_for_arithmetic.h"
 #include "random_without_cast_overflow.h"
 
+static_assert(
+    std::is_same<ArrayXf::AbsReturnType, std::remove_const_t<decltype(std::declval<const ArrayXf&>().abs())>>::value,
+    "ArrayBase unary return type aliases must match their corresponding expressions");
+
 // suppress annoying unsigned integer warnings
-template <typename Scalar, bool IsSigned = NumTraits<Scalar>::IsSigned>
+template <typename Scalar, bool IsSignedInteger = NumTraits<Scalar>::IsSigned && NumTraits<Scalar>::IsInteger,
+          bool IsSigned = NumTraits<Scalar>::IsSigned>
 struct negative_or_zero_impl {
+  static Scalar run(const Scalar& a) {
+    using UnsignedScalar = std::make_unsigned_t<Scalar>;
+    return static_cast<Scalar>(UnsignedScalar(0) - static_cast<UnsignedScalar>(a));
+  }
+};
+template <typename Scalar>
+struct negative_or_zero_impl<Scalar, false, true> {
   static Scalar run(const Scalar& a) { return -a; }
 };
 template <typename Scalar>
-struct negative_or_zero_impl<Scalar, false> {
-  static Scalar run(const Scalar&) { return 0; }
+struct negative_or_zero_impl<Scalar, false, false> {
+  static Scalar run(const Scalar&) { return Scalar(0); }
 };
 template <typename Scalar>
 Scalar negative_or_zero(const Scalar& a) {
@@ -86,7 +103,7 @@ void special_value_pairs(Array<Scalar, Dynamic, Dynamic>& x, Array<Scalar, Dynam
 }
 
 template <typename Scalar, typename Fn, typename RefFn>
-void binary_op_test(std::string name, Fn fun, RefFn ref) {
+void binary_op_test(const std::string& name, Fn fun, RefFn ref) {
   const Scalar tol = test_precision<Scalar>();
   Array<Scalar, Dynamic, Dynamic> lhs;
   Array<Scalar, Dynamic, Dynamic> rhs;
@@ -125,7 +142,7 @@ void binary_op_test(std::string name, Fn fun, RefFn ref) {
 template <typename Scalar>
 void binary_ops_test() {
   binary_op_test<Scalar>(BINARY_FUNCTOR_TEST_ARGS(pow));
-#ifndef EIGEN_COMP_MSVC
+#if !EIGEN_COMP_MSVC
   binary_op_test<Scalar>(BINARY_FUNCTOR_TEST_ARGS(atan2));
 #else
   binary_op_test<Scalar>(
@@ -144,7 +161,7 @@ void binary_ops_test() {
 }
 
 template <typename Scalar, typename Fn, typename RefFn>
-void unary_op_test(std::string name, Fn fun, RefFn ref) {
+void unary_op_test(const std::string& name, Fn fun, RefFn ref) {
   const Scalar tol = test_precision<Scalar>();
   auto values = special_values<Scalar>();
   Map<Array<Scalar, Dynamic, 1>> valuesMap(values.data(), values.size());
@@ -183,6 +200,7 @@ void unary_ops_test() {
   unary_op_test<Scalar>(UNARY_FUNCTOR_TEST_ARGS(exp));
   unary_op_test<Scalar>(UNARY_FUNCTOR_TEST_ARGS(exp2));
   unary_op_test<Scalar>(UNARY_FUNCTOR_TEST_ARGS(log));
+  unary_op_test<Scalar>(UNARY_FUNCTOR_TEST_ARGS(log10));
   unary_op_test<Scalar>(UNARY_FUNCTOR_TEST_ARGS(sin));
   unary_op_test<Scalar>(UNARY_FUNCTOR_TEST_ARGS(cos));
   unary_op_test<Scalar>(UNARY_FUNCTOR_TEST_ARGS(tan));
@@ -214,6 +232,156 @@ void unary_ops_test() {
   */
 }
 
+// The scalar tanh approximations return +-1 where tanh rounds to it, whether or not the compiler fuses their
+// multiply-adds (GCC does, with FMA available, even when Eigen is not vectorized).
+inline float scalar_tanh_approximation(float x) { return internal::ptanh_float(x); }
+inline double scalar_tanh_approximation(double x) { return internal::ptanh_double(x); }
+
+template <typename Scalar>
+void tanh_saturation_test() {
+  const Scalar inf = NumTraits<Scalar>::infinity(), highest = NumTraits<Scalar>::highest();
+  const Scalar rounds_to_one = std::is_same<Scalar, float>::value ? Scalar(9.1) : Scalar(19.1);
+  for (const Scalar x : {rounds_to_one, Scalar(2) * rounds_to_one, Scalar(100), Scalar(1e10), highest, inf}) {
+    VERIFY_IS_EQUAL(scalar_tanh_approximation(x), Scalar(1));
+    VERIFY_IS_EQUAL(scalar_tanh_approximation(-x), Scalar(-1));
+    VERIFY_IS_EQUAL(numext::tanh(x), Scalar(1));
+    VERIFY_IS_EQUAL(numext::tanh(-x), Scalar(-1));
+  }
+  // The approximation never exceeds 1 in magnitude on the way to saturation.
+  for (Scalar x = Scalar(0.5); x < rounds_to_one; x += Scalar(0.0125)) {
+    VERIFY(numext::abs(scalar_tanh_approximation(x)) <= Scalar(1));
+    VERIFY(numext::abs(scalar_tanh_approximation(-x)) <= Scalar(1));
+  }
+  VERIFY((numext::isnan)(scalar_tanh_approximation(NumTraits<Scalar>::quiet_NaN())));
+}
+
+// log2 of half and bfloat16 is exact at powers of two, subnormal ones included, on the scalar path (size 1) and in the
+// packet body and tail.
+template <typename Scalar>
+void log2_narrow_test() {
+#if EIGEN_ARCH_ARM  // 32-bit ARM flushes subnormals.
+  const int min_exp = NumTraits<Scalar>::min_exponent() - 1;
+#else
+  const int min_exp = NumTraits<Scalar>::min_exponent() - NumTraits<Scalar>::digits();  // 2^-24 and 2^-133
+#endif
+  const int max_exp = NumTraits<Scalar>::max_exponent() - 1;
+  for (const Index size : {Index(1), 2 * Index(internal::packet_traits<Scalar>::size) + 1}) {
+    for (int e = min_exp; e <= max_exp; ++e) {
+      const ArrayX<Scalar> x = ArrayX<Scalar>::Constant(size, Scalar(std::ldexp(1.0f, e)));
+      const ArrayX<Scalar> y = x.log2();
+      for (Index i = 0; i < size; ++i) VERIFY_IS_EQUAL(float(y(i)), float(e));
+    }
+  }
+}
+
+// |x - y| of signed integers that differ by more than the maximum wraps modulo 2^digits, as pabsdiff does.
+template <typename Scalar>
+void absolute_difference_integer_test() {
+  using Unsigned = std::make_unsigned_t<Scalar>;
+  const Scalar lowest = (std::numeric_limits<Scalar>::min)(), highest = (std::numeric_limits<Scalar>::max)();
+  const Scalar values[] = {lowest, Scalar(lowest + 1), Scalar(-1), Scalar(0), Scalar(1), Scalar(highest - 1), highest};
+  const Index n = Index(sizeof(values) / sizeof(values[0]));
+  const Index size = n * n;
+  ArrayX<Scalar> x(size), y(size), expected(size);
+  for (Index i = 0; i < n; ++i) {
+    for (Index j = 0; j < n; ++j) {
+      x(i * n + j) = values[i];
+      y(i * n + j) = values[j];
+      const Unsigned a = Unsigned(values[i]), b = Unsigned(values[j]);
+      expected(i * n + j) = Scalar(Unsigned(values[i] > values[j] ? a - b : b - a));
+    }
+  }
+  const ArrayX<Scalar> got = x.absolute_difference(y);
+  VERIFY_IS_CWISE_EQUAL(got, expected);
+  for (Index k = 0; k < size; ++k) VERIFY_IS_EQUAL(numext::absdiff(x(k), y(k)), expected(k));
+}
+
+template <typename Scalar>
+void ldexp_test() {
+  const std::vector<Scalar> vals = special_values<Scalar>();
+  // Exercise both packet and scalar tails.
+  const Index num_repeats = 2 * Index(internal::packet_traits<Scalar>::size) + 1;
+  Array<Scalar, Dynamic, 1> x(num_repeats * Index(vals.size()));
+  Index count = 0;
+  for (const Scalar& value : vals) {
+    for (Index repeat = 0; repeat < num_repeats; ++repeat) x(count++) = value;
+  }
+
+  const int digits = std::numeric_limits<Scalar>::digits;
+  const int max_exp = std::numeric_limits<Scalar>::max_exponent;
+  // Include denormals, saturation, and unrepresentable 2^e scale factors.
+  std::vector<int> exponents = {0,
+                                1,
+                                -1,
+                                digits - 1,
+                                1 - digits,
+                                max_exp - 1,
+                                1 - max_exp,
+                                max_exp + digits,
+                                -(max_exp + digits),
+                                2 * max_exp,
+                                -2 * max_exp,
+                                (std::numeric_limits<int>::max)(),
+                                (std::numeric_limits<int>::min)(),
+                                70000,
+                                -70000};
+  // Every exponent that matters for subnormal inputs and near-overflow results, including those that bfloat16 cannot
+  // represent as a Scalar (odd |e| > 256).
+  for (int exponent = -300; exponent <= 300; ++exponent) exponents.push_back(exponent);
+
+  bool all_pass = true;
+  for (const int exponent : exponents) {
+    const Array<Scalar, Dynamic, 1> method_result = x.ldexp(exponent);
+    const Array<Scalar, Dynamic, 1> global_result = Eigen::ldexp(x, exponent);
+    for (Index i = 0; i < x.size(); ++i) {
+      // double covers every tested Scalar, so one conversion back gives the exact reference.
+      const double exact = std::ldexp(static_cast<double>(x(i)), exponent);
+      const double expected = static_cast<double>(static_cast<Scalar>(exact));
+#if EIGEN_ARCH_ARM
+      // Work around 32-bit ARM flush-to-zero mode: skip cases with subnormal results. Tininess is detected before
+      // rounding, so a result below the smallest normal that rounds up to it, such as (2 - 2^-23) * 2^-127, is
+      // flushed too.
+      if (expected != 0.0 && std::abs(exact) < static_cast<double>((std::numeric_limits<Scalar>::min)())) continue;
+#endif
+      for (const Scalar& result : {method_result(i), global_result(i)}) {
+        const double actual = static_cast<double>(result);
+        const bool success = (actual == expected && std::signbit(actual) == std::signbit(expected)) ||
+                             ((numext::isnan)(actual) && (numext::isnan)(expected));
+        all_pass &= success;
+        if (!success) {
+          std::cout << "ldexp(" << x(i) << "," << exponent << ") = " << result << " != " << expected << std::endl;
+        }
+      }
+    }
+  }
+  VERIFY(all_pass);
+}
+
+// A custom scalar whose NumTraits members are plain functions, not constexpr (as for mpfr::mpreal), still has ldexp.
+struct NonConstexprReal {
+  NonConstexprReal() : value(0) {}
+  explicit NonConstexprReal(double v) : value(v) {}
+  double value;
+};
+inline NonConstexprReal ldexp(const NonConstexprReal& x, int exponent) {
+  return NonConstexprReal(std::ldexp(x.value, exponent));
+}
+namespace Eigen {
+template <>
+struct NumTraits<NonConstexprReal> : GenericNumTraits<NonConstexprReal> {
+  static int digits() { return 53; }
+  static int min_exponent() { return -1021; }
+  static int max_exponent() { return 1024; }
+};
+}  // namespace Eigen
+
+void ldexp_custom_scalar_test() {
+  ArrayX<NonConstexprReal> x(5);
+  for (Index i = 0; i < x.size(); ++i) x(i) = NonConstexprReal(double(i) + 0.5);
+  const ArrayX<NonConstexprReal> y = x.ldexp(3);
+  for (Index i = 0; i < x.size(); ++i) VERIFY_IS_EQUAL(y(i).value, 8.0 * (double(i) + 0.5));
+}
+
 template <typename Base, typename Exponent, bool ExpIsInteger = NumTraits<Exponent>::IsInteger>
 struct ref_pow {
   static Base run(Base base, Exponent exponent) {
@@ -223,8 +391,23 @@ struct ref_pow {
 };
 
 template <typename Base, typename Exponent>
+Base ref_pow_integer_base(Base base, Exponent exponent) {
+  // std::pow uses floating-point arithmetic and can round one ulp below the exact integer result before casting.
+  Base result(1);
+  while (exponent > Exponent(0)) {
+    if (exponent & Exponent(1)) result *= base;
+    exponent >>= 1;
+    if (exponent > Exponent(0)) base *= base;
+  }
+  return result;
+}
+
+template <typename Base, typename Exponent>
 struct ref_pow<Base, Exponent, true> {
   static Base run(Base base, Exponent exponent) {
+    if (NumTraits<Base>::IsInteger && (exponent > Exponent(0) || exponent == Exponent(0))) {
+      return ref_pow_integer_base(base, exponent);
+    }
     EIGEN_USING_STD(pow);
     return static_cast<Base>(pow(base, exponent));
   }
@@ -262,6 +445,8 @@ void float_pow_test_impl() {
     abs_base_vals.push_back(internal::random<Base>(Base(0), Base(10)));
     abs_exponent_vals.push_back(internal::random<Exponent>(Exponent(0), Exponent(10)));
   }
+  // For float and the smallest normal base, this exponent lies near a subnormal rounding boundary.
+  abs_exponent_vals.push_back(Exponent(1.1245369911193847656));
   const Index num_repeats = internal::packet_traits<Base>::size + 1;
   ArrayX<Base> bases(num_repeats), eigenPow(num_repeats);
   bool all_pass = true;
@@ -283,10 +468,14 @@ void float_pow_test_impl() {
               bool ref_is_neg = !(numext::isnan)(e) && (bool)numext::signbit(e);
               bool flip_sign = result_is_neg != ref_is_neg;
               if (flip_sign) e = -e;
+            } else if (e == Base(0)) {
+              // Implementations may disagree on the sign of pow(-0, positive non-integer).  The specified result is
+              // +0, so do not inherit a negative zero from the scalar reference.
+              e = numext::abs(e);
             }
 
             Base a = eigenPow(j);
-#ifdef EIGEN_COMP_MSVC
+#if EIGEN_COMP_MSVC
             // Work around MSVC return value on underflow.
             // if std::pow returns 0 and Eigen returns a denormalized value, then skip the test
             int eigen_fpclass = std::fpclassify(a);
@@ -301,7 +490,11 @@ void float_pow_test_impl() {
 #endif
 
             bool both_nan = (numext::isnan)(a) && (numext::isnan)(e);
-            bool exact_or_approx = (a == e) || internal::isApprox(a, e, tol);
+            // Two rounded subnormal results can differ by denorm_min even when the relative budget is smaller.
+            const Base min_normal = (std::numeric_limits<Base>::min)();
+            const bool subnormal_rounding = numext::abs(a) <= min_normal && numext::abs(e) <= min_normal &&
+                                            numext::abs(a - e) <= (std::numeric_limits<Base>::denorm_min)();
+            bool exact_or_approx = (a == e) || internal::isApprox(a, e, tol) || subnormal_rounding;
             bool same_sign = (bool)numext::signbit(e) == (bool)numext::signbit(a);
             bool success = both_nan || (exact_or_approx && same_sign);
             all_pass &= success;
@@ -313,6 +506,64 @@ void float_pow_test_impl() {
         }
       }
     }
+  VERIFY(all_pass);
+}
+
+// pow(x, y) = 2^(y log2(x)) for x in [1/2, 2] and |y log2(x)| up to the exponent range, where y magnifies the error
+// of log2(x). Eigen and std::pow are each within a few ulps.
+template <typename Scalar>
+void pow_magnified_log_test() {
+  const Scalar eps = NumTraits<Scalar>::epsilon();
+  const Scalar max_log2 = Scalar(NumTraits<Scalar>::max_exponent() - 2);
+  const Index n = 1000;
+  ArrayX<Scalar> x(n), y(n);
+  for (Index i = 0; i < n; ++i) {
+    do {
+      x(i) = internal::random<Scalar>(Scalar(0.5), Scalar(2));
+    } while (x(i) == Scalar(1));
+    y(i) = internal::random<Scalar>(-max_log2, max_log2) / numext::log2(x(i));
+  }
+  const ArrayX<Scalar> actual = x.pow(y);
+  bool all_pass = true;
+  for (Index i = 0; i < n; ++i) {
+    const Scalar expected = std::pow(x(i), y(i));
+    const bool success = numext::abs(actual(i) - expected) <= Scalar(4) * eps * numext::abs(expected);
+    all_pass &= success;
+    if (!success) {
+      std::cout << std::setprecision(17) << "pow(" << x(i) << "," << y(i) << ") = " << actual(i) << " != " << expected
+                << std::endl;
+    }
+  }
+  VERIFY(all_pass);
+}
+
+// pow(x, +-y) for x = +-(1 - eps/2), the |x| nearest 1, and y = 1.5 max_exponent ln(2) / eps: x^y = 2^(-0.75
+// max_exponent) and x^-y = 2^(0.75 max_exponent) are normal, although (1 + eps)^y overflows. Both the array and the
+// scalar exponent take the vectorized generic pow (y is an integer far above the repeated squaring limit).
+template <typename Scalar>
+void pow_near_one_huge_exponent_test() {
+  const Scalar eps = NumTraits<Scalar>::epsilon();
+  const Scalar below_one = Scalar(1) - eps / Scalar(2);
+  const Scalar huge = Scalar(1.5) * Scalar(NumTraits<Scalar>::max_exponent()) * Scalar(EIGEN_LN2) / eps;
+  const Index n = 2 * internal::packet_traits<Scalar>::size + 1;
+  bool all_pass = true;
+  for (const Scalar base : {below_one, -below_one}) {
+    for (const Scalar exponent : {huge, -huge}) {
+      const ArrayX<Scalar> x = ArrayX<Scalar>::Constant(n, base);
+      const ArrayX<Scalar> binary = x.pow(ArrayX<Scalar>::Constant(n, exponent));
+      const ArrayX<Scalar> unary = x.pow(exponent);
+      const Scalar expected = std::pow(base, exponent);
+      for (Index i = 0; i < n; ++i) {
+        for (const Scalar actual : {binary(i), unary(i)}) {
+          const bool success = numext::abs(actual - expected) <= Scalar(4) * eps * numext::abs(expected);
+          all_pass &= success;
+          if (!success) {
+            std::cout << "pow(" << base << "," << exponent << ") = " << actual << " != " << expected << std::endl;
+          }
+        }
+      }
+    }
+  }
   VERIFY(all_pass);
 }
 
@@ -378,11 +629,16 @@ void int_pow_test_impl() {
   }
 }
 
+template <typename = void>
 void float_pow_test() {
   float_pow_test_impl<float, float>();
   float_pow_test_impl<double, double>();
+  pow_magnified_log_test<double>();
+  pow_near_one_huge_exponent_test<float>();
+  pow_near_one_huge_exponent_test<double>();
 }
 
+template <typename = void>
 void mixed_pow_test() {
   // The following cases will test promoting a smaller exponent type
   // to a wider base type.
@@ -405,6 +661,7 @@ void mixed_pow_test() {
   // unary_pow_test<float, double>();
 }
 
+template <typename = void>
 void int_pow_test() {
   int_pow_test_impl<int, int>();
   int_pow_test_impl<unsigned int, unsigned int>();
@@ -419,7 +676,6 @@ void int_pow_test() {
   int_pow_test_impl<unsigned int, int>();
   int_pow_test_impl<long long, unsigned long long>();
   int_pow_test_impl<unsigned long long, long long>();
-  int_pow_test_impl<long long, int>();
 }
 
 namespace Eigen {
@@ -461,6 +717,7 @@ void signbit_test() {
 
   VERIFY(all_pass);
 }
+template <typename = void>
 void signbit_tests() {
   signbit_test<float>();
   signbit_test<double>();
@@ -474,33 +731,23 @@ void signbit_tests() {
 
 template <typename ArrayType>
 void array_generic(const ArrayType& m) {
-  typedef typename ArrayType::Scalar Scalar;
-  typedef typename ArrayType::RealScalar RealScalar;
-  typedef Array<Scalar, ArrayType::RowsAtCompileTime, 1> ColVectorType;
-  typedef Array<Scalar, 1, ArrayType::ColsAtCompileTime> RowVectorType;
+  using Scalar = typename ArrayType::Scalar;
+  using RealScalar = typename ArrayType::RealScalar;
+  using ColVectorType = Array<Scalar, ArrayType::RowsAtCompileTime, 1>;
+  using RowVectorType = Array<Scalar, 1, ArrayType::ColsAtCompileTime>;
 
   Index rows = m.rows();
   Index cols = m.cols();
 
-  ArrayType m1 = ArrayType::Random(rows, cols);
-  if (NumTraits<RealScalar>::IsInteger && NumTraits<RealScalar>::IsSigned && !NumTraits<Scalar>::IsComplex) {
-    // Here we cap the size of the values in m1 such that pow(3)/cube()
-    // doesn't overflow and result in undefined behavior. Notice that because
-    // pow(int, int) promotes its inputs and output to double (according to
-    // the C++ standard), we have to make sure that the result fits in 53 bits
-    // for int64,
-    RealScalar max_val =
-        numext::mini(RealScalar(std::cbrt(NumTraits<RealScalar>::highest())), RealScalar(std::cbrt(1LL << 53))) / 2;
-    m1.array() = (m1.abs().array() <= max_val).select(m1, Scalar(max_val));
-  }
-  ArrayType m2 = ArrayType::Random(rows, cols), m3(rows, cols);
+  ArrayType m1 = random_for_arithmetic<ArrayType>(rows, cols);
+  ArrayType m2 = random_for_arithmetic<ArrayType>(rows, cols), m3(rows, cols);
   ArrayType m4 = m1;  // copy constructor
   VERIFY_IS_APPROX(m1, m4);
 
-  ColVectorType cv1 = ColVectorType::Random(rows);
-  RowVectorType rv1 = RowVectorType::Random(cols);
+  ColVectorType cv1 = random_for_arithmetic<ColVectorType>(rows);
+  RowVectorType rv1 = random_for_arithmetic<RowVectorType>(cols);
 
-  Scalar s1 = internal::random<Scalar>(), s2 = internal::random<Scalar>();
+  Scalar s1 = random_scalar_for_arithmetic<Scalar>(), s2 = random_scalar_for_arithmetic<Scalar>();
 
   // scalar addition
   VERIFY_IS_APPROX(m1 + s1, s1 + m1);
@@ -534,7 +781,7 @@ void array_generic(const ArrayType& m) {
 
   m3 = m1;
   m4 = m1;
-  m2 = ArrayType::Random(rows, cols);
+  m2 = random_for_arithmetic<ArrayType>(rows, cols);
   m2 = (m2 == 0).select(1, m2);
   ArrayType::Map(m4.data(), m4.rows(), m4.cols()) /= ArrayType::Map(m2.data(), m2.rows(), m2.cols());
   VERIFY_IS_APPROX(m4, m3 / m2);
@@ -563,9 +810,9 @@ void array_generic(const ArrayType& m) {
   VERIFY_IS_APPROX((m3 = s1), ArrayType::Constant(rows, cols, s1));
   VERIFY_IS_APPROX((m3 = 1), ArrayType::Constant(rows, cols, 1));
   VERIFY_IS_APPROX((m3.topLeftCorner(rows, cols) = 1), ArrayType::Constant(rows, cols, 1));
-  typedef Array<Scalar, ArrayType::RowsAtCompileTime == Dynamic ? 2 : ArrayType::RowsAtCompileTime,
-                ArrayType::ColsAtCompileTime == Dynamic ? 2 : ArrayType::ColsAtCompileTime, ArrayType::Options>
-      FixedArrayType;
+  using FixedArrayType =
+      Array<Scalar, ArrayType::RowsAtCompileTime == Dynamic ? 2 : ArrayType::RowsAtCompileTime,
+            ArrayType::ColsAtCompileTime == Dynamic ? 2 : ArrayType::ColsAtCompileTime, ArrayType::Options>;
   {
     FixedArrayType f1(s1);
     VERIFY_IS_APPROX(f1, FixedArrayType::Constant(s1));
@@ -606,7 +853,7 @@ void array_generic(const ArrayType& m) {
   VERIFY_IS_APPROX(Eigen::pow(m1(0, 0), exponents), ArrayType::Constant(rows, cols, m1(0, 0) * m1(0, 0)));
 
   // Check possible conflicts with 1D ctor
-  typedef Array<Scalar, Dynamic, 1> OneDArrayType;
+  using OneDArrayType = Array<Scalar, Dynamic, 1>;
   {
     OneDArrayType o1(rows);
     VERIFY(o1.size() == rows);
@@ -620,8 +867,8 @@ void array_generic(const ArrayType& m) {
     VERIFY(o4.size() == rows);
   }
   // Check possible conflicts with 2D ctor
-  typedef Array<Scalar, Dynamic, Dynamic> TwoDArrayType;
-  typedef Array<Scalar, 2, 1> ArrayType2;
+  using TwoDArrayType = Array<Scalar, Dynamic, Dynamic>;
+  using ArrayType2 = Array<Scalar, 2, 1>;
   {
     TwoDArrayType o1(rows, cols);
     VERIFY(o1.rows() == rows);
@@ -653,17 +900,18 @@ void array_generic(const ArrayType& m) {
 template <typename ArrayType>
 void comparisons(const ArrayType& m) {
   using numext::abs;
-  typedef typename ArrayType::Scalar Scalar;
-  typedef typename NumTraits<Scalar>::Real RealScalar;
+  using Scalar = typename ArrayType::Scalar;
+  using RealScalar = typename NumTraits<Scalar>::Real;
 
   Index rows = m.rows();
   Index cols = m.cols();
 
   Index r = internal::random<Index>(0, rows - 1), c = internal::random<Index>(0, cols - 1);
 
-  ArrayType m1 = ArrayType::Random(rows, cols), m2 = ArrayType::Random(rows, cols), m3(rows, cols), m4 = m1;
+  ArrayType m1 = random_for_arithmetic<ArrayType>(rows, cols), m2 = random_for_arithmetic<ArrayType>(rows, cols),
+            m3(rows, cols), m4 = m1;
 
-  m4 = (m4.abs() == Scalar(0)).select(1, m4);
+  m4 = (m4.abs() == Scalar(0)).select(Scalar(1), m4);
 
   // use operator overloads with default return type
 
@@ -671,7 +919,7 @@ void comparisons(const ArrayType& m) {
   VERIFY(((m1 - Scalar(1)) < m1).all());
   if (rows * cols > 1) {
     m3 = m1;
-    m3(r, c) += 1;
+    m3(r, c) += Scalar(1);
     VERIFY(!(m1 < m3).all());
     VERIFY(!(m1 > m3).all());
   }
@@ -679,15 +927,15 @@ void comparisons(const ArrayType& m) {
   VERIFY((m1 <= m2 || m1 >= m2).all());
 
   // comparisons array to scalar
-  VERIFY((m1 != (m1(r, c) + 1)).any());
-  VERIFY((m1 > (m1(r, c) - 1)).any());
-  VERIFY((m1 < (m1(r, c) + 1)).any());
+  VERIFY((m1 != (m1(r, c) + Scalar(1))).any());
+  VERIFY((m1 > (m1(r, c) - Scalar(1))).any());
+  VERIFY((m1 < (m1(r, c) + Scalar(1))).any());
   VERIFY((m1 == m1(r, c)).any());
 
   // comparisons scalar to array
-  VERIFY(((m1(r, c) + 1) != m1).any());
-  VERIFY(((m1(r, c) - 1) < m1).any());
-  VERIFY(((m1(r, c) + 1) > m1).any());
+  VERIFY(((m1(r, c) + Scalar(1)) != m1).any());
+  VERIFY(((m1(r, c) - Scalar(1)) < m1).any());
+  VERIFY(((m1(r, c) + Scalar(1)) > m1).any());
   VERIFY((m1(r, c) == m1).any());
 
   // currently, any() / all() are not vectorized, so use VERIFY_IS_CWISE_EQUAL to test vectorized path
@@ -739,16 +987,16 @@ void comparisons(const ArrayType& m) {
   VERIFY_IS_APPROX((m1 > m2).select(m1, m2), m1.cwiseMax(m2));
   Scalar mid = (m1.cwiseAbs().minCoeff() + m1.cwiseAbs().maxCoeff()) / Scalar(2);
   for (int j = 0; j < cols; ++j)
-    for (int i = 0; i < rows; ++i) m3(i, j) = abs(m1(i, j)) < mid ? 0 : m1(i, j);
+    for (int i = 0; i < rows; ++i) m3(i, j) = abs(m1(i, j)) < mid ? Scalar(0) : m1(i, j);
   VERIFY_IS_APPROX((m1.abs() < ArrayType::Constant(rows, cols, mid)).select(ArrayType::Zero(rows, cols), m1), m3);
   // shorter versions:
-  VERIFY_IS_APPROX((m1.abs() < ArrayType::Constant(rows, cols, mid)).select(0, m1), m3);
-  VERIFY_IS_APPROX((m1.abs() >= ArrayType::Constant(rows, cols, mid)).select(m1, 0), m3);
+  VERIFY_IS_APPROX((m1.abs() < ArrayType::Constant(rows, cols, mid)).select(Scalar(0), m1), m3);
+  VERIFY_IS_APPROX((m1.abs() >= ArrayType::Constant(rows, cols, mid)).select(m1, Scalar(0)), m3);
   // even shorter version:
-  VERIFY_IS_APPROX((m1.abs() < mid).select(0, m1), m3);
+  VERIFY_IS_APPROX((m1.abs() < mid).select(Scalar(0), m1), m3);
 
   // count
-  VERIFY(((m1.abs() + 1) > RealScalar(0.1)).count() == rows * cols);
+  VERIFY(((m1.abs() + Scalar(1)) > RealScalar(0.1)).count() == rows * cols);
 
   // and/or
   VERIFY((m1 < RealScalar(0) && m1 > RealScalar(0)).count() == 0);
@@ -756,12 +1004,12 @@ void comparisons(const ArrayType& m) {
   RealScalar a = m1.abs().mean();
   VERIFY((m1 < -a || m1 > a).count() == (m1.abs() > a).count());
 
-  typedef Array<Index, Dynamic, 1> ArrayOfIndices;
+  using ArrayOfIndices = Array<Index, Dynamic, 1>;
 
   // TODO allows colwise/rowwise for array
-  VERIFY_IS_APPROX(((m1.abs() + 1) > RealScalar(0.1)).colwise().count(),
+  VERIFY_IS_APPROX(((m1.abs() + Scalar(1)) > RealScalar(0.1)).colwise().count(),
                    ArrayOfIndices::Constant(cols, rows).transpose());
-  VERIFY_IS_APPROX(((m1.abs() + 1) > RealScalar(0.1)).rowwise().count(), ArrayOfIndices::Constant(rows, cols));
+  VERIFY_IS_APPROX(((m1.abs() + Scalar(1)) > RealScalar(0.1)).rowwise().count(), ArrayOfIndices::Constant(rows, cols));
 
   // simple data type that does not permit implicit conversions
   struct scalar_wrapper {
@@ -773,15 +1021,16 @@ void comparisons(const ArrayType& m) {
 
   // test bug2966: select did not support some scalar types that forbade implicit conversions from bool
   ArrayX<scalar_wrapper> m5(10);
-  m5 = (m5 == scalar_wrapper(0)).select(m5, m5);
+  m5.setConstant(scalar_wrapper(Scalar(0)));
+  m5 = (m5 == scalar_wrapper(Scalar(0))).select(m5, m5);
 }
 
 template <typename ArrayType>
 void array_real(const ArrayType& m) {
   using numext::abs;
   using std::sqrt;
-  typedef typename ArrayType::Scalar Scalar;
-  typedef typename NumTraits<Scalar>::Real RealScalar;
+  using Scalar = typename ArrayType::Scalar;
+  using RealScalar = typename NumTraits<Scalar>::Real;
 
   Index rows = m.rows();
   Index cols = m.cols();
@@ -812,10 +1061,59 @@ void array_real(const ArrayType& m) {
   VERIFY_IS_APPROX(m1.tanh().atanh(), atanh(tanh(m1)));
   VERIFY_IS_APPROX(m1.sinh().asinh(), asinh(sinh(m1)));
   VERIFY_IS_APPROX(m1.cosh().acosh(), acosh(cosh(m1)));
-  VERIFY_IS_APPROX(m1.tanh().atanh(), atanh(tanh(m1)));
   VERIFY_IS_APPROX(m1.logistic(), logistic(m1));
 
+  // sin and cos must reduce large arguments accurately. A Cody-Waite reduction in Scalar loses every bit of the
+  // reduced argument long before |x| reaches 2^digits.
+  if (std::is_same<Scalar, float>::value || std::is_same<Scalar, double>::value) {
+    Array<Scalar, Dynamic, 1> x(2 * NumTraits<Scalar>::digits());
+    for (Index i = 0; i < x.size(); ++i) x(i) = Scalar(std::ldexp(1.0 + 0.37 * double(i % 3), int(i)));
+    const Array<Scalar, Dynamic, 1> s = x.sin(), c = x.cos();
+    for (Index i = 0; i < x.size(); ++i) {
+      VERIFY(abs(s(i) - numext::sin(x(i))) <= Scalar(4) * NumTraits<Scalar>::epsilon());
+      VERIFY(abs(c(i) - numext::cos(x(i))) <= Scalar(4) * NumTraits<Scalar>::epsilon());
+    }
+    // tanh(x) rounds to +-1 for |x| >= 20. The rational approximation clamps |x| where it reaches 1, which depends on
+    // whether pmadd is fused.
+    const Scalar inf = NumTraits<Scalar>::infinity();
+    const Scalar big[] = {inf, -inf, Scalar(20), Scalar(-20)};
+    for (Index i = 0; i < x.size(); ++i) x(i) = big[i % 4];
+    // Evaluate into an array: comparing the expression would call the scalar tanh, which is std::tanh for double.
+    const Array<Scalar, Dynamic, 1> t = x.tanh(), sgn = x.sign();
+    VERIFY_IS_CWISE_EQUAL(t, sgn);
+  }
+
+  // Division by zero and by infinity is exact, also where pdiv refines a reciprocal estimate.
+  {
+    const Scalar inf = NumTraits<Scalar>::infinity();
+    Array<Scalar, Dynamic, 1> num(32), den(32), quotient(32);
+    for (Index i = 0; i < num.size(); ++i) {
+      num(i) = (i % 4 < 2) ? Scalar(3) : Scalar(-3);
+      den(i) = (i % 2) ? inf : Scalar(0);
+      quotient(i) = (i % 2) ? Scalar(0) : num(i) * inf;
+    }
+    // Evaluate into an array: comparing the expression would divide coefficient by coefficient.
+    const Array<Scalar, Dynamic, 1> q = num / den;
+    VERIFY_IS_CWISE_EQUAL(q, quotient);
+  }
+
+  // rint rounds halfway cases to even. generic_rint passes values beyond 2^digits through by a lane-wise pcmp_lt, so
+  // every packet mixes both kinds.
+  {
+    const float halves[] = {0.5f, 1.5f, 2.5f, 1e30f, -0.5f, -1.5f, -2.5f, -1e30f};
+    const float even[] = {0.f, 2.f, 2.f, 1e30f, -0.f, -2.f, -2.f, -1e30f};
+    Array<Scalar, Dynamic, 1> h(32), r(32);
+    for (Index i = 0; i < h.size(); ++i) {
+      h(i) = Scalar(halves[i % 8]);
+      r(i) = Scalar(even[i % 8]);
+    }
+    const Array<Scalar, Dynamic, 1> rh = h.rint();
+    VERIFY_IS_CWISE_EQUAL(rh, r);
+  }
+
   VERIFY_IS_APPROX(m1.arg(), arg(m1));
+  // carg of a real array is its arg as a real Scalar, on the vectorized path too.
+  VERIFY_IS_CWISE_EQUAL(m1.carg(), m1.arg());
   VERIFY_IS_APPROX(m1.round(), round(m1));
   VERIFY_IS_APPROX(m1.rint(), rint(m1));
   VERIFY_IS_APPROX(m1.floor(), floor(m1));
@@ -870,6 +1168,10 @@ void array_real(const ArrayType& m) {
   VERIFY((abs(m1) == m1 || abs(m1) == -m1).all());
   VERIFY_IS_APPROX(m3, sqrt(abs2(m3)));
   VERIFY_IS_APPROX(m1.absolute_difference(m2), (m1 > m2).select(m1 - m2, m2 - m1));
+  // |(+0) - (-0)| is +0, as on the vectorized path.
+  VERIFY(!(std::signbit)(static_cast<double>(numext::absdiff(Scalar(0), -Scalar(0)))));
+  // and NaN for (inf, inf), as inf - inf is.
+  VERIFY((numext::isnan)(numext::absdiff(NumTraits<Scalar>::infinity(), NumTraits<Scalar>::infinity())));
   VERIFY_IS_APPROX(m1.sign(), -(-m1).sign());
   VERIFY_IS_APPROX(m1 * m1.sign(), m1.abs());
   VERIFY_IS_APPROX(m1.sign() * m1.abs(), m1);
@@ -932,16 +1234,19 @@ void array_real(const ArrayType& m) {
 
 template <typename ArrayType>
 void array_complex(const ArrayType& m) {
-  typedef typename ArrayType::Scalar Scalar;
-  typedef typename NumTraits<Scalar>::Real RealScalar;
+  using Scalar = typename ArrayType::Scalar;
+  using RealScalar = typename NumTraits<Scalar>::Real;
 
   Index rows = m.rows();
   Index cols = m.cols();
 
   ArrayType m1 = ArrayType::Random(rows, cols), m2(rows, cols), m4 = m1;
 
-  m4.real() = (m4.real().abs() == RealScalar(0)).select(RealScalar(1), m4.real());
-  m4.imag() = (m4.imag().abs() == RealScalar(0)).select(RealScalar(1), m4.imag());
+  // Clamp m4 so that |m4| >= min_normal, avoiding overflow in inverse(m4).
+  // For complex z = a+bi, 1/z = (a-bi)/(a²+b²); if a²+b² underflows to zero
+  // (both |a| and |b| below sqrt(min_normal)), the inverse overflows to inf/nan.
+  const RealScalar min = (std::numeric_limits<RealScalar>::min)();
+  m4 = (m4.abs() < min).select(Scalar(1), m4);
 
   Array<RealScalar, -1, -1> m3(rows, cols);
 
@@ -994,6 +1299,42 @@ void array_complex(const ArrayType& m) {
     VERIFY_IS_APPROX(logistic(m1), (1.0 / (1.0 + exp(-m1))));
     m1(0, 0) = old_m1_val;  // Restore value for future tests.
   }
+  {
+    // expm1 where exp(real) overflows: exp(z) - 1 is (inf, 0) and (-inf, -inf), not NaN.
+    const RealScalar inf = NumTraits<RealScalar>::infinity();
+    const Scalar e0 = numext::expm1(Scalar(inf, RealScalar(0)));
+    const Scalar e1 = numext::expm1(Scalar(RealScalar(1000), RealScalar(-2)));
+    // Where exp(x) overflows and exp(x) cos(y) does not, and where exp(x) is negligible: exactly -1.
+    const RealScalar x_big = numext::log((std::numeric_limits<RealScalar>::max)()) + RealScalar(0.5);
+    const RealScalar y_third = RealScalar(EIGEN_PI / 3);
+    const Scalar e2 = numext::expm1(Scalar(x_big, y_third));
+    VERIFY_IS_APPROX(e2.real(), numext::exp(x_big - RealScalar(EIGEN_LN2)) * (RealScalar(2) * numext::cos(y_third)));
+    VERIFY(e2.imag() == inf);
+    VERIFY_IS_EQUAL(numext::expm1(Scalar(-inf, RealScalar(EIGEN_PI / 2))), Scalar(RealScalar(-1), RealScalar(0)));
+    VERIFY_IS_EQUAL(numext::expm1(Scalar(RealScalar(-200), RealScalar(2))).real(), RealScalar(-1));
+    const Scalar e3 = numext::expm1(Scalar(inf, inf));
+    VERIFY(e3.real() == inf && (numext::isnan)(e3.imag()));
+    VERIFY_IS_EQUAL(numext::expm1(Scalar(-inf, inf)), Scalar(RealScalar(-1), RealScalar(0)));
+#if !EIGEN_ARCH_ARM  // 32-bit ARM flushes subnormals.
+    // Where exp(x / 2) overflows too, exp(x) sin(y) is still finite for denormal y.
+    const RealScalar x_huge = RealScalar(2) * numext::log((std::numeric_limits<RealScalar>::max)()) + RealScalar(1);
+    const RealScalar y_tiny = (std::numeric_limits<RealScalar>::min)() / RealScalar(64);
+    const Scalar e4 = numext::expm1(Scalar(x_huge, y_tiny));
+    const RealScalar q = numext::exp(x_huge / RealScalar(4));
+    VERIFY(e4.real() == inf);
+    VERIFY_IS_APPROX(e4.imag(), (((q * y_tiny) * q) * q) * q);
+#endif
+    VERIFY(e0.real() == inf && e0.imag() == RealScalar(0));
+    VERIFY(e1.real() == -inf && e1.imag() == -inf);
+    // log1p where log(1 + z) is not finite: (inf, 0) and (-inf, 0), not NaN.
+    const Scalar l0 = numext::log1p(Scalar(inf, RealScalar(1)));
+    const Scalar l1 = numext::log1p(Scalar(RealScalar(-1), RealScalar(0)));
+    VERIFY(l0.real() == inf && l0.imag() == RealScalar(0));
+    VERIFY(l1.real() == -inf && l1.imag() == RealScalar(0));
+    // log2(0) is (-inf, 0) on both the vectorized and the scalar path.
+    const Array<Scalar, Dynamic, 1> log2_zero = Array<Scalar, Dynamic, 1>::Zero(17).log2();
+    VERIFY((log2_zero.real() == -inf).all() && (log2_zero.imag() == RealScalar(0)).all());
+  }
 
   for (Index i = 0; i < m.rows(); ++i)
     for (Index j = 0; j < m.cols(); ++j) m3(i, j) = std::atan2(m1(i, j).imag(), m1(i, j).real());
@@ -1002,21 +1343,10 @@ void array_complex(const ArrayType& m) {
 
   std::complex<RealScalar> zero(0.0, 0.0);
   VERIFY((Eigen::isnan)(m1 * zero / zero).all());
-#if EIGEN_COMP_MSVC
-  // msvc complex division is not robust
-  VERIFY((Eigen::isinf)(m4 / RealScalar(0)).all());
-#else
-#if EIGEN_COMP_CLANG
-  // clang's complex division is notoriously broken too
-  if ((numext::isinf)(m4(0, 0) / RealScalar(0))) {
-#endif
-    VERIFY((Eigen::isinf)(m4 / zero).all());
-#if EIGEN_COMP_CLANG
-  } else {
-    VERIFY((Eigen::isinf)(m4.real() / zero.real()).all());
-  }
-#endif
-#endif  // MSVC
+  // Complex division by zero may produce inf or NaN depending on the std::complex
+  // implementation (algebraic formula gives 0/0=NaN for some components). Only require
+  // the result to be non-finite.
+  VERIFY((!(Eigen::isfinite)(m4 / zero)).all());
 
   VERIFY(((Eigen::isfinite)(m1) && (!(Eigen::isfinite)(m1 * zero / zero)) && (!(Eigen::isfinite)(m1 / zero))).all());
 
@@ -1052,7 +1382,7 @@ void array_complex(const ArrayType& m) {
 
 template <typename ArrayType>
 void min_max(const ArrayType& m) {
-  typedef typename ArrayType::Scalar Scalar;
+  using Scalar = typename ArrayType::Scalar;
 
   Index rows = m.rows();
   Index cols = m.cols();
@@ -1091,73 +1421,47 @@ void min_max(const ArrayType& m) {
   }
 }
 
-template <typename Scalar>
-struct shift_imm_traits {
-  enum { Cost = 1, PacketAccess = internal::packet_traits<Scalar>::HasShift };
-};
-
-template <int N, typename Scalar>
-struct logical_left_shift_op {
-  Scalar operator()(const Scalar& v) const { return numext::logical_shift_left(v, N); }
-  template <typename Packet>
-  Packet packetOp(const Packet& v) const {
-    return internal::plogical_shift_left<N>(v);
-  }
-};
-template <int N, typename Scalar>
-struct logical_right_shift_op {
-  Scalar operator()(const Scalar& v) const { return numext::logical_shift_right(v, N); }
-  template <typename Packet>
-  Packet packetOp(const Packet& v) const {
-    return internal::plogical_shift_right<N>(v);
-  }
-};
-template <int N, typename Scalar>
-struct arithmetic_right_shift_op {
-  Scalar operator()(const Scalar& v) const { return numext::arithmetic_shift_right(v, N); }
-  template <typename Packet>
-  Packet packetOp(const Packet& v) const {
-    return internal::parithmetic_shift_right<N>(v);
-  }
-};
-
-namespace Eigen {
-namespace internal {
-template <int N, typename Scalar>
-struct functor_traits<logical_left_shift_op<N, Scalar>> : shift_imm_traits<Scalar> {};
-template <int N, typename Scalar>
-struct functor_traits<logical_right_shift_op<N, Scalar>> : shift_imm_traits<Scalar> {};
-template <int N, typename Scalar>
-struct functor_traits<arithmetic_right_shift_op<N, Scalar>> : shift_imm_traits<Scalar> {};
-}  // namespace internal
-}  // namespace Eigen
-
+// A lambda takes the default functor_traits, so each reference arm stays scalar while the arm under
+// test vectorizes. Comparing the reference against the shift expression as well as against the
+// assigned result evaluates the expression coefficient-wise, which is the only path that reaches the
+// scalar operator() of its functor.
 template <typename ArrayType>
 struct shift_test_impl {
-  typedef typename ArrayType::Scalar Scalar;
+  using Scalar = typename ArrayType::Scalar;
   static constexpr size_t Size = sizeof(Scalar);
   static constexpr size_t MaxShift = (CHAR_BIT * Size) - 1;
 
-  template <size_t N = 1>
+  template <size_t N = 0>
   static inline std::enable_if_t<(N > MaxShift), void> run(const ArrayType&) {}
-  template <size_t N = 1>
+  template <size_t N = 0>
   static inline std::enable_if_t<(N <= MaxShift), void> run(const ArrayType& m) {
     const Index rows = m.rows();
     const Index cols = m.cols();
 
     ArrayType m1 = ArrayType::Random(rows, cols), m2(rows, cols), m3(rows, cols);
+    // The high bit is what separates an arithmetic right shift from a logical one.
+    m1(0, 0) = NumTraits<Scalar>::lowest();
+    m1(rows - 1, cols - 1) = NumTraits<Scalar>::highest();
 
     m2 = m1.unaryExpr([](const Scalar& v) { return numext::logical_shift_left(v, N); });
-    m3 = m1.unaryExpr(logical_left_shift_op<N, Scalar>());
+    m3 = m1.template logicalShiftLeft<N>();
     VERIFY_IS_CWISE_EQUAL(m2, m3);
+    VERIFY_IS_CWISE_EQUAL(m2, m1.template logicalShiftLeft<N>());
+    VERIFY_IS_CWISE_EQUAL(m2, m1.template shiftLeft<N>());
 
     m2 = m1.unaryExpr([](const Scalar& v) { return numext::logical_shift_right(v, N); });
-    m3 = m1.unaryExpr(logical_right_shift_op<N, Scalar>());
+    m3 = m1.template logicalShiftRight<N>();
     VERIFY_IS_CWISE_EQUAL(m2, m3);
+    VERIFY_IS_CWISE_EQUAL(m2, m1.template logicalShiftRight<N>());
 
-    m2 = m1.unaryExpr([](const Scalar& v) { return numext::arithmetic_shift_right(v, N); });
-    m3 = m1.unaryExpr(arithmetic_right_shift_op<N, Scalar>());
+    // Referencing Scalar's own operator>> rather than the numext helper the functor calls keeps this
+    // arm independent of the implementation under test, and states the semantics: fill with the sign
+    // bit when Scalar is signed and with zero when it is not.
+    m2 = m1.unaryExpr([](const Scalar& v) { return static_cast<Scalar>(v >> N); });
+    m3 = m1.template arithmeticShiftRight<N>();
     VERIFY_IS_CWISE_EQUAL(m2, m3);
+    VERIFY_IS_CWISE_EQUAL(m2, m1.template arithmeticShiftRight<N>());
+    VERIFY_IS_CWISE_EQUAL(m2, m1.template shiftRight<N>());
 
     run<N + 1>(m);
   }
@@ -1275,6 +1579,43 @@ void typed_logicals_test(const ArrayType& m) {
   typed_logicals_test_impl<ArrayType>::run(m);
 }
 
+// Integer scalars are always finite, so isFiniteTyped() must be true (nonzero) everywhere. Only
+// truthiness is checked: the exact nonzero value differs between the vectorized path (all-ones
+// mask) and the scalar path (1). Regression: the vectorized path used to compare |x| against a
+// synthesized "infinity" bit pattern, misclassifying |x| >= 2^(digits-1) for signed types and
+// everything for unsigned ones.
+template <typename ArrayType>
+void integer_typed_predicates_test(const ArrayType& m) {
+  using Scalar = typename ArrayType::Scalar;
+  Index rows = m.rows();
+  Index cols = m.cols();
+  const Scalar values[] = {Scalar(0),
+                           Scalar(1),
+                           static_cast<Scalar>(-1),
+                           Scalar(Scalar(1) << (std::numeric_limits<Scalar>::digits - 1)),
+                           NumTraits<Scalar>::highest(),
+                           NumTraits<Scalar>::lowest()};
+  const Index num_values = sizeof(values) / sizeof(values[0]);
+  ArrayType m1(rows, cols);
+  for (Index i = 0; i < m1.size(); ++i) m1.coeffRef(i) = values[i % num_values];
+  // Materialize so the vectorized assignment path engages.
+  ArrayType finite = m1.isFiniteTyped();
+  VERIFY((finite != Scalar(0)).all());
+}
+
+// The logistic functor derives its saturation threshold from NumTraits<Scalar>::epsilon(), which is 0 for integer
+// scalars. The result of an integer logistic is not meaningful, but the call must not divide by zero (SIGFPE at -O0,
+// a trap at -O2) and must stay in [0, 1].
+template <typename Scalar>
+void integer_logistic_test() {
+  const Scalar values[] = {Scalar(0), Scalar(1), Scalar(-1), Scalar(5), Scalar(-5)};
+  const Index num_values = sizeof(values) / sizeof(values[0]);
+  Array<Scalar, Dynamic, 1> x(2 * num_values + 3);
+  for (Index i = 0; i < x.size(); ++i) x(i) = values[i % num_values];
+  const Array<Scalar, Dynamic, 1> y = x.logistic();
+  for (Index i = 0; i < y.size(); ++i) VERIFY(y(i) == Scalar(0) || y(i) == Scalar(1));
+}
+
 template <typename SrcType, typename DstType, int RowsAtCompileTime, int ColsAtCompileTime>
 struct cast_test_impl {
   using SrcArray = Array<SrcType, RowsAtCompileTime, ColsAtCompileTime>;
@@ -1290,8 +1631,8 @@ struct cast_test_impl {
   static constexpr int MaxPacketSize = internal::plain_enum_max(SrcPacketSize, DstPacketSize);
 
   static void run() {
-    const Index testRows = RowsAtCompileTime == Dynamic ? ((10 * MaxPacketSize) + 1) : RowsAtCompileTime;
-    const Index testCols = ColsAtCompileTime == Dynamic ? ((10 * MaxPacketSize) + 1) : ColsAtCompileTime;
+    constexpr Index testRows = RowsAtCompileTime == Dynamic ? ((10 * MaxPacketSize) + 1) : RowsAtCompileTime;
+    constexpr Index testCols = ColsAtCompileTime == Dynamic ? ((10 * MaxPacketSize) + 1) : ColsAtCompileTime;
     const Index testSize = testRows * testCols;
     const Index minTestSize = 100;
     const Index repeats = numext::div_ceil(minTestSize, testSize);
@@ -1328,8 +1669,8 @@ struct cast_tests_impl {
 
   template <size_t i = 0, size_t j = i + 1, bool Done = (i >= ScalarTupleSize - 1) || (j >= ScalarTupleSize)>
   static std::enable_if_t<!Done> run() {
-    using Type1 = typename std::tuple_element<i, ScalarTuple>::type;
-    using Type2 = typename std::tuple_element<j, ScalarTuple>::type;
+    using Type1 = std::tuple_element_t<i, ScalarTuple>;
+    using Type2 = std::tuple_element_t<j, ScalarTuple>;
     cast_test_impl<Type1, Type2, RowsAtCompileTime, ColsAtCompileTime>::run();
     cast_test_impl<Type2, Type1, RowsAtCompileTime, ColsAtCompileTime>::run();
     static constexpr size_t next_i = (j == ScalarTupleSize - 1) ? (i + 1) : (i + 0);
@@ -1343,6 +1684,200 @@ template <int RowsAtCompileTime, int ColsAtCompileTime>
 void cast_test() {
   cast_tests_impl<RowsAtCompileTime, ColsAtCompileTime, bool, int8_t, int16_t, int32_t, int64_t, uint8_t, uint16_t,
                   uint32_t, uint64_t, float, double, /*long double, */ half, bfloat16>::run();
+}
+
+// Floating-point to integer casts truncate toward zero at every packet width.
+template <typename SrcType, int Size>
+void cast_truncation_test() {
+  const Array<SrcType, Size, 1> src = Array<SrcType, Size, 1>::LinSpaced(SrcType(-3.75), SrcType(3.75));
+  const Array<int, Size, 1> dst = src.template cast<int>();
+  for (Index k = 0; k < Size; ++k) VERIFY_IS_EQUAL(dst(k), static_cast<int>(src(k)));
+}
+
+// cast_test compares approximately. A 64-bit integer must round to float once: 2^60 + 2^36 + 1 rounds up, but
+// rounding through double first lands on the midpoint 2^60 + 2^36, which ties down to 2^60. Clang before 21 converts
+// that way on AArch64 when it vectorizes a scalar loop: without explicit vectorization, for a type with no vectorized
+// cast, for the unrolled remainder of a fixed size (14 in the generic backend with 16-byte vectors), and for
+// complex<float>, which no backend casts to from int64.
+template <typename T, int Size>
+void int64_to_float_cast_test(Index size = Size) {
+  const bool is_signed = std::is_signed<T>::value;
+  // Read through volatile: EIGEN_OPTIMIZATION_BARRIER is empty on MSVC, which folds constant conversions through
+  // double.
+  const volatile T big_source = (T(1) << 60) + (T(1) << 36) + 1;
+  const T big = big_source;
+  Array<T, Size, 1> a;
+  a.resize(size);
+  for (Index i = 0; i < a.size(); ++i) a(i) = is_signed && i % 2 == 0 ? T(0) - big : big;
+  const Array<float, Size, 1> f = a.template cast<float>();
+  const Array<std::complex<float>, Size, 1> c = a.template cast<std::complex<float>>();
+  // 2^60 + 2^37, spelled exactly: MSVC folds a constant int64-to-float conversion through double.
+  const float rounded = std::ldexp(1.f + std::ldexp(1.f, -23), 60);
+  for (Index i = 0; i < a.size(); ++i) {
+    const float expected = is_signed && i % 2 == 0 ? -rounded : rounded;
+    VERIFY_IS_EQUAL(f(i), expected);
+    VERIFY_IS_EQUAL(c(i), std::complex<float>(expected, 0.f));
+  }
+}
+
+// Float midpoints 2^e + (k + 1/2) ulp, offset in the low 12 bits, on both sides of 2^53. The reference converts behind
+// a barrier, which keeps the compiler from vectorizing it: Clang before 21 does that through double on AArch64.
+template <typename T>
+void int64_to_float_midpoint_cast_test() {
+  using U = std::make_unsigned_t<T>;
+  std::vector<T> values = {T((U(1) << 53) - 1), T(U(1) << 53), T((U(1) << 53) + 1), NumTraits<T>::highest()};
+  for (int e = 24; e < (std::is_signed<T>::value ? 63 : 64); ++e) {
+    for (U k = 0; k < 2; ++k) {
+      const U mid = (U(1) << e) + (k << (e - 23)) + (U(1) << (e - 24));
+      for (U s : {U(0), U(1), U(0x7ff), U(0x800), U(0x801)}) {
+        values.push_back(T(mid + s));
+        values.push_back(T(mid - s));
+      }
+    }
+  }
+  const size_t count = values.size();
+  if (std::is_signed<T>::value) {
+    for (size_t i = 0; i < count; ++i) values.push_back(T(-values[i]));
+    values.push_back(NumTraits<T>::lowest());
+  }
+  const ArrayX<T> a = Map<const ArrayX<T>>(values.data(), Index(values.size()));
+  const ArrayXf f = a.template cast<float>();
+  for (Index i = 0; i < a.size(); ++i) {
+    T x = a(i);
+    EIGEN_OPTIMIZATION_BARRIER(x);
+    VERIFY_IS_EQUAL(f(i), static_cast<float>(x));
+  }
+}
+
+template <typename = void>
+void bool_logical_ops() {
+  const Index size = 67;
+  ArrayX<bool> lhs = ArrayXi::Random(size) > 0;
+  ArrayX<bool> rhs = ArrayXi::Random(size) > 0;
+  for (Index i = 0; i < 4; ++i) {
+    lhs[i] = lhs[size - 4 + i] = (i & 2) != 0;
+    rhs[i] = rhs[size - 4 + i] = (i & 1) != 0;
+  }
+
+  ArrayX<bool> actual_and(size), actual_or(size), actual_xor(size), actual_not(size);
+  ArrayX<bool> expected_and(size), expected_or(size), expected_xor(size), expected_not(size);
+  actual_and = lhs && rhs;
+  actual_or = lhs || rhs;
+  actual_xor = lhs.binaryExpr(rhs, internal::scalar_boolean_xor_op<bool>());
+  actual_not = !lhs;
+  for (Index i = 0; i < size; ++i) {
+    expected_and[i] = lhs[i] && rhs[i];
+    expected_or[i] = lhs[i] || rhs[i];
+    expected_xor[i] = lhs[i] != rhs[i];
+    expected_not[i] = !lhs[i];
+  }
+  VERIFY((actual_and == expected_and).all());
+  VERIFY((actual_or == expected_or).all());
+  VERIFY((actual_xor == expected_xor).all());
+  VERIFY((actual_not == expected_not).all());
+  VERIFY((lhs + rhs == expected_or).all());
+  VERIFY((lhs * rhs == expected_and).all());
+  VERIFY(((lhs != rhs) == expected_xor).all());
+
+  ArrayXi difference = lhs.cast<int>() - rhs.cast<int>();
+  ArrayXi opposite = -lhs.cast<int>();
+  ArrayXi expected_difference(size), expected_opposite(size);
+  for (Index i = 0; i < size; ++i) {
+    expected_difference[i] = int(lhs[i]) - int(rhs[i]);
+    expected_opposite[i] = -int(lhs[i]);
+  }
+  VERIFY_IS_CWISE_EQUAL(difference, expected_difference);
+  VERIFY_IS_CWISE_EQUAL(opposite, expected_opposite);
+}
+
+template <typename RealScalar>
+void complex_classification() {
+  using Complex = std::complex<RealScalar>;
+  const RealScalar inf = NumTraits<RealScalar>::infinity();
+  const RealScalar nan = NumTraits<RealScalar>::quiet_NaN();
+
+  struct TestCase {
+    Complex value;
+    bool finite;
+    bool infinite;
+    bool not_a_number;
+  };
+  const TestCase test_cases[] = {
+      {Complex(0, 0), true, false, false},     {Complex(inf, 0), false, true, false},
+      {Complex(0, inf), false, true, false},   {Complex(nan, 0), false, false, true},
+      {Complex(0, nan), false, false, true},   {Complex(inf, nan), false, false, true},
+      {Complex(nan, inf), false, false, true}, {Complex(-inf, -inf), false, true, false},
+      {Complex(nan, nan), false, false, true},
+  };
+
+  for (const TestCase& test_case : test_cases) {
+    VERIFY_IS_EQUAL((numext::isfinite)(test_case.value), test_case.finite);
+    VERIFY_IS_EQUAL((numext::isinf)(test_case.value), test_case.infinite);
+    VERIFY_IS_EQUAL((numext::isnan)(test_case.value), test_case.not_a_number);
+  }
+}
+
+// Coefficient-wise modulus. Integer scalars only.
+// Original coverage by @arvsrao in !1705; extended here to the array-array form,
+// the scalar-on-the-left form, negative operands, and the 2D and compound-expression cases.
+template <typename Scalar>
+void modulus_test_impl() {
+  // Array % Array, 1D.
+  Array<Scalar, 3, 1> a(Scalar(7), Scalar(8), Scalar(9));
+  Array<Scalar, 3, 1> b(Scalar(2), Scalar(3), Scalar(4));
+  Array<Scalar, 3, 1> expected(Scalar(1), Scalar(2), Scalar(1));
+  VERIFY_IS_CWISE_EQUAL(a % b, expected);
+
+  // Array % scalar.
+  Array<Scalar, 3, 1> a_mod_2(Scalar(1), Scalar(0), Scalar(1));
+  VERIFY_IS_CWISE_EQUAL(a % Scalar(2), a_mod_2);
+
+  // Scalar % Array.
+  Array<Scalar, 3, 1> ten_mod_b(Scalar(0), Scalar(1), Scalar(2));
+  VERIFY_IS_CWISE_EQUAL(Scalar(10) % b, ten_mod_b);
+
+  // Modulus of a compound expression.
+  // (7,8,9) + (2,3,4) = (9,11,13); mod 4 -> (1,3,1)
+  Array<Scalar, 3, 1> compound(Scalar(1), Scalar(3), Scalar(1));
+  VERIFY_IS_CWISE_EQUAL((a + b) % Scalar(4), compound);
+
+  // Dynamic 2D.
+  ArrayXX<Scalar> m(2, 3);
+  m << Scalar(0), Scalar(1), Scalar(2), Scalar(3), Scalar(4), Scalar(5);
+  ArrayXX<Scalar> m_mod_3(2, 3);
+  m_mod_3 << Scalar(0), Scalar(1), Scalar(2), Scalar(0), Scalar(1), Scalar(2);
+  VERIFY_IS_CWISE_EQUAL(m % Scalar(3), m_mod_3);
+  VERIFY_IS_CWISE_EQUAL(m % ArrayXX<Scalar>::Constant(2, 3, Scalar(3)), m_mod_3);
+
+  // Agreement with the scalar operator, including negative dividends where the
+  // sign of the result follows the dividend (C++11 onwards).
+  if (NumTraits<Scalar>::IsSigned) {
+    Array<Scalar, 4, 1> neg(Scalar(-7), Scalar(-1), Scalar(7), Scalar(0));
+    Array<Scalar, 4, 1> div(Scalar(3), Scalar(3), Scalar(-3), Scalar(3));
+    for (Index i = 0; i < neg.size(); ++i) {
+      VERIFY_IS_EQUAL((neg % div)(i), Scalar(neg(i) % div(i)));
+    }
+  }
+
+  // Matches a hand-rolled loop over random data.
+  ArrayX<Scalar> lhs = ArrayX<Scalar>::Random(37);
+  ArrayX<Scalar> rhs = ArrayX<Scalar>::Random(37);
+  rhs = (rhs == Scalar(0) || rhs == Scalar(-1)).select(ArrayX<Scalar>::Constant(37, Scalar(1)), rhs);
+  ArrayX<Scalar> got = lhs % rhs;
+  for (Index i = 0; i < lhs.size(); ++i) {
+    VERIFY_IS_EQUAL(got(i), Scalar(lhs(i) % rhs(i)));
+  }
+}
+
+void modulus_tests() {
+  modulus_test_impl<int8_t>();
+  modulus_test_impl<int16_t>();
+  modulus_test_impl<int>();
+  modulus_test_impl<int64_t>();
+  modulus_test_impl<uint8_t>();
+  modulus_test_impl<uint16_t>();
+  modulus_test_impl<uint32_t>();
+  modulus_test_impl<uint64_t>();
 }
 
 EIGEN_DECLARE_TEST(array_cwise) {
@@ -1362,6 +1897,23 @@ EIGEN_DECLARE_TEST(array_cwise) {
         ArrayXXi(internal::random<int>(1, EIGEN_TEST_MAX_SIZE), internal::random<int>(1, EIGEN_TEST_MAX_SIZE))));
     CALL_SUBTEST_9(shift_test(Array<Index, Dynamic, Dynamic>(internal::random<int>(1, EIGEN_TEST_MAX_SIZE),
                                                              internal::random<int>(1, EIGEN_TEST_MAX_SIZE))));
+    // An unsigned Scalar has no sign bit, so its arithmetic right shift must not sign-extend.
+    CALL_SUBTEST_38(shift_test(Array<uint32_t, Dynamic, Dynamic>(internal::random<int>(1, EIGEN_TEST_MAX_SIZE),
+                                                                 internal::random<int>(1, EIGEN_TEST_MAX_SIZE))));
+    CALL_SUBTEST_39(shift_test(Array<uint64_t, Dynamic, Dynamic>(internal::random<int>(1, EIGEN_TEST_MAX_SIZE),
+                                                                 internal::random<int>(1, EIGEN_TEST_MAX_SIZE))));
+    CALL_SUBTEST_40(shift_test(Array<int8_t, Dynamic, Dynamic>(internal::random<int>(1, EIGEN_TEST_MAX_SIZE),
+                                                               internal::random<int>(1, EIGEN_TEST_MAX_SIZE))));
+    CALL_SUBTEST_40(shift_test(Array<uint8_t, Dynamic, Dynamic>(internal::random<int>(1, EIGEN_TEST_MAX_SIZE),
+                                                                internal::random<int>(1, EIGEN_TEST_MAX_SIZE))));
+    // A random dynamic size above only occasionally lands on 4, so it does not reliably exercise
+    // the quarter-width NEON packets (Packet4c/Packet4uc); pin a fixed size to cover them every run.
+    CALL_SUBTEST_40(shift_test(Array<int8_t, 4, 1>()));
+    CALL_SUBTEST_40(shift_test(Array<uint8_t, 4, 1>()));
+    CALL_SUBTEST_41(shift_test(Array<int16_t, Dynamic, Dynamic>(internal::random<int>(1, EIGEN_TEST_MAX_SIZE),
+                                                                internal::random<int>(1, EIGEN_TEST_MAX_SIZE))));
+    CALL_SUBTEST_41(shift_test(Array<uint16_t, Dynamic, Dynamic>(internal::random<int>(1, EIGEN_TEST_MAX_SIZE),
+                                                                 internal::random<int>(1, EIGEN_TEST_MAX_SIZE))));
     CALL_SUBTEST_10(array_generic(Array<uint32_t, Dynamic, Dynamic>(internal::random<int>(1, EIGEN_TEST_MAX_SIZE),
                                                                     internal::random<int>(1, EIGEN_TEST_MAX_SIZE))));
     CALL_SUBTEST_11(array_generic(Array<uint64_t, Dynamic, Dynamic>(internal::random<int>(1, EIGEN_TEST_MAX_SIZE),
@@ -1375,6 +1927,8 @@ EIGEN_DECLARE_TEST(array_cwise) {
         ArrayXXf(internal::random<int>(1, EIGEN_TEST_MAX_SIZE), internal::random<int>(1, EIGEN_TEST_MAX_SIZE))));
     CALL_SUBTEST_8(comparisons(
         ArrayXXi(internal::random<int>(1, EIGEN_TEST_MAX_SIZE), internal::random<int>(1, EIGEN_TEST_MAX_SIZE))));
+    CALL_SUBTEST_8(comparisons(Array<Eigen::half, 32, 32>()));
+    CALL_SUBTEST_8(comparisons(Array<Eigen::bfloat16, 32, 32>()));
   }
   for (int i = 0; i < g_repeat; i++) {
     CALL_SUBTEST_6(min_max(Array<float, 1, 1>()));
@@ -1400,23 +1954,65 @@ EIGEN_DECLARE_TEST(array_cwise) {
     CALL_SUBTEST_18(array_complex(
         ArrayXXcd(internal::random<int>(1, EIGEN_TEST_MAX_SIZE), internal::random<int>(1, EIGEN_TEST_MAX_SIZE))));
   }
+  CALL_SUBTEST_17(complex_classification<float>());
+  CALL_SUBTEST_18(complex_classification<double>());
+  CALL_SUBTEST_18(complex_classification<long double>());
 
   for (int i = 0; i < g_repeat; i++) {
-    CALL_SUBTEST_19(float_pow_test());
-    CALL_SUBTEST_20(int_pow_test());
-    CALL_SUBTEST_21(mixed_pow_test());
-    CALL_SUBTEST_22(signbit_tests());
+    CALL_SUBTEST_19(float_pow_test<>());
+    CALL_SUBTEST_20(int_pow_test<>());
+    CALL_SUBTEST_21(mixed_pow_test<>());
+    CALL_SUBTEST_22(signbit_tests<>());
+  }
+  for (int i = 0; i < g_repeat; i++) {
+    CALL_SUBTEST_34(ldexp_test<float>());
+    CALL_SUBTEST_35(ldexp_test<double>());
+    CALL_SUBTEST_34(tanh_saturation_test<float>());
+    CALL_SUBTEST_35(tanh_saturation_test<double>());
+    CALL_SUBTEST_36(ldexp_test<Eigen::half>());
+    CALL_SUBTEST_37(ldexp_test<Eigen::bfloat16>());
+    CALL_SUBTEST_36(log2_narrow_test<Eigen::half>());
+    CALL_SUBTEST_37(log2_narrow_test<Eigen::bfloat16>());
+    CALL_SUBTEST_37(ldexp_custom_scalar_test());
   }
   for (int i = 0; i < g_repeat; i++) {
     CALL_SUBTEST_23(typed_logicals_test(ArrayX<int>(internal::random<int>(1, EIGEN_TEST_MAX_SIZE))));
+    CALL_SUBTEST_23(integer_typed_predicates_test(ArrayX<int>(internal::random<int>(1, EIGEN_TEST_MAX_SIZE))));
+    CALL_SUBTEST_23(integer_typed_predicates_test(ArrayXX<int64_t>(internal::random<int>(1, EIGEN_TEST_MAX_SIZE),
+                                                                   internal::random<int>(1, EIGEN_TEST_MAX_SIZE))));
+    CALL_SUBTEST_23(integer_typed_predicates_test(ArrayX<uint32_t>(internal::random<int>(1, EIGEN_TEST_MAX_SIZE))));
+    CALL_SUBTEST_23(integer_logistic_test<int>());
+    CALL_SUBTEST_23(integer_logistic_test<int64_t>());
+    CALL_SUBTEST_23(integer_logistic_test<int16_t>());
     CALL_SUBTEST_24(typed_logicals_test(ArrayX<float>(internal::random<int>(1, EIGEN_TEST_MAX_SIZE))));
+    CALL_SUBTEST_24(typed_logicals_test(ArrayX<Eigen::half>(internal::random<int>(1, EIGEN_TEST_MAX_SIZE))));
     CALL_SUBTEST_25(typed_logicals_test(ArrayX<double>(internal::random<int>(1, EIGEN_TEST_MAX_SIZE))));
+    CALL_SUBTEST_25(typed_logicals_test(ArrayX<Eigen::bfloat16>(internal::random<int>(1, EIGEN_TEST_MAX_SIZE))));
     CALL_SUBTEST_26(typed_logicals_test(ArrayX<std::complex<float>>(internal::random<int>(1, EIGEN_TEST_MAX_SIZE))));
     CALL_SUBTEST_27(typed_logicals_test(ArrayX<std::complex<double>>(internal::random<int>(1, EIGEN_TEST_MAX_SIZE))));
+    CALL_SUBTEST_42(bool_logical_ops<>());
+    CALL_SUBTEST_43(modulus_tests());
+    CALL_SUBTEST_43(absolute_difference_integer_test<int8_t>());
+    CALL_SUBTEST_43(absolute_difference_integer_test<int16_t>());
+    CALL_SUBTEST_43(absolute_difference_integer_test<int32_t>());
+    CALL_SUBTEST_43(absolute_difference_integer_test<int64_t>());
   }
 
   for (int i = 0; i < g_repeat; i++) {
     CALL_SUBTEST_28((cast_test<1, 1>()));
+    CALL_SUBTEST_28((cast_truncation_test<double, 4>()));
+    CALL_SUBTEST_28((cast_truncation_test<double, 8>()));
+    CALL_SUBTEST_28((cast_truncation_test<double, 16>()));
+    CALL_SUBTEST_28((cast_truncation_test<float, 16>()));
+    // QEMU, which runs the ppc64le tests, emulates xscvsxdsp and xscvuxdsp through double, so they round twice.
+#if !EIGEN_ARCH_PPC
+    CALL_SUBTEST_28((int64_to_float_cast_test<int64_t, Dynamic>(17)));
+    CALL_SUBTEST_28((int64_to_float_cast_test<int64_t, 14>()));
+    CALL_SUBTEST_28(int64_to_float_midpoint_cast_test<int64_t>());
+    CALL_SUBTEST_28((int64_to_float_cast_test<uint64_t, Dynamic>(17)));
+    CALL_SUBTEST_28((int64_to_float_cast_test<uint64_t, 14>()));
+    CALL_SUBTEST_28(int64_to_float_midpoint_cast_test<uint64_t>());
+#endif
     CALL_SUBTEST_29((cast_test<3, 1>()));
     CALL_SUBTEST_30((cast_test<5, 1>()));
     CALL_SUBTEST_31((cast_test<9, 1>()));
@@ -1424,9 +2020,9 @@ EIGEN_DECLARE_TEST(array_cwise) {
     CALL_SUBTEST_33((cast_test<Dynamic, 1>()));
   }
 
-  VERIFY((internal::is_same<internal::global_math_functions_filtering_base<int>::type, int>::value));
-  VERIFY((internal::is_same<internal::global_math_functions_filtering_base<float>::type, float>::value));
-  VERIFY((internal::is_same<internal::global_math_functions_filtering_base<Array2i>::type, ArrayBase<Array2i>>::value));
-  typedef CwiseUnaryOp<internal::scalar_abs_op<double>, ArrayXd> Xpr;
-  VERIFY((internal::is_same<internal::global_math_functions_filtering_base<Xpr>::type, ArrayBase<Xpr>>::value));
+  VERIFY((std::is_same<internal::global_math_functions_filtering_base<int>::type, int>::value));
+  VERIFY((std::is_same<internal::global_math_functions_filtering_base<float>::type, float>::value));
+  VERIFY((std::is_same<internal::global_math_functions_filtering_base<Array2i>::type, ArrayBase<Array2i>>::value));
+  using Xpr = CwiseUnaryOp<internal::scalar_abs_op<double>, ArrayXd>;
+  VERIFY((std::is_same<internal::global_math_functions_filtering_base<Xpr>::type, ArrayBase<Xpr>>::value));
 }

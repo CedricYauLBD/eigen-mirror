@@ -6,6 +6,7 @@
 // This Source Code Form is subject to the terms of the Mozilla
 // Public License v. 2.0. If a copy of the MPL was not distributed
 // with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
+// SPDX-License-Identifier: MPL-2.0
 
 #ifndef EIGEN_SIMPLICIAL_CHOLESKY_H
 #define EIGEN_SIMPLICIAL_CHOLESKY_H
@@ -20,7 +21,7 @@ enum SimplicialCholeskyMode { SimplicialCholeskyLLT, SimplicialCholeskyLDLT };
 namespace internal {
 template <typename CholMatrixType, typename InputMatrixType>
 struct simplicial_cholesky_grab_input {
-  typedef CholMatrixType const* ConstCholMatrixPtr;
+  using ConstCholMatrixPtr = const CholMatrixType*;
   static void run(const InputMatrixType& input, ConstCholMatrixPtr& pmat, CholMatrixType& tmp) {
     tmp = input;
     pmat = &tmp;
@@ -29,8 +30,39 @@ struct simplicial_cholesky_grab_input {
 
 template <typename MatrixType>
 struct simplicial_cholesky_grab_input<MatrixType, MatrixType> {
-  typedef MatrixType const* ConstMatrixPtr;
+  using ConstMatrixPtr = const MatrixType*;
   static void run(const MatrixType& input, ConstMatrixPtr& pmat, MatrixType& /*tmp*/) { pmat = &input; }
+};
+
+// Compute a fill-reducing permutation for SimplicialCholesky. The generic path
+// builds the full Scalar-valued symmetric matrix that the user's OrderingType
+// expects. The AMDOrdering specialization below skips that copy: AMD reads
+// only the sparsity pattern, so we can hand it a SparseSelfAdjointView<UpLo>
+// whose pattern-only overload materializes the underlying triangle as
+// SparseMatrix<signed char> and expands once.
+template <bool UseAMDFastPath>
+struct simplicial_cholesky_amd_dispatch {
+  template <int UpLo_, bool NonHermitian, typename Ordering, typename MatrixType, typename CholMatrixType,
+            typename Perm>
+  static void run(const MatrixType& a, CholMatrixType& C, Perm& perm) {
+    permute_symm_to_fullsymm<UpLo_, NonHermitian>(a, C, nullptr);
+    Ordering ordering;
+    ordering(C, perm);
+  }
+};
+
+template <>
+struct simplicial_cholesky_amd_dispatch<true> {
+  template <int UpLo_, bool /*NonHermitian*/, typename Ordering, typename MatrixType, typename CholMatrixType,
+            typename Perm>
+  static void run(const MatrixType& a, CholMatrixType& /*C*/, Perm& perm) {
+    // Pattern-only: works for both Hermitian and NonHermitian variants because
+    // AMD's selfadjointView overload never reads scalar values, so the
+    // selfadjoint-vs-symmetric distinction (which only affects value
+    // expansion) is irrelevant.
+    Ordering ordering;
+    ordering(a.template selfadjointView<UpLo_>(), perm);
+  }
 };
 }  // end namespace internal
 
@@ -49,21 +81,21 @@ struct simplicial_cholesky_grab_input<MatrixType, MatrixType> {
  */
 template <typename Derived>
 class SimplicialCholeskyBase : public SparseSolverBase<Derived> {
-  typedef SparseSolverBase<Derived> Base;
+  using Base = SparseSolverBase<Derived>;
   using Base::m_isInitialized;
 
  public:
-  typedef typename internal::traits<Derived>::MatrixType MatrixType;
-  typedef typename internal::traits<Derived>::OrderingType OrderingType;
+  using MatrixType = typename internal::traits<Derived>::MatrixType;
+  using OrderingType = typename internal::traits<Derived>::OrderingType;
   enum { UpLo = internal::traits<Derived>::UpLo };
-  typedef typename MatrixType::Scalar Scalar;
-  typedef typename MatrixType::RealScalar RealScalar;
-  typedef typename internal::traits<Derived>::DiagonalScalar DiagonalScalar;
-  typedef typename MatrixType::StorageIndex StorageIndex;
-  typedef SparseMatrix<Scalar, ColMajor, StorageIndex> CholMatrixType;
-  typedef CholMatrixType const* ConstCholMatrixPtr;
-  typedef Matrix<Scalar, Dynamic, 1> VectorType;
-  typedef Matrix<StorageIndex, Dynamic, 1> VectorI;
+  using Scalar = typename MatrixType::Scalar;
+  using RealScalar = typename MatrixType::RealScalar;
+  using DiagonalScalar = typename internal::traits<Derived>::DiagonalScalar;
+  using StorageIndex = typename MatrixType::StorageIndex;
+  using CholMatrixType = SparseMatrix<Scalar, ColMajor, StorageIndex>;
+  using ConstCholMatrixPtr = const CholMatrixType*;
+  using VectorType = Matrix<Scalar, Dynamic, 1>;
+  using VectorI = Matrix<StorageIndex, Dynamic, 1>;
 
   enum { ColsAtCompileTime = MatrixType::ColsAtCompileTime, MaxColsAtCompileTime = MatrixType::MaxColsAtCompileTime };
 
@@ -79,8 +111,6 @@ class SimplicialCholeskyBase : public SparseSolverBase<Derived> {
     derived().compute(matrix);
   }
 
-  ~SimplicialCholeskyBase() {}
-
   Derived& derived() { return *static_cast<Derived*>(this); }
   const Derived& derived() const { return *static_cast<const Derived*>(this); }
 
@@ -90,7 +120,7 @@ class SimplicialCholeskyBase : public SparseSolverBase<Derived> {
   /** \brief Reports whether previous computation was successful.
    *
    * \returns \c Success if computation was successful,
-   *          \c NumericalIssue if the matrix.appears to be negative.
+   *          \c NumericalIssue if the matrix appears to be negative.
    */
   ComputationInfo info() const {
     eigen_assert(m_isInitialized && "Decomposition is not initialized.");
@@ -150,7 +180,7 @@ class SimplicialCholeskyBase : public SparseSolverBase<Derived> {
     eigen_assert(m_factorizationIsOk &&
                  "The decomposition is not in a valid state for solving, you must first call either compute() or "
                  "symbolic()/numeric()");
-    eigen_assert(m_matrix.rows() == b.rows());
+    EIGEN_INTERNAL_ASSERT_SAME_ROWS(m_matrix, b);
 
     if (m_info != Success) return;
 
@@ -181,7 +211,7 @@ class SimplicialCholeskyBase : public SparseSolverBase<Derived> {
   /** Computes the sparse Cholesky decomposition of \a matrix */
   template <bool DoLDLT, bool NonHermitian>
   void compute(const MatrixType& matrix) {
-    eigen_assert(matrix.rows() == matrix.cols());
+    EIGEN_INTERNAL_ASSERT_SQUARE(matrix);
     Index size = matrix.cols();
     CholMatrixType tmp(size, size);
     ConstCholMatrixPtr pmat;
@@ -192,7 +222,7 @@ class SimplicialCholeskyBase : public SparseSolverBase<Derived> {
 
   template <bool DoLDLT, bool NonHermitian>
   void factorize(const MatrixType& a) {
-    eigen_assert(a.rows() == a.cols());
+    EIGEN_INTERNAL_ASSERT_SQUARE(a);
     Index size = a.cols();
     CholMatrixType tmp(size, size);
     ConstCholMatrixPtr pmat;
@@ -210,10 +240,12 @@ class SimplicialCholeskyBase : public SparseSolverBase<Derived> {
 
   template <bool DoLDLT, bool NonHermitian>
   void factorize_preordered(const CholMatrixType& a);
+  template <bool DoLDLT, bool NonHermitian, bool UsePackets>
+  void factorize_preordered_impl(const CholMatrixType& a);
 
   template <bool DoLDLT, bool NonHermitian>
   void analyzePattern(const MatrixType& a) {
-    eigen_assert(a.rows() == a.cols());
+    EIGEN_INTERNAL_ASSERT_SQUARE(a);
     Index size = a.cols();
     CholMatrixType tmp(size, size);
     ConstCholMatrixPtr pmat;
@@ -234,6 +266,8 @@ class SimplicialCholeskyBase : public SparseSolverBase<Derived> {
   };
 
   mutable ComputationInfo m_info;
+  // Set once factorize() has run, success or not: factorize_preordered() breaks out on a bad pivot, leaving
+  // the tails of m_diag and of m_matrix's diagonal unwritten. Readers of those also need m_info == Success.
   bool m_factorizationIsOk;
   bool m_analysisIsOk;
 
@@ -268,15 +302,15 @@ namespace internal {
 
 template <typename MatrixType_, int UpLo_, typename Ordering_>
 struct traits<SimplicialLLT<MatrixType_, UpLo_, Ordering_> > {
-  typedef MatrixType_ MatrixType;
-  typedef Ordering_ OrderingType;
+  using MatrixType = MatrixType_;
+  using OrderingType = Ordering_;
   enum { UpLo = UpLo_ };
-  typedef typename MatrixType::Scalar Scalar;
-  typedef typename MatrixType::RealScalar DiagonalScalar;
-  typedef typename MatrixType::StorageIndex StorageIndex;
-  typedef SparseMatrix<Scalar, ColMajor, StorageIndex> CholMatrixType;
-  typedef TriangularView<const CholMatrixType, Eigen::Lower> MatrixL;
-  typedef TriangularView<const typename CholMatrixType::AdjointReturnType, Eigen::Upper> MatrixU;
+  using Scalar = typename MatrixType::Scalar;
+  using DiagonalScalar = typename MatrixType::RealScalar;
+  using StorageIndex = typename MatrixType::StorageIndex;
+  using CholMatrixType = SparseMatrix<Scalar, ColMajor, StorageIndex>;
+  using MatrixL = TriangularView<const CholMatrixType, Eigen::Lower>;
+  using MatrixU = TriangularView<const typename CholMatrixType::AdjointReturnType, Eigen::Upper>;
   static inline MatrixL getL(const CholMatrixType& m) { return MatrixL(m); }
   static inline MatrixU getU(const CholMatrixType& m) { return MatrixU(m.adjoint()); }
   static inline DiagonalScalar getDiag(Scalar x) { return numext::real(x); }
@@ -285,15 +319,15 @@ struct traits<SimplicialLLT<MatrixType_, UpLo_, Ordering_> > {
 
 template <typename MatrixType_, int UpLo_, typename Ordering_>
 struct traits<SimplicialLDLT<MatrixType_, UpLo_, Ordering_> > {
-  typedef MatrixType_ MatrixType;
-  typedef Ordering_ OrderingType;
+  using MatrixType = MatrixType_;
+  using OrderingType = Ordering_;
   enum { UpLo = UpLo_ };
-  typedef typename MatrixType::Scalar Scalar;
-  typedef typename MatrixType::RealScalar DiagonalScalar;
-  typedef typename MatrixType::StorageIndex StorageIndex;
-  typedef SparseMatrix<Scalar, ColMajor, StorageIndex> CholMatrixType;
-  typedef TriangularView<const CholMatrixType, Eigen::UnitLower> MatrixL;
-  typedef TriangularView<const typename CholMatrixType::AdjointReturnType, Eigen::UnitUpper> MatrixU;
+  using Scalar = typename MatrixType::Scalar;
+  using DiagonalScalar = typename MatrixType::RealScalar;
+  using StorageIndex = typename MatrixType::StorageIndex;
+  using CholMatrixType = SparseMatrix<Scalar, ColMajor, StorageIndex>;
+  using MatrixL = TriangularView<const CholMatrixType, Eigen::UnitLower>;
+  using MatrixU = TriangularView<const typename CholMatrixType::AdjointReturnType, Eigen::UnitUpper>;
   static inline MatrixL getL(const CholMatrixType& m) { return MatrixL(m); }
   static inline MatrixU getU(const CholMatrixType& m) { return MatrixU(m.adjoint()); }
   static inline DiagonalScalar getDiag(Scalar x) { return numext::real(x); }
@@ -302,15 +336,15 @@ struct traits<SimplicialLDLT<MatrixType_, UpLo_, Ordering_> > {
 
 template <typename MatrixType_, int UpLo_, typename Ordering_>
 struct traits<SimplicialNonHermitianLLT<MatrixType_, UpLo_, Ordering_> > {
-  typedef MatrixType_ MatrixType;
-  typedef Ordering_ OrderingType;
+  using MatrixType = MatrixType_;
+  using OrderingType = Ordering_;
   enum { UpLo = UpLo_ };
-  typedef typename MatrixType::Scalar Scalar;
-  typedef typename MatrixType::Scalar DiagonalScalar;
-  typedef typename MatrixType::StorageIndex StorageIndex;
-  typedef SparseMatrix<Scalar, ColMajor, StorageIndex> CholMatrixType;
-  typedef TriangularView<const CholMatrixType, Eigen::Lower> MatrixL;
-  typedef TriangularView<const typename CholMatrixType::ConstTransposeReturnType, Eigen::Upper> MatrixU;
+  using Scalar = typename MatrixType::Scalar;
+  using DiagonalScalar = typename MatrixType::Scalar;
+  using StorageIndex = typename MatrixType::StorageIndex;
+  using CholMatrixType = SparseMatrix<Scalar, ColMajor, StorageIndex>;
+  using MatrixL = TriangularView<const CholMatrixType, Eigen::Lower>;
+  using MatrixU = TriangularView<const typename CholMatrixType::ConstTransposeReturnType, Eigen::Upper>;
   static inline MatrixL getL(const CholMatrixType& m) { return MatrixL(m); }
   static inline MatrixU getU(const CholMatrixType& m) { return MatrixU(m.transpose()); }
   static inline DiagonalScalar getDiag(Scalar x) { return x; }
@@ -319,15 +353,15 @@ struct traits<SimplicialNonHermitianLLT<MatrixType_, UpLo_, Ordering_> > {
 
 template <typename MatrixType_, int UpLo_, typename Ordering_>
 struct traits<SimplicialNonHermitianLDLT<MatrixType_, UpLo_, Ordering_> > {
-  typedef MatrixType_ MatrixType;
-  typedef Ordering_ OrderingType;
+  using MatrixType = MatrixType_;
+  using OrderingType = Ordering_;
   enum { UpLo = UpLo_ };
-  typedef typename MatrixType::Scalar Scalar;
-  typedef typename MatrixType::Scalar DiagonalScalar;
-  typedef typename MatrixType::StorageIndex StorageIndex;
-  typedef SparseMatrix<Scalar, ColMajor, StorageIndex> CholMatrixType;
-  typedef TriangularView<const CholMatrixType, Eigen::UnitLower> MatrixL;
-  typedef TriangularView<const typename CholMatrixType::ConstTransposeReturnType, Eigen::UnitUpper> MatrixU;
+  using Scalar = typename MatrixType::Scalar;
+  using DiagonalScalar = typename MatrixType::Scalar;
+  using StorageIndex = typename MatrixType::StorageIndex;
+  using CholMatrixType = SparseMatrix<Scalar, ColMajor, StorageIndex>;
+  using MatrixL = TriangularView<const CholMatrixType, Eigen::UnitLower>;
+  using MatrixU = TriangularView<const typename CholMatrixType::ConstTransposeReturnType, Eigen::UnitUpper>;
   static inline MatrixL getL(const CholMatrixType& m) { return MatrixL(m); }
   static inline MatrixU getU(const CholMatrixType& m) { return MatrixU(m.transpose()); }
   static inline DiagonalScalar getDiag(Scalar x) { return x; }
@@ -336,11 +370,11 @@ struct traits<SimplicialNonHermitianLDLT<MatrixType_, UpLo_, Ordering_> > {
 
 template <typename MatrixType_, int UpLo_, typename Ordering_>
 struct traits<SimplicialCholesky<MatrixType_, UpLo_, Ordering_> > {
-  typedef MatrixType_ MatrixType;
-  typedef Ordering_ OrderingType;
+  using MatrixType = MatrixType_;
+  using OrderingType = Ordering_;
   enum { UpLo = UpLo_ };
-  typedef typename MatrixType::Scalar Scalar;
-  typedef typename MatrixType::RealScalar DiagonalScalar;
+  using Scalar = typename MatrixType::Scalar;
+  using DiagonalScalar = typename MatrixType::RealScalar;
   static inline DiagonalScalar getDiag(Scalar x) { return numext::real(x); }
   static inline Scalar getSymm(Scalar x) { return numext::conj(x); }
 };
@@ -370,17 +404,17 @@ struct traits<SimplicialCholesky<MatrixType_, UpLo_, Ordering_> > {
 template <typename MatrixType_, int UpLo_, typename Ordering_>
 class SimplicialLLT : public SimplicialCholeskyBase<SimplicialLLT<MatrixType_, UpLo_, Ordering_> > {
  public:
-  typedef MatrixType_ MatrixType;
+  using MatrixType = MatrixType_;
   enum { UpLo = UpLo_ };
-  typedef SimplicialCholeskyBase<SimplicialLLT> Base;
-  typedef typename MatrixType::Scalar Scalar;
-  typedef typename MatrixType::RealScalar RealScalar;
-  typedef typename MatrixType::StorageIndex StorageIndex;
-  typedef SparseMatrix<Scalar, ColMajor, Index> CholMatrixType;
-  typedef Matrix<Scalar, Dynamic, 1> VectorType;
-  typedef internal::traits<SimplicialLLT> Traits;
-  typedef typename Traits::MatrixL MatrixL;
-  typedef typename Traits::MatrixU MatrixU;
+  using Base = SimplicialCholeskyBase<SimplicialLLT>;
+  using Scalar = typename MatrixType::Scalar;
+  using RealScalar = typename MatrixType::RealScalar;
+  using StorageIndex = typename MatrixType::StorageIndex;
+  using CholMatrixType = SparseMatrix<Scalar, ColMajor, Index>;
+  using VectorType = Matrix<Scalar, Dynamic, 1>;
+  using Traits = internal::traits<SimplicialLLT>;
+  using MatrixL = typename Traits::MatrixL;
+  using MatrixU = typename Traits::MatrixU;
 
  public:
   /** Default constructor */
@@ -416,7 +450,7 @@ class SimplicialLLT : public SimplicialCholeskyBase<SimplicialLLT<MatrixType_, U
 
   /** Performs a numeric decomposition of \a matrix
    *
-   * The given matrix must have the same sparsity than the matrix on which the symbolic decomposition has been
+   * The given matrix must have the same sparsity as the matrix on which the symbolic decomposition has been
    * performed.
    *
    * \sa analyzePattern()
@@ -425,8 +459,38 @@ class SimplicialLLT : public SimplicialCholeskyBase<SimplicialLLT<MatrixType_, U
 
   /** \returns the determinant of the underlying matrix from the current factorization */
   Scalar determinant() const {
-    Scalar detL = Base::m_matrix.diagonal().prod();
-    return numext::abs2(detL);
+    eigen_assert(Base::m_factorizationIsOk && Base::m_info == Success &&
+                 "Simplicial LLT is not factorized, or its factorization failed");
+    return internal::scaled_prod_squared(Base::m_matrix.diagonal()).abs();
+  }
+
+  /** \returns the absolute value of the determinant of the underlying matrix from the current factorization */
+  RealScalar absDeterminant() const {
+    eigen_assert(Base::m_factorizationIsOk && Base::m_info == Success &&
+                 "Simplicial LLT is not factorized, or its factorization failed");
+    return internal::scaled_prod_squared(Base::m_matrix.diagonal()).abs();
+  }
+
+  /** \returns the natural log of the absolute value of the determinant of the underlying matrix from the current
+   * factorization.
+   *
+   * Unlike determinant(), this stays finite for the large factorizations where a determinant overflows or underflows.
+   */
+  RealScalar logAbsDeterminant() const {
+    eigen_assert(Base::m_factorizationIsOk && Base::m_info == Success &&
+                 "Simplicial LLT is not factorized, or its factorization failed");
+    return RealScalar(2) * internal::log_abs_prod(Base::m_matrix.diagonal());
+  }
+
+  /** \returns the sign of the determinant of the underlying matrix, which is \c 1 since that matrix is positive
+   * definite.
+   *
+   * This method is provided for compatibility with the other decompositions, thus enabling generic code.
+   */
+  Scalar signDeterminant() const {
+    eigen_assert(Base::m_factorizationIsOk && Base::m_info == Success &&
+                 "Simplicial LLT is not factorized, or its factorization failed");
+    return Scalar(1);
   }
 };
 
@@ -453,17 +517,17 @@ class SimplicialLLT : public SimplicialCholeskyBase<SimplicialLLT<MatrixType_, U
 template <typename MatrixType_, int UpLo_, typename Ordering_>
 class SimplicialLDLT : public SimplicialCholeskyBase<SimplicialLDLT<MatrixType_, UpLo_, Ordering_> > {
  public:
-  typedef MatrixType_ MatrixType;
+  using MatrixType = MatrixType_;
   enum { UpLo = UpLo_ };
-  typedef SimplicialCholeskyBase<SimplicialLDLT> Base;
-  typedef typename MatrixType::Scalar Scalar;
-  typedef typename MatrixType::RealScalar RealScalar;
-  typedef typename MatrixType::StorageIndex StorageIndex;
-  typedef SparseMatrix<Scalar, ColMajor, StorageIndex> CholMatrixType;
-  typedef Matrix<Scalar, Dynamic, 1> VectorType;
-  typedef internal::traits<SimplicialLDLT> Traits;
-  typedef typename Traits::MatrixL MatrixL;
-  typedef typename Traits::MatrixU MatrixU;
+  using Base = SimplicialCholeskyBase<SimplicialLDLT>;
+  using Scalar = typename MatrixType::Scalar;
+  using RealScalar = typename MatrixType::RealScalar;
+  using StorageIndex = typename MatrixType::StorageIndex;
+  using CholMatrixType = SparseMatrix<Scalar, ColMajor, StorageIndex>;
+  using VectorType = Matrix<Scalar, Dynamic, 1>;
+  using Traits = internal::traits<SimplicialLDLT>;
+  using MatrixL = typename Traits::MatrixL;
+  using MatrixU = typename Traits::MatrixU;
 
  public:
   /** Default constructor */
@@ -505,7 +569,7 @@ class SimplicialLDLT : public SimplicialCholeskyBase<SimplicialLDLT<MatrixType_,
 
   /** Performs a numeric decomposition of \a matrix
    *
-   * The given matrix must have the same sparsity than the matrix on which the symbolic decomposition has been
+   * The given matrix must have the same sparsity as the matrix on which the symbolic decomposition has been
    * performed.
    *
    * \sa analyzePattern()
@@ -513,7 +577,36 @@ class SimplicialLDLT : public SimplicialCholeskyBase<SimplicialLDLT<MatrixType_,
   void factorize(const MatrixType& a) { Base::template factorize<true, false>(a); }
 
   /** \returns the determinant of the underlying matrix from the current factorization */
-  Scalar determinant() const { return Base::m_diag.prod(); }
+  Scalar determinant() const {
+    eigen_assert(Base::m_factorizationIsOk && Base::m_info == Success &&
+                 "Simplicial LDLT is not factorized, or its factorization failed");
+    return internal::scaled_prod(Base::m_diag).value();
+  }
+
+  /** \returns the absolute value of the determinant of the underlying matrix from the current factorization */
+  RealScalar absDeterminant() const {
+    eigen_assert(Base::m_factorizationIsOk && Base::m_info == Success &&
+                 "Simplicial LDLT is not factorized, or its factorization failed");
+    return internal::scaled_prod(Base::m_diag.real()).abs();
+  }
+
+  /** \returns the natural log of the absolute value of the determinant of the underlying matrix from the current
+   * factorization.
+   *
+   * Unlike determinant(), this stays finite for the large factorizations where a determinant overflows or underflows.
+   */
+  RealScalar logAbsDeterminant() const {
+    eigen_assert(Base::m_factorizationIsOk && Base::m_info == Success &&
+                 "Simplicial LDLT is not factorized, or its factorization failed");
+    return internal::log_abs_prod(Base::m_diag.real());
+  }
+
+  /** \returns the sign of the determinant of the underlying matrix from the current factorization */
+  Scalar signDeterminant() const {
+    eigen_assert(Base::m_factorizationIsOk && Base::m_info == Success &&
+                 "Simplicial LDLT is not factorized, or its factorization failed");
+    return Scalar(Base::m_diag.real().array().sign().prod());
+  }
 };
 
 /** \ingroup SparseCholesky_Module
@@ -522,6 +615,8 @@ class SimplicialLDLT : public SimplicialCholeskyBase<SimplicialLDLT<MatrixType_,
  *
  * This class provides a LL^T Cholesky factorizations of sparse matrices that are
  * symmetric but not hermitian. For real matrices, this is equivalent to the regular LLT factorization.
+ * For real matrices the pivots must be positive, and info() reports NumericalIssue otherwise. For complex matrices
+ * a pivot may have any phase and is given a complex square root; only a zero pivot is reported as NumericalIssue.
  * The factorization allows for solving A.X = B where X and B can be either dense or sparse.
  *
  * In order to reduce the fill-in, a symmetric permutation P is applied prior to the factorization
@@ -540,17 +635,17 @@ template <typename MatrixType_, int UpLo_, typename Ordering_>
 class SimplicialNonHermitianLLT
     : public SimplicialCholeskyBase<SimplicialNonHermitianLLT<MatrixType_, UpLo_, Ordering_> > {
  public:
-  typedef MatrixType_ MatrixType;
+  using MatrixType = MatrixType_;
   enum { UpLo = UpLo_ };
-  typedef SimplicialCholeskyBase<SimplicialNonHermitianLLT> Base;
-  typedef typename MatrixType::Scalar Scalar;
-  typedef typename MatrixType::RealScalar RealScalar;
-  typedef typename MatrixType::StorageIndex StorageIndex;
-  typedef SparseMatrix<Scalar, ColMajor, StorageIndex> CholMatrixType;
-  typedef Matrix<Scalar, Dynamic, 1> VectorType;
-  typedef internal::traits<SimplicialNonHermitianLLT> Traits;
-  typedef typename Traits::MatrixL MatrixL;
-  typedef typename Traits::MatrixU MatrixU;
+  using Base = SimplicialCholeskyBase<SimplicialNonHermitianLLT>;
+  using Scalar = typename MatrixType::Scalar;
+  using RealScalar = typename MatrixType::RealScalar;
+  using StorageIndex = typename MatrixType::StorageIndex;
+  using CholMatrixType = SparseMatrix<Scalar, ColMajor, StorageIndex>;
+  using VectorType = Matrix<Scalar, Dynamic, 1>;
+  using Traits = internal::traits<SimplicialNonHermitianLLT>;
+  using MatrixL = typename Traits::MatrixL;
+  using MatrixU = typename Traits::MatrixU;
 
  public:
   /** Default constructor */
@@ -587,7 +682,7 @@ class SimplicialNonHermitianLLT
 
   /** Performs a numeric decomposition of \a matrix
    *
-   * The given matrix must have the same sparsity than the matrix on which the symbolic decomposition has been
+   * The given matrix must have the same sparsity as the matrix on which the symbolic decomposition has been
    * performed.
    *
    * \sa analyzePattern()
@@ -596,8 +691,35 @@ class SimplicialNonHermitianLLT
 
   /** \returns the determinant of the underlying matrix from the current factorization */
   Scalar determinant() const {
-    Scalar detL = Base::m_matrix.diagonal().prod();
-    return detL * detL;
+    eigen_assert(Base::m_factorizationIsOk && Base::m_info == Success &&
+                 "Simplicial LLT is not factorized, or its factorization failed");
+    return internal::scaled_prod_squared(Base::m_matrix.diagonal()).value();
+  }
+
+  /** \returns the absolute value of the determinant of the underlying matrix from the current factorization */
+  RealScalar absDeterminant() const {
+    eigen_assert(Base::m_factorizationIsOk && Base::m_info == Success &&
+                 "Simplicial LLT is not factorized, or its factorization failed");
+    return internal::scaled_prod_squared(Base::m_matrix.diagonal()).abs();
+  }
+
+  /** \returns the natural log of the absolute value of the determinant of the underlying matrix from the current
+   * factorization.
+   *
+   * Unlike determinant(), this stays finite for the large factorizations where a determinant overflows or underflows.
+   */
+  RealScalar logAbsDeterminant() const {
+    eigen_assert(Base::m_factorizationIsOk && Base::m_info == Success &&
+                 "Simplicial LLT is not factorized, or its factorization failed");
+    return RealScalar(2) * internal::log_abs_prod(Base::m_matrix.diagonal());
+  }
+
+  /** \returns the sign of the determinant of the underlying matrix from the current factorization */
+  Scalar signDeterminant() const {
+    eigen_assert(Base::m_factorizationIsOk && Base::m_info == Success &&
+                 "Simplicial LLT is not factorized, or its factorization failed");
+    Scalar signL = Base::m_matrix.diagonal().array().sign().prod();
+    return signL * signL;
   }
 };
 
@@ -625,17 +747,17 @@ template <typename MatrixType_, int UpLo_, typename Ordering_>
 class SimplicialNonHermitianLDLT
     : public SimplicialCholeskyBase<SimplicialNonHermitianLDLT<MatrixType_, UpLo_, Ordering_> > {
  public:
-  typedef MatrixType_ MatrixType;
+  using MatrixType = MatrixType_;
   enum { UpLo = UpLo_ };
-  typedef SimplicialCholeskyBase<SimplicialNonHermitianLDLT> Base;
-  typedef typename MatrixType::Scalar Scalar;
-  typedef typename MatrixType::RealScalar RealScalar;
-  typedef typename MatrixType::StorageIndex StorageIndex;
-  typedef SparseMatrix<Scalar, ColMajor, StorageIndex> CholMatrixType;
-  typedef Matrix<Scalar, Dynamic, 1> VectorType;
-  typedef internal::traits<SimplicialNonHermitianLDLT> Traits;
-  typedef typename Traits::MatrixL MatrixL;
-  typedef typename Traits::MatrixU MatrixU;
+  using Base = SimplicialCholeskyBase<SimplicialNonHermitianLDLT>;
+  using Scalar = typename MatrixType::Scalar;
+  using RealScalar = typename MatrixType::RealScalar;
+  using StorageIndex = typename MatrixType::StorageIndex;
+  using CholMatrixType = SparseMatrix<Scalar, ColMajor, StorageIndex>;
+  using VectorType = Matrix<Scalar, Dynamic, 1>;
+  using Traits = internal::traits<SimplicialNonHermitianLDLT>;
+  using MatrixL = typename Traits::MatrixL;
+  using MatrixU = typename Traits::MatrixU;
 
  public:
   /** Default constructor */
@@ -677,7 +799,7 @@ class SimplicialNonHermitianLDLT
 
   /** Performs a numeric decomposition of \a matrix
    *
-   * The given matrix must have the same sparsity than the matrix on which the symbolic decomposition has been
+   * The given matrix must have the same sparsity as the matrix on which the symbolic decomposition has been
    * performed.
    *
    * \sa analyzePattern()
@@ -685,7 +807,36 @@ class SimplicialNonHermitianLDLT
   void factorize(const MatrixType& a) { Base::template factorize<true, true>(a); }
 
   /** \returns the determinant of the underlying matrix from the current factorization */
-  Scalar determinant() const { return Base::m_diag.prod(); }
+  Scalar determinant() const {
+    eigen_assert(Base::m_factorizationIsOk && Base::m_info == Success &&
+                 "Simplicial LDLT is not factorized, or its factorization failed");
+    return internal::scaled_prod(Base::m_diag).value();
+  }
+
+  /** \returns the absolute value of the determinant of the underlying matrix from the current factorization */
+  RealScalar absDeterminant() const {
+    eigen_assert(Base::m_factorizationIsOk && Base::m_info == Success &&
+                 "Simplicial LDLT is not factorized, or its factorization failed");
+    return internal::scaled_prod(Base::m_diag).abs();
+  }
+
+  /** \returns the natural log of the absolute value of the determinant of the underlying matrix from the current
+   * factorization.
+   *
+   * Unlike determinant(), this stays finite for the large factorizations where a determinant overflows or underflows.
+   */
+  RealScalar logAbsDeterminant() const {
+    eigen_assert(Base::m_factorizationIsOk && Base::m_info == Success &&
+                 "Simplicial LDLT is not factorized, or its factorization failed");
+    return internal::log_abs_prod(Base::m_diag);
+  }
+
+  /** \returns the sign of the determinant of the underlying matrix from the current factorization */
+  Scalar signDeterminant() const {
+    eigen_assert(Base::m_factorizationIsOk && Base::m_info == Success &&
+                 "Simplicial LDLT is not factorized, or its factorization failed");
+    return Base::m_diag.array().sign().prod();
+  }
 };
 
 /** \deprecated use SimplicialLDLT or class SimplicialLLT
@@ -697,16 +848,16 @@ class SimplicialNonHermitianLDLT
 template <typename MatrixType_, int UpLo_, typename Ordering_>
 class SimplicialCholesky : public SimplicialCholeskyBase<SimplicialCholesky<MatrixType_, UpLo_, Ordering_> > {
  public:
-  typedef MatrixType_ MatrixType;
+  using MatrixType = MatrixType_;
   enum { UpLo = UpLo_ };
-  typedef SimplicialCholeskyBase<SimplicialCholesky> Base;
-  typedef typename MatrixType::Scalar Scalar;
-  typedef typename MatrixType::RealScalar RealScalar;
-  typedef typename MatrixType::StorageIndex StorageIndex;
-  typedef SparseMatrix<Scalar, ColMajor, StorageIndex> CholMatrixType;
-  typedef Matrix<Scalar, Dynamic, 1> VectorType;
-  typedef internal::traits<SimplicialLDLT<MatrixType, UpLo> > LDLTTraits;
-  typedef internal::traits<SimplicialLLT<MatrixType, UpLo> > LLTTraits;
+  using Base = SimplicialCholeskyBase<SimplicialCholesky>;
+  using Scalar = typename MatrixType::Scalar;
+  using RealScalar = typename MatrixType::RealScalar;
+  using StorageIndex = typename MatrixType::StorageIndex;
+  using CholMatrixType = SparseMatrix<Scalar, ColMajor, StorageIndex>;
+  using VectorType = Matrix<Scalar, Dynamic, 1>;
+  using LDLTTraits = internal::traits<SimplicialLDLT<MatrixType, UpLo>>;
+  using LLTTraits = internal::traits<SimplicialLLT<MatrixType, UpLo>>;
 
  public:
   SimplicialCholesky() : Base(), m_LDLT(true) {}
@@ -761,7 +912,7 @@ class SimplicialCholesky : public SimplicialCholeskyBase<SimplicialCholesky<Matr
 
   /** Performs a numeric decomposition of \a matrix
    *
-   * The given matrix must have the same sparsity than the matrix on which the symbolic decomposition has been
+   * The given matrix must have the same sparsity as the matrix on which the symbolic decomposition has been
    * performed.
    *
    * \sa analyzePattern()
@@ -779,7 +930,7 @@ class SimplicialCholesky : public SimplicialCholeskyBase<SimplicialCholesky<Matr
     eigen_assert(Base::m_factorizationIsOk &&
                  "The decomposition is not in a valid state for solving, you must first call either compute() or "
                  "symbolic()/numeric()");
-    eigen_assert(Base::m_matrix.rows() == b.rows());
+    EIGEN_INTERNAL_ASSERT_SAME_ROWS(Base::m_matrix, b);
 
     if (Base::m_info != Success) return;
 
@@ -798,7 +949,7 @@ class SimplicialCholesky : public SimplicialCholeskyBase<SimplicialCholesky<Matr
 
     if (Base::m_diag.size() > 0) dest = Base::m_diag.real().asDiagonal().inverse() * dest;
 
-    if (Base::m_matrix.nonZeros() > 0)  // otherwise I==I
+    if (Base::m_matrix.nonZeros() > 0)  // otherwise U==I
     {
       if (m_LDLT)
         LDLTTraits::getU(Base::m_matrix).solveInPlace(dest);
@@ -816,11 +967,12 @@ class SimplicialCholesky : public SimplicialCholeskyBase<SimplicialCholesky<Matr
   }
 
   Scalar determinant() const {
+    eigen_assert(Base::m_factorizationIsOk && Base::m_info == Success &&
+                 "Simplicial Cholesky is not factorized, or its factorization failed");
     if (m_LDLT) {
-      return Base::m_diag.prod();
+      return internal::scaled_prod(Base::m_diag).value();
     } else {
-      Scalar detL = Diagonal<const CholMatrixType>(Base::m_matrix).prod();
-      return numext::abs2(detL);
+      return internal::scaled_prod_squared(Base::m_matrix.diagonal()).abs();
     }
   }
 
@@ -831,17 +983,16 @@ class SimplicialCholesky : public SimplicialCholeskyBase<SimplicialCholesky<Matr
 template <typename Derived>
 template <bool NonHermitian>
 void SimplicialCholeskyBase<Derived>::ordering(const MatrixType& a, ConstCholMatrixPtr& pmat, CholMatrixType& ap) {
-  eigen_assert(a.rows() == a.cols());
+  EIGEN_INTERNAL_ASSERT_SQUARE(a);
   const Index size = a.rows();
   pmat = &ap;
   // Note that ordering methods compute the inverse permutation
-  if (!internal::is_same<OrderingType, NaturalOrdering<StorageIndex> >::value) {
+  EIGEN_IF_CONSTEXPR ((!std::is_same<OrderingType, NaturalOrdering<StorageIndex> >::value)) {
     {
       CholMatrixType C;
-      internal::permute_symm_to_fullsymm<UpLo, NonHermitian>(a, C, NULL);
-
-      OrderingType ordering;
-      ordering(C, m_Pinv);
+      constexpr bool kUseAMDFastPath = std::is_same<OrderingType, AMDOrdering<StorageIndex> >::value;
+      internal::simplicial_cholesky_amd_dispatch<kUseAMDFastPath>::template run<UpLo, NonHermitian, OrderingType>(
+          a, C, m_Pinv);
     }
 
     if (m_Pinv.size() > 0)
@@ -854,10 +1005,10 @@ void SimplicialCholeskyBase<Derived>::ordering(const MatrixType& a, ConstCholMat
   } else {
     m_Pinv.resize(0);
     m_P.resize(0);
-    if (int(UpLo) == int(Lower) || MatrixType::IsRowMajor) {
-      // we have to transpose the lower part to to the upper one
+    EIGEN_IF_CONSTEXPR (int(UpLo) == int(Lower) || MatrixType::IsRowMajor) {
+      // we have to transpose the lower part to the upper one
       ap.resize(size, size);
-      internal::permute_symm_to_symm<UpLo, Upper, NonHermitian>(a, ap, NULL);
+      internal::permute_symm_to_symm<UpLo, Upper, NonHermitian>(a, ap, nullptr);
     } else
       internal::simplicial_cholesky_grab_input<CholMatrixType, MatrixType>::run(a, pmat, ap);
   }

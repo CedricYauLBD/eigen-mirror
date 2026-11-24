@@ -7,6 +7,7 @@
 // This Source Code Form is subject to the terms of the Mozilla
 // Public License v. 2.0. If a copy of the MPL was not distributed
 // with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
+// SPDX-License-Identifier: MPL-2.0
 
 #ifndef EIGEN_DIAGONAL_H
 #define EIGEN_DIAGONAL_H
@@ -38,9 +39,9 @@ namespace Eigen {
 namespace internal {
 template <typename MatrixType, int DiagIndex>
 struct traits<Diagonal<MatrixType, DiagIndex> > : traits<MatrixType> {
-  typedef typename ref_selector<MatrixType>::type MatrixTypeNested;
-  typedef std::remove_reference_t<MatrixTypeNested> MatrixTypeNested_;
-  typedef typename MatrixType::StorageKind StorageKind;
+  using MatrixTypeNested = typename ref_selector<MatrixType>::type;
+  using MatrixTypeNested_ = std::remove_reference_t<MatrixTypeNested>;
+  using StorageKind = typename MatrixType::StorageKind;
   enum {
     RowsAtCompileTime = (int(DiagIndex) == DynamicIndex || int(MatrixType::SizeAtCompileTime) == Dynamic)
                             ? Dynamic
@@ -55,44 +56,59 @@ struct traits<Diagonal<MatrixType, DiagIndex> > : traits<MatrixType> {
                               MatrixType::MaxColsAtCompileTime - plain_enum_max(DiagIndex, 0))),
     MaxColsAtCompileTime = 1,
     MaskLvalueBit = is_lvalue<MatrixType>::value ? LvalueBit : 0,
-    Flags = (unsigned int)MatrixTypeNested_::Flags & (RowMajorBit | MaskLvalueBit | DirectAccessBit) &
-            ~RowMajorBit,  // FIXME DirectAccessBit should not be handled by expressions
-    MatrixTypeOuterStride = outer_stride_at_compile_time<MatrixType>::ret,
-    InnerStrideAtCompileTime = MatrixTypeOuterStride == Dynamic ? Dynamic : MatrixTypeOuterStride + 1,
+    Flags = (unsigned int)MatrixTypeNested_::Flags &
+            (MaskLvalueBit | DirectAccessBit),  // FIXME DirectAccessBit should not be handled by expressions
+    MatrixTypeOuterStride = outer_stride_at_compile_time<MatrixType>::value,
     OuterStrideAtCompileTime = 0
   };
+  static constexpr int MatrixTypeInnerStride = inner_stride_at_compile_time<MatrixType>::value;
+  static constexpr int InnerStrideAtCompileTime = MatrixTypeOuterStride == Dynamic || MatrixTypeInnerStride == Dynamic
+                                                      ? Dynamic
+                                                      : MatrixTypeOuterStride + MatrixTypeInnerStride;
 };
+
+template <typename MatrixType, int DiagIndex>
+constexpr int traits<Diagonal<MatrixType, DiagIndex>>::MatrixTypeInnerStride;
+
+template <typename MatrixType, int DiagIndex>
+constexpr int traits<Diagonal<MatrixType, DiagIndex>>::InnerStrideAtCompileTime;
 }  // namespace internal
 
 template <typename MatrixType, int DiagIndex_>
 class Diagonal : public internal::dense_xpr_base<Diagonal<MatrixType, DiagIndex_> >::type {
  public:
   enum { DiagIndex = DiagIndex_ };
-  typedef typename internal::dense_xpr_base<Diagonal>::type Base;
+  using Base = typename internal::dense_xpr_base<Diagonal>::type;
   EIGEN_DENSE_PUBLIC_INTERFACE(Diagonal)
 
-  EIGEN_DEVICE_FUNC explicit inline Diagonal(MatrixType& matrix, Index a_index = DiagIndex)
+  EIGEN_DEVICE_FUNC constexpr explicit inline Diagonal(MatrixType& matrix, Index a_index = DiagIndex)
       : m_matrix(matrix), m_index(a_index) {
     eigen_assert(a_index <= m_matrix.cols() && -a_index <= m_matrix.rows());
   }
 
   EIGEN_INHERIT_ASSIGNMENT_OPERATORS(Diagonal)
 
-  EIGEN_DEVICE_FUNC inline Index rows() const {
+  EIGEN_DEVICE_FUNC constexpr inline Index rows() const {
     return m_index.value() < 0 ? numext::mini<Index>(m_matrix.cols(), m_matrix.rows() + m_index.value())
                                : numext::mini<Index>(m_matrix.rows(), m_matrix.cols() - m_index.value());
   }
 
   EIGEN_DEVICE_FUNC constexpr Index cols() const noexcept { return 1; }
 
-  EIGEN_DEVICE_FUNC constexpr Index innerStride() const noexcept { return m_matrix.outerStride() + 1; }
+  EIGEN_DEVICE_FUNC constexpr Index innerStride() const noexcept {
+    return m_matrix.outerStride() + m_matrix.innerStride();
+  }
 
   EIGEN_DEVICE_FUNC constexpr Index outerStride() const noexcept { return 0; }
 
-  typedef std::conditional_t<internal::is_lvalue<MatrixType>::value, Scalar, const Scalar> ScalarWithConstIfNotLvalue;
+  using ScalarWithConstIfNotLvalue = std::conditional_t<internal::is_lvalue<MatrixType>::value, Scalar, const Scalar>;
 
-  EIGEN_DEVICE_FUNC inline ScalarWithConstIfNotLvalue* data() { return &(m_matrix.coeffRef(rowOffset(), colOffset())); }
-  EIGEN_DEVICE_FUNC inline const Scalar* data() const { return &(m_matrix.coeffRef(rowOffset(), colOffset())); }
+  EIGEN_DEVICE_FUNC inline ScalarWithConstIfNotLvalue* data() {
+    return rows() > 0 ? &(m_matrix.coeffRef(rowOffset(), colOffset())) : nullptr;
+  }
+  EIGEN_DEVICE_FUNC inline const Scalar* data() const {
+    return rows() > 0 ? &(m_matrix.coeffRef(rowOffset(), colOffset())) : nullptr;
+  }
 
   EIGEN_DEVICE_FUNC inline Scalar& coeffRef(Index row, Index) {
     EIGEN_STATIC_ASSERT_LVALUE(MatrixType)
@@ -120,11 +136,12 @@ class Diagonal : public internal::dense_xpr_base<Diagonal<MatrixType, DiagIndex_
     return m_matrix.coeff(idx + rowOffset(), idx + colOffset());
   }
 
-  EIGEN_DEVICE_FUNC inline const internal::remove_all_t<typename MatrixType::Nested>& nestedExpression() const {
+  EIGEN_DEVICE_FUNC constexpr inline const internal::remove_all_t<typename MatrixType::Nested>& nestedExpression()
+      const {
     return m_matrix;
   }
 
-  EIGEN_DEVICE_FUNC inline Index index() const { return m_index.value(); }
+  EIGEN_DEVICE_FUNC constexpr inline Index index() const { return m_index.value(); }
 
  protected:
   typename internal::ref_selector<MatrixType>::non_const_type m_matrix;
@@ -132,15 +149,8 @@ class Diagonal : public internal::dense_xpr_base<Diagonal<MatrixType, DiagIndex_
 
  private:
   // some compilers may fail to optimize std::max etc in case of compile-time constants...
-  EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE constexpr Index absDiagIndex() const noexcept {
-    return m_index.value() > 0 ? m_index.value() : -m_index.value();
-  }
-  EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE constexpr Index rowOffset() const noexcept {
-    return m_index.value() > 0 ? 0 : -m_index.value();
-  }
-  EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE constexpr Index colOffset() const noexcept {
-    return m_index.value() > 0 ? m_index.value() : 0;
-  }
+  EIGEN_DEVICE_FUNC constexpr Index rowOffset() const noexcept { return m_index.value() > 0 ? 0 : -m_index.value(); }
+  EIGEN_DEVICE_FUNC constexpr Index colOffset() const noexcept { return m_index.value() > 0 ? m_index.value() : 0; }
   // trigger a compile-time error if someone try to call packet
   template <int LoadMode>
   typename MatrixType::PacketReturnType packet(Index) const;
@@ -157,13 +167,13 @@ class Diagonal : public internal::dense_xpr_base<Diagonal<MatrixType, DiagIndex_
  *
  * \sa class Diagonal */
 template <typename Derived>
-EIGEN_DEVICE_FUNC inline typename MatrixBase<Derived>::DiagonalReturnType MatrixBase<Derived>::diagonal() {
+EIGEN_DEVICE_FUNC constexpr typename MatrixBase<Derived>::DiagonalReturnType MatrixBase<Derived>::diagonal() {
   return DiagonalReturnType(derived());
 }
 
 /** This is the const version of diagonal(). */
 template <typename Derived>
-EIGEN_DEVICE_FUNC inline const typename MatrixBase<Derived>::ConstDiagonalReturnType MatrixBase<Derived>::diagonal()
+EIGEN_DEVICE_FUNC constexpr const typename MatrixBase<Derived>::ConstDiagonalReturnType MatrixBase<Derived>::diagonal()
     const {
   return ConstDiagonalReturnType(derived());
 }
@@ -180,13 +190,14 @@ EIGEN_DEVICE_FUNC inline const typename MatrixBase<Derived>::ConstDiagonalReturn
  *
  * \sa MatrixBase::diagonal(), class Diagonal */
 template <typename Derived>
-EIGEN_DEVICE_FUNC inline Diagonal<Derived, DynamicIndex> MatrixBase<Derived>::diagonal(Index index) {
+EIGEN_DEVICE_FUNC constexpr Diagonal<Derived, DynamicIndex> MatrixBase<Derived>::diagonal(Index index) {
   return Diagonal<Derived, DynamicIndex>(derived(), index);
 }
 
 /** This is the const version of diagonal(Index). */
 template <typename Derived>
-EIGEN_DEVICE_FUNC inline const Diagonal<const Derived, DynamicIndex> MatrixBase<Derived>::diagonal(Index index) const {
+EIGEN_DEVICE_FUNC constexpr const Diagonal<const Derived, DynamicIndex> MatrixBase<Derived>::diagonal(
+    Index index) const {
   return Diagonal<const Derived, DynamicIndex>(derived(), index);
 }
 
@@ -203,14 +214,14 @@ EIGEN_DEVICE_FUNC inline const Diagonal<const Derived, DynamicIndex> MatrixBase<
  * \sa MatrixBase::diagonal(), class Diagonal */
 template <typename Derived>
 template <int Index_>
-EIGEN_DEVICE_FUNC inline Diagonal<Derived, Index_> MatrixBase<Derived>::diagonal() {
+EIGEN_DEVICE_FUNC constexpr Diagonal<Derived, Index_> MatrixBase<Derived>::diagonal() {
   return Diagonal<Derived, Index_>(derived());
 }
 
 /** This is the const version of diagonal<int>(). */
 template <typename Derived>
 template <int Index_>
-EIGEN_DEVICE_FUNC inline const Diagonal<const Derived, Index_> MatrixBase<Derived>::diagonal() const {
+EIGEN_DEVICE_FUNC constexpr const Diagonal<const Derived, Index_> MatrixBase<Derived>::diagonal() const {
   return Diagonal<const Derived, Index_>(derived());
 }
 

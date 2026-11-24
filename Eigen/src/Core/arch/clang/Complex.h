@@ -6,6 +6,7 @@
 // This Source Code Form is subject to the terms of the Mozilla
 // Public License v. 2.0. If a copy of the MPL was not distributed
 // with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
+// SPDX-License-Identifier: MPL-2.0
 
 #ifndef EIGEN_COMPLEX_CLANG_H
 #define EIGEN_COMPLEX_CLANG_H
@@ -19,7 +20,7 @@ namespace internal {
 template <typename RealScalar, int N>
 struct complex_packet_wrapper {
   using RealPacketT = detail::VectorType<RealScalar, 2 * N>;
-  EIGEN_STRONG_INLINE complex_packet_wrapper() = default;
+  complex_packet_wrapper() = default;
   EIGEN_STRONG_INLINE explicit complex_packet_wrapper(const RealPacketT& a) : v(a) {}
   EIGEN_STRONG_INLINE constexpr std::complex<RealScalar> operator[](Index i) const {
     return std::complex<RealScalar>(v[2 * i], v[2 * i + 1]);
@@ -27,11 +28,11 @@ struct complex_packet_wrapper {
   RealPacketT v;
 };
 
-using Packet8cf = complex_packet_wrapper<float, 8>;
-using Packet4cf = complex_packet_wrapper<float, 4>;
-using Packet2cf = complex_packet_wrapper<float, 2>;
-using Packet4cd = complex_packet_wrapper<double, 4>;
-using Packet2cd = complex_packet_wrapper<double, 2>;
+// --- Primary complex packet aliases ---
+constexpr int kComplexFloatSize = kFloatPacketSize / 2;    // 2, 4, or 8
+constexpr int kComplexDoubleSize = kDoublePacketSize / 2;  // 1, 2, or 4
+using PacketXcf = complex_packet_wrapper<float, kComplexFloatSize>;
+using PacketXcd = complex_packet_wrapper<double, kComplexDoubleSize>;
 
 struct generic_complex_packet_traits : default_packet_traits {
   enum {
@@ -58,40 +59,39 @@ struct generic_complex_packet_traits : default_packet_traits {
 
 template <>
 struct packet_traits<std::complex<float>> : generic_complex_packet_traits {
-  using type = Packet8cf;
-  using half = Packet8cf;
+  using type = PacketXcf;
+  using half = PacketXcf;
   enum {
-    size = 8,
+    size = kComplexFloatSize,
   };
 };
 
 template <>
-struct unpacket_traits<Packet8cf> : generic_unpacket_traits {
+struct unpacket_traits<PacketXcf> : generic_unpacket_traits {
   using type = std::complex<float>;
-  using half = Packet8cf;
-  using as_real = Packet16f;
+  using half = PacketXcf;
+  using as_real = PacketXf;
   enum {
-    size = 8,
+    size = kComplexFloatSize,
   };
 };
 
 template <>
 struct packet_traits<std::complex<double>> : generic_complex_packet_traits {
-  using type = Packet4cd;
-  using half = Packet4cd;
+  using type = PacketXcd;
+  using half = PacketXcd;
   enum {
-    size = 4,
-    HasExp = 0,  // FIXME(rmlarsen): pexp_complex is broken for double.
+    size = kComplexDoubleSize,
   };
 };
 
 template <>
-struct unpacket_traits<Packet4cd> : generic_unpacket_traits {
+struct unpacket_traits<PacketXcd> : generic_unpacket_traits {
   using type = std::complex<double>;
-  using half = Packet4cd;
-  using as_real = Packet8d;
+  using half = PacketXcd;
+  using as_real = PacketXd;
   enum {
-    size = 4,
+    size = kComplexDoubleSize,
   };
 };
 
@@ -116,23 +116,103 @@ struct unpacket_traits<Packet4cd> : generic_unpacket_traits {
     pstore(&numext::real_ref(*to), from.v);                                                               \
   }
 
-EIGEN_CLANG_COMPLEX_LOAD_STORE(Packet8cf);
-EIGEN_CLANG_COMPLEX_LOAD_STORE(Packet4cd);
+EIGEN_CLANG_COMPLEX_LOAD_STORE(PacketXcf);
+EIGEN_CLANG_COMPLEX_LOAD_STORE(PacketXcd);
 #undef EIGEN_CLANG_COMPLEX_LOAD_STORE
 
-template <>
-EIGEN_STRONG_INLINE Packet8cf pset1<Packet8cf>(const std::complex<float>& from) {
-  const float re = numext::real(from);
-  const float im = numext::imag(from);
-  return Packet8cf(Packet16f{re, im, re, im, re, im, re, im, re, im, re, im, re, im, re, im});
+namespace detail {
+
+// Index sequence over the real components -- two per complex value -- of a
+// complex packet. Index Is names component Is % 2 of complex value Is / 2.
+template <typename ComplexPacket>
+using complex_real_indices = vector_indices<typename ComplexPacket::RealPacketT>;
+
+template <typename ComplexPacket, std::size_t... Is>
+EIGEN_STRONG_INLINE ComplexPacket complex_pset1_impl(const typename unpacket_traits<ComplexPacket>::type& from,
+                                                     std::index_sequence<Is...>) {
+  using RealPacket = typename ComplexPacket::RealPacketT;
+  using RealScalar = scalar_type_of_vector_t<RealPacket>;
+  const RealScalar re = numext::real(from);
+  const RealScalar im = numext::imag(from);
+  return ComplexPacket(RealPacket{(Is % 2 == 0 ? re : im)...});
 }
 
-template <>
-EIGEN_STRONG_INLINE Packet4cd pset1<Packet4cd>(const std::complex<double>& from) {
-  const double re = numext::real(from);
-  const double im = numext::imag(from);
-  return Packet4cd(Packet8d{re, im, re, im, re, im, re, im});
+// Negates the imaginary parts by flipping their sign bits with one xor; the
+// negate-and-shuffle alternative costs an extra blend.
+template <typename ComplexPacket, std::size_t... Is>
+EIGEN_STRONG_INLINE ComplexPacket complex_pconj_impl(const ComplexPacket& a, std::index_sequence<Is...>) {
+  using RealScalar = scalar_type_of_vector_t<typename ComplexPacket::RealPacketT>;
+  using IntScalar = std::conditional_t<sizeof(RealScalar) == 4, int32_t, int64_t>;
+  using IntPacket = VectorType<IntScalar, sizeof...(Is)>;
+  const IntPacket sign_mask = {(Is % 2 == 0 ? IntScalar(0) : (std::numeric_limits<IntScalar>::min)())...};
+  return ComplexPacket(
+      reinterpret_cast<typename ComplexPacket::RealPacketT>(reinterpret_cast<IntPacket>(a.v) ^ sign_mask));
 }
+
+// {re, im} -> {im, re}.
+template <typename ComplexPacket, std::size_t... Is>
+EIGEN_STRONG_INLINE ComplexPacket complex_pcplxflip_impl(const ComplexPacket& a, std::index_sequence<Is...>) {
+  return ComplexPacket(__builtin_shufflevector(a.v, a.v, (2 * (Is / 2) + (1 - Is % 2))...));
+}
+
+// {re, im} -> {re, re}.
+template <typename ComplexPacket, std::size_t... Is>
+EIGEN_STRONG_INLINE ComplexPacket complex_pdupreal_impl(const ComplexPacket& a, std::index_sequence<Is...>) {
+  return ComplexPacket(__builtin_shufflevector(a.v, a.v, (2 * (Is / 2))...));
+}
+
+// {re, im} -> {im, im}.
+template <typename ComplexPacket, std::size_t... Is>
+EIGEN_STRONG_INLINE ComplexPacket complex_pdupimag_impl(const ComplexPacket& a, std::index_sequence<Is...>) {
+  return ComplexPacket(__builtin_shufflevector(a.v, a.v, (2 * (Is / 2) + 1)...));
+}
+
+// (a + ib)(c + id) = (ac - bd) + i(ad + bc), as an even/odd merge of the
+// difference and sum vectors. Both products are spelled inside one expression
+// each so fp-contract may fuse them, and the merge of a same-operand sub and
+// add is the pattern LLVM folds into a single fmaddsub-style instruction on
+// targets that have one. This matches the handwritten x86 backends, unlike
+// the conjugate-and-flip formulation of the generic pmul_complex.
+template <typename ComplexPacket, std::size_t... Is>
+EIGEN_STRONG_INLINE ComplexPacket complex_pmul_impl(const ComplexPacket& x, const ComplexPacket& y,
+                                                    std::index_sequence<Is...> is) {
+  using RealPacket = typename ComplexPacket::RealPacketT;
+  const RealPacket x_re = complex_pdupreal_impl(x, is).v;
+  const RealPacket t = complex_pdupimag_impl(x, is).v * complex_pcplxflip_impl(y, is).v;
+  const RealPacket sub = x_re * y.v - t;
+  const RealPacket add = x_re * y.v + t;
+  return ComplexPacket(__builtin_shufflevector(sub, add, (Is % 2 == 0 ? Is : sizeof...(Is) + Is)...));
+}
+
+// Loads each complex value Repeat times in a row: Repeat == 2 implements
+// ploaddup and Repeat == 4 implements ploadquad.
+template <std::size_t Repeat, typename ComplexPacket, std::size_t... Is>
+EIGEN_STRONG_INLINE ComplexPacket complex_loadrepeat_impl(const typename unpacket_traits<ComplexPacket>::type* from,
+                                                          std::index_sequence<Is...>) {
+  using RealPacket = typename ComplexPacket::RealPacketT;
+  return ComplexPacket(
+      RealPacket{(Is % 2 == 0 ? numext::real(from[Is / (2 * Repeat)]) : numext::imag(from[Is / (2 * Repeat)]))...});
+}
+
+// Reverses the complex values, keeping each real/imaginary pair together.
+template <typename ComplexPacket, std::size_t... Is>
+EIGEN_STRONG_INLINE ComplexPacket complex_preverse_impl(const ComplexPacket& a, std::index_sequence<Is...>) {
+  constexpr std::size_t kLastValue = sizeof...(Is) - 2;
+  return ComplexPacket(__builtin_shufflevector(a.v, a.v, (kLastValue - 2 * (Is / 2) + Is % 2)...));
+}
+
+}  // namespace detail
+
+// --- pset1 for complex ---
+#define EIGEN_CLANG_COMPLEX_SET1(PACKET_TYPE)                                                          \
+  template <>                                                                                          \
+  EIGEN_STRONG_INLINE PACKET_TYPE pset1<PACKET_TYPE>(const unpacket_traits<PACKET_TYPE>::type& from) { \
+    return detail::complex_pset1_impl<PACKET_TYPE>(from, detail::complex_real_indices<PACKET_TYPE>{}); \
+  }
+
+EIGEN_CLANG_COMPLEX_SET1(PacketXcf)
+EIGEN_CLANG_COMPLEX_SET1(PacketXcd)
+#undef EIGEN_CLANG_COMPLEX_SET1
 
 // ----------- Unary ops ------------------
 #define DELEGATE_UNARY_TO_REAL_OP(PACKET_TYPE, OP)                        \
@@ -148,145 +228,60 @@ EIGEN_STRONG_INLINE Packet4cd pset1<Packet4cd>(const std::complex<double>& from)
   EIGEN_STRONG_INLINE unpacket_traits<PACKET_TYPE>::type pfirst<PACKET_TYPE>(const PACKET_TYPE& a) { \
     return a[0];                                                                                     \
   }                                                                                                  \
-  template <>                                                                                        \
-  EIGEN_STRONG_INLINE PACKET_TYPE pexp<PACKET_TYPE>(const PACKET_TYPE& a) {                          \
-    return pexp_complex(a);                                                                          \
-  }                                                                                                  \
-  template <>                                                                                        \
-  EIGEN_STRONG_INLINE PACKET_TYPE plog<PACKET_TYPE>(const PACKET_TYPE& a) {                          \
-    return plog_complex(a);                                                                          \
-  }                                                                                                  \
-  template <>                                                                                        \
-  EIGEN_STRONG_INLINE PACKET_TYPE psqrt<PACKET_TYPE>(const PACKET_TYPE& a) {                         \
-    return psqrt_complex(a);                                                                         \
-  }
+  EIGEN_INSTANTIATE_COMPLEX_MATH_FUNCS(PACKET_TYPE)
 
-EIGEN_CLANG_COMPLEX_UNARY_CWISE_OPS(Packet8cf);
-EIGEN_CLANG_COMPLEX_UNARY_CWISE_OPS(Packet4cd);
-
-template <>
-EIGEN_STRONG_INLINE Packet8cf pconj<Packet8cf>(const Packet8cf& a) {
-  return Packet8cf(__builtin_shufflevector(a.v, -a.v, 0, 17, 2, 19, 4, 21, 6, 23, 8, 25, 10, 27, 12, 29, 14, 31));
-}
-template <>
-EIGEN_STRONG_INLINE Packet4cf pconj<Packet4cf>(const Packet4cf& a) {
-  return Packet4cf(__builtin_shufflevector(a.v, -a.v, 0, 9, 2, 11, 4, 13, 6, 15));
-}
-template <>
-EIGEN_STRONG_INLINE Packet2cf pconj<Packet2cf>(const Packet2cf& a) {
-  return Packet2cf(__builtin_shufflevector(a.v, -a.v, 0, 5, 2, 7));
-}
-
-template <>
-EIGEN_STRONG_INLINE Packet4cd pconj<Packet4cd>(const Packet4cd& a) {
-  return Packet4cd(__builtin_shufflevector(a.v, -a.v, 0, 9, 2, 11, 4, 13, 6, 15));
-}
-template <>
-EIGEN_STRONG_INLINE Packet2cd pconj<Packet2cd>(const Packet2cd& a) {
-  return Packet2cd(__builtin_shufflevector(a.v, -a.v, 0, 5, 2, 7));
-}
+EIGEN_CLANG_COMPLEX_UNARY_CWISE_OPS(PacketXcf);
+EIGEN_CLANG_COMPLEX_UNARY_CWISE_OPS(PacketXcd);
 
 #undef DELEGATE_UNARY_TO_REAL_OP
 #undef EIGEN_CLANG_COMPLEX_UNARY_CWISE_OPS
 
-// Flip real and imaginary parts, i.e.  {re(a), im(a)} -> {im(a), re(a)}.
-template <>
-EIGEN_STRONG_INLINE Packet8cf pcplxflip<Packet8cf>(const Packet8cf& a) {
-  return Packet8cf(__builtin_shufflevector(a.v, a.v, 1, 0, 3, 2, 5, 4, 7, 6, 9, 8, 11, 10, 13, 12, 15, 14));
-}
-template <>
-EIGEN_STRONG_INLINE Packet4cf pcplxflip<Packet4cf>(const Packet4cf& a) {
-  return Packet4cf(__builtin_shufflevector(a.v, a.v, 1, 0, 3, 2, 5, 4, 7, 6));
-}
-template <>
-EIGEN_STRONG_INLINE Packet2cf pcplxflip<Packet2cf>(const Packet2cf& a) {
-  return Packet2cf(__builtin_shufflevector(a.v, a.v, 1, 0, 3, 2));
-}
-template <>
-EIGEN_STRONG_INLINE Packet4cd pcplxflip<Packet4cd>(const Packet4cd& a) {
-  return Packet4cd(__builtin_shufflevector(a.v, a.v, 1, 0, 3, 2, 5, 4, 7, 6));
-}
-template <>
-EIGEN_STRONG_INLINE Packet2cd pcplxflip<Packet2cd>(const Packet2cd& a) {
-  return Packet2cd(__builtin_shufflevector(a.v, a.v, 1, 0, 3, 2));
-}
+// --- Operations that rearrange the real and imaginary lanes ---
+#define EIGEN_CLANG_COMPLEX_LANE_OPS(PACKET_TYPE)                                          \
+  template <>                                                                              \
+  EIGEN_STRONG_INLINE PACKET_TYPE pconj<PACKET_TYPE>(const PACKET_TYPE& a) {               \
+    return detail::complex_pconj_impl(a, detail::complex_real_indices<PACKET_TYPE>{});     \
+  }                                                                                        \
+  template <>                                                                              \
+  EIGEN_STRONG_INLINE PACKET_TYPE pcplxflip<PACKET_TYPE>(const PACKET_TYPE& a) {           \
+    return detail::complex_pcplxflip_impl(a, detail::complex_real_indices<PACKET_TYPE>{}); \
+  }                                                                                        \
+  template <>                                                                              \
+  EIGEN_STRONG_INLINE PACKET_TYPE pdupreal<PACKET_TYPE>(const PACKET_TYPE& a) {            \
+    return detail::complex_pdupreal_impl(a, detail::complex_real_indices<PACKET_TYPE>{});  \
+  }                                                                                        \
+  template <>                                                                              \
+  EIGEN_STRONG_INLINE PACKET_TYPE pdupimag<PACKET_TYPE>(const PACKET_TYPE& a) {            \
+    return detail::complex_pdupimag_impl(a, detail::complex_real_indices<PACKET_TYPE>{});  \
+  }
 
-// Copy real to imaginary part, i.e. {re(a), im(a)} -> {re(a), re(a)}.
-template <>
-EIGEN_STRONG_INLINE Packet8cf pdupreal<Packet8cf>(const Packet8cf& a) {
-  return Packet8cf(__builtin_shufflevector(a.v, a.v, 0, 0, 2, 2, 4, 4, 6, 6, 8, 8, 10, 10, 12, 12, 14, 14));
-}
-template <>
-EIGEN_STRONG_INLINE Packet4cf pdupreal<Packet4cf>(const Packet4cf& a) {
-  return Packet4cf(__builtin_shufflevector(a.v, a.v, 0, 0, 2, 2, 4, 4, 6, 6));
-}
-template <>
-EIGEN_STRONG_INLINE Packet2cf pdupreal<Packet2cf>(const Packet2cf& a) {
-  return Packet2cf(__builtin_shufflevector(a.v, a.v, 0, 0, 2, 2));
-}
-template <>
-EIGEN_STRONG_INLINE Packet4cd pdupreal<Packet4cd>(const Packet4cd& a) {
-  return Packet4cd(__builtin_shufflevector(a.v, a.v, 0, 0, 2, 2, 4, 4, 6, 6));
-}
-template <>
-EIGEN_STRONG_INLINE Packet2cd pdupreal<Packet2cd>(const Packet2cd& a) {
-  return Packet2cd(__builtin_shufflevector(a.v, a.v, 0, 0, 2, 2));
-}
+EIGEN_CLANG_COMPLEX_LANE_OPS(PacketXcf)
+EIGEN_CLANG_COMPLEX_LANE_OPS(PacketXcd)
+#undef EIGEN_CLANG_COMPLEX_LANE_OPS
 
-// Copy imaginary to real part, i.e. {re(a), im(a)} -> {im(a), im(a)}.
-template <>
-EIGEN_STRONG_INLINE Packet8cf pdupimag<Packet8cf>(const Packet8cf& a) {
-  return Packet8cf(__builtin_shufflevector(a.v, a.v, 1, 1, 3, 3, 5, 5, 7, 7, 9, 9, 11, 11, 13, 13, 15, 15));
-}
-template <>
-EIGEN_STRONG_INLINE Packet4cf pdupimag<Packet4cf>(const Packet4cf& a) {
-  return Packet4cf(__builtin_shufflevector(a.v, a.v, 1, 1, 3, 3, 5, 5, 7, 7));
-}
-template <>
-EIGEN_STRONG_INLINE Packet2cf pdupimag<Packet2cf>(const Packet2cf& a) {
-  return Packet2cf(__builtin_shufflevector(a.v, a.v, 1, 1, 3, 3));
-}
-template <>
-EIGEN_STRONG_INLINE Packet4cd pdupimag<Packet4cd>(const Packet4cd& a) {
-  return Packet4cd(__builtin_shufflevector(a.v, a.v, 1, 1, 3, 3, 5, 5, 7, 7));
-}
-template <>
-EIGEN_STRONG_INLINE Packet2cd pdupimag<Packet2cd>(const Packet2cd& a) {
-  return Packet2cd(__builtin_shufflevector(a.v, a.v, 1, 1, 3, 3));
-}
+// --- ploaddup and ploadquad ---
+#define EIGEN_CLANG_COMPLEX_LOAD_REPEAT(PACKET_TYPE)                                                           \
+  template <>                                                                                                  \
+  EIGEN_STRONG_INLINE PACKET_TYPE ploaddup<PACKET_TYPE>(const unpacket_traits<PACKET_TYPE>::type* from) {      \
+    return detail::complex_loadrepeat_impl<2, PACKET_TYPE>(from, detail::complex_real_indices<PACKET_TYPE>{}); \
+  }                                                                                                            \
+  template <>                                                                                                  \
+  EIGEN_STRONG_INLINE PACKET_TYPE ploadquad<PACKET_TYPE>(const unpacket_traits<PACKET_TYPE>::type* from) {     \
+    return detail::complex_loadrepeat_impl<4, PACKET_TYPE>(from, detail::complex_real_indices<PACKET_TYPE>{}); \
+  }
 
-template <>
-EIGEN_STRONG_INLINE Packet8cf ploaddup<Packet8cf>(const std::complex<float>* from) {
-  return Packet8cf(Packet16f{std::real(from[0]), std::imag(from[0]), std::real(from[0]), std::imag(from[0]),
-                             std::real(from[1]), std::imag(from[1]), std::real(from[1]), std::imag(from[1]),
-                             std::real(from[2]), std::imag(from[2]), std::real(from[2]), std::imag(from[2]),
-                             std::real(from[3]), std::imag(from[3]), std::real(from[3]), std::imag(from[3])});
-}
-template <>
-EIGEN_STRONG_INLINE Packet4cd ploaddup<Packet4cd>(const std::complex<double>* from) {
-  return Packet4cd(Packet8d{std::real(from[0]), std::imag(from[0]), std::real(from[0]), std::imag(from[0]),
-                            std::real(from[1]), std::imag(from[1]), std::real(from[1]), std::imag(from[1])});
-}
+EIGEN_CLANG_COMPLEX_LOAD_REPEAT(PacketXcf)
+EIGEN_CLANG_COMPLEX_LOAD_REPEAT(PacketXcd)
+#undef EIGEN_CLANG_COMPLEX_LOAD_REPEAT
 
+// --- preverse ---
 template <>
-EIGEN_STRONG_INLINE Packet8cf ploadquad<Packet8cf>(const std::complex<float>* from) {
-  return Packet8cf(Packet16f{std::real(from[0]), std::imag(from[0]), std::real(from[0]), std::imag(from[0]),
-                             std::real(from[0]), std::imag(from[0]), std::real(from[0]), std::imag(from[0]),
-                             std::real(from[1]), std::imag(from[1]), std::real(from[1]), std::imag(from[1]),
-                             std::real(from[1]), std::imag(from[1]), std::real(from[1]), std::imag(from[1])});
+EIGEN_STRONG_INLINE PacketXcf preverse<PacketXcf>(const PacketXcf& a) {
+  return detail::complex_preverse_impl(a, detail::complex_real_indices<PacketXcf>{});
 }
 template <>
-EIGEN_STRONG_INLINE Packet4cd ploadquad<Packet4cd>(const std::complex<double>* from) {
-  return pset1<Packet4cd>(*from);
-}
-
-template <>
-EIGEN_STRONG_INLINE Packet8cf preverse<Packet8cf>(const Packet8cf& a) {
-  return Packet8cf(reinterpret_cast<Packet16f>(preverse(reinterpret_cast<Packet8d>(a.v))));
-}
-template <>
-EIGEN_STRONG_INLINE Packet4cd preverse<Packet4cd>(const Packet4cd& a) {
-  return Packet4cd(__builtin_shufflevector(a.v, a.v, 6, 7, 4, 5, 2, 3, 0, 1));
+EIGEN_STRONG_INLINE PacketXcd preverse<PacketXcd>(const PacketXcd& a) {
+  return detail::complex_preverse_impl(a, detail::complex_real_indices<PacketXcd>{});
 }
 
 // ----------- Binary ops ------------------
@@ -297,6 +292,7 @@ EIGEN_STRONG_INLINE Packet4cd preverse<Packet4cd>(const Packet4cd& a) {
   }
 
 #define EIGEN_CLANG_COMPLEX_BINARY_CWISE_OPS(PACKET_TYPE)                                            \
+  DELEGATE_BINARY_TO_REAL_OP(PACKET_TYPE, padd)                                                      \
   DELEGATE_BINARY_TO_REAL_OP(PACKET_TYPE, psub)                                                      \
   DELEGATE_BINARY_TO_REAL_OP(PACKET_TYPE, pand)                                                      \
   DELEGATE_BINARY_TO_REAL_OP(PACKET_TYPE, por)                                                       \
@@ -312,22 +308,19 @@ EIGEN_STRONG_INLINE Packet4cd preverse<Packet4cd>(const Packet4cd& a) {
     return PACKET_TYPE(pand(pdupreal(t).v, pdupimag(t).v));                                          \
   }
 
-EIGEN_CLANG_COMPLEX_BINARY_CWISE_OPS(Packet8cf);
-EIGEN_CLANG_COMPLEX_BINARY_CWISE_OPS(Packet4cd);
+EIGEN_CLANG_COMPLEX_BINARY_CWISE_OPS(PacketXcf);
+EIGEN_CLANG_COMPLEX_BINARY_CWISE_OPS(PacketXcd);
 
-// Binary ops that are needed on sub-packets for predux and predux_mul.
-#define EIGEN_CLANG_COMPLEX_REDUCER_BINARY_CWISE_OPS(PACKET_TYPE)                                 \
-  DELEGATE_BINARY_TO_REAL_OP(PACKET_TYPE, padd)                                                   \
+// The sub-packets complex_predux_mul in Reductions.h recurses through call
+// detail::complex_pmul_impl directly, so only the full packets need pmul.
+#define EIGEN_CLANG_COMPLEX_PMUL(PACKET_TYPE)                                                     \
   template <>                                                                                     \
   EIGEN_STRONG_INLINE PACKET_TYPE pmul<PACKET_TYPE>(const PACKET_TYPE& a, const PACKET_TYPE& b) { \
-    return pmul_complex(a, b);                                                                    \
+    return detail::complex_pmul_impl(a, b, detail::complex_real_indices<PACKET_TYPE>{});          \
   }
 
-EIGEN_CLANG_COMPLEX_REDUCER_BINARY_CWISE_OPS(Packet8cf);
-EIGEN_CLANG_COMPLEX_REDUCER_BINARY_CWISE_OPS(Packet4cf);
-EIGEN_CLANG_COMPLEX_REDUCER_BINARY_CWISE_OPS(Packet2cf);
-EIGEN_CLANG_COMPLEX_REDUCER_BINARY_CWISE_OPS(Packet4cd);
-EIGEN_CLANG_COMPLEX_REDUCER_BINARY_CWISE_OPS(Packet2cd);
+EIGEN_CLANG_COMPLEX_PMUL(PacketXcf);
+EIGEN_CLANG_COMPLEX_PMUL(PacketXcd);
 
 #define EIGEN_CLANG_PACKET_SCATTER_GATHER(PACKET_TYPE)                                                               \
   template <>                                                                                                        \
@@ -350,53 +343,76 @@ EIGEN_CLANG_COMPLEX_REDUCER_BINARY_CWISE_OPS(Packet2cd);
     return result;                                                                                                   \
   }
 
-EIGEN_CLANG_PACKET_SCATTER_GATHER(Packet8cf);
-EIGEN_CLANG_PACKET_SCATTER_GATHER(Packet4cd);
+EIGEN_CLANG_PACKET_SCATTER_GATHER(PacketXcf);
+EIGEN_CLANG_PACKET_SCATTER_GATHER(PacketXcd);
 #undef EIGEN_CLANG_PACKET_SCATTER_GATHER
 
 #undef DELEGATE_BINARY_TO_REAL_OP
 #undef EIGEN_CLANG_COMPLEX_BINARY_CWISE_OPS
-#undef EIGEN_CLANG_COMPLEX_REDUCER_BINARY_CWISE_OPS
+#undef EIGEN_CLANG_COMPLEX_PMUL
 
 // ------------ ternary ops -------------
+// The mask duplicates each complex value's bits across both real lanes, so
+// selecting per real lane is equivalent to selecting whole complex values.
 template <>
-EIGEN_STRONG_INLINE Packet8cf pselect<Packet8cf>(const Packet8cf& mask, const Packet8cf& a, const Packet8cf& b) {
-  return Packet8cf(reinterpret_cast<Packet16f>(
-      pselect(reinterpret_cast<Packet8d>(mask.v), reinterpret_cast<Packet8d>(a.v), reinterpret_cast<Packet8d>(b.v))));
+EIGEN_STRONG_INLINE PacketXcf pselect<PacketXcf>(const PacketXcf& mask, const PacketXcf& a, const PacketXcf& b) {
+  return PacketXcf(pselect(mask.v, a.v, b.v));
+}
+template <>
+EIGEN_STRONG_INLINE PacketXcd pselect<PacketXcd>(const PacketXcd& mask, const PacketXcd& a, const PacketXcd& b) {
+  return PacketXcd(pselect(mask.v, a.v, b.v));
 }
 
+// --- zip_in_place for complex ---
 namespace detail {
+
+// Complex packets interleave whole complex values, so their real and imaginary
+// components move together.
 template <>
-EIGEN_ALWAYS_INLINE void zip_in_place<Packet8cf>(Packet8cf& p1, Packet8cf& p2) {
-  Packet16f tmp = __builtin_shufflevector(p1.v, p2.v, 0, 1, 16, 17, 2, 3, 18, 19, 4, 5, 20, 21, 6, 7, 22, 23);
-  p2.v = __builtin_shufflevector(p1.v, p2.v, 8, 9, 24, 25, 10, 11, 26, 27, 12, 13, 28, 29, 14, 15, 30, 31);
-  p1.v = tmp;
+EIGEN_ALWAYS_INLINE void zip_in_place<PacketXcf>(PacketXcf& p1, PacketXcf& p2) {
+  zip_in_place_impl<2>(p1.v, p2.v, complex_real_indices<PacketXcf>{});
 }
 
+#if EIGEN_GENERIC_VECTOR_SIZE_BYTES >= 32
+// PacketXcd holds a single complex value at 16 bytes, so there is nothing to interleave.
 template <>
-EIGEN_ALWAYS_INLINE void zip_in_place<Packet4cd>(Packet4cd& p1, Packet4cd& p2) {
-  Packet8d tmp = __builtin_shufflevector(p1.v, p2.v, 0, 1, 8, 9, 2, 3, 10, 11);
-  p2.v = __builtin_shufflevector(p1.v, p2.v, 4, 5, 12, 13, 6, 7, 14, 15);
-  p1.v = tmp;
+EIGEN_ALWAYS_INLINE void zip_in_place<PacketXcd>(PacketXcd& p1, PacketXcd& p2) {
+  zip_in_place_impl<2>(p1.v, p2.v, complex_real_indices<PacketXcd>{});
 }
+#endif
+
 }  // namespace detail
 
-EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE void ptranspose(PacketBlock<Packet8cf, 8>& kernel) {
+// --- ptranspose for complex ---
+// PacketXcf: valid block sizes depend on kComplexFloatSize.
+EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE void ptranspose(PacketBlock<PacketXcf, 2>& kernel) {
   detail::ptranspose_impl(kernel);
 }
-EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE void ptranspose(PacketBlock<Packet8cf, 4>& kernel) {
+#if EIGEN_GENERIC_VECTOR_SIZE_BYTES >= 32
+EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE void ptranspose(PacketBlock<PacketXcf, 4>& kernel) {
   detail::ptranspose_impl(kernel);
 }
-EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE void ptranspose(PacketBlock<Packet8cf, 2>& kernel) {
+#endif
+#if EIGEN_GENERIC_VECTOR_SIZE_BYTES >= 64
+EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE void ptranspose(PacketBlock<PacketXcf, 8>& kernel) {
   detail::ptranspose_impl(kernel);
 }
+#endif
 
-EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE void ptranspose(PacketBlock<Packet4cd, 4>& kernel) {
+// PacketXcd: valid block sizes depend on kComplexDoubleSize.
+#if EIGEN_GENERIC_VECTOR_SIZE_BYTES >= 32
+EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE void ptranspose(PacketBlock<PacketXcd, 2>& kernel) {
   detail::ptranspose_impl(kernel);
 }
-EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE void ptranspose(PacketBlock<Packet4cd, 2>& kernel) {
+#endif
+#if EIGEN_GENERIC_VECTOR_SIZE_BYTES >= 64
+EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE void ptranspose(PacketBlock<PacketXcd, 4>& kernel) {
   detail::ptranspose_impl(kernel);
 }
+#endif
+
+EIGEN_MAKE_CONJ_HELPER_CPLX_REAL(PacketXcf, PacketXf)
+EIGEN_MAKE_CONJ_HELPER_CPLX_REAL(PacketXcd, PacketXd)
 
 }  // end namespace internal
 }  // end namespace Eigen

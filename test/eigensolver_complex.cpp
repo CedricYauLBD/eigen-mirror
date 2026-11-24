@@ -7,6 +7,7 @@
 // This Source Code Form is subject to the terms of the Mozilla
 // Public License v. 2.0. If a copy of the MPL was not distributed
 // with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
+// SPDX-License-Identifier: MPL-2.0
 
 #include "main.h"
 #include <limits>
@@ -49,8 +50,8 @@ bool find_pivot(typename MatrixType::Scalar tol, MatrixType& diffs, Index col = 
  */
 template <typename VectorType>
 void verify_is_approx_upto_permutation(const VectorType& vec1, const VectorType& vec2) {
-  typedef typename VectorType::Scalar Scalar;
-  typedef typename NumTraits<Scalar>::Real RealScalar;
+  using Scalar = typename VectorType::Scalar;
+  using RealScalar = typename NumTraits<Scalar>::Real;
 
   VERIFY(vec1.cols() == 1);
   VERIFY(vec2.cols() == 1);
@@ -73,8 +74,8 @@ void eigensolver(const MatrixType& m) {
   Index rows = m.rows();
   Index cols = m.cols();
 
-  typedef typename MatrixType::Scalar Scalar;
-  typedef typename NumTraits<Scalar>::Real RealScalar;
+  using Scalar = typename MatrixType::Scalar;
+  using RealScalar = typename NumTraits<Scalar>::Real;
 
   MatrixType a = MatrixType::Random(rows, cols);
   MatrixType symmA = a.adjoint() * a;
@@ -131,8 +132,8 @@ void eigensolver(const MatrixType& m) {
     a.setZero();
     ComplexEigenSolver<MatrixType> ei3(a);
     VERIFY_IS_EQUAL(ei3.info(), Success);
-    VERIFY_IS_MUCH_SMALLER_THAN(ei3.eigenvalues().norm(), RealScalar(1));
-    VERIFY((ei3.eigenvectors().transpose() * ei3.eigenvectors().transpose()).eval().isIdentity());
+    RealScalar tol = 2 * a.cols() * NumTraits<RealScalar>::epsilon();
+    VERIFY((ei3.eigenvectors().adjoint() * ei3.eigenvectors()).eval().isIdentity(tol));
   }
 }
 
@@ -147,6 +148,152 @@ void eigensolver_verify_assert(const MatrixType& m) {
   VERIFY_RAISES_ASSERT(eig.eigenvectors());
 }
 
+void custom_complex_stable_normalization() {
+  using Scalar = CustomComplex<double>;
+  using Vector2 = Matrix<Scalar, 2, 1>;
+
+  Vector2 input;
+  input << Scalar(3.0, 4.0), Scalar(0.0, 0.0);
+  const Vector2 normalized = input.stableNormalized();
+  VERIFY_IS_APPROX(normalized(0).re, 0.6);
+  VERIFY_IS_APPROX(normalized(0).im, 0.8);
+  VERIFY_IS_EQUAL(normalized(1), Scalar(0.0, 0.0));
+
+  input.stableNormalize();
+  VERIFY_IS_APPROX(input(0).re, 0.6);
+  VERIFY_IS_APPROX(input(0).im, 0.8);
+  VERIFY_IS_EQUAL(input(1), Scalar(0.0, 0.0));
+}
+
+// A Jordan block has equal eigenvalues, so each back-substitution step divides by eps * |T| and the unit
+// triangular factor X grows like eps^-k along the chain: it overflows for n >= 30 (double) and n >= 8 (float)
+// unless the columns are rescaled. The eigenvectors are then not finite with info() == Success. The block is also
+// multiplied by 2^exponent, so that |T|_F overflows (2^510 in double, 2^64 in float, for these sizes) or underflows
+// (2^-1000, 2^-80) in the perturbation eps |T|_F that replaces the zero denominators.
+template <typename Scalar>
+void complex_eigensolver_jordan_block(int n, int exponent = 0) {
+  using RealScalar = typename NumTraits<Scalar>::Real;
+  using MatrixType = Matrix<std::complex<RealScalar>, Dynamic, Dynamic>;
+  const RealScalar eps = NumTraits<RealScalar>::epsilon();
+  const RealScalar scale = std::ldexp(RealScalar(1), exponent);
+  MatrixType unit = MatrixType::Identity(n, n);
+  unit.template diagonal<1>().setOnes();
+  const MatrixType A = unit * scale;
+  ComplexEigenSolver<MatrixType> eig(A);
+  VERIFY_IS_EQUAL(eig.info(), Success);
+  const MatrixType& V = eig.eigenvectors();
+  VERIFY(V.allFinite());
+  VERIFY(eig.eigenvalues().allFinite());
+  const MatrixType scaledEigenvalues = (eig.eigenvalues() / scale).matrix();
+  const RealScalar residual = (unit * V - V * scaledEigenvalues.col(0).asDiagonal()).cwiseAbs().maxCoeff() /
+                              (unit.cwiseAbs().maxCoeff() * V.cwiseAbs().maxCoeff());
+  VERIFY(residual <= RealScalar(100 * n) * eps);
+}
+
+// The bound B = max / (4 n |T|_F) on the entries of X overflows in the denominator for |T|_F > max / (4 n), and |T|_F
+// itself overflows for a finite T with |T|_F > max; neither may zero the columns of V. T = s (U + diag(1, ..., n)) with
+// U the strictly upper triangular ones and s = 2^exponent.
+template <typename RealScalar>
+void complex_eigensolver_large_triangular(int n, int exponent) {
+  using MatrixType = Matrix<std::complex<RealScalar>, Dynamic, Dynamic>;
+  const RealScalar eps = NumTraits<RealScalar>::epsilon();
+  const RealScalar scale = std::ldexp(RealScalar(1), exponent);
+  MatrixType unit = MatrixType::Zero(n, n);
+  unit.template triangularView<StrictlyUpper>().setOnes();
+  for (Index i = 0; i < n; ++i) unit(i, i) = RealScalar(i + 1);
+  const MatrixType A = unit * scale;
+  VERIFY(A.allFinite());
+  ComplexEigenSolver<MatrixType> eig(A);
+  VERIFY_IS_EQUAL(eig.info(), Success);
+  const MatrixType& V = eig.eigenvectors();
+  VERIFY(V.allFinite());
+  for (Index k = 0; k < n; ++k) VERIFY(numext::abs(V.col(k).stableNorm() - RealScalar(1)) <= RealScalar(10 * n) * eps);
+  const MatrixType scaledEigenvalues = (eig.eigenvalues() / scale).matrix();
+  const RealScalar residual =
+      (unit * V - V * scaledEigenvalues.col(0).asDiagonal()).cwiseAbs().maxCoeff() / unit.cwiseAbs().maxCoeff();
+  VERIFY(residual <= RealScalar(100 * n) * eps);
+}
+
+// A fixed sequence of coefficients near highest() / 1024, so the products in the back substitution leave the range
+// while the eigenvectors of T itself do not. The scaled problem is the reference: V must still solve a V = V D.
+template <typename MatrixType>
+void eigensolver_large_coefficients() {
+  using Scalar = typename MatrixType::Scalar;
+  using RealScalar = typename MatrixType::RealScalar;
+  const RealScalar highest = NumTraits<RealScalar>::highest();
+  const RealScalar eps = NumTraits<RealScalar>::epsilon();
+  unsigned state = 12345u + 7919u * 182u;
+  const auto next = [&state]() {
+    state = state * 1103515245u + 12345u;
+    return RealScalar(int((state >> 16) & 0x7fff) - 16384) / RealScalar(16384);
+  };
+  MatrixType a(8, 8);
+  for (Index i = 0; i < 8; ++i)
+    for (Index j = 0; j < 8; ++j) a(i, j) = Scalar(next(), next()) * (highest / RealScalar(1024));
+  a(3, 5) = Scalar(RealScalar(0.45) * highest, RealScalar(0.45) * highest);
+
+  ComplexEigenSolver<MatrixType> solver(a);
+  VERIFY_IS_EQUAL(solver.info(), Success);
+  VERIFY(solver.eigenvalues().allFinite());
+  VERIFY(solver.eigenvectors().allFinite());
+  const MatrixType& V = solver.eigenvectors();
+  for (Index k = 0; k < a.cols(); ++k) {
+    const RealScalar norm = V.col(k).stableNorm();
+    VERIFY(norm > RealScalar(0.5) && norm < RealScalar(2));
+  }
+  const MatrixType b = a / highest;
+  const MatrixType residual = b * V - V * (solver.eigenvalues() / highest).asDiagonal();
+  VERIFY(residual.norm() <= RealScalar(1000 * a.cols()) * eps * b.norm());
+}
+
+// The eigenvalue difference is at rounding level while the coupling is near highest(), so the correction factor that
+// keeps a column of X bounded underflows and has to be applied in two steps.
+template <typename RealScalar>
+void eigensolver_underflowing_correction(int n) {
+  using MatrixType = Matrix<std::complex<RealScalar>, Dynamic, Dynamic>;
+  using ComplexScalar = std::complex<RealScalar>;
+  const RealScalar highest = NumTraits<RealScalar>::highest();
+  const RealScalar eps = NumTraits<RealScalar>::epsilon();
+  MatrixType a = MatrixType::Zero(n, n);
+  for (Index i = 0; i < n; ++i) {
+    a(i, i) = ComplexScalar(RealScalar(1) + RealScalar(i) * RealScalar(2) * eps, RealScalar(0));
+    if (i + 1 < n) a(i, i + 1) = ComplexScalar(highest / RealScalar(4), RealScalar(0));
+  }
+  ComplexEigenSolver<MatrixType> solver(a);
+  VERIFY_IS_EQUAL(solver.info(), Success);
+  VERIFY(solver.eigenvectors().allFinite());
+  VERIFY(solver.eigenvalues().allFinite());
+  for (Index k = 0; k < n; ++k) {
+    const RealScalar norm = solver.eigenvectors().col(k).stableNorm();
+    VERIFY(norm > RealScalar(0.5) && norm < RealScalar(2));
+  }
+}
+
+// A chain of rows with coefficients near highest() forces a component of the eigenvector of T above highest(). X is
+// homogeneous of degree zero in T, so the eigenvectors must agree with those of the same matrix scaled down.
+template <typename RealScalar>
+void eigensolver_overflowing_eigenvector(int n) {
+  using MatrixType = Matrix<std::complex<RealScalar>, Dynamic, Dynamic>;
+  using ComplexScalar = std::complex<RealScalar>;
+  const RealScalar highest = NumTraits<RealScalar>::highest();
+  const RealScalar eps = NumTraits<RealScalar>::epsilon();
+  MatrixType a = MatrixType::Zero(n, n);
+  for (Index i = 0; i < n; ++i) {
+    a(i, i) = ComplexScalar(RealScalar(i) + RealScalar(1), RealScalar(0));
+    if (i + 1 < n) a(i, i + 1) = ComplexScalar(highest / RealScalar(4), highest / RealScalar(4));
+  }
+  ComplexEigenSolver<MatrixType> solver(a);
+  ComplexEigenSolver<MatrixType> reference(a / highest);
+  VERIFY_IS_EQUAL(solver.info(), Success);
+  VERIFY_IS_EQUAL(reference.info(), Success);
+  VERIFY(solver.eigenvectors().allFinite());
+  VERIFY(solver.eigenvalues().allFinite());
+  for (Index k = 0; k < n; ++k) {
+    VERIFY_IS_APPROX(solver.eigenvectors().col(k).stableNorm(), RealScalar(1));
+    VERIFY((solver.eigenvectors().col(k) - reference.eigenvectors().col(k)).stableNorm() <= RealScalar(256 * n) * eps);
+  }
+}
+
 EIGEN_DECLARE_TEST(eigensolver_complex) {
   int s = 0;
   for (int i = 0; i < g_repeat; i++) {
@@ -155,7 +302,7 @@ EIGEN_DECLARE_TEST(eigensolver_complex) {
     CALL_SUBTEST_2(eigensolver(MatrixXcd(s, s)));
     CALL_SUBTEST_3(eigensolver(Matrix<std::complex<float>, 1, 1>()));
     CALL_SUBTEST_4(eigensolver(Matrix3f()));
-    TEST_SET_BUT_UNUSED_VARIABLE(s)
+    TEST_SET_BUT_UNUSED_VARIABLE(s);
   }
   CALL_SUBTEST_1(eigensolver_verify_assert(Matrix4cf()));
   s = internal::random<int>(1, EIGEN_TEST_MAX_SIZE / 4);
@@ -166,8 +313,50 @@ EIGEN_DECLARE_TEST(eigensolver_complex) {
   // Test problem size constructors
   CALL_SUBTEST_5(ComplexEigenSolver<MatrixXf> tmp(s));
 
+  // ComplexSchur took the maximum of no coefficients for an empty matrix.
+  CALL_SUBTEST_2({
+    MatrixXcd A(0, 0);
+    ComplexEigenSolver<MatrixXcd> solver(A);
+    VERIFY_IS_EQUAL(solver.info(), Success);
+    VERIFY_IS_EQUAL(solver.eigenvectors().size(), 0);
+    VERIFY_IS_EQUAL(A.eigenvalues().size(), 0);
+  });
+
   // Test custom complex scalar type.
   CALL_SUBTEST_6(eigensolver(Matrix<CustomComplex<double>, 5, 5>()));
+  CALL_SUBTEST_6(custom_complex_stable_normalization());
+  CALL_SUBTEST_7(eigensolver_large_coefficients<MatrixXcd>());
+  CALL_SUBTEST_7(eigensolver_underflowing_correction<double>(2));
+  CALL_SUBTEST_7(eigensolver_underflowing_correction<double>(3));
+  CALL_SUBTEST_7(eigensolver_underflowing_correction<double>(4));
+  CALL_SUBTEST_7(eigensolver_underflowing_correction<float>(2));
+  CALL_SUBTEST_7(eigensolver_underflowing_correction<float>(4));
+  CALL_SUBTEST_7(eigensolver_overflowing_eigenvector<double>(3));
+  CALL_SUBTEST_7(eigensolver_overflowing_eigenvector<double>(8));
+  CALL_SUBTEST_7(eigensolver_overflowing_eigenvector<float>(3));
+  CALL_SUBTEST_7(eigensolver_overflowing_eigenvector<float>(8));
 
-  TEST_SET_BUT_UNUSED_VARIABLE(s)
+  CALL_SUBTEST_5(complex_eigensolver_jordan_block<float>(7));
+  CALL_SUBTEST_5(complex_eigensolver_jordan_block<float>(8));
+  CALL_SUBTEST_5(complex_eigensolver_jordan_block<float>(24));
+  CALL_SUBTEST_5(complex_eigensolver_jordan_block<double>(30));
+  CALL_SUBTEST_5(complex_eigensolver_jordan_block<double>(50));
+  CALL_SUBTEST_5(complex_eigensolver_jordan_block<double>(64));
+  CALL_SUBTEST_5(complex_eigensolver_jordan_block<float>(10, 64));
+  CALL_SUBTEST_5(complex_eigensolver_jordan_block<float>(10, -80));
+  CALL_SUBTEST_5(complex_eigensolver_jordan_block<double>(30, 510));
+  CALL_SUBTEST_5(complex_eigensolver_jordan_block<double>(30, -1000));
+
+  // |T|_F below max / (4 n) (exponents 1000, 1019, 123), between max / (4 n) and max (n = 2), above max (n = 5).
+  CALL_SUBTEST_5(complex_eigensolver_large_triangular<double>(2, 1000));
+  CALL_SUBTEST_5(complex_eigensolver_large_triangular<double>(2, 1019));
+  CALL_SUBTEST_5(complex_eigensolver_large_triangular<double>(2, 1021));
+  CALL_SUBTEST_5(complex_eigensolver_large_triangular<double>(2, 1022));
+  CALL_SUBTEST_5(complex_eigensolver_large_triangular<double>(5, 1021));
+  CALL_SUBTEST_5(complex_eigensolver_large_triangular<float>(2, 123));
+  CALL_SUBTEST_5(complex_eigensolver_large_triangular<float>(2, 125));
+  CALL_SUBTEST_5(complex_eigensolver_large_triangular<float>(2, 126));
+  CALL_SUBTEST_5(complex_eigensolver_large_triangular<float>(5, 125));
+
+  TEST_SET_BUT_UNUSED_VARIABLE(s);
 }

@@ -6,6 +6,7 @@
 // This Source Code Form is subject to the terms of the Mozilla
 // Public License v. 2.0. If a copy of the MPL was not distributed
 // with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
+// SPDX-License-Identifier: MPL-2.0
 
 #include "main.h"
 #include <Eigen/Geometry>
@@ -16,15 +17,15 @@ void homogeneous(void) {
      Homogeneous.h
   */
 
-  typedef Matrix<Scalar, Size, Size> MatrixType;
-  typedef Matrix<Scalar, Size, 1, ColMajor> VectorType;
+  using MatrixType = Matrix<Scalar, Size, Size>;
+  using VectorType = Matrix<Scalar, Size, 1, ColMajor>;
 
-  typedef Matrix<Scalar, Size + 1, Size> HMatrixType;
-  typedef Matrix<Scalar, Size + 1, 1> HVectorType;
+  using HMatrixType = Matrix<Scalar, Size + 1, Size>;
+  using HVectorType = Matrix<Scalar, Size + 1, 1>;
 
-  typedef Matrix<Scalar, Size, Size + 1> T1MatrixType;
-  typedef Matrix<Scalar, Size + 1, Size + 1> T2MatrixType;
-  typedef Matrix<Scalar, Size + 1, Size> T3MatrixType;
+  using T1MatrixType = Matrix<Scalar, Size, Size + 1>;
+  using T2MatrixType = Matrix<Scalar, Size + 1, Size + 1>;
+  using T3MatrixType = Matrix<Scalar, Size + 1, Size>;
 
   VectorType v0 = VectorType::Random(), ones = VectorType::Ones();
 
@@ -39,11 +40,14 @@ void homogeneous(void) {
   VERIFY_IS_APPROX(v0, hv0.hnormalized());
 
   VERIFY_IS_APPROX(v0.homogeneous().sum(), hv0.sum());
+  VERIFY_IS_APPROX(v0.homogeneous().prod(), hv0.prod());
   VERIFY_IS_APPROX(v0.homogeneous().minCoeff(), hv0.minCoeff());
   VERIFY_IS_APPROX(v0.homogeneous().maxCoeff(), hv0.maxCoeff());
 
   hm0 << m0, ones.transpose();
   VERIFY_IS_APPROX(m0.colwise().homogeneous(), hm0);
+  VERIFY_IS_APPROX(m0.colwise().homogeneous().sum(), hm0.sum());
+  VERIFY_IS_APPROX(m0.transpose().rowwise().homogeneous().sum(), hm0.sum());
   VERIFY_IS_APPROX(m0, hm0.colwise().hnormalized());
   hm0.row(Size - 1).setRandom();
   for (int j = 0; j < Size; ++j) m0.col(j) = hm0.col(j).head(Size) / hm0(Size, j);
@@ -98,17 +102,43 @@ void homogeneous(void) {
                    (t2.template topLeftCorner<Size, Size>() * v0 + t2.template topRightCorner<Size, 1>()) /
                        ((t2.template bottomLeftCorner<1, Size>() * v0).value() + t2(Size, Size)));
 
-  VERIFY_IS_APPROX((t2 * pts.colwise().homogeneous()).colwise().hnormalized(),
-                   (Matrix<Scalar, Size + 1, Dynamic>(t2 * pts1).colwise().hnormalized()));
+  {
+    using Wide = std::conditional_t<std::is_same<Scalar, float>::value, double, long double>;
+    const Matrix<Scalar, Size, Dynamic> normalized[] = {
+        (t2 * pts.colwise().homogeneous()).colwise().hnormalized(),
+        Matrix<Scalar, Size + 1, Dynamic>(t2 * pts1).colwise().hnormalized(),
+        (t2.lazyProduct(pts.colwise().homogeneous())).colwise().hnormalized(),
+        (pts.transpose().rowwise().homogeneous().lazyProduct(t2)).rowwise().hnormalized().transpose()};
+    // For q = fl(n/d), test |q*d-n| <= gamma*(sum|n terms| + |q|*sum|d terms|).
+    // 2*(Size+1) product/sum roundings plus division; widened reference roundoff is included.
+    const Wide rounding = Wide(2 * (Size + 1) + 1) * (Wide(NumTraits<Scalar>::epsilon()) + NumTraits<Wide>::epsilon());
+    VERIFY(rounding < Wide(1));
+    const Wide gamma = rounding / (Wide(1) - rounding);
+    for (Index path = 0; path < 4; ++path) {
+      for (Index j = 0; j < pts.cols(); ++j) {
+        Wide reference[Size + 1] = {}, magnitude[Size + 1] = {};
+        for (Index row = 0; row <= Size; ++row) {
+          for (Index k = 0; k <= Size; ++k) {
+            const Wide term = Wide(path == 3 ? t2(k, row) : t2(row, k)) * (k == Size ? Wide(1) : Wide(pts(k, j)));
+            reference[row] += term;
+            magnitude[row] += numext::abs(term);
+          }
+        }
+        for (Index row = 0; row < Size; ++row) {
+          const Wide q = Wide(normalized[path](row, j));
+          const Wide bound = gamma * (magnitude[row] + numext::abs(q) * magnitude[Size]);
+          VERIFY((numext::isfinite)(q));
+          VERIFY((numext::isfinite)(bound));
+          VERIFY(numext::abs(q * reference[Size] - reference[row]) <= bound);
+        }
+      }
+    }
+  }
 
   VERIFY_IS_APPROX((t2.lazyProduct(v0.homogeneous())).hnormalized(), (t2 * v0.homogeneous()).hnormalized());
-  VERIFY_IS_APPROX((t2.lazyProduct(pts.colwise().homogeneous())).colwise().hnormalized(),
-                   (t2 * pts1).colwise().hnormalized());
 
   VERIFY_IS_APPROX((v0.transpose().homogeneous().lazyProduct(t2)).hnormalized(),
                    (v0.transpose().homogeneous() * t2).hnormalized());
-  VERIFY_IS_APPROX((pts.transpose().rowwise().homogeneous().lazyProduct(t2)).rowwise().hnormalized(),
-                   (pts1.transpose() * t2).rowwise().hnormalized());
 
   VERIFY_IS_APPROX((t2.template triangularView<Lower>() * v0.homogeneous()).eval(),
                    (t2.template triangularView<Lower>() * hv0));
@@ -135,7 +165,60 @@ void homogeneous(void) {
   }
 }
 
+// Complex scalars are unordered, so these reductions apply only to the others.
+template <typename Expression>
+void check_empty_homogeneous_extrema(const Expression& expression, Index appended_ones, std::true_type) {
+  if (appended_ones > 0) {
+    VERIFY_IS_EQUAL(expression.minCoeff(), typename Expression::Scalar(1));
+    VERIFY_IS_EQUAL(expression.maxCoeff(), typename Expression::Scalar(1));
+  } else {
+    VERIFY_RAISES_ASSERT(expression.minCoeff());
+    VERIFY_RAISES_ASSERT(expression.maxCoeff());
+  }
+}
+
+template <typename Expression>
+void check_empty_homogeneous_extrema(const Expression&, Index, std::false_type) {}
+
+template <typename Expression>
+void check_empty_homogeneous_reductions(const Expression& expression, Index appended_ones) {
+  using Scalar = typename Expression::Scalar;
+  VERIFY_IS_EQUAL(expression.size(), appended_ones);
+  VERIFY_IS_EQUAL(expression.sum(), Scalar(appended_ones));
+  VERIFY_IS_EQUAL(expression.prod(), Scalar(1));
+  check_empty_homogeneous_extrema(expression, appended_ones, internal::bool_constant<!NumTraits<Scalar>::IsComplex>());
+  if (appended_ones > 0) {
+    // This associative functor has identity -1, not a guessed sum/product identity.
+    VERIFY_IS_EQUAL(expression.redux([](Scalar a, Scalar b) { return a + b + Scalar(1); }),
+                    Scalar(2 * appended_ones - 1));
+  }
+}
+
+template <typename Scalar>
+void homogeneous_empty_reductions() {
+  using DynamicMatrix = Matrix<Scalar, Dynamic, Dynamic>;
+  check_empty_homogeneous_reductions(Matrix<Scalar, 0, 1>().homogeneous(), 1);
+  check_empty_homogeneous_reductions(Matrix<Scalar, 1, 0>().homogeneous(), 1);
+  check_empty_homogeneous_reductions(Matrix<Scalar, Dynamic, 1>(0).homogeneous(), 1);
+  check_empty_homogeneous_reductions(Matrix<Scalar, 1, Dynamic>(0).homogeneous(), 1);
+  check_empty_homogeneous_reductions(Matrix<Scalar, 0, 3>().colwise().homogeneous(), 3);
+  check_empty_homogeneous_reductions(Matrix<Scalar, 0, 3>().rowwise().homogeneous(), 0);
+  check_empty_homogeneous_reductions(Matrix<Scalar, 3, 0>().colwise().homogeneous(), 0);
+  check_empty_homogeneous_reductions(Matrix<Scalar, 3, 0>().rowwise().homogeneous(), 3);
+  check_empty_homogeneous_reductions(Matrix<Scalar, 0, 0>().colwise().homogeneous(), 0);
+  check_empty_homogeneous_reductions(Matrix<Scalar, 0, 0>().rowwise().homogeneous(), 0);
+  check_empty_homogeneous_reductions(DynamicMatrix(0, 3).colwise().homogeneous(), 3);
+  check_empty_homogeneous_reductions(DynamicMatrix(0, 3).rowwise().homogeneous(), 0);
+  check_empty_homogeneous_reductions(DynamicMatrix(3, 0).colwise().homogeneous(), 0);
+  check_empty_homogeneous_reductions(DynamicMatrix(3, 0).rowwise().homogeneous(), 3);
+  check_empty_homogeneous_reductions(Matrix<Scalar, Dynamic, Dynamic, 0, 0, 0>().colwise().homogeneous(), 0);
+  check_empty_homogeneous_reductions(Matrix<Scalar, Dynamic, Dynamic, 0, 0, 0>().rowwise().homogeneous(), 0);
+}
+
 EIGEN_DECLARE_TEST(geo_homogeneous) {
+  CALL_SUBTEST_1(homogeneous_empty_reductions<float>());
+  CALL_SUBTEST_2(homogeneous_empty_reductions<double>());
+  CALL_SUBTEST_2(homogeneous_empty_reductions<std::complex<double>>());
   for (int i = 0; i < g_repeat; i++) {
     CALL_SUBTEST_1((homogeneous<float, 1>()));
     CALL_SUBTEST_2((homogeneous<double, 3>()));

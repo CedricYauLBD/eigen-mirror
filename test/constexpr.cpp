@@ -6,6 +6,7 @@
 // This Source Code Form is subject to the terms of the Mozilla
 // Public License v. 2.0. If a copy of the MPL was not distributed
 // with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
+// SPDX-License-Identifier: MPL-2.0
 
 #define EIGEN_TESTING_CONSTEXPR
 #include "main.h"
@@ -15,6 +16,20 @@ struct ConstexprTest {
   constexpr ConstexprTest(const Matrix<Scalar, Rows, Rows>& B) { A = B; }
 
   Matrix<Scalar, Rows, Rows> A;
+};
+
+template <typename Scalar, int Rows>
+struct ConstexprArrayTest {
+  constexpr ConstexprArrayTest(const Array<Scalar, Rows, Rows>& B) { A = B; }
+
+  Array<Scalar, Rows, Rows> A;
+};
+
+template <typename Scalar, int Rows>
+struct ConstexprArrayMoveTest {
+  constexpr ConstexprArrayMoveTest(Array<Scalar, Rows, Rows> B) { A = std::move(B); }
+
+  Array<Scalar, Rows, Rows> A;
 };
 
 EIGEN_DECLARE_TEST(constexpr) {
@@ -40,7 +55,7 @@ EIGEN_DECLARE_TEST(constexpr) {
   VERIFY_IS_EQUAL(vec.size(), 3);
   static_assert(vec.coeff(0, 1) == 2);
 
-  // Check assignment. A wrapper struct is used to avoid copy ellision.
+  // Check assignment. A wrapper struct is used to avoid copy elision.
   constexpr ConstexprTest<double, 2> obj1(Matrix2d({{1, 2}, {3, 4}}));
   VERIFY_IS_EQUAL(obj1.A.size(), 4);
   static_assert(obj1.A(0, 0) == 1);
@@ -51,6 +66,16 @@ EIGEN_DECLARE_TEST(constexpr) {
   static_assert(obj2.A(0, 0) == 1);
   static_assert(obj2.A(0) == 1);
   static_assert(obj2.A.coeff(0, 1) == 2);
+
+  constexpr ConstexprArrayTest<double, 2> arr_obj1(Array22d({{1, 2}, {3, 4}}));
+  VERIFY_IS_EQUAL(arr_obj1.A.size(), 4);
+  static_assert(arr_obj1.A(0, 0) == 1);
+  static_assert(arr_obj1.A(0) == 1);
+  static_assert(arr_obj1.A.coeff(0, 1) == 2);
+
+  constexpr ConstexprArrayMoveTest<double, 2> arr_move_obj(Array22d({{1, 2}, {3, 4}}));
+  static_assert(arr_move_obj.A(0, 0) == 1);
+  static_assert(arr_move_obj.A.coeff(0, 1) == 2);
 
   // Also check dynamic size arrays/matrices with fixed-size storage (currently
   // only works if all elements are initialized, since otherwise the compiler
@@ -64,6 +89,27 @@ EIGEN_DECLARE_TEST(constexpr) {
   static_assert(dyn_arr(0) == 1);
   VERIFY_IS_EQUAL(dyn_arr.size(), 9);
   static_assert(dyn_arr.coeff(0, 1) == 2);
+
+  // Test matrix addition.
+  constexpr Matrix3i mat_a({{1, 2, 3}, {4, 5, 6}, {7, 8, 9}});
+  constexpr Matrix3i mat_b({{9, 8, 7}, {6, 5, 4}, {3, 2, 1}});
+  constexpr Matrix3i mat_sum = mat_a + mat_b;
+  static_assert(mat_sum(0, 0) == 10);
+  static_assert(mat_sum(1, 1) == 10);
+  static_assert(mat_sum(2, 2) == 10);
+
+  // Test matrix subtraction.
+  constexpr Matrix3i mat_diff = mat_a - mat_b;
+  static_assert(mat_diff(0, 0) == -8);
+  static_assert(mat_diff(1, 1) == 0);
+  static_assert(mat_diff(2, 2) == 8);
+
+  // Test scalar multiplication.
+  constexpr Matrix3i mat_scaled = mat_a * 2;
+  static_assert(mat_scaled(0, 0) == 2);
+  static_assert(mat_scaled(1, 1) == 10);
+  static_assert(mat_scaled(2, 2) == 18);
+
 #endif  // __cpp_constexpr >= 201907L
 }
 
@@ -80,3 +126,21 @@ EIGEN_DECLARE_TEST(constexpr_global) {
   static_assert(global_mat.coeff(0, 0) == 1);
 }
 #endif  // __cpp_constexpr >= 201907L
+
+// Check that preprocessor correctly parses and expands EIGEN_IF_CONSTEXPR arguments containing commas
+EIGEN_DECLARE_TEST(constexpr_if) {
+  int true_branch_executed = 0;
+  int false_branch_executed = 0;
+  EIGEN_IF_CONSTEXPR (std::is_same<int, int>::value) {
+    true_branch_executed++;
+  } else {
+    false_branch_executed++;
+  }
+  EIGEN_IF_CONSTEXPR (std::is_same<int, float>::value) {
+    true_branch_executed++;
+  } else {
+    false_branch_executed++;
+  }
+  VERIFY_IS_EQUAL(true_branch_executed, 1);
+  VERIFY_IS_EQUAL(false_branch_executed, 1);
+}

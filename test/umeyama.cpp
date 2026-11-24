@@ -6,6 +6,7 @@
 // This Source Code Form is subject to the terms of the Mozilla
 // Public License v. 2.0. If a copy of the MPL was not distributed
 // with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
+// SPDX-License-Identifier: MPL-2.0
 
 #include "main.h"
 
@@ -13,6 +14,7 @@
 #include <Eigen/Geometry>
 
 #include <Eigen/LU>   // required for MatrixBase::determinant
+#include <Eigen/QR>   // required for HouseholderQR
 #include <Eigen/SVD>  // required for SVD
 
 using namespace Eigen;
@@ -20,55 +22,21 @@ using namespace Eigen;
 //  Constructs a random matrix from the unitary group U(size).
 template <typename T>
 Eigen::Matrix<T, Eigen::Dynamic, Eigen::Dynamic> randMatrixUnitary(int size) {
-  typedef T Scalar;
-  typedef Eigen::Matrix<Scalar, Eigen::Dynamic, Eigen::Dynamic> MatrixType;
+  using Scalar = T;
+  using MatrixType = Eigen::Matrix<Scalar, Eigen::Dynamic, Eigen::Dynamic>;
 
-  MatrixType Q;
-
-  int max_tries = 40;
-  bool is_unitary = false;
-
-  while (!is_unitary && max_tries > 0) {
-    // initialize random matrix
-    Q = MatrixType::Random(size, size);
-
-    // orthogonalize columns using the Gram-Schmidt algorithm
-    for (int col = 0; col < size; ++col) {
-      typename MatrixType::ColXpr colVec = Q.col(col);
-      for (int prevCol = 0; prevCol < col; ++prevCol) {
-        typename MatrixType::ColXpr prevColVec = Q.col(prevCol);
-        colVec -= colVec.dot(prevColVec) * prevColVec;
-      }
-      Q.col(col) = colVec.normalized();
-    }
-
-    // this additional orthogonalization is not necessary in theory but should enhance
-    // the numerical orthogonality of the matrix
-    for (int row = 0; row < size; ++row) {
-      typename MatrixType::RowXpr rowVec = Q.row(row);
-      for (int prevRow = 0; prevRow < row; ++prevRow) {
-        typename MatrixType::RowXpr prevRowVec = Q.row(prevRow);
-        rowVec -= rowVec.dot(prevRowVec) * prevRowVec;
-      }
-      Q.row(row) = rowVec.normalized();
-    }
-
-    // final check
-    is_unitary = Q.isUnitary();
-    --max_tries;
-  }
-
-  if (max_tries == 0) eigen_assert(false && "randMatrixUnitary: Could not construct unitary matrix!");
-
+  // The Q factor of the QR decomposition of a random matrix is a random unitary matrix.
+  // HouseholderQR is numerically stable and always succeeds, unlike Gram-Schmidt.
+  MatrixType Q = MatrixType::Random(size, size).householderQr().householderQ();
   return Q;
 }
 
 //  Constructs a random matrix from the special unitary group SU(size).
 template <typename T>
 Eigen::Matrix<T, Eigen::Dynamic, Eigen::Dynamic> randMatrixSpecialUnitary(int size) {
-  typedef T Scalar;
+  using Scalar = T;
 
-  typedef Eigen::Matrix<Scalar, Eigen::Dynamic, Eigen::Dynamic> MatrixType;
+  using MatrixType = Eigen::Matrix<Scalar, Eigen::Dynamic, Eigen::Dynamic>;
 
   // initialize unitary matrix
   MatrixType Q = randMatrixUnitary<Scalar>(size);
@@ -80,11 +48,11 @@ Eigen::Matrix<T, Eigen::Dynamic, Eigen::Dynamic> randMatrixSpecialUnitary(int si
 }
 
 template <typename MatrixType>
-void run_test(int dim, int num_elements) {
+void run_test(unsigned dim, int num_elements) {
   using std::abs;
-  typedef typename internal::traits<MatrixType>::Scalar Scalar;
-  typedef Matrix<Scalar, Eigen::Dynamic, Eigen::Dynamic> MatrixX;
-  typedef Matrix<Scalar, Eigen::Dynamic, 1> VectorX;
+  using Scalar = typename internal::traits<MatrixType>::Scalar;
+  using MatrixX = Matrix<Scalar, Eigen::Dynamic, Eigen::Dynamic>;
+  using VectorX = Matrix<Scalar, Eigen::Dynamic, 1>;
 
   // MUST be positive because in any other case det(cR_t) may become negative for
   // odd dimensions!
@@ -111,10 +79,10 @@ void run_test(int dim, int num_elements) {
 template <typename Scalar, int Dimension>
 void run_fixed_size_test(int num_elements) {
   using std::abs;
-  typedef Matrix<Scalar, Dimension + 1, Dynamic> MatrixX;
-  typedef Matrix<Scalar, Dimension + 1, Dimension + 1> HomMatrix;
-  typedef Matrix<Scalar, Dimension, Dimension> FixedMatrix;
-  typedef Matrix<Scalar, Dimension, 1> FixedVector;
+  using MatrixX = Matrix<Scalar, Dimension + 1, Dynamic>;
+  using HomMatrix = Matrix<Scalar, Dimension + 1, Dimension + 1>;
+  using FixedMatrix = Matrix<Scalar, Dimension, Dimension>;
+  using FixedVector = Matrix<Scalar, Dimension, 1>;
 
   const int dim = Dimension;
 
@@ -150,7 +118,7 @@ EIGEN_DECLARE_TEST(umeyama) {
     const int num_elements = internal::random<int>(40, 500);
 
     // works also for dimensions bigger than 3...
-    for (int dim = 2; dim < 8; ++dim) {
+    for (unsigned dim = 2; dim < 8; ++dim) {
       CALL_SUBTEST_1(run_test<MatrixXd>(dim, num_elements));
       CALL_SUBTEST_2(run_test<MatrixXf>(dim, num_elements));
     }

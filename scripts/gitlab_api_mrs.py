@@ -1,55 +1,26 @@
+# SPDX-FileCopyrightText: The Eigen Authors
+# SPDX-License-Identifier: MPL-2.0
+
 """Downloads all MRs from GitLab matching specified criteria."""
 
 import argparse
 import datetime
 import json
 import os
-import requests
 import sys
+
+from gitlab_api_common import GitLabApiError, get_api_query as _get_api_query
 
 EIGEN_PROJECT_ID = 15462818  # Taken from the gitlab project page.
 
 
 def date(date_string: str):
-    """Convert a date YY-MM-DD string to a datetime object."""
+    """Convert a date YYYY-MM-DD string to a datetime object."""
     try:
-        return datetime.strptime(date_string, "%Y-%m-%d")
+        return datetime.datetime.strptime(date_string, "%Y-%m-%d")
     except ValueError:
         msg = f"Not a valid date: '{date_string}'. Expected format is YYYY-MM-DD."
         raise argparse.ArgumentTypeError(msg)
-
-
-def _get_api_query(
-    gitlab_private_token: str, url: str, params: dict[str, str] | None = None
-):
-    next_page = "1"
-    if not params:
-        params = dict()
-    params["per_page"] = "100"
-    headers = {"PRIVATE-TOKEN": gitlab_private_token}
-    out = []
-    while next_page:
-        params["page"] = next_page
-        try:
-            resp = requests.head(url=url, params=params, headers=headers)
-            if resp.status_code != 200:
-                print("Request failed: ", resp, file=sys.stderr)
-                break
-
-            next_next_page = resp.headers["x-next-page"]
-
-            resp = requests.get(url=url, params=params, headers=headers)
-            if resp.status_code != 200:
-                # Try again.
-                continue
-
-            out.extend(resp.json())
-            # Advance at the end, in case an exception occurs above so we can retry
-            next_page = next_next_page
-        except:
-            # Keep same next_page
-            continue
-    return out
 
 
 def get_merge_requests(
@@ -180,17 +151,20 @@ def main(_):
             sys.exit(1)
 
     # Parse the arguments from the command line
-    mrs = get_merge_requests(
-        gitlab_private_token=args.gitlab_private_token,
-        author_username=args.author,
-        state=args.state,
-        created_before=args.created_before,
-        created_after=args.created_after,
-        updated_before=args.updated_before,
-        updated_after=args.updated_after,
-        related_issues=args.related_issues,
-        closes_issues=args.closes_issues,
-    )
+    try:
+        mrs = get_merge_requests(
+            gitlab_private_token=args.gitlab_private_token,
+            author_username=args.author,
+            state=args.state,
+            created_before=args.created_before,
+            created_after=args.created_after,
+            updated_before=args.updated_before,
+            updated_after=args.updated_after,
+            related_issues=args.related_issues,
+            closes_issues=args.closes_issues,
+        )
+    except GitLabApiError as exc:
+        sys.exit(f"error: {exc}")
 
     mr_str = json.dumps(mrs, indent=2)
     print(mr_str)

@@ -6,14 +6,16 @@
 // This Source Code Form is subject to the terms of the Mozilla
 // Public License v. 2.0. If a copy of the MPL was not distributed
 // with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
+// SPDX-License-Identifier: MPL-2.0
 
 #include "main.h"
+#include "random_for_arithmetic.h"
 
 #define EIGEN_TESTMAP_MAX_SIZE 256
 
 template <typename VectorType>
 void map_class_vector(const VectorType& m) {
-  typedef typename VectorType::Scalar Scalar;
+  using Scalar = typename VectorType::Scalar;
 
   Index size = m.size();
 
@@ -48,10 +50,10 @@ void map_class_vector(const VectorType& m) {
 
 template <typename MatrixType>
 void map_class_matrix(const MatrixType& m) {
-  typedef typename MatrixType::Scalar Scalar;
+  using Scalar = typename MatrixType::Scalar;
 
   Index rows = m.rows(), cols = m.cols(), size = rows * cols;
-  Scalar s1 = internal::random<Scalar>();
+  Scalar s1 = random_scalar_for_arithmetic<Scalar>();
 
   // array1 and array2 -> aligned heap allocation
   Scalar* array1 = internal::aligned_new<Scalar>(size);
@@ -92,7 +94,7 @@ void map_class_matrix(const MatrixType& m) {
   map3.setZero();
   VERIFY_IS_EQUAL(map3, MatrixType::Zero(rows, cols));
 
-  map1 = MatrixType::Random(rows, cols);
+  map1 = random_for_arithmetic<MatrixType>(rows, cols);
   map2 = map1;
   map3 = map1;
   MatrixType ma1 = map1;
@@ -134,7 +136,7 @@ void map_class_matrix(const MatrixType& m) {
 
 template <typename VectorType>
 void map_static_methods(const VectorType& m) {
-  typedef typename VectorType::Scalar Scalar;
+  using Scalar = typename VectorType::Scalar;
 
   Index size = m.size();
 
@@ -166,11 +168,82 @@ void check_const_correctness(const PlainObjectType&) {
   // CMake can help with that.
 
   // verify that map-to-const don't have LvalueBit
-  typedef std::add_const_t<PlainObjectType> ConstPlainObjectType;
-  VERIFY(!(internal::traits<Map<ConstPlainObjectType> >::Flags & LvalueBit));
-  VERIFY(!(internal::traits<Map<ConstPlainObjectType, AlignedMax> >::Flags & LvalueBit));
+  using ConstPlainObjectType = std::add_const_t<PlainObjectType>;
+  VERIFY(!(internal::traits<Map<ConstPlainObjectType>>::Flags & LvalueBit));
+  VERIFY(!(internal::traits<Map<ConstPlainObjectType, AlignedMax>>::Flags & LvalueBit));
   VERIFY(!(Map<ConstPlainObjectType>::Flags & LvalueBit));
   VERIFY(!(Map<ConstPlainObjectType, AlignedMax>::Flags & LvalueBit));
+}
+
+// Test Map with InnerStride at vectorization boundary sizes.
+// Strided Maps exercise different traversal paths (SliceVectorized or Default)
+// in assignment and reductions.
+template <typename Scalar>
+void map_inner_stride_boundary() {
+  const Index PS = internal::packet_traits<Scalar>::size;
+  const Index sizes[] = {1, 2, 3, PS - 1, PS, PS + 1, 2 * PS, 2 * PS + 1, 4 * PS, 4 * PS + 1};
+  for (int si = 0; si < 10; ++si) {
+    const Index n = sizes[si];
+    if (n <= 0) continue;
+    using Vec = Matrix<Scalar, Dynamic, 1>;
+    // InnerStride<2>: every other element
+    Vec data = random_for_arithmetic<Vec>(2 * n);
+    Map<Vec, 0, InnerStride<2>> strided(data.data(), n);
+
+    // Test assignment to/from strided map
+    Vec dense = strided;
+    for (Index k = 0; k < n; ++k) VERIFY_IS_APPROX(dense(k), data(2 * k));
+
+    // Test scalar operations on strided map
+    Vec result = Scalar(2) * strided;
+    for (Index k = 0; k < n; ++k) VERIFY_IS_APPROX(result(k), Scalar(2) * data(2 * k));
+
+    // Test strided map + dense vector
+    Vec other = random_for_arithmetic<Vec>(n);
+    Vec sum_result = strided + other;
+    for (Index k = 0; k < n; ++k) VERIFY_IS_APPROX(sum_result(k), data(2 * k) + other(k));
+
+    // Test writing to strided map
+    Map<Vec, 0, InnerStride<2>> strided_dst(data.data(), n);
+    strided_dst = other;
+    for (Index k = 0; k < n; ++k) VERIFY_IS_APPROX(data(2 * k), other(k));
+  }
+}
+
+// Test Map with OuterStride on matrices at boundary sizes.
+template <typename Scalar>
+void map_outer_stride_boundary() {
+  const Index PS = internal::packet_traits<Scalar>::size;
+  using Mat = Matrix<Scalar, Dynamic, Dynamic>;
+  // Test various inner dimensions around packet size
+  const Index inner_sizes[] = {1, PS - 1, PS, PS + 1, 2 * PS, 2 * PS + 1};
+  const Index outer_stride = numext::maxi<Index>(64, 2 * PS + 1);  // large enough for any inner size
+  const Index cols = 4;
+
+  for (int si = 0; si < 6; ++si) {
+    Index rows = inner_sizes[si];
+    if (rows <= 0) continue;
+    using Vec = Matrix<Scalar, Dynamic, 1>;
+    Vec data = random_for_arithmetic<Vec>(outer_stride * cols);
+    Map<Mat, 0, OuterStride<>> mapped(data.data(), rows, cols, OuterStride<>(outer_stride));
+
+    // Test that mapped values match expected layout
+    Mat dense = mapped;
+    for (Index j = 0; j < cols; ++j)
+      for (Index i = 0; i < rows; ++i) VERIFY_IS_APPROX(dense(i, j), data(j * outer_stride + i));
+
+    // Test reduction on mapped matrix
+    Scalar ref_sum(0);
+    for (Index j = 0; j < cols; ++j)
+      for (Index i = 0; i < rows; ++i) ref_sum += data(j * outer_stride + i);
+    VERIFY_IS_APPROX(mapped.sum(), ref_sum);
+
+    // Test matrix product with mapped matrix
+    Vec x = random_for_arithmetic<Vec>(cols);
+    Vec y = mapped * x;
+    Vec y_ref = dense * x;
+    VERIFY_IS_APPROX(y, y_ref);
+  }
 }
 
 EIGEN_DECLARE_TEST(mapped_matrix) {
@@ -197,4 +270,10 @@ EIGEN_DECLARE_TEST(mapped_matrix) {
     CALL_SUBTEST_9(map_static_methods(VectorXcd(8)));
     CALL_SUBTEST_10(map_static_methods(VectorXf(12)));
   }
+
+  // Strided map tests at vectorization boundaries (deterministic, outside g_repeat).
+  CALL_SUBTEST_12(map_inner_stride_boundary<float>());
+  CALL_SUBTEST_12(map_inner_stride_boundary<double>());
+  CALL_SUBTEST_13(map_outer_stride_boundary<float>());
+  CALL_SUBTEST_13(map_outer_stride_boundary<double>());
 }

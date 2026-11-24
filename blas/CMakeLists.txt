@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: The Eigen Authors
+# SPDX-License-Identifier: MPL-2.0
 
 project(EigenBlas CXX)
 
@@ -6,11 +8,7 @@ if(EIGEN_BUILD_BLAS)
 add_custom_target(blas)
 
 set(EigenBlas_SRCS  single.cpp double.cpp complex_single.cpp complex_double.cpp xerbla.cpp
-                    f2c/srotm.c   f2c/srotmg.c  f2c/drotm.c f2c/drotmg.c
-                    f2c/lsame.c   f2c/dspmv.c   f2c/ssbmv.c f2c/chbmv.c
-                    f2c/sspmv.c   f2c/zhbmv.c   f2c/chpmv.c f2c/dsbmv.c
-                    f2c/zhpmv.c   f2c/dtbmv.c   f2c/stbmv.c f2c/ctbmv.c
-                    f2c/ztbmv.c   f2c/complexdots.c
+                    lsame.cpp complexdots.cpp
    )
 
 set(EIGEN_BLAS_TARGETS "")
@@ -20,11 +18,34 @@ list(APPEND EIGEN_BLAS_TARGETS eigen_blas_static)
 
 if (EIGEN_BUILD_SHARED_LIBS)
   add_library(eigen_blas SHARED ${EigenBlas_SRCS} "eigen_blas.def")
-  target_compile_definitions(eigen_blas PUBLIC "EIGEN_BLAS_BUILD_DLL")
+  # EIGEN_BLAS_BUILD_DLL stays private: a consumer that sees it declares the routines dllexport,
+  # which MSVC rejects against the plain declarations EIGEN_USE_BLAS brings in (C2375).
+  target_compile_definitions(eigen_blas PRIVATE "EIGEN_BLAS_BUILD_DLL")
   set_target_properties(eigen_blas PROPERTIES CXX_VISIBILITY_PRESET hidden
     VERSION ${EIGEN_VERSION_NUMBER}
     SOVERSION ${EIGEN_MAJOR_VERSION})
   list(APPEND EIGEN_BLAS_TARGETS eigen_blas)
+endif()
+
+if(CMAKE_SIZEOF_VOID_P EQUAL 8 AND NOT EIGEN_TEST_32BIT)
+  option(EIGEN_BUILD_BLAS_ILP64 "Toggles the building of the 64-bit integer (ILP64) Eigen Blas library" ON)
+else()
+  set(EIGEN_BUILD_BLAS_ILP64 OFF)
+endif()
+
+if(EIGEN_BUILD_BLAS_ILP64)
+  add_library(eigen_blas_ilp64_static STATIC ${EigenBlas_SRCS})
+  target_compile_definitions(eigen_blas_ilp64_static PUBLIC "EIGEN_64BIT_BLAS")
+  list(APPEND EIGEN_BLAS_TARGETS eigen_blas_ilp64_static)
+
+  if(EIGEN_BUILD_SHARED_LIBS)
+    add_library(eigen_blas_ilp64 SHARED ${EigenBlas_SRCS} "eigen_blas.def")
+    target_compile_definitions(eigen_blas_ilp64 PRIVATE "EIGEN_BLAS_BUILD_DLL" PUBLIC "EIGEN_64BIT_BLAS")
+    set_target_properties(eigen_blas_ilp64 PROPERTIES CXX_VISIBILITY_PRESET hidden
+      VERSION ${EIGEN_VERSION_NUMBER}
+      SOVERSION ${EIGEN_MAJOR_VERSION})
+    list(APPEND EIGEN_BLAS_TARGETS eigen_blas_ilp64)
+  endif()
 endif()
 
 foreach(target IN LISTS EIGEN_BLAS_TARGETS)
@@ -33,10 +54,12 @@ foreach(target IN LISTS EIGEN_BLAS_TARGETS)
   endif()
 
   add_dependencies(blas ${target})
-  install(TARGETS ${target}
-          RUNTIME DESTINATION bin
-          LIBRARY DESTINATION lib
-          ARCHIVE DESTINATION lib)
+  if(EIGEN_INSTALL)
+    install(TARGETS ${target}
+            RUNTIME DESTINATION bin
+            LIBRARY DESTINATION lib
+            ARCHIVE DESTINATION lib)
+  endif()
 endforeach()
 
 if(EIGEN_BUILD_TESTING)

@@ -8,6 +8,7 @@
 # This Source Code Form is subject to the terms of the Mozilla Public
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
+# SPDX-License-Identifier: MPL-2.0
 
 # Pretty printers for Eigen::Matrix to use with LLDB debugger
 #
@@ -190,7 +191,7 @@ class EigenSparseMatrixChildProvider:
 
         name = valtype.GetName()
         template_begin = name.find("<")
-        template_end = name.find(">")
+        template_end = name.rfind(">")
         template_args = name[(template_begin + 1):template_end].split(",")
         self._row_major = (int(template_args[1]) & 1) != 0
 

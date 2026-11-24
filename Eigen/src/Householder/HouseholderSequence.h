@@ -7,6 +7,7 @@
 // This Source Code Form is subject to the terms of the Mozilla
 // Public License v. 2.0. If a copy of the MPL was not distributed
 // with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
+// SPDX-License-Identifier: MPL-2.0
 
 #ifndef EIGEN_HOUSEHOLDER_SEQUENCE_H
 #define EIGEN_HOUSEHOLDER_SEQUENCE_H
@@ -61,9 +62,9 @@ namespace internal {
 
 template <typename VectorsType, typename CoeffsType, int Side>
 struct traits<HouseholderSequence<VectorsType, CoeffsType, Side> > {
-  typedef typename VectorsType::Scalar Scalar;
-  typedef typename VectorsType::StorageIndex StorageIndex;
-  typedef typename VectorsType::StorageKind StorageKind;
+  using Scalar = typename VectorsType::Scalar;
+  using StorageIndex = typename VectorsType::StorageIndex;
+  using StorageKind = typename VectorsType::StorageKind;
   enum {
     RowsAtCompileTime =
         Side == OnTheLeft ? traits<VectorsType>::RowsAtCompileTime : traits<VectorsType>::ColsAtCompileTime,
@@ -80,13 +81,13 @@ struct HouseholderSequenceShape {};
 template <typename VectorsType, typename CoeffsType, int Side>
 struct evaluator_traits<HouseholderSequence<VectorsType, CoeffsType, Side> >
     : public evaluator_traits_base<HouseholderSequence<VectorsType, CoeffsType, Side> > {
-  typedef HouseholderSequenceShape Shape;
+  using Shape = HouseholderSequenceShape;
 };
 
 template <typename VectorsType, typename CoeffsType, int Side>
 struct hseq_side_dependent_impl {
-  typedef Block<const VectorsType, Dynamic, 1> EssentialVectorType;
-  typedef HouseholderSequence<VectorsType, CoeffsType, OnTheLeft> HouseholderSequenceType;
+  using EssentialVectorType = Block<const VectorsType, Dynamic, 1>;
+  using HouseholderSequenceType = HouseholderSequence<VectorsType, CoeffsType, OnTheLeft>;
   static EIGEN_DEVICE_FUNC inline const EssentialVectorType essentialVector(const HouseholderSequenceType& h, Index k) {
     Index start = k + 1 + h.m_shift;
     return Block<const VectorsType, Dynamic, 1>(h.m_vectors, start, k, h.rows() - start, 1);
@@ -95,28 +96,65 @@ struct hseq_side_dependent_impl {
 
 template <typename VectorsType, typename CoeffsType>
 struct hseq_side_dependent_impl<VectorsType, CoeffsType, OnTheRight> {
-  typedef Transpose<Block<const VectorsType, 1, Dynamic> > EssentialVectorType;
-  typedef HouseholderSequence<VectorsType, CoeffsType, OnTheRight> HouseholderSequenceType;
+  using EssentialVectorType = Transpose<Block<const VectorsType, 1, Dynamic>>;
+  using HouseholderSequenceType = HouseholderSequence<VectorsType, CoeffsType, OnTheRight>;
   static inline const EssentialVectorType essentialVector(const HouseholderSequenceType& h, Index k) {
     Index start = k + 1 + h.m_shift;
     return Block<const VectorsType, 1, Dynamic>(h.m_vectors, k, start, 1, h.rows() - start).transpose();
   }
 };
 
-template <typename OtherScalarType, typename MatrixType>
+template <typename OtherScalarType, typename MatrixType, bool ScalarOnLeft = true>
 struct matrix_type_times_scalar_type {
-  typedef typename ScalarBinaryOpTraits<OtherScalarType, typename MatrixType::Scalar>::ReturnType ResultScalar;
-  typedef Matrix<ResultScalar, MatrixType::RowsAtCompileTime, MatrixType::ColsAtCompileTime, 0,
-                 MatrixType::MaxRowsAtCompileTime, MatrixType::MaxColsAtCompileTime>
-      Type;
+  using ResultScalar =
+      typename std::conditional_t<ScalarOnLeft, ScalarBinaryOpTraits<OtherScalarType, typename MatrixType::Scalar>,
+                                  ScalarBinaryOpTraits<typename MatrixType::Scalar, OtherScalarType>>::ReturnType;
+  using Type =
+      Matrix<ResultScalar, MatrixType::RowsAtCompileTime, MatrixType::ColsAtCompileTime,
+             (MatrixType::MaxRowsAtCompileTime == 1 && MatrixType::MaxColsAtCompileTime != 1) ? RowMajor : ColMajor,
+             MatrixType::MaxRowsAtCompileTime, MatrixType::MaxColsAtCompileTime>;
+};
+
+// A permutation has no scalar type; its product with a Householder sequence takes the sequence's.
+template <typename Scalar, typename PermutationType>
+struct permutation_type_as_matrix_type {
+  using Type = Matrix<Scalar, PermutationType::RowsAtCompileTime, PermutationType::ColsAtCompileTime, 0,
+                      PermutationType::MaxRowsAtCompileTime, PermutationType::MaxColsAtCompileTime>;
+};
+
+// A diagonal or triangular operand is assigned to the result directly when the scalar types agree. The triangular
+// assignment kernel does not convert scalars, so a promoted result evaluates the operand and casts it, as the dense
+// product casts its operand.
+template <typename ResultType, typename OtherDerived>
+std::enable_if_t<std::is_same<typename ResultType::Scalar, typename OtherDerived::Scalar>::value>
+assign_householder_operand(ResultType& res, const EigenBase<OtherDerived>& other) {
+  res = other.derived();
+}
+template <typename ResultType, typename OtherDerived>
+std::enable_if_t<!std::is_same<typename ResultType::Scalar, typename OtherDerived::Scalar>::value>
+assign_householder_operand(ResultType& res, const EigenBase<OtherDerived>& other) {
+  res = other.derived().toDenseMatrix().template cast<typename ResultType::Scalar>();
+}
+
+// A real sequence applied to a complex destination, which happens in a product with a complex matrix.
+template <typename SequenceScalar, typename Dest>
+using hseq_applies_to_complex_parts =
+    bool_constant<!NumTraits<SequenceScalar>::IsComplex && NumTraits<typename Dest::Scalar>::IsComplex>;
+
+// The real matrix holding the real or imaginary part of a destination.
+template <typename SequenceScalar, typename Dest>
+struct hseq_real_part_type {
+  using type = Matrix<SequenceScalar, Dest::RowsAtCompileTime, Dest::ColsAtCompileTime,
+                      (Dest::MaxRowsAtCompileTime == 1 && Dest::MaxColsAtCompileTime != 1) ? RowMajor : ColMajor,
+                      Dest::MaxRowsAtCompileTime, Dest::MaxColsAtCompileTime>;
 };
 
 }  // end namespace internal
 
 template <typename VectorsType, typename CoeffsType, int Side>
 class HouseholderSequence : public EigenBase<HouseholderSequence<VectorsType, CoeffsType, Side> > {
-  typedef typename internal::hseq_side_dependent_impl<VectorsType, CoeffsType, Side>::EssentialVectorType
-      EssentialVectorType;
+  using EssentialVectorType =
+      typename internal::hseq_side_dependent_impl<VectorsType, CoeffsType, Side>::EssentialVectorType;
 
  public:
   enum {
@@ -125,31 +163,28 @@ class HouseholderSequence : public EigenBase<HouseholderSequence<VectorsType, Co
     MaxRowsAtCompileTime = internal::traits<HouseholderSequence>::MaxRowsAtCompileTime,
     MaxColsAtCompileTime = internal::traits<HouseholderSequence>::MaxColsAtCompileTime
   };
-  typedef typename internal::traits<HouseholderSequence>::Scalar Scalar;
+  using Scalar = typename internal::traits<HouseholderSequence>::Scalar;
 
-  typedef HouseholderSequence<
+  using ConjugateReturnType = HouseholderSequence<
       std::conditional_t<NumTraits<Scalar>::IsComplex,
                          internal::remove_all_t<typename VectorsType::ConjugateReturnType>, VectorsType>,
       std::conditional_t<NumTraits<Scalar>::IsComplex, internal::remove_all_t<typename CoeffsType::ConjugateReturnType>,
                          CoeffsType>,
-      Side>
-      ConjugateReturnType;
+      Side>;
 
-  typedef HouseholderSequence<
+  using AdjointReturnType = HouseholderSequence<
       VectorsType,
       std::conditional_t<NumTraits<Scalar>::IsComplex, internal::remove_all_t<typename CoeffsType::ConjugateReturnType>,
                          CoeffsType>,
-      Side>
-      AdjointReturnType;
+      Side>;
 
-  typedef HouseholderSequence<
+  using TransposeReturnType = HouseholderSequence<
       std::conditional_t<NumTraits<Scalar>::IsComplex,
                          internal::remove_all_t<typename VectorsType::ConjugateReturnType>, VectorsType>,
-      CoeffsType, Side>
-      TransposeReturnType;
+      CoeffsType, Side>;
 
-  typedef HouseholderSequence<std::add_const_t<VectorsType>, std::add_const_t<CoeffsType>, Side>
-      ConstHouseholderSequence;
+  using ConstHouseholderSequence =
+      HouseholderSequence<std::add_const_t<VectorsType>, std::add_const_t<CoeffsType>, Side>;
 
   /** \brief Constructor.
    * \param[in]  v      %Matrix containing the essential parts of the Householder vectors
@@ -228,12 +263,15 @@ class HouseholderSequence : public EigenBase<HouseholderSequence<VectorsType, Co
         .setShift(m_shift);
   }
 
-  /** \returns an expression of the complex conjugate of \c *this if Cond==true,
-   *           returns \c *this otherwise.
+  /** \returns a %HouseholderSequence over the vectors and coefficients of \c *this, complex-conjugated if
+   *           Cond==true.
+   *
+   * \warning Unlike conjugate(), this function does not propagate the state of \c *this: the returned sequence uses
+   *          the defaults of the two-argument constructor, that is, not reversed, full length and zero shift.
    */
   template <bool Cond>
   EIGEN_DEVICE_FUNC inline std::conditional_t<Cond, ConjugateReturnType, ConstHouseholderSequence> conjugateIf() const {
-    typedef std::conditional_t<Cond, ConjugateReturnType, ConstHouseholderSequence> ReturnType;
+    using ReturnType = std::conditional_t<Cond, ConjugateReturnType, ConstHouseholderSequence>;
     return ReturnType(m_vectors.template conjugateIf<Cond>(), m_coeffs.template conjugateIf<Cond>());
   }
 
@@ -259,6 +297,20 @@ class HouseholderSequence : public EigenBase<HouseholderSequence<VectorsType, Co
   /** \internal */
   template <typename Dest, typename Workspace>
   EIGEN_DEVICE_FUNC void evalTo(Dest& dst, Workspace& workspace) const {
+    evalToImpl(dst, workspace, internal::hseq_applies_to_complex_parts<Scalar, Dest>());
+  }
+
+ private:
+  /** \internal A real sequence evaluated into a complex matrix is evaluated into a real matrix first. */
+  template <typename Dest, typename Workspace>
+  EIGEN_DEVICE_FUNC void evalToImpl(Dest& dst, Workspace&, std::true_type) const {
+    typename internal::hseq_real_part_type<Scalar, Dest>::type real_dst;
+    evalTo(real_dst);
+    dst = real_dst.template cast<typename Dest::Scalar>();
+  }
+
+  template <typename Dest, typename Workspace>
+  EIGEN_DEVICE_FUNC void evalToImpl(Dest& dst, Workspace& workspace, std::false_type) const {
     workspace.resize(rows());
     Index vecs = m_length;
     if (internal::is_same_dense(dst, m_vectors)) {
@@ -281,10 +333,7 @@ class HouseholderSequence : public EigenBase<HouseholderSequence<VectorsType, Co
       for (Index k = 0; k < cols() - vecs; ++k) dst.col(k).tail(rows() - k - 1).setZero();
     } else if (m_length > BlockSize) {
       dst.setIdentity(rows(), rows());
-      if (m_reverse)
-        applyThisOnTheLeft(dst, workspace, true);
-      else
-        applyThisOnTheLeft(dst, workspace, true);
+      applyThisOnTheLeft(dst, workspace, true);
     } else {
       dst.setIdentity(rows(), rows());
       for (Index k = vecs - 1; k >= 0; --k) {
@@ -299,6 +348,7 @@ class HouseholderSequence : public EigenBase<HouseholderSequence<VectorsType, Co
     }
   }
 
+ public:
   /** \internal */
   template <typename Dest>
   inline void applyThisOnTheRight(Dest& dst) const {
@@ -309,14 +359,65 @@ class HouseholderSequence : public EigenBase<HouseholderSequence<VectorsType, Co
   /** \internal */
   template <typename Dest, typename Workspace>
   inline void applyThisOnTheRight(Dest& dst, Workspace& workspace) const {
-    workspace.resize(dst.rows());
-    for (Index k = 0; k < m_length; ++k) {
-      Index actual_k = m_reverse ? m_length - k - 1 : k;
-      dst.rightCols(rows() - m_shift - actual_k)
-          .applyHouseholderOnTheRight(essentialVector(actual_k), m_coeffs.coeff(actual_k), workspace.data());
+    applyThisOnTheRightImpl(dst, workspace, internal::hseq_applies_to_complex_parts<Scalar, Dest>());
+  }
+
+ private:
+  /** \internal A real sequence applied to a complex matrix acts on its real and imaginary parts separately. */
+  template <typename Dest, typename Workspace>
+  void applyThisOnTheRightImpl(Dest& dst, Workspace&, std::true_type) const {
+    typename internal::hseq_real_part_type<Scalar, Dest>::type part = dst.real();
+    applyThisOnTheRight(part);
+    dst.real() = part;
+    part = dst.imag();
+    applyThisOnTheRight(part);
+    dst.imag() = part;
+  }
+
+  template <typename Dest, typename Workspace>
+  inline void applyThisOnTheRightImpl(Dest& dst, Workspace& workspace, std::false_type) const {
+    // Use the block path when the reflectors are long enough for GEMM to outperform GEMV.
+    // The threshold on rows() (the reflector length) is higher than for the left-side path because
+    // the right-side block application has more overhead from the tmp = mat * V product layout.
+    if (m_length >= BlockSize && rows() - m_shift >= 4 * BlockSize) {
+      applyBlockOnTheRight(dst);
+    } else {
+      workspace.resize(dst.rows());
+      for (Index k = 0; k < m_length; ++k) {
+        Index actual_k = m_reverse ? m_length - k - 1 : k;
+        dst.rightCols(rows() - m_shift - actual_k)
+            .applyHouseholderOnTheRight(essentialVector(actual_k), m_coeffs.coeff(actual_k), workspace.data());
+      }
     }
   }
 
+  /** \internal Block Householder application on the right, kept out-of-line
+   * to avoid template bloat pessimizing the scalar path above. */
+  template <typename Dest>
+  EIGEN_DONT_INLINE void applyBlockOnTheRight(Dest& dst) const {
+    // Make sure we have at least 2 useful blocks, otherwise it is point-less:
+    Index blockSize = m_length < Index(2 * BlockSize) ? (m_length + 1) / 2 : Index(BlockSize);
+    for (Index i = 0; i < m_length; i += blockSize) {
+      // Right-side application processes blocks in opposite order to left-side:
+      // forward (m_reverse=false): first block first; reversed: last block first.
+      Index end = m_reverse ? m_length - i : (std::min)(m_length, i + blockSize);
+      Index k = m_reverse ? (std::max)(Index(0), end - blockSize) : i;
+      Index bs = end - k;
+      Index start = k + m_shift;
+
+      using SubVectorsType = Block<internal::remove_all_t<VectorsType>, Dynamic, Dynamic>;
+      SubVectorsType sub_vecs1(m_vectors.const_cast_derived(), Side == OnTheRight ? k : start,
+                               Side == OnTheRight ? start : k, Side == OnTheRight ? bs : m_vectors.rows() - start,
+                               Side == OnTheRight ? m_vectors.cols() - start : bs);
+      std::conditional_t<Side == OnTheRight, Transpose<SubVectorsType>, SubVectorsType&> sub_vecs(sub_vecs1);
+
+      Index dstCols = rows() - m_shift - k;
+      auto sub_dst = dst.rightCols(dstCols);
+      internal::apply_block_householder_on_the_right(sub_dst, sub_vecs, m_coeffs.segment(k, bs), !m_reverse);
+    }
+  }
+
+ public:
   /** \internal */
   template <typename Dest>
   inline void applyThisOnTheLeft(Dest& dst, bool inputIsIdentity = false) const {
@@ -327,6 +428,23 @@ class HouseholderSequence : public EigenBase<HouseholderSequence<VectorsType, Co
   /** \internal */
   template <typename Dest, typename Workspace>
   inline void applyThisOnTheLeft(Dest& dst, Workspace& workspace, bool inputIsIdentity = false) const {
+    applyThisOnTheLeftImpl(dst, workspace, inputIsIdentity, internal::hseq_applies_to_complex_parts<Scalar, Dest>());
+  }
+
+ private:
+  /** \internal A real sequence applied to a complex matrix acts on its real and imaginary parts separately. */
+  template <typename Dest, typename Workspace>
+  void applyThisOnTheLeftImpl(Dest& dst, Workspace&, bool inputIsIdentity, std::true_type) const {
+    typename internal::hseq_real_part_type<Scalar, Dest>::type part = dst.real();
+    applyThisOnTheLeft(part, inputIsIdentity);
+    dst.real() = part;
+    part = dst.imag();
+    applyThisOnTheLeft(part, inputIsIdentity);
+    dst.imag() = part;
+  }
+
+  template <typename Dest, typename Workspace>
+  inline void applyThisOnTheLeftImpl(Dest& dst, Workspace& workspace, bool inputIsIdentity, std::false_type) const {
     if (inputIsIdentity && m_reverse) inputIsIdentity = false;
     // if the entries are large enough, then apply the reflectors by block
     if (m_length >= BlockSize && dst.cols() > 1) {
@@ -338,7 +456,7 @@ class HouseholderSequence : public EigenBase<HouseholderSequence<VectorsType, Co
         Index bs = end - k;
         Index start = k + m_shift;
 
-        typedef Block<internal::remove_all_t<VectorsType>, Dynamic, Dynamic> SubVectorsType;
+        using SubVectorsType = Block<internal::remove_all_t<VectorsType>, Dynamic, Dynamic>;
         SubVectorsType sub_vecs1(m_vectors.const_cast_derived(), Side == OnTheRight ? k : start,
                                  Side == OnTheRight ? start : k, Side == OnTheRight ? bs : m_vectors.rows() - start,
                                  Side == OnTheRight ? m_vectors.cols() - start : bs);
@@ -371,6 +489,7 @@ class HouseholderSequence : public EigenBase<HouseholderSequence<VectorsType, Co
     }
   }
 
+ public:
   /** \brief Computes the product of a Householder sequence with a matrix.
    * \param[in]  other  %Matrix being multiplied.
    * \returns    Expression object representing the product.
@@ -387,9 +506,78 @@ class HouseholderSequence : public EigenBase<HouseholderSequence<VectorsType, Co
     return res;
   }
 
+  /** \brief Computes the product of a Householder sequence with a diagonal matrix.
+   *
+   * The reflections are applied to the diagonal matrix on the path the dense product uses for an identity
+   * operand, so \f$ HD \f$ costs no more than \f$ H \f$ itself.
+   */
+  template <typename OtherDerived>
+  typename internal::matrix_type_times_scalar_type<Scalar, OtherDerived>::Type operator*(
+      const DiagonalBase<OtherDerived>& other) const {
+    return applyToUpperTriangularOnTheLeft<
+        typename internal::matrix_type_times_scalar_type<Scalar, OtherDerived>::Type>(other, true);
+  }
+
+  /** \brief Computes the product of a Householder sequence with a triangular or self-adjoint view.
+   *
+   * A square upper triangular operand takes the same path as a diagonal one; any other view is evaluated into a
+   * dense matrix and multiplied as such.
+   */
+  template <typename OtherDerived>
+  typename internal::matrix_type_times_scalar_type<Scalar, OtherDerived>::Type operator*(
+      const TriangularBase<OtherDerived>& other) const {
+    constexpr bool kUpperTriangular =
+        (int(OtherDerived::Mode) & (int(Upper) | int(Lower) | int(SelfAdjoint))) == int(Upper);
+    return applyToUpperTriangularOnTheLeft<
+        typename internal::matrix_type_times_scalar_type<Scalar, OtherDerived>::Type>(other, kUpperTriangular);
+  }
+
+  /** \brief Computes the product of a Householder sequence with a permutation matrix.
+   *
+   * \f$ HP \f$ is \f$ H \f$ with its columns permuted: the sequence is evaluated and the permutation applied in
+   * place. The result takes the sequence's scalar type.
+   */
+  template <typename OtherDerived>
+  typename internal::permutation_type_as_matrix_type<Scalar, OtherDerived>::Type operator*(
+      const PermutationBase<OtherDerived>& other) const {
+    using ResultType = typename internal::permutation_type_as_matrix_type<Scalar, OtherDerived>::Type;
+    EIGEN_INTERNAL_ASSERT_PRODUCT_SHAPE(*this, other);
+    ResultType res = ResultType::Identity(rows(), rows());
+    applyThisOnTheLeft(res, true);
+    // The permutation product runs in place when its operand is the destination.
+    res.noalias() = res * other.derived();
+    return res;
+  }
+
+  /** \brief Computes the product of a Householder sequence with the inverse of a permutation matrix. */
+  template <typename OtherDerived>
+  typename internal::permutation_type_as_matrix_type<Scalar, Inverse<OtherDerived>>::Type operator*(
+      const InverseImpl<OtherDerived, PermutationStorage>& other) const {
+    using ResultType = typename internal::permutation_type_as_matrix_type<Scalar, Inverse<OtherDerived>>::Type;
+    EIGEN_INTERNAL_ASSERT_PRODUCT_SHAPE(*this, other);
+    ResultType res = ResultType::Identity(rows(), rows());
+    applyThisOnTheLeft(res, true);
+    res.noalias() = res * other.derived();
+    return res;
+  }
+
   template <typename VectorsType_, typename CoeffsType_, int Side_>
   friend struct internal::hseq_side_dependent_impl;
 
+ private:
+  // The identity path of applyThisOnTheLeft() skips the columns left of the rows each reflection acts on, which is
+  // valid for any square input that vanishes below the diagonal: a diagonal or upper triangular matrix as much as
+  // the identity. Other inputs take the full path.
+  template <typename ResultType, typename OtherDerived>
+  ResultType applyToUpperTriangularOnTheLeft(const EigenBase<OtherDerived>& other, bool upperTriangular) const {
+    EIGEN_INTERNAL_ASSERT_PRODUCT_SHAPE(*this, other);
+    ResultType res;
+    internal::assign_householder_operand(res, other);
+    applyThisOnTheLeft(res, upperTriangular && res.rows() == res.cols());
+    return res;
+  }
+
+ public:
   /** \brief Sets the length of the Householder sequence.
    * \param [in]  length  New value for the length.
    *
@@ -467,12 +655,78 @@ class HouseholderSequence : public EigenBase<HouseholderSequence<VectorsType, Co
  * Householder sequence represented by \p h.
  */
 template <typename OtherDerived, typename VectorsType, typename CoeffsType, int Side>
-typename internal::matrix_type_times_scalar_type<typename VectorsType::Scalar, OtherDerived>::Type operator*(
+typename internal::matrix_type_times_scalar_type<typename VectorsType::Scalar, OtherDerived, false>::Type operator*(
     const MatrixBase<OtherDerived>& other, const HouseholderSequence<VectorsType, CoeffsType, Side>& h) {
-  typename internal::matrix_type_times_scalar_type<typename VectorsType::Scalar, OtherDerived>::Type res(
-      other.template cast<typename internal::matrix_type_times_scalar_type<typename VectorsType::Scalar,
-                                                                           OtherDerived>::ResultScalar>());
+  typename internal::matrix_type_times_scalar_type<typename VectorsType::Scalar, OtherDerived, false>::Type res(
+      other.template cast<typename internal::matrix_type_times_scalar_type<typename VectorsType::Scalar, OtherDerived,
+                                                                           false>::ResultScalar>());
   h.applyThisOnTheRight(res);
+  return res;
+}
+
+/** \brief Computes the product of a diagonal matrix with a Householder sequence.
+ *
+ * \f$ DH \f$ is \f$ H \f$ with its rows scaled: the sequence is evaluated and scaled in place.
+ */
+template <typename OtherDerived, typename VectorsType, typename CoeffsType, int Side>
+typename internal::matrix_type_times_scalar_type<typename VectorsType::Scalar, OtherDerived, false>::Type operator*(
+    const DiagonalBase<OtherDerived>& other, const HouseholderSequence<VectorsType, CoeffsType, Side>& h) {
+  using ResultType =
+      typename internal::matrix_type_times_scalar_type<typename VectorsType::Scalar, OtherDerived, false>::Type;
+  EIGEN_INTERNAL_ASSERT_PRODUCT_SHAPE(other, h);
+  ResultType res = ResultType::Identity(h.rows(), h.rows());
+  h.applyThisOnTheLeft(res, true);
+  // The lazy diagonal product multiplies from the left, D(i,i) * H(i,j), as a noncommutative scalar requires, and
+  // reads each coefficient only to overwrite it, so it runs in place.
+  res = other.derived() * res;
+  return res;
+}
+
+/** \brief Computes the product of a triangular or self-adjoint view with a Householder sequence.
+ *
+ * The view is evaluated into a dense matrix and the reflections are applied to it on the right, which has no
+ * structured path.
+ */
+template <typename OtherDerived, typename VectorsType, typename CoeffsType, int Side>
+typename internal::matrix_type_times_scalar_type<typename VectorsType::Scalar, OtherDerived, false>::Type operator*(
+    const TriangularBase<OtherDerived>& other, const HouseholderSequence<VectorsType, CoeffsType, Side>& h) {
+  using ResultType =
+      typename internal::matrix_type_times_scalar_type<typename VectorsType::Scalar, OtherDerived, false>::Type;
+  ResultType res;
+  internal::assign_householder_operand(res, other);
+  h.applyThisOnTheRight(res);
+  return res;
+}
+
+/** \brief Computes the product of a permutation matrix with a Householder sequence.
+ *
+ * \f$ PH \f$ is \f$ H \f$ with its rows permuted: the sequence is evaluated and the permutation applied in place.
+ * The result takes the sequence's scalar type.
+ */
+template <typename OtherDerived, typename VectorsType, typename CoeffsType, int Side>
+typename internal::permutation_type_as_matrix_type<typename VectorsType::Scalar, OtherDerived>::Type operator*(
+    const PermutationBase<OtherDerived>& other, const HouseholderSequence<VectorsType, CoeffsType, Side>& h) {
+  using ResultType =
+      typename internal::permutation_type_as_matrix_type<typename VectorsType::Scalar, OtherDerived>::Type;
+  EIGEN_INTERNAL_ASSERT_PRODUCT_SHAPE(other, h);
+  ResultType res = ResultType::Identity(h.rows(), h.rows());
+  h.applyThisOnTheLeft(res, true);
+  // The permutation product runs in place when its operand is the destination.
+  res.noalias() = other.derived() * res;
+  return res;
+}
+
+/** \brief Computes the product of the inverse of a permutation matrix with a Householder sequence. */
+template <typename OtherDerived, typename VectorsType, typename CoeffsType, int Side>
+typename internal::permutation_type_as_matrix_type<typename VectorsType::Scalar, Inverse<OtherDerived>>::Type operator*(
+    const InverseImpl<OtherDerived, PermutationStorage>& other,
+    const HouseholderSequence<VectorsType, CoeffsType, Side>& h) {
+  using ResultType =
+      typename internal::permutation_type_as_matrix_type<typename VectorsType::Scalar, Inverse<OtherDerived>>::Type;
+  EIGEN_INTERNAL_ASSERT_PRODUCT_SHAPE(other, h);
+  ResultType res = ResultType::Identity(h.rows(), h.rows());
+  h.applyThisOnTheLeft(res, true);
+  res.noalias() = other.derived() * res;
   return res;
 }
 

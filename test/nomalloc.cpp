@@ -7,6 +7,7 @@
 // This Source Code Form is subject to the terms of the Mozilla
 // Public License v. 2.0. If a copy of the MPL was not distributed
 // with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
+// SPDX-License-Identifier: MPL-2.0
 
 // discard stack allocation as that too bypasses malloc
 #define EIGEN_STACK_ALLOCATION_LIMIT 0
@@ -24,7 +25,8 @@ template <typename MatrixType>
 void nomalloc(const MatrixType& m) {
   /* this test check no dynamic memory allocation are issued with fixed-size matrices
    */
-  typedef typename MatrixType::Scalar Scalar;
+  using Scalar = typename MatrixType::Scalar;
+  using RealScalar = typename NumTraits<Scalar>::Real;
 
   Index rows = m.rows();
   Index cols = m.cols();
@@ -77,6 +79,12 @@ void nomalloc(const MatrixType& m) {
   m2.template selfadjointView<Upper>().rankUpdate(m1.row(0), -1);
   m2.template selfadjointView<Lower>().rankUpdate(m1.col(0), m1.col(0));  // rank-2
 
+  MatrixType spd = m1 * m1.adjoint();
+  spd.diagonal().array() += RealScalar(rows);
+  LLT<MatrixType> llt(spd);
+  VERIFY_IS_EQUAL(llt.info(), Success);
+  llt.rankUpdate(m1.col(0), RealScalar(1));
+
   // The following fancy matrix-matrix products are not safe yet regarding static allocation
   m2.template selfadjointView<Lower>().rankUpdate(m1);
   m2 += m2.template triangularView<Upper>() * m1;
@@ -90,11 +98,11 @@ void ctms_decompositions() {
   const int maxSize = 16;
   const int size = 12;
 
-  typedef Eigen::Matrix<Scalar, Eigen::Dynamic, Eigen::Dynamic, 0, maxSize, maxSize> Matrix;
+  using Matrix = Eigen::Matrix<Scalar, Eigen::Dynamic, Eigen::Dynamic, 0, maxSize, maxSize>;
 
-  typedef Eigen::Matrix<Scalar, Eigen::Dynamic, 1, 0, maxSize, 1> Vector;
+  using Vector = Eigen::Matrix<Scalar, Eigen::Dynamic, 1, 0, maxSize, 1>;
 
-  typedef Eigen::Matrix<std::complex<Scalar>, Eigen::Dynamic, Eigen::Dynamic, 0, maxSize, maxSize> ComplexMatrix;
+  using ComplexMatrix = Eigen::Matrix<std::complex<Scalar>, Eigen::Dynamic, Eigen::Dynamic, 0, maxSize, maxSize>;
 
   const Matrix A(Matrix::Random(size, size)), B(Matrix::Random(size, size));
   Matrix X(size, size);
@@ -108,6 +116,9 @@ void ctms_decompositions() {
   LLT.compute(A);
   X = LLT.solve(B);
   x = LLT.solve(b);
+  LLT.compute(saA);
+  VERIFY_IS_EQUAL(LLT.info(), Eigen::Success);
+  LLT.rankUpdate(b, Scalar(1));
   Eigen::LDLT<Matrix> LDLT;
   LDLT.compute(A);
   X = LDLT.solve(B);
@@ -156,6 +167,70 @@ void ctms_decompositions() {
   jSVD.compute(A);
 }
 
+template <typename Scalar>
+void selfadjoint_eigensolver_large_fixed_no_malloc() {
+  using Matrix = Eigen::Matrix<Scalar, 96, 96>;
+  Matrix A = Matrix::Random();
+  Matrix saA = A.adjoint() * A;
+
+  Eigen::SelfAdjointEigenSolver<Matrix> solver;
+  solver.compute(saA);
+  VERIFY_IS_EQUAL(solver.info(), Eigen::Success);
+}
+
+// The temporary of a gemv-like product with a strided operand is a static buffer for fixed sizes, also when nothing
+// needs aligning (EIGEN_DONT_VECTORIZE, EIGEN_MAX_ALIGN_BYTES=0): the buffer is never null, which would fall back to
+// the allocator (here, with the stack limit at 0, the heap).
+void gemv_static_buffer() {
+  internal::gemv_static_vector_if<double, 4, 4, true> buffer;
+  VERIFY(buffer.data() != nullptr);
+  const Matrix4d m = Matrix4d::Random();
+  Matrix4d r = Matrix4d::Zero();
+  r.col(0).noalias() -= m.adjoint().template triangularView<Upper>() * m.row(0).adjoint();
+  r.col(0).noalias() -= m.adjoint().template selfadjointView<Upper>() * m.row(0).adjoint();
+}
+
+// A rank-2 update and a selfadjoint matrix-vector product with unit-stride operands read them in place: no packing
+// buffer is needed, also where the temporaries are heap allocated (EIGEN_NO_ALLOCA) and over-aligned.
+template <typename Scalar>
+void selfadjoint_direct_operands_no_malloc() {
+  using Mat = Matrix<Scalar, Dynamic, Dynamic>;
+  using Vec = Matrix<Scalar, Dynamic, 1>;
+  Eigen::internal::set_is_malloc_allowed(true);
+  Mat m = Mat::Random(9, 9), a = Mat::Random(9, 9);
+  Vec u = Vec::Random(9), v = Vec::Random(9), y = Vec::Zero(9);
+  Eigen::internal::set_is_malloc_allowed(false);
+  m.template selfadjointView<Lower>().rankUpdate(u, v, Scalar(0.5));
+  m.template selfadjointView<Upper>().rankUpdate(u, v, Scalar(0.5));
+  y.noalias() = a.template selfadjointView<Lower>() * u;
+  y.noalias() += a.template selfadjointView<Upper>() * v;
+}
+
+// isOrthogonal() compares dynamic vectors without a temporary, also where it scales them by powers of two.
+template <typename Scalar>
+void is_orthogonal_no_malloc() {
+  using RealScalar = typename NumTraits<Scalar>::Real;
+  using Vec = Matrix<Scalar, Dynamic, 1>;
+  const RealScalar scales[] = {RealScalar(1),
+                               RealScalar(std::ldexp(1.0, std::numeric_limits<RealScalar>::max_exponent - 4)),
+                               RealScalar(std::ldexp(1.0, std::numeric_limits<RealScalar>::min_exponent + 1))};
+  Eigen::internal::set_is_malloc_allowed(true);
+  Vec v(3), w(3), a(3), b(3);
+  Eigen::internal::set_is_malloc_allowed(false);
+  v << Scalar(1), Scalar(3), Scalar(1);
+  w << Scalar(3), Scalar(-1), Scalar(0);
+  for (RealScalar sv : scales) {
+    for (RealScalar sw : scales) {
+      a = v * sv;
+      b = w * sw;
+      VERIFY(a.isOrthogonal(b));
+      VERIFY(a.isOrthogonal(b, RealScalar(0)));
+      VERIFY(a.isOrthogonal(b.reverse()));
+      VERIFY(!a.isOrthogonal(a));
+    }
+  }
+}
+
 void test_zerosized() {
   // default constructors:
   Eigen::MatrixXd A;
@@ -171,15 +246,15 @@ void test_zerosized() {
 
 template <typename MatrixType>
 void test_reference(const MatrixType& m) {
-  typedef typename MatrixType::Scalar Scalar;
+  using Scalar = typename MatrixType::Scalar;
   enum { Flag = MatrixType::IsRowMajor ? Eigen::RowMajor : Eigen::ColMajor };
   enum { TransposeFlag = !MatrixType::IsRowMajor ? Eigen::RowMajor : Eigen::ColMajor };
   Index rows = m.rows(), cols = m.cols();
-  typedef Eigen::Matrix<Scalar, Eigen::Dynamic, Eigen::Dynamic, Flag> MatrixX;
-  typedef Eigen::Matrix<Scalar, Eigen::Dynamic, Eigen::Dynamic, TransposeFlag> MatrixXT;
+  using MatrixX = Eigen::Matrix<Scalar, Eigen::Dynamic, Eigen::Dynamic, Flag>;
+  using MatrixXT = Eigen::Matrix<Scalar, Eigen::Dynamic, Eigen::Dynamic, TransposeFlag>;
   // Dynamic reference:
-  typedef Eigen::Ref<const MatrixX> Ref;
-  typedef Eigen::Ref<const MatrixXT> RefT;
+  using Ref = Eigen::Ref<const MatrixX>;
+  using RefT = Eigen::Ref<const MatrixXT>;
 
   Ref r1(m);
   Ref r2(m.block(rows / 3, cols / 4, rows / 2, cols / 2));
@@ -198,7 +273,7 @@ void test_reference(const MatrixType& m) {
   Eigen::Ref<const MatrixX, Unaligned, Stride<Dynamic, Dynamic> > r10 = r8, r11 = m;
 
   // Initializing from an incompatible Ref will malloc:
-  typedef Eigen::Ref<const MatrixX, Aligned> RefAligned;
+  using RefAligned = Eigen::Ref<const MatrixX, Aligned>;
   VERIFY_RAISES_ASSERT(RefAligned r12 = r10);
   VERIFY_RAISES_ASSERT(Ref r13 = r10);  // r10 has more dynamic strides
 }
@@ -219,8 +294,21 @@ EIGEN_DECLARE_TEST(nomalloc) {
 
   // Check decomposition modules with dynamic matrices that have a known compile-time max size (ctms)
   CALL_SUBTEST_4(ctms_decompositions<float>());
+  CALL_SUBTEST_9(selfadjoint_eigensolver_large_fixed_no_malloc<float>());
+  CALL_SUBTEST_10(selfadjoint_eigensolver_large_fixed_no_malloc<double>());
 
   CALL_SUBTEST_5(test_zerosized());
+  CALL_SUBTEST_13(gemv_static_buffer());
+  CALL_SUBTEST_12(selfadjoint_direct_operands_no_malloc<float>());
+  CALL_SUBTEST_12(selfadjoint_direct_operands_no_malloc<double>());
+  CALL_SUBTEST_12(selfadjoint_direct_operands_no_malloc<std::complex<float>>());
+  CALL_SUBTEST_12(selfadjoint_direct_operands_no_malloc<std::complex<double>>());
+  CALL_SUBTEST_11(is_orthogonal_no_malloc<float>());
+  CALL_SUBTEST_11(is_orthogonal_no_malloc<double>());
+  CALL_SUBTEST_11(is_orthogonal_no_malloc<std::complex<float>>());
+  CALL_SUBTEST_11(is_orthogonal_no_malloc<std::complex<double>>());
+  CALL_SUBTEST_11(is_orthogonal_no_malloc<half>());
+  CALL_SUBTEST_11(is_orthogonal_no_malloc<bfloat16>());
 
   CALL_SUBTEST_6(test_reference(Matrix<float, 32, 32>()));
   CALL_SUBTEST_7(test_reference(R1));

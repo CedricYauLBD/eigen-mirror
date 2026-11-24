@@ -6,12 +6,84 @@
 // This Source Code Form is subject to the terms of the Mozilla
 // Public License v. 2.0. If a copy of the MPL was not distributed
 // with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
+// SPDX-License-Identifier: MPL-2.0
 
 #include "sparse_solver.h"
 
+template <typename Solver>
+void verify_determinant_asserts(const Solver& solver) {
+  VERIFY_RAISES_ASSERT(solver.determinant());
+  VERIFY_RAISES_ASSERT(solver.absDeterminant());
+  VERIFY_RAISES_ASSERT(solver.logAbsDeterminant());
+  VERIFY_RAISES_ASSERT(solver.signDeterminant());
+}
+
+// factorize_preordered() breaks out of its column loop on a bad pivot but still sets m_factorizationIsOk,
+// leaving the tail of D -- and of L's diagonal -- unwritten. The determinant accessors read exactly those,
+// so they check info() too, as the dense LLT ones do.
+template <typename SparseMatrixType>
+void test_simplicial_cholesky_determinant_asserts() {
+  using Scalar = typename SparseMatrixType::Scalar;
+  const Index n = 6;
+
+  // A zero pivot stops all four classes. A negative one stops the LLT classes for a real scalar; for a complex scalar
+  // the non-Hermitian LLT takes a complex square root of it, and only the Hermitian LLT rejects it. The LDLT classes
+  // accept it, since D may be indefinite.
+  SparseMatrixType zero_pivot(n, n), negative_pivot(n, n);
+  for (Index i = 0; i < n; ++i) {
+    zero_pivot.insert(i, i) = (i == 0) ? Scalar(0) : Scalar(1);
+    negative_pivot.insert(i, i) = (i == n - 1) ? Scalar(-1) : Scalar(1);
+  }
+  zero_pivot.makeCompressed();
+  negative_pivot.makeCompressed();
+
+  SimplicialLLT<SparseMatrixType> llt(zero_pivot);
+  VERIFY(llt.info() == NumericalIssue);
+  verify_determinant_asserts(llt);
+
+  SimplicialLLT<SparseMatrixType> indefinite_llt(negative_pivot);
+  VERIFY(indefinite_llt.info() == NumericalIssue);
+  verify_determinant_asserts(indefinite_llt);
+
+  SimplicialLDLT<SparseMatrixType> ldlt(zero_pivot);
+  VERIFY(ldlt.info() == NumericalIssue);
+  verify_determinant_asserts(ldlt);
+
+  SimplicialNonHermitianLLT<SparseMatrixType> nhllt(zero_pivot);
+  VERIFY(nhllt.info() == NumericalIssue);
+  verify_determinant_asserts(nhllt);
+
+  SimplicialNonHermitianLDLT<SparseMatrixType> nhldlt(zero_pivot);
+  VERIFY(nhldlt.info() == NumericalIssue);
+  verify_determinant_asserts(nhldlt);
+
+  SimplicialNonHermitianLLT<SparseMatrixType> nh_indefinite_llt(negative_pivot);
+  if (NumTraits<Scalar>::IsComplex) {
+    VERIFY(nh_indefinite_llt.info() == Success);
+    // L L^T = P A P^T, whichever position the ordering gives the pivot -1.
+    using DenseMatrix = Matrix<Scalar, Dynamic, Dynamic>;
+    const DenseMatrix L = nh_indefinite_llt.matrixL();
+    const DenseMatrix A = DenseMatrix(negative_pivot);
+    const DenseMatrix PAPt = nh_indefinite_llt.permutationP() * A * nh_indefinite_llt.permutationP().transpose();
+    VERIFY_IS_APPROX(L * L.transpose(), PAPt);
+  } else {
+    VERIFY(nh_indefinite_llt.info() == NumericalIssue);
+    verify_determinant_asserts(nh_indefinite_llt);
+  }
+
+  // The deprecated SimplicialCholesky exposes determinant() alone, and reads the same tail.
+  SimplicialCholesky<SparseMatrixType> deprecated(zero_pivot);
+  VERIFY(deprecated.info() == NumericalIssue);
+  VERIFY_RAISES_ASSERT(deprecated.determinant());
+
+  // info() alone would not reject an unfactorized decomposition: it is constructed Success.
+  SimplicialLDLT<SparseMatrixType> unfactorized;
+  verify_determinant_asserts(unfactorized);
+}
+
 template <typename T, typename I_, int flag>
 void test_simplicial_cholesky_T() {
-  typedef SparseMatrix<T, flag, I_> SparseMatrixType;
+  using SparseMatrixType = SparseMatrix<T, flag, I_>;
   SimplicialCholesky<SparseMatrixType, Lower> chol_colmajor_lower_amd;
   SimplicialCholesky<SparseMatrixType, Upper> chol_colmajor_upper_amd;
   SimplicialLLT<SparseMatrixType, Lower> llt_colmajor_lower_amd;
@@ -49,13 +121,64 @@ void test_simplicial_cholesky_T() {
   check_sparse_nonhermitian_determinant(nhldlt_colmajor_lower_amd);
   check_sparse_nonhermitian_determinant(nhldlt_colmajor_upper_amd);
 
+  check_sparse_spd_log_abs_determinant(llt_colmajor_lower_amd);
+  check_sparse_spd_log_abs_determinant(llt_colmajor_upper_amd);
+  check_sparse_spd_log_abs_determinant(ldlt_colmajor_lower_amd);
+  check_sparse_spd_log_abs_determinant(ldlt_colmajor_upper_amd);
+  check_sparse_nonhermitian_log_abs_determinant(nhllt_colmajor_lower_amd);
+  check_sparse_nonhermitian_log_abs_determinant(nhllt_colmajor_upper_amd);
+  check_sparse_nonhermitian_log_abs_determinant(nhldlt_colmajor_lower_amd);
+  check_sparse_nonhermitian_log_abs_determinant(nhldlt_colmajor_upper_amd);
+
+  test_simplicial_cholesky_determinant_asserts<SparseMatrixType>();
+
   check_sparse_spd_solving(ldlt_colmajor_lower_nat, (std::min)(300, EIGEN_TEST_MAX_SIZE), 1000);
   check_sparse_spd_solving(ldlt_colmajor_upper_nat, (std::min)(300, EIGEN_TEST_MAX_SIZE), 1000);
   check_sparse_nonhermitian_solving(nhldlt_colmajor_lower_nat, (std::min)(300, EIGEN_TEST_MAX_SIZE), 1000);
   check_sparse_nonhermitian_solving(nhldlt_colmajor_upper_nat, (std::min)(300, EIGEN_TEST_MAX_SIZE), 1000);
 }
 
+template <typename Scalar>
+void test_simplicial_cholesky_scatter(Index bandwidth) {
+  using RealScalar = typename NumTraits<Scalar>::Real;
+  using DenseMatrix = Matrix<Scalar, Dynamic, Dynamic>;
+  using SparseMatrixType = SparseMatrix<Scalar, ColMajor, long long>;
+  const Index n = 67;
+  DenseMatrix matrix = DenseMatrix::Zero(n, n);
+  for (Index j = 0; j < n; ++j) {
+    matrix(j, j) = Scalar(2 * bandwidth + 1);
+    for (Index i = j + 1; i < (std::min)(n, j + bandwidth + 1); ++i) {
+      matrix(i, j) = Scalar(0.125) + Scalar(0.0625) * internal::random<Scalar>();
+      matrix(j, i) = numext::conj(matrix(i, j));
+    }
+  }
+  SparseMatrixType sparse = matrix.sparseView();
+  SimplicialLLT<SparseMatrixType, Lower, NaturalOrdering<long long>> solver;
+  SimplicialLDLT<SparseMatrixType, Lower, NaturalOrdering<long long>> ldlt;
+  solver.analyzePattern(sparse);
+  ldlt.analyzePattern(sparse);
+  // Reconstruction error scales with the O(n * epsilon) factorization backward error.
+  const RealScalar tolerance = RealScalar(16 * n) * NumTraits<RealScalar>::epsilon();
+  DenseMatrix lower;
+  for (int repeat = 0; repeat < 2; ++repeat) {
+    solver.factorize(sparse);
+    VERIFY_IS_EQUAL(solver.info(), Success);
+    lower = solver.matrixL();
+    VERIFY((lower * lower.adjoint() - matrix).norm() <= tolerance * matrix.norm());
+    ldlt.factorize(sparse);
+    VERIFY_IS_EQUAL(ldlt.info(), Success);
+    lower = ldlt.matrixL();
+    VERIFY((lower * ldlt.vectorD().asDiagonal() * lower.adjoint() - matrix).norm() <= tolerance * matrix.norm());
+    matrix.diagonal().array() += Scalar(1);
+    sparse.diagonal().array() += Scalar(1);
+  }
+}
+
 EIGEN_DECLARE_TEST(simplicial_cholesky) {
+  CALL_SUBTEST_31(test_simplicial_cholesky_scatter<float>(3));
+  CALL_SUBTEST_31(test_simplicial_cholesky_scatter<float>(37));
+  CALL_SUBTEST_32(test_simplicial_cholesky_scatter<std::complex<float>>(3));
+  CALL_SUBTEST_32(test_simplicial_cholesky_scatter<std::complex<float>>(37));
   CALL_SUBTEST_11((test_simplicial_cholesky_T<double, int, ColMajor>()));
   CALL_SUBTEST_12((test_simplicial_cholesky_T<std::complex<double>, int, ColMajor>()));
   CALL_SUBTEST_13((test_simplicial_cholesky_T<double, long int, ColMajor>()));
