@@ -62,8 +62,9 @@ EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE unsigned pcg_xsh_rs_step(uint64_t* state, 
 //
 // thread_local is part of the C++14 baseline, so as in Memory.h only EIGEN_AVOID_THREAD_LOCAL and device passes
 // (CUDA/HIP, SYCL) disable it. Clang additionally reports per-target TLS support through cxx_thread_local.
+// __SYCL_DEVICE_ONLY__ rather than SYCL_DEVICE_ONLY, which Macros.h defines only under EIGEN_USE_SYCL.
 #if defined(EIGEN_USE_PCG_RANDOM) && !defined(EIGEN_AVOID_THREAD_LOCAL) && !defined(EIGEN_GPU_COMPILE_PHASE) && \
-    !defined(SYCL_DEVICE_ONLY) && (!EIGEN_COMP_CLANG || __has_feature(cxx_thread_local))
+    !defined(__SYCL_DEVICE_ONLY__) && (!EIGEN_COMP_CLANG || __has_feature(cxx_thread_local))
 #define EIGEN_HAS_THREAD_LOCAL_RANDOM 1
 #else
 #define EIGEN_HAS_THREAD_LOCAL_RANDOM 0

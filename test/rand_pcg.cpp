@@ -4,3 +4,8 @@
 // SPDX-License-Identifier: MPL-2.0
 #define EIGEN_USE_PCG_RANDOM
 #include "rand.cpp"  // NOLINT(bugprone-suspicious-include): Compile the suite with the PCG backend.
+
+// rand.cpp compiles its PCG checks out when the backend is off, so a silent fallback to std::rand() would pass.
+#ifndef EIGEN_AVOID_THREAD_LOCAL
+static_assert(EIGEN_HAS_THREAD_LOCAL_RANDOM == 1, "EIGEN_USE_PCG_RANDOM must enable the PCG backend");
+#endif
