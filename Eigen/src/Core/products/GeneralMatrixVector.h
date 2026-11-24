@@ -390,7 +390,9 @@ general_matrix_vector_product<Index, LhsScalar, LhsMapper, ColMajor, ConjugateLh
   // packet whose accumulator chain is bound by the FMA latency. Exact multiples of the packet size keep the 4, 3, 2
   // and 1-packet passes.
   const Index count = UseSegment ? Index(UnsignedIndex(rows) % ResPacketSize) : Index(0);
-  constexpr bool Sixteen = kGemvColMajorSixteenPackets && !NumTraits<ResScalar>::IsComplex &&
+  // The FMA-pipe model and the measurements cover float and double packets only.
+  constexpr bool Sixteen = kGemvColMajorSixteenPackets && bool(Traits::Vectorizable) &&
+                           (std::is_same<ResScalar, float>::value || std::is_same<ResScalar, double>::value) &&
                            std::is_same<LhsPacket, ResPacket>::value && std::is_same<RhsPacket, ResPacket>::value;
   const Index n16 = Sixteen ? rows - (count > 0 ? 18 : 16) * ResPacketSize + 1 : Index(0);
   const Index n8 = rows - (count > 0 ? 10 : 8) * ResPacketSize + 1;
