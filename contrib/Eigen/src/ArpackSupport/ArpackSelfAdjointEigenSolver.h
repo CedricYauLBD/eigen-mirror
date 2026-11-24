@@ -363,9 +363,8 @@ ArpackGeneralizedSelfAdjointEigenSolver<MatrixType, MatrixSolver, BisSPD>::compu
       whch[1] = eigs_sigma[1];
     }
   } else {
-    eigen_assert(false && "Specifying clustered eigenvalues is not yet supported!");
 
-    // If it's not scalar values, then the user may be explicitly
+    // If it's not alpha values, then the user may be explicitly
     // specifying the sigma value to cluster the evs around
     //
     sigma = atof(eigs_sigma.c_str());
