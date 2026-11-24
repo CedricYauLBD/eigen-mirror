@@ -209,9 +209,9 @@ struct general_matrix_vector_product<Index, LhsScalar, LhsMapper, ColMajor, Conj
       conj_helper<LhsPacket, RhsPacket, ConjugateLhs, ConjugateRhs>&, Index) {}
 };
 
-// AArch64 cores such as Apple M4 have four FMA pipes of latency four: the col-major kernel's eight accumulator chains
-// sustain half their rate, so real products there also take 16-packet row blocks.
-#if EIGEN_ARCH_ARM64 && defined(EIGEN_VECTORIZE_NEON)
+// Apple AArch64 cores have four FMA pipes of latency four: the col-major kernel's eight accumulator chains sustain half
+// their rate, so real products there also take 16-packet row blocks. Other AArch64 cores are unmeasured.
+#if EIGEN_ARCH_ARM64 && defined(EIGEN_VECTORIZE_NEON) && EIGEN_OS_MAC
 static constexpr bool kGemvColMajorSixteenPackets = true;
 #else
 static constexpr bool kGemvColMajorSixteenPackets = false;
