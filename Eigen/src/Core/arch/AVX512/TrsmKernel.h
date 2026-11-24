@@ -982,8 +982,7 @@ void triSolve(Scalar* A_arr, Scalar* B_arr, int64_t M, int64_t numRHS, int64_t L
     int64_t bK = numRHS - k > kB ? kB : numRHS - k;
     int64_t M_ = (M / EIGEN_AVX_MAX_NUM_ROW) * EIGEN_AVX_MAX_NUM_ROW, gemmOff = 0;
 
-    // bK rounded up to next multiple of L=EIGEN_AVX_MAX_NUM_ROW. When B_temp is used, we solve for bkL RHS
-    // instead of bK RHS in triSolveKernelLxK.
+    // Round up the row stride. Only the bK right-hand sides are initialized.
     int64_t bkL = ((bK + (EIGEN_AVX_MAX_NUM_ROW - 1)) / EIGEN_AVX_MAX_NUM_ROW) * EIGEN_AVX_MAX_NUM_ROW;
     const int64_t numScalarPerCache = 64 / sizeof(Scalar);
     // Leading dimension of B_temp, will be a multiple of the cache line size.
@@ -999,7 +998,7 @@ void triSolve(Scalar* A_arr, Scalar* B_arr, int64_t M, int64_t numRHS, int64_t L
         copyBToRowMajor<Scalar, true, false>(B_arr + indB_i + k * LDB, LDB, bK, B_temp + offB_1, LDT);
         // Triangular solve with a small block of A and long horizontal blocks of B (or B_temp if B col-major)
         triSolveKernelLxK<Scalar, isARowMajor, isFWDSolve, isUnitDiag>(
-            &A_arr[idA<isARowMajor>(indA_i, indA_i, LDA)], B_temp + offB_2, EIGEN_AVX_MAX_NUM_ROW, bkL, LDA, LDT);
+            &A_arr[idA<isARowMajor>(indA_i, indA_i, LDA)], B_temp + offB_2, EIGEN_AVX_MAX_NUM_ROW, bK, LDA, LDT);
         // Copy values from B_temp back to B. B_temp will be reused in gemm call below.
         copyBToRowMajor<Scalar, false, false>(B_arr + indB_i + k * LDB, LDB, bK, B_temp + offB_1, LDT);
 
@@ -1092,7 +1091,7 @@ void triSolve(Scalar* A_arr, Scalar* B_arr, int64_t M, int64_t numRHS, int64_t L
         int64_t offB_1 = isFWDSolve ? 0 : (bM - 1) * bkL;
         copyBToRowMajor<Scalar, true, true>(B_arr + indB_i + k * LDB, LDB, bK, B_temp, bkL, bM);
         triSolveKernelLxK<Scalar, isARowMajor, isFWDSolve, isUnitDiag>(&A_arr[idA<isARowMajor>(indA_i, indA_i, LDA)],
-                                                                       B_temp + offB_1, bM, bkL, LDA, bkL);
+                                                                       B_temp + offB_1, bM, bK, LDA, bkL);
         copyBToRowMajor<Scalar, false, true>(B_arr + indB_i + k * LDB, LDB, bK, B_temp, bkL, bM);
       } else {
         int64_t ind = isFWDSolve ? M_ : M - 1 - M_;
