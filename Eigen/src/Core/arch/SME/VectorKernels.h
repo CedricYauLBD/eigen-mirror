@@ -105,9 +105,10 @@ __arm_new("za") __arm_locally_streaming
   using Vec = typename Traits::type;
   const Index lanes = Traits::size();
   const auto scale = pset1<Vec>(alpha);
+  // 4-column batches mean a column stride past L1; a wider panel then costs 8-16% at 16384-65536 rows on Apple M4.
+  const Index panel_cols = block_cols < 16 ? block_cols : Index(kSmeGemvPanelCols);
   for (Index panel_first = 0; panel_first < cols;) {
-    const Index panel_end =
-        cols - panel_first < Index(kSmeGemvPanelCols) ? cols : panel_first + Index(kSmeGemvPanelCols);
+    const Index panel_end = cols - panel_first < panel_cols ? cols : panel_first + panel_cols;
     for (Index i = 0; i < rows;) {
       const Index remaining = rows - i;
       // Four predicated chunks per row block keep four independent FMLA chains, also in the final partial block.
