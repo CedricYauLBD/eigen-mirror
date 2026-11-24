@@ -4,18 +4,9 @@
 #ifndef EIGEN_MISC_BLAS_H
 #define EIGEN_MISC_BLAS_H
 
-/* EIGEN_BLAS_SYM applies EIGEN_BLAS_SYMBOL_SUFFIX; both come from Core/util/MKL_support.h, this header's only
- * includer. The declarations here must stay in step with the BLAS call sites under Core/products.
+/* EIGEN_BLAS_SYM applies EIGEN_BLAS_SYMBOL_SUFFIX; both, and EIGEN_BLAS_DECL, come from Core/util/MKL_support.h, this
+ * header's only includer. The declarations here must stay in step with the BLAS call sites under Core/products.
  */
-
-// Asm-labelled C++ declarations in Eigen::internal cannot conflict with differently typed vendor prototypes (#2420).
-#if (EIGEN_COMP_GNUC || EIGEN_COMP_CLANG) && defined(__USER_LABEL_PREFIX__)
-#define EIGEN_BLAS_DECL(FUNC, PARAMS) \
-  void EIGEN_BLAS_SYM(FUNC)           \
-      PARAMS __asm__(EIGEN_MAKESTRING(__USER_LABEL_PREFIX__) EIGEN_MAKESTRING(EIGEN_BLAS_SYM(FUNC)))
-#else
-#define EIGEN_BLAS_DECL(FUNC, PARAMS) extern "C" void EIGEN_BLAS_SYM(FUNC) PARAMS
-#endif
 
 namespace Eigen {
 namespace internal {
@@ -129,8 +120,6 @@ EIGEN_BLAS_DECL(cherk, (const char*, const char*, const EIGEN_BLAS_INT*, const E
                         const float*, const EIGEN_BLAS_INT*, const float*, float*, const EIGEN_BLAS_INT*));
 EIGEN_BLAS_DECL(zherk, (const char*, const char*, const EIGEN_BLAS_INT*, const EIGEN_BLAS_INT*, const double*,
                         const double*, const EIGEN_BLAS_INT*, const double*, double*, const EIGEN_BLAS_INT*));
-
-#undef EIGEN_BLAS_DECL
 
 }  // namespace internal
 }  // namespace Eigen

@@ -5,6 +5,14 @@
 #ifndef EIGEN_USE_BLAS
 #define EIGEN_USE_BLAS
 #endif
+// Declares Eigen's sbgemm_ prototype; no bfloat16 product is formed, so the test needs no sbgemm_ to link.
+#ifndef EIGEN_USE_OPENBLAS_BFLOAT16
+#define EIGEN_USE_OPENBLAS_BFLOAT16 1
+#endif
+// OpenBLAS f77blas.h form, which declares sbgemm_ whether or not the library was built with bfloat16.
+#define EIGEN_TEST_OPENBLAS_SBGEMM                                                                              \
+  extern "C" void sbgemm_(char*, char*, int*, int*, int*, float*, unsigned short*, int*, unsigned short*, int*, \
+                          float*, float*, int*);
 
 #if defined(__APPLE__) && defined(__clang__) && defined(__has_include)
 #if __has_include(<Accelerate/Accelerate.h>)
@@ -27,6 +35,7 @@
 
 #if defined(EIGEN_TEST_PART_1) || defined(EIGEN_TEST_PART_3)
 #include EIGEN_TEST_VENDOR_HEADER
+EIGEN_TEST_OPENBLAS_SBGEMM
 #endif
 
 #include "main.h"
@@ -37,6 +46,7 @@
 #undef DEBUG
 #include EIGEN_TEST_VENDOR_HEADER
 #pragma pop_macro("DEBUG")
+EIGEN_TEST_OPENBLAS_SBGEMM
 #endif
 
 // Integer entries in [-3, 3] keep every sum exact, so the ?gemm-backed product must equal the coefficient-based one.
