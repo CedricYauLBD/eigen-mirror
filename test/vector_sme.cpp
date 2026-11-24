@@ -321,8 +321,9 @@ void sme_gemv_rowmajor_products() {
   VERIFY(!internal::sme_gemv_rowmajor_suitable<Scalar>(Index(64), min_dot - 1));
 #endif
   const Index padding = 64 / sizeof(Scalar);
-  for (Index dot : {min_dot, min_dot + 1, min_dot + 4 * lanes - 1, min_dot + 4 * lanes, min_dot + 8 * lanes + 5,
-                    Index(1031), Index(8197)}) {
+  // Final chunk tails: 0, 1, 4 * lanes - 1, 4 * lanes, 6 * lanes and 8 * lanes - 1 (p1 partly active), and 5.
+  for (Index dot : {min_dot, min_dot + 1, min_dot + 4 * lanes - 1, min_dot + 4 * lanes, min_dot + 6 * lanes,
+                    min_dot + 8 * lanes - 1, min_dot + 8 * lanes + 5, Index(1031), Index(8197)}) {
     std::vector<Index> outputs = {64, 65, 66, 67, 68, 69, 70, 71};
     if (dot == 8197) outputs.insert(outputs.end(), {4, 7, 9});
     for (Index n : outputs) {
