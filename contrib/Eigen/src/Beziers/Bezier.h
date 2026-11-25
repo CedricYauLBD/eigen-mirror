@@ -20,24 +20,31 @@ namespace Eigen {
 namespace internal {
 
 /** \internal
+ * Raises the Bernstein polynomials held in N(0..k-1) from degree k-1 to degree k in place:
+ * B_{j,k} = (1-u) B_{j,k-1} + u B_{j-1,k-1} (Piegl & Tiller, The NURBS Book, A1.3).
+ */
+template <typename Scalar, typename Derived>
+void bernstein_basis_step(const Scalar& u, Index k, DenseBase<Derived>& N) {
+  eigen_assert(k >= 1 && N.size() > k);
+  const Scalar u1 = Scalar(1) - u;
+  Scalar saved(0);
+  for (Index j = 0; j < k; ++j) {
+    const Scalar tmp = N.coeff(j);
+    N.coeffRef(j) = saved + u1 * tmp;
+    saved = u * tmp;
+  }
+  N.coeffRef(k) = saved;
+}
+
+/** \internal
  * Fills \a N (of size \a degree + 1) with the Bernstein polynomials B_{j,degree}(u), j = 0..degree, using the
- * numerically stable triangular recurrence B_{j,k} = (1-u) B_{j,k-1} + u B_{j-1,k-1}
- * (Piegl & Tiller, The NURBS Book, A1.3).
+ * numerically stable triangular recurrence of bernstein_basis_step.
  */
 template <typename Scalar, typename Derived>
 void bernstein_basis(const Scalar& u, Index degree, DenseBase<Derived>& N) {
   eigen_assert(degree >= 0 && N.size() == degree + 1);
-  const Scalar u1 = Scalar(1) - u;
   N.coeffRef(0) = Scalar(1);
-  for (Index k = 1; k <= degree; ++k) {
-    Scalar saved(0);
-    for (Index j = 0; j < k; ++j) {
-      const Scalar tmp = N.coeff(j);
-      N.coeffRef(j) = saved + u1 * tmp;
-      saved = u * tmp;
-    }
-    N.coeffRef(k) = saved;
-  }
+  for (Index k = 1; k <= degree; ++k) bernstein_basis_step(u, k, N);
 }
 
 }  // namespace internal
@@ -64,6 +71,7 @@ class Bezier {
   typedef typename Traits::PointType PointType;
   typedef typename Traits::ControlPointVectorType ControlPointVectorType;
   typedef typename Traits::BasisVectorType BasisVectorType;
+  typedef typename Traits::BasisDerivativeType BasisDerivativeType;
   typedef typename Traits::DerivativeType DerivativeType;
   typedef typename Traits::ParameterVectorType ParameterVectorType;
 
@@ -106,6 +114,14 @@ class Bezier {
   /** \brief Returns the first derivatives of the degree+1 Bernstein basis functions evaluated at \a u. */
   BasisVectorType basisFunctionDerivatives(Scalar u) const { return BasisFunctionDerivatives(u, degree()); }
 
+  /**
+   * \brief Returns the degree+1 Bernstein basis functions and their derivatives through \a order evaluated at \a u.
+   * \sa BasisFunctionDerivatives(Scalar, Index, Index)
+   */
+  BasisDerivativeType basisFunctionDerivatives(Scalar u, Index order) const {
+    return BasisFunctionDerivatives(u, degree(), order);
+  }
+
   /** \brief Returns the Bernstein basis functions B_{j,degree}(u), j = 0..degree. */
   static BasisVectorType BasisFunctions(Scalar u, Index degree);
 
@@ -114,6 +130,16 @@ class Bezier {
    * \f$ B'_{j,p}(u) = p\,(B_{j-1,p-1}(u) - B_{j,p-1}(u)) \f$.
    */
   static BasisVectorType BasisFunctionDerivatives(Scalar u, Index degree);
+
+  /**
+   * \brief Returns the Bernstein basis functions of the given degree and their derivatives through \a order at \a u.
+   *
+   * \returns An (order+1) x (degree+1) array whose row k holds \f$ B^{(k)}_{j,p}(u) \f$, j = 0..p: row 0 equals
+   *          BasisFunctions(u, degree) and row 1 equals BasisFunctionDerivatives(u, degree). Rows of order greater
+   *          than the degree are zero, as in derivatives(). The k-th derivative of a curve is
+   *          ctrls().matrix() * row(k).matrix().transpose().
+   */
+  static BasisDerivativeType BasisFunctionDerivatives(Scalar u, Index degree, Index order);
 
  private:
   ControlPointVectorType m_ctrls; /*!< Control points, one per column. */
@@ -140,6 +166,32 @@ typename Bezier<Scalar_, Dim_, Degree_>::BasisVectorType Bezier<Scalar_, Dim_, D
   const Scalar p = Scalar(degree);
   dN.head(degree) -= p * N;
   dN.tail(degree) += p * N;
+  return dN;
+}
+
+template <typename Scalar_, int Dim_, int Degree_>
+typename Bezier<Scalar_, Dim_, Degree_>::BasisDerivativeType Bezier<Scalar_, Dim_, Degree_>::BasisFunctionDerivatives(
+    Scalar u, Index degree, Index order) {
+  eigen_assert(degree >= 0 && order >= 0);
+  BasisDerivativeType dN = BasisDerivativeType::Zero(order + 1, degree + 1);
+
+  // B^{(k)}_{.,p} = D_p D_{p-1} ... D_{p-k+1} B_{.,p-k},  (D_q w)_j = q (w_{j-1} - w_j),  w_{-1} = w_q = 0,
+  // so a single run of the degree-raising recurrence provides every B_{.,p-k} for k = 0..min(order, p).
+  const Index maxOrder = numext::mini(order, degree);
+  BasisVectorType N(degree + 1);
+  N(0) = Scalar(1);
+  for (Index q = 0; q <= degree; ++q) {
+    if (q > 0) internal::bernstein_basis_step(u, q, N);
+    const Index k = degree - q;
+    if (k > maxOrder) continue;
+    dN.row(k).head(q + 1) = N.head(q + 1);
+    // D_r in place; descending j keeps w_{j-1} unmodified, and w_r is still zero.
+    for (Index r = q + 1; r <= degree; ++r) {
+      const Scalar p = Scalar(r);
+      for (Index j = r; j > 0; --j) dN(k, j) = p * (dN(k, j - 1) - dN(k, j));
+      dN(k, 0) = -p * dN(k, 0);
+    }
+  }
   return dN;
 }
 

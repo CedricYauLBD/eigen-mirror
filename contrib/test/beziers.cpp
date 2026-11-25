@@ -151,6 +151,7 @@ void check_derivatives() {
   typedef typename BezierType::BasisVectorType BasisVectorType;
   typedef typename BezierType::DerivativeType DerivativeType;
   typedef typename BezierType::ControlPointVectorType ControlPointVectorType;
+  typedef typename BezierType::BasisDerivativeType BasisDerivativeType;
 
   const Index degree = internal::random<Index>(0, 10);
   const BezierType bezier = random_bezier<BezierType>(degree);
@@ -183,6 +184,24 @@ void check_derivatives() {
   VERIFY_IS_EQUAL(der.col(degree + 1).matrix().norm(), Scalar(0));
   VERIFY_IS_EQUAL(der.col(degree + 2).matrix().norm(), Scalar(0));
 
+  // Table of basis derivatives through order: row k against the control-point differences of derivatives().
+  const BasisDerivativeType table = bezier.basisFunctionDerivatives(u, order);
+  VERIFY_IS_EQUAL(table.rows(), order + 1);
+  VERIFY_IS_EQUAL(table.cols(), degree + 1);
+  VERIFY_IS_APPROX(table.row(0).matrix(), bezier.basisFunctions(u).matrix());
+  if (degree > 0) VERIFY_IS_APPROX(table.row(1).matrix(), dN.matrix());
+  for (Index k = 0; k <= degree; ++k) {
+    const Array<Scalar, BezierType::Dimension, 1> fromTable =
+        (bezier.ctrls().matrix() * table.row(k).matrix().transpose()).array();
+    VERIFY((fromTable - der.col(k)).abs().maxCoeff() <=
+           test_precision<Scalar>() * numext::maxi(Scalar(1), der.col(k).abs().maxCoeff()));
+    if (k > 0)
+      VERIFY(numext::abs(table.row(k).sum()) <=
+             test_precision<Scalar>() * numext::maxi(Scalar(1), table.row(k).abs().maxCoeff()));
+  }
+  VERIFY_IS_EQUAL(table.row(degree + 1).matrix().norm(), Scalar(0));
+  VERIFY_IS_EQUAL(table.row(degree + 2).matrix().norm(), Scalar(0));
+
   // Fixed degree curves agree with dynamic ones.
   const ControlPointVectorType c = ControlPointVectorType::Random(BezierType::Dimension, 4);
   const Bezier<Scalar, BezierType::Dimension, 3> fixed(c);
@@ -190,6 +209,7 @@ void check_derivatives() {
   VERIFY_IS_EQUAL(fixed.degree(), Index(3));
   VERIFY_IS_APPROX(fixed(u), dynamic(u));
   VERIFY_IS_APPROX(fixed.derivatives(u, 2).matrix(), dynamic.derivatives(u, 2).matrix());
+  VERIFY_IS_APPROX(fixed.basisFunctionDerivatives(u, 5).matrix(), dynamic.basisFunctionDerivatives(u, 5).matrix());
 }
 
 template <typename BezierType>

@@ -46,6 +46,10 @@ struct BezierTraits<Bezier<Scalar_, Dim_, Degree_> > {
 
   /** \brief The data type used to store curve parameters (one per data point). */
   typedef Array<Scalar, 1, Dynamic> ParameterVectorType;
+
+  /** \brief The data type used to store the Bernstein basis functions and their derivatives (row k holds the k-th
+   * derivatives). */
+  typedef Array<Scalar, Dynamic, OrderAtCompileTime> BasisDerivativeType;
 };
 
 /** \ingroup Beziers_Module \brief 2D float Bezier curve with dynamic degree. */
