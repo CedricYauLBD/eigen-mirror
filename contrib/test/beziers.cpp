@@ -201,6 +201,11 @@ void check_derivatives() {
   }
   VERIFY_IS_EQUAL(table.row(degree + 1).matrix().norm(), Scalar(0));
   VERIFY_IS_EQUAL(table.row(degree + 2).matrix().norm(), Scalar(0));
+  // order < degree skips the rows k > order of the recurrence (taken whenever degree > 0).
+  const Index low = degree / 2;
+  const BasisDerivativeType lowTable = bezier.basisFunctionDerivatives(u, low);
+  VERIFY_IS_EQUAL(lowTable.rows(), low + 1);
+  VERIFY_IS_APPROX(lowTable.matrix(), table.topRows(low + 1).matrix());
 
   // Fixed degree curves agree with dynamic ones.
   const ControlPointVectorType c = ControlPointVectorType::Random(BezierType::Dimension, 4);
