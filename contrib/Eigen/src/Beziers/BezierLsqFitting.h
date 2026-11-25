@@ -30,6 +30,10 @@ namespace Eigen {
  * where \f$ A' \f$ holds the derivatives of the Bernstein basis functions. The first and last parameters are kept
  * fixed, and the parameters are kept within the range they span.
  *
+ * The Jacobian is dense, \f$ dn \times n \f$ for \f$ n \f$ points of dimension \f$ d \f$. Each Gauss-Newton iteration
+ * forms and factorizes it in \f$ O(d\,n^3) \f$ time and \f$ O(d\,n^2) \f$ memory, so the method suits moderate
+ * numbers of points.
+ *
  * \sa C. F. Borges and T. A. Pastva, Total least squares fitting of Bezier and B-spline curves to ordered data,
  *     Computer Aided Geometric Design 19(4), 2002.
  *
@@ -81,6 +85,9 @@ struct BezierLsqFitting {
   /**
    * \brief Computes the residual of the linear fit for the given parameters and its Jacobian with respect to them.
    *
+   * \param[in] pts The n data points, one per column.
+   * \param[in] degree The degree of the fitted curve.
+   * \param[in] params One parameter per point.
    * \param[out] residual The stacked residual: entry j*n+i is the j-th coordinate of the error at the i-th point.
    * \param[out] jacobian The (Dimension*n) x n derivative of \a residual with respect to \a params.
    */
