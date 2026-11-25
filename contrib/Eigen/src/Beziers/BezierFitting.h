@@ -31,10 +31,10 @@ namespace Eigen {
  */
 template <typename BezierType>
 struct BezierFitting {
-  typedef typename BezierType::Scalar Scalar;
-  typedef typename BezierType::ParameterVectorType ParameterVectorType;
-  typedef typename BezierType::ControlPointVectorType ControlPointVectorType;
-  typedef Matrix<Scalar, Dynamic, Dynamic> MatrixType;
+  using Scalar = typename BezierType::Scalar;
+  using ParameterVectorType = typename BezierType::ParameterVectorType;
+  using ControlPointVectorType = typename BezierType::ControlPointVectorType;
+  using MatrixType = Matrix<Scalar, Dynamic, Dynamic>;
 
   /**
    * \brief Computes normalized chord-length parameters of the points.

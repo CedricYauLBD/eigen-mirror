@@ -63,17 +63,17 @@ void bernstein_basis(const Scalar& u, Index degree, DenseBase<Derived>& N) {
 template <typename Scalar_, int Dim_, int Degree_>
 class Bezier {
  public:
-  typedef Scalar_ Scalar; /*!< The curve's scalar type. */
+  using Scalar = Scalar_; /*!< The curve's scalar type. */
   enum { Dimension = Dim_ /*!< The curve's dimension. */ };
   enum { Degree = Degree_ /*!< The curve's degree, or Dynamic. */ };
 
-  typedef BezierTraits<Bezier> Traits;
-  typedef typename Traits::PointType PointType;
-  typedef typename Traits::ControlPointVectorType ControlPointVectorType;
-  typedef typename Traits::BasisVectorType BasisVectorType;
-  typedef typename Traits::BasisDerivativeType BasisDerivativeType;
-  typedef typename Traits::DerivativeType DerivativeType;
-  typedef typename Traits::ParameterVectorType ParameterVectorType;
+  using Traits = BezierTraits<Bezier>;
+  using PointType = typename Traits::PointType;
+  using ControlPointVectorType = typename Traits::ControlPointVectorType;
+  using BasisVectorType = typename Traits::BasisVectorType;
+  using BasisDerivativeType = typename Traits::BasisDerivativeType;
+  using DerivativeType = typename Traits::DerivativeType;
+  using ParameterVectorType = typename Traits::ParameterVectorType;
 
   EIGEN_STATIC_ASSERT(Dim_ > 0, YOU_MADE_A_PROGRAMMING_MISTAKE)
   EIGEN_STATIC_ASSERT(Degree_ == Dynamic || Degree_ >= 0, YOU_MADE_A_PROGRAMMING_MISTAKE)

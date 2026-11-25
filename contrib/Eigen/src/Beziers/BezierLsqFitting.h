@@ -37,10 +37,10 @@ namespace Eigen {
  */
 template <typename BezierType>
 struct BezierLsqFitting {
-  typedef typename BezierType::Scalar Scalar;
-  typedef typename BezierType::ParameterVectorType ParameterVectorType;
-  typedef Matrix<Scalar, Dynamic, 1> VectorType;
-  typedef Matrix<Scalar, Dynamic, Dynamic> MatrixType;
+  using Scalar = typename BezierType::Scalar;
+  using ParameterVectorType = typename BezierType::ParameterVectorType;
+  using VectorType = Matrix<Scalar, Dynamic, 1>;
+  using MatrixType = Matrix<Scalar, Dynamic, Dynamic>;
 
   /**
    * \brief Fits a Bezier curve to the points, starting from chord-length parameters.

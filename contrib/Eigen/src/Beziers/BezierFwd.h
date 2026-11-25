@@ -27,39 +27,39 @@ struct BezierTraits;
  */
 template <typename Scalar_, int Dim_, int Degree_>
 struct BezierTraits<Bezier<Scalar_, Dim_, Degree_> > {
-  typedef Scalar_ Scalar; /*!< The curve's scalar type. */
+  using Scalar = Scalar_; /*!< The curve's scalar type. */
   enum { Dimension = Dim_ /*!< The curve's dimension. */ };
   enum { Degree = Degree_ /*!< The curve's degree, or Dynamic. */ };
   enum { OrderAtCompileTime = Degree_ == Dynamic ? Dynamic : Degree_ + 1 /*!< Number of control points. */ };
 
   /** \brief The point type the curve is representing. */
-  typedef Array<Scalar, Dimension, 1> PointType;
+  using PointType = Array<Scalar, Dimension, 1>;
 
   /** \brief The data type representing the curve's control points (one per column). */
-  typedef Array<Scalar, Dimension, OrderAtCompileTime> ControlPointVectorType;
+  using ControlPointVectorType = Array<Scalar, Dimension, OrderAtCompileTime>;
 
   /** \brief The data type used to store the values of the Bernstein basis functions. */
-  typedef Array<Scalar, 1, OrderAtCompileTime> BasisVectorType;
+  using BasisVectorType = Array<Scalar, 1, OrderAtCompileTime>;
 
   /** \brief The data type used to store the curve's derivatives (column k holds the k-th derivative). */
-  typedef Array<Scalar, Dimension, Dynamic> DerivativeType;
+  using DerivativeType = Array<Scalar, Dimension, Dynamic>;
 
   /** \brief The data type used to store curve parameters (one per data point). */
-  typedef Array<Scalar, 1, Dynamic> ParameterVectorType;
+  using ParameterVectorType = Array<Scalar, 1, Dynamic>;
 
   /** \brief The data type used to store the Bernstein basis functions and their derivatives (row k holds the k-th
    * derivatives). */
-  typedef Array<Scalar, Dynamic, OrderAtCompileTime> BasisDerivativeType;
+  using BasisDerivativeType = Array<Scalar, Dynamic, OrderAtCompileTime>;
 };
 
 /** \ingroup Beziers_Module \brief 2D float Bezier curve with dynamic degree. */
-typedef Bezier<float, 2> Bezier2f;
+using Bezier2f = Bezier<float, 2>;
 /** \ingroup Beziers_Module \brief 2D double Bezier curve with dynamic degree. */
-typedef Bezier<double, 2> Bezier2d;
+using Bezier2d = Bezier<double, 2>;
 /** \ingroup Beziers_Module \brief 3D float Bezier curve with dynamic degree. */
-typedef Bezier<float, 3> Bezier3f;
+using Bezier3f = Bezier<float, 3>;
 /** \ingroup Beziers_Module \brief 3D double Bezier curve with dynamic degree. */
-typedef Bezier<double, 3> Bezier3d;
+using Bezier3d = Bezier<double, 3>;
 
 }  // namespace Eigen
 

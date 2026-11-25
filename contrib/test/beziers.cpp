@@ -25,7 +25,7 @@ template class Bezier<double, 3, 4>;
 // Reference evaluation with de Casteljau's algorithm.
 template <typename BezierType>
 typename BezierType::PointType de_casteljau(const BezierType& bezier, typename BezierType::Scalar u) {
-  typedef typename BezierType::Scalar Scalar;
+  using Scalar = typename BezierType::Scalar;
   Array<Scalar, BezierType::Dimension, Dynamic> pts = bezier.ctrls();
   for (Index k = pts.cols() - 1; k > 0; --k)
     for (Index j = 0; j < k; ++j) pts.col(j) = (Scalar(1) - u) * pts.col(j) + u * pts.col(j + 1);
@@ -34,7 +34,7 @@ typename BezierType::PointType de_casteljau(const BezierType& bezier, typename B
 
 template <typename BezierType>
 BezierType random_bezier(Index degree) {
-  typedef typename BezierType::ControlPointVectorType ControlPointVectorType;
+  using ControlPointVectorType = typename BezierType::ControlPointVectorType;
   return BezierType(ControlPointVectorType::Random(BezierType::Dimension, degree + 1));
 }
 
@@ -108,9 +108,9 @@ void eval_reference_curves() {
 
 template <typename BezierType>
 void check_evaluation() {
-  typedef typename BezierType::Scalar Scalar;
-  typedef typename BezierType::BasisVectorType BasisVectorType;
-  typedef typename BezierType::PointType PointType;
+  using Scalar = typename BezierType::Scalar;
+  using BasisVectorType = typename BezierType::BasisVectorType;
+  using PointType = typename BezierType::PointType;
 
   const Index degree = internal::random<Index>(0, 12);
   const BezierType bezier = random_bezier<BezierType>(degree);
@@ -147,11 +147,11 @@ void check_evaluation() {
 
 template <typename BezierType>
 void check_derivatives() {
-  typedef typename BezierType::Scalar Scalar;
-  typedef typename BezierType::BasisVectorType BasisVectorType;
-  typedef typename BezierType::DerivativeType DerivativeType;
-  typedef typename BezierType::ControlPointVectorType ControlPointVectorType;
-  typedef typename BezierType::BasisDerivativeType BasisDerivativeType;
+  using Scalar = typename BezierType::Scalar;
+  using BasisVectorType = typename BezierType::BasisVectorType;
+  using DerivativeType = typename BezierType::DerivativeType;
+  using ControlPointVectorType = typename BezierType::ControlPointVectorType;
+  using BasisDerivativeType = typename BezierType::BasisDerivativeType;
 
   const Index degree = internal::random<Index>(0, 10);
   const BezierType bezier = random_bezier<BezierType>(degree);
@@ -286,9 +286,9 @@ void check_split() {
 
 template <typename BezierType>
 void check_chord_lengths() {
-  typedef typename BezierType::Scalar Scalar;
-  typedef typename BezierType::ParameterVectorType ParameterVectorType;
-  typedef Array<Scalar, BezierType::Dimension, Dynamic> PointArrayType;
+  using Scalar = typename BezierType::Scalar;
+  using ParameterVectorType = typename BezierType::ParameterVectorType;
+  using PointArrayType = Array<Scalar, BezierType::Dimension, Dynamic>;
 
   const Index n = internal::random<Index>(2, 30);
   const PointArrayType pts = PointArrayType::Random(BezierType::Dimension, n);
@@ -307,9 +307,9 @@ void check_chord_lengths() {
 
 template <typename BezierType>
 void check_fitting() {
-  typedef typename BezierType::Scalar Scalar;
-  typedef typename BezierType::ParameterVectorType ParameterVectorType;
-  typedef Array<Scalar, BezierType::Dimension, Dynamic> PointArrayType;
+  using Scalar = typename BezierType::Scalar;
+  using ParameterVectorType = typename BezierType::ParameterVectorType;
+  using PointArrayType = Array<Scalar, BezierType::Dimension, Dynamic>;
 
   // Degree n-1: the curve interpolates the points.
   {
@@ -337,12 +337,12 @@ void check_fitting() {
 
 template <typename BezierType>
 void check_lsq_jacobian() {
-  typedef typename BezierType::Scalar Scalar;
-  typedef typename BezierType::ParameterVectorType ParameterVectorType;
-  typedef BezierLsqFitting<BezierType> LsqFitting;
-  typedef typename LsqFitting::VectorType VectorType;
-  typedef typename LsqFitting::MatrixType MatrixType;
-  typedef Array<Scalar, BezierType::Dimension, Dynamic> PointArrayType;
+  using Scalar = typename BezierType::Scalar;
+  using ParameterVectorType = typename BezierType::ParameterVectorType;
+  using LsqFitting = BezierLsqFitting<BezierType>;
+  using VectorType = typename LsqFitting::VectorType;
+  using MatrixType = typename LsqFitting::MatrixType;
+  using PointArrayType = Array<Scalar, BezierType::Dimension, Dynamic>;
 
   const Index degree = internal::random<Index>(1, 5);
   const Index n = degree + 1 + internal::random<Index>(1, 10);
@@ -381,7 +381,7 @@ void check_lsq_jacobian() {
 template <typename BezierType>
 Array<typename BezierType::Scalar, BezierType::Dimension, Dynamic> sample_warped(
     const BezierType& ref, Index n, typename BezierType::ParameterVectorType& exact) {
-  typedef typename BezierType::Scalar Scalar;
+  using Scalar = typename BezierType::Scalar;
   const typename BezierType::ParameterVectorType t =
       BezierType::ParameterVectorType::LinSpaced(n, Scalar(0), Scalar(1));
   exact = t + Scalar(0.5) * t * (Scalar(1) - t);
@@ -410,11 +410,11 @@ void check_lsq_recovery() {
 
 template <typename BezierType>
 void check_lsq_fitting() {
-  typedef typename BezierType::Scalar Scalar;
-  typedef typename BezierType::ParameterVectorType ParameterVectorType;
-  typedef typename BezierType::ControlPointVectorType ControlPointVectorType;
-  typedef BezierLsqFitting<BezierType> LsqFitting;
-  typedef Array<Scalar, BezierType::Dimension, Dynamic> PointArrayType;
+  using Scalar = typename BezierType::Scalar;
+  using ParameterVectorType = typename BezierType::ParameterVectorType;
+  using ControlPointVectorType = typename BezierType::ControlPointVectorType;
+  using LsqFitting = BezierLsqFitting<BezierType>;
+  using PointArrayType = Array<Scalar, BezierType::Dimension, Dynamic>;
   const bool isDouble = NumTraits<Scalar>::epsilon() < Scalar(1e-10);
 
   // Points sampled from a random curve at non chord-length parameters. The problem is non-convex and
@@ -452,7 +452,7 @@ void check_lsq_fitting() {
 
 // Noisy real-life data (a closed curve): the residual must decrease and the parameters stay in [0,1].
 void check_lsq_fitting_data2d() {
-  typedef Bezier2d::ParameterVectorType ParameterVectorType;
+  using ParameterVectorType = Bezier2d::ParameterVectorType;
   const MatrixXd points = sample_points2d();
   const Index n = points.cols();
   for (Index degree = 3; degree <= 9; degree += 3) {
