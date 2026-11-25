@@ -78,6 +78,8 @@ class Bezier {
   EIGEN_STATIC_ASSERT(Dim_ > 0, YOU_MADE_A_PROGRAMMING_MISTAKE)
   EIGEN_STATIC_ASSERT(Degree_ == Dynamic || Degree_ >= 0, YOU_MADE_A_PROGRAMMING_MISTAKE)
 
+  EIGEN_MAKE_ALIGNED_OPERATOR_NEW_IF(bool(ControlPointVectorType::NeedsToAlign))
+
   /**
    * \brief Creates a constant zero curve. For curves with dynamic degree the resulting degree is 0.
    */
@@ -168,7 +170,8 @@ template <typename Scalar_, int Dim_, int Degree_>
 typename Bezier<Scalar_, Dim_, Degree_>::BasisVectorType Bezier<Scalar_, Dim_, Degree_>::BasisFunctions(Scalar u,
                                                                                                         Index degree) {
   eigen_assert(degree >= 0);
-  BasisVectorType N(degree + 1);
+  BasisVectorType N;
+  N.resize(degree + 1);
   internal::bernstein_basis(u, degree, N);
   return N;
 }
@@ -197,7 +200,8 @@ typename Bezier<Scalar_, Dim_, Degree_>::BasisDerivativeType Bezier<Scalar_, Dim
   // B^{(k)}_{.,p} = D_p D_{p-1} ... D_{p-k+1} B_{.,p-k},  (D_q w)_j = q (w_{j-1} - w_j),  w_{-1} = w_q = 0,
   // so a single run of the degree-raising recurrence provides every B_{.,p-k} for k = 0..min(order, p).
   const Index maxOrder = numext::mini(order, degree);
-  BasisVectorType N(degree + 1);
+  BasisVectorType N;
+  N.resize(degree + 1);
   N(0) = Scalar(1);
   for (Index q = 0; q <= degree; ++q) {
     if (q > 0) internal::bernstein_basis_step(u, q, N);

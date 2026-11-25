@@ -469,6 +469,27 @@ void check_lsq_fitting_data2d() {
   }
 }
 
+// Heap-allocated fixed-degree curves must honor the alignment of their control point storage, also in C++14.
+template <typename BezierType>
+void check_aligned_new() {
+  const std::uintptr_t alignment = internal::traits<typename BezierType::ControlPointVectorType>::Alignment;
+  const auto is_aligned = [alignment](const void* p) {
+    return alignment == 0 || std::uintptr_t(p) % alignment == 0;
+  };
+  const int N = 10;
+  for (int i = 0; i < 32; ++i) {
+    BezierType* single = new BezierType;
+    VERIFY(is_aligned(single->ctrls().data()));
+    BezierType* many = new BezierType[N];
+    for (int k = 0; k < N; ++k) VERIFY(is_aligned(many[k].ctrls().data()));
+    BezierType* nothrow = new (std::nothrow) BezierType;
+    VERIFY(nothrow != nullptr && is_aligned(nothrow->ctrls().data()));
+    delete nothrow;
+    delete[] many;
+    delete single;
+  }
+}
+
 template <typename BezierType>
 void beziers_all() {
   CALL_SUBTEST(check_evaluation<BezierType>());
@@ -484,6 +505,11 @@ EIGEN_DECLARE_TEST(beziers) {
   CALL_SUBTEST(eval_reference_curves());
   CALL_SUBTEST(check_lsq_recovery());
   CALL_SUBTEST(check_lsq_fitting_data2d());
+  CALL_SUBTEST((check_aligned_new<Bezier<float, 2, 3> >()));
+  CALL_SUBTEST((check_aligned_new<Bezier<double, 2, 3> >()));
+  CALL_SUBTEST((check_aligned_new<Bezier<double, 3, 3> >()));
+  CALL_SUBTEST(check_aligned_new<Bezier2d>());
+  STATIC_CHECK(!Bezier2d::ControlPointVectorType::NeedsToAlign);
   for (int i = 0; i < g_repeat; ++i) {
     CALL_SUBTEST(beziers_all<Bezier2d>());
     CALL_SUBTEST(beziers_all<Bezier3d>());
