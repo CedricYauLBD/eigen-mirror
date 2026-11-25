@@ -303,6 +303,14 @@ void check_chord_lengths() {
   const PointArrayType same = pts.col(0).replicate(1, n);
   BezierFitting<BezierType>::ChordLengths(same, params);
   VERIFY_IS_APPROX(params.matrix(), ParameterVectorType::LinSpaced(n, Scalar(0), Scalar(1)).matrix());
+
+  // A single point is the minimum for a degree-0 fit.
+  const PointArrayType single = pts.col(0);
+  BezierFitting<BezierType>::ChordLengths(single, params);
+  VERIFY_IS_EQUAL(params.size(), 1);
+  VERIFY_IS_EQUAL(params(0), Scalar(0));
+  VERIFY_IS_APPROX(BezierFitting<BezierType>::Fit(single, 0).ctrls(), single);
+  VERIFY_IS_APPROX(BezierLsqFitting<BezierType>::Fit(single, 0).ctrls(), single);
 }
 
 template <typename BezierType>

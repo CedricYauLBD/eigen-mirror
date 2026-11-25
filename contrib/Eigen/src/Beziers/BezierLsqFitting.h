@@ -164,6 +164,8 @@ BezierType BezierLsqFitting<BezierType>::Fit(const PointArrayType& pts, Index de
         trial = params;
         trial.segment(1, numFree) =
             (params.segment(1, numFree).matrix() + alpha * step.transpose()).cwiseMax(lo).cwiseMin(hi).array();
+        // clamp(t + alpha s) == t also holds for every smaller alpha, so no further trial can decrease f.
+        if ((trial == params).all()) break;
         fTrial = SquaredResidual(pts, degree, trial);
         if (fTrial < f) {
           accepted = true;

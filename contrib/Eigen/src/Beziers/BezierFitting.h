@@ -41,7 +41,7 @@ struct BezierFitting {
    *
    * \param[in] pts The data points, one per column.
    * \param[out] params The cumulated chord lengths normalized to [0,1]. Uniform parameters are returned when all
-   *             points coincide.
+   *             points coincide, and a single point gets the parameter 0.
    *
    * \sa Les Piegl and Wayne Tiller, The NURBS book (2nd ed.), 1997, 9.2.1 Global Curve Interpolation to Point Data
    */
@@ -77,7 +77,12 @@ template <typename BezierType>
 template <typename PointArrayType>
 void BezierFitting<BezierType>::ChordLengths(const PointArrayType& pts, ParameterVectorType& params) {
   const Index n = pts.cols();
-  eigen_assert(n >= 2 && "ChordLengths requires at least two points");
+  eigen_assert(n >= 1 && "ChordLengths requires at least one point");
+
+  if (n == 1) {
+    params = ParameterVectorType::Zero(1);
+    return;
+  }
 
   params.resize(n);
   params(0) = Scalar(0);
