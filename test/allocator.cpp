@@ -54,6 +54,15 @@ static bool is_aligned(const void* ptr, std::size_t alignment) {
   return (reinterpret_cast<std::uintptr_t>(ptr) % alignment) == 0;
 }
 
+// Alignment requested by a one-argument memory_resource::allocate: alignof(max_align_t)
+// for std::pmr under C++17, Eigen's default alignment in the C++14 fallback.
+static constexpr std::size_t resource_default_alignment =
+#if EIGEN_HAS_CXX17_PMR
+    alignof(std::max_align_t);
+#else
+    Eigen::internal::pmr_default_alignment;
+#endif
+
 // ---------------------------------------------------------------------------
 // 1. new_delete_resource basics
 // ---------------------------------------------------------------------------
@@ -67,7 +76,7 @@ static void test_new_delete_resource() {
   // Allocate, write, deallocate.
   void* p = r->allocate(128);
   VERIFY(p != nullptr);
-  VERIFY(is_aligned(p, Eigen::internal::pmr_default_alignment));
+  VERIFY(is_aligned(p, resource_default_alignment));
   std::memset(p, 0xAB, 128);
   r->deallocate(p, 128);
 
@@ -138,13 +147,13 @@ static void test_monotonic_heap_growth() {
     Eigen::monotonic_buffer_resource arena(64, &counter);
 
     // Allocate more than 64 bytes to force block growth.
-    arena.allocate(128);
+    VERIFY(arena.allocate(128) != nullptr);
     VERIFY(counter.alloc_count() >= 1);
 
     int allocs_before = counter.alloc_count();
     // Many small allocations should batch into existing blocks.
     for (int i = 0; i < 100; ++i) {
-      arena.allocate(8);
+      VERIFY(arena.allocate(8) != nullptr);
     }
     // Should NOT have allocated 100 new blocks.
     VERIFY(counter.alloc_count() - allocs_before < 10);
@@ -160,8 +169,8 @@ static void test_monotonic_release() {
   counting_resource counter;
   Eigen::monotonic_buffer_resource arena(256, &counter);
 
-  arena.allocate(128);
-  arena.allocate(128);
+  VERIFY(arena.allocate(128) != nullptr);
+  VERIFY(arena.allocate(128) != nullptr);
   int allocs = counter.alloc_count();
 
   arena.release();
@@ -187,6 +196,10 @@ static void test_alignment() {
     VERIFY(p != nullptr);
     VERIFY(is_aligned(p, align));
   }
+
+#if !EIGEN_HAS_CXX17_PMR
+  VERIFY_RAISES_ASSERT(arena.allocate(100, 24));
+#endif
 }
 
 // ---------------------------------------------------------------------------
@@ -205,6 +218,7 @@ static void test_polymorphic_allocator() {
   // Allocate and deallocate.
   void* p = arena_alloc.allocate(256);
   VERIFY(p != nullptr);
+  VERIFY(is_aligned(p, Eigen::internal::pmr_default_alignment));
   arena_alloc.deallocate(p, 256);
 
   // Copy construction.
@@ -248,7 +262,7 @@ static void test_edge_cases() {
   // Allocation larger than initial size triggers growth.
   void* big = arena.allocate(1024);
   VERIFY(big != nullptr);
-  VERIFY(is_aligned(big, Eigen::internal::pmr_default_alignment));
+  VERIFY(is_aligned(big, resource_default_alignment));
 
   // Nested resources: monotonic using monotonic as upstream.
   Eigen::monotonic_buffer_resource outer(4096);
@@ -265,7 +279,7 @@ static void test_no_leaks() {
   {
     Eigen::monotonic_buffer_resource arena(128, &counter);
     for (int i = 0; i < 50; ++i) {
-      arena.allocate(64);
+      VERIFY(arena.allocate(64) != nullptr);
     }
     // Many allocations, several blocks allocated upstream.
     VERIFY(counter.alloc_count() > 0);
@@ -361,7 +375,7 @@ static void test_user_buffer_not_freed() {
     VERIFY_IS_EQUAL(counter.alloc_count(), 0);
 
     // Large allocation forces upstream block.
-    arena.allocate(1024);
+    VERIFY(arena.allocate(1024) != nullptr);
     VERIFY(counter.alloc_count() >= 1);
   }
   // Destructor must free upstream blocks but NOT the user buffer.

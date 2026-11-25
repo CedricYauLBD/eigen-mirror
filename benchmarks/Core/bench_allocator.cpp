@@ -10,7 +10,7 @@ using namespace Eigen;
 static void BM_HandmadeAlignedMalloc(benchmark::State& state) {
   const std::size_t bytes = static_cast<std::size_t>(state.range(0));
   for (auto _ : state) {
-    void* p = internal::handmade_aligned_malloc(bytes);
+    void* p = internal::handmade_aligned_malloc(bytes, internal::pmr_default_alignment);
     benchmark::DoNotOptimize(p);
     internal::handmade_aligned_free(p);
   }
@@ -20,9 +20,9 @@ static void BM_NewDeleteResource(benchmark::State& state) {
   const std::size_t bytes = static_cast<std::size_t>(state.range(0));
   memory_resource* r = new_delete_resource();
   for (auto _ : state) {
-    void* p = r->allocate(bytes);
+    void* p = r->allocate(bytes, internal::pmr_default_alignment);
     benchmark::DoNotOptimize(p);
-    r->deallocate(p, bytes);
+    r->deallocate(p, bytes, internal::pmr_default_alignment);
   }
 }
 
@@ -56,7 +56,7 @@ static void BM_HandmadeAlignedMallocBatch(benchmark::State& state) {
   const std::size_t count = static_cast<std::size_t>(state.range(1));
   for (auto _ : state) {
     for (std::size_t i = 0; i < count; ++i) {
-      void* p = internal::handmade_aligned_malloc(bytes);
+      void* p = internal::handmade_aligned_malloc(bytes, internal::pmr_default_alignment);
       benchmark::DoNotOptimize(p);
       internal::handmade_aligned_free(p);
     }

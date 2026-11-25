@@ -20,17 +20,16 @@
 
 // Detect C++17 PMR support. When available, Eigen::memory_resource and
 // Eigen::monotonic_buffer_resource are plain aliases for the std::pmr types and
-// Eigen carries no resource implementation of its own. Only when <memory_resource>
-// is unavailable does Eigen fall back to its own hand-rolled implementations.
+// Eigen carries no resource implementation of its own. Otherwise Eigen falls back to
+// its own hand-rolled implementations. The feature-test macro (from <version>, included
+// by Macros.h) is checked rather than the header's presence: Apple libc++ ships
+// <memory_resource> but marks std::pmr unavailable before macOS 14 / iOS 17 and
+// withholds the macro there.
 #ifndef EIGEN_HAS_CXX17_PMR
-#if EIGEN_MAX_CPP_VER >= 17 && EIGEN_COMP_CXXVER >= 17
-#ifdef __has_include
-#if __has_include(<memory_resource>)
+#if EIGEN_MAX_CPP_VER >= 17 && EIGEN_COMP_CXXVER >= 17 && defined(__cpp_lib_memory_resource) && \
+    __cpp_lib_memory_resource >= 201603L
 #define EIGEN_HAS_CXX17_PMR 1
-#endif
-#endif
-#endif
-#ifndef EIGEN_HAS_CXX17_PMR
+#else
 #define EIGEN_HAS_CXX17_PMR 0
 #endif
 #endif
@@ -97,7 +96,7 @@ inline bool size_mul_overflows(std::size_t a, std::size_t b) noexcept { return b
  * \brief Abstract interface for memory resources (C++14 fallback).
  *
  * This is a minimal stand-in for std::pmr::memory_resource, used only when
- * \<memory_resource\> is unavailable. When compiling with C++17 or later,
+ * std::pmr is unavailable. When compiling with C++17 or later,
  * Eigen::memory_resource is an alias for std::pmr::memory_resource instead.
  *
  * \note This class is not thread-safe. External synchronization is required
@@ -215,6 +214,7 @@ class monotonic_buffer_resource : public memory_resource {
   }
 
   void* do_allocate(std::size_t bytes, std::size_t alignment) override {
+    eigen_assert(alignment != 0 && (alignment & (alignment - 1)) == 0 && "alignment must be a power of two");
     // C++ standard: allocate(0) must return a non-null pointer.
     if (bytes == 0) bytes = 1;
 
@@ -328,10 +328,17 @@ inline std::atomic<memory_resource*>& default_resource_instance() noexcept {
 
 }  // namespace internal
 
-/** Returns a pointer to the default new/delete memory resource using Eigen's aligned allocation. */
+/** Returns a pointer to the default new/delete memory resource using Eigen's aligned allocation.
+ * The instance is never destroyed, so static objects may still allocate and free through it
+ * during static teardown. */
 inline memory_resource* new_delete_resource() noexcept {
-  static internal::new_delete_memory_resource instance;
-  return &instance;
+  union immortal_resource {
+    internal::new_delete_memory_resource resource;
+    immortal_resource() : resource() {}
+    ~immortal_resource() {}
+  };
+  static immortal_resource instance;
+  return &instance.resource;
 }
 
 /** Returns the current default memory resource. If none has been set, returns new_delete_resource().
@@ -345,7 +352,10 @@ inline memory_resource* get_default_resource() noexcept {
 /** Sets the default memory resource to \a r. Returns the previous default resource.
  * Pass nullptr to restore new_delete_resource() as the default.
  * \note Thread-safe (uses std::atomic). The caller is responsible for ensuring the
- * resource remains alive for the duration of its use as the default. */
+ * resource remains alive for the duration of its use as the default.
+ * \note Under C++17, monotonic_buffer_resource is std::pmr::monotonic_buffer_resource, whose
+ * constructors without an upstream use std::pmr::get_default_resource() and ignore this setting.
+ * Pass Eigen::get_default_resource() as the upstream explicitly when it should apply. */
 inline memory_resource* set_default_resource(memory_resource* r) noexcept {
   memory_resource* prev = internal::default_resource_instance().exchange(r, std::memory_order_acq_rel);
   return prev ? prev : new_delete_resource();
