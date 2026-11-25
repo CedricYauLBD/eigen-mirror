@@ -27,6 +27,41 @@ namespace Eigen {
 template <typename T, typename EnableIf = void>
 class Serializer;
 
+namespace internal {
+
+// Zeroes the bytes of serialized Scalars that hold no part of their value. Of the built-in scalars only the padded x87
+// extended precision long double has such bytes: a store writes 10 of its 12 or 16, and the others keep what the
+// memory held before, which must not be serialized along with the value. A long double that is a member of Scalar is
+// not cleared.
+template <typename Scalar>
+EIGEN_DEVICE_FUNC void clear_serialized_padding(uint8_t* dest, size_t bytes) {
+  constexpr size_t value_bytes = 10;
+  constexpr bool has_padding =
+      (std::is_same<Scalar, long double>::value || std::is_same<Scalar, std::complex<long double>>::value) &&
+      EIGEN_ARCH_i386_OR_x86_64 && std::numeric_limits<long double>::digits == 64 && sizeof(long double) > value_bytes;
+  constexpr size_t padding_bytes = has_padding ? sizeof(long double) - value_bytes : 0;
+  EIGEN_IF_CONSTEXPR (has_padding) {
+    EIGEN_USING_STD(memset)
+    for (size_t i = 0; i + sizeof(long double) <= bytes; i += sizeof(long double))
+      memset(dest + i + value_bytes, 0, padding_bytes);
+  }
+}
+
+// deserialize() copies untrusted bytes into objects of type T, and reading a bool that holds a byte other than 0 or 1
+// is undefined; the other built-in scalars can be read whatever their bytes. Returns whether the count objects stored
+// at src can be read. A bool that is a member of T is not checked.
+template <typename T>
+EIGEN_DEVICE_FUNC bool valid_serialized_values(const uint8_t* src, Index count) {
+  EIGEN_IF_CONSTEXPR (is_same<T, bool>::value) {
+    for (Index i = 0; i < count; ++i) {
+      if (EIGEN_PREDICT_FALSE(src[i] > 1)) return false;
+    }
+  }
+  return true;
+}
+
+}  // namespace internal
+
 // Specialization for POD types.
 template <typename T>
 class Serializer<T, std::enable_if_t<std::is_trivially_copyable<T>::value && std::is_standard_layout<T>::value>> {
@@ -51,6 +86,7 @@ class Serializer<T, std::enable_if_t<std::is_trivially_copyable<T>::value && std
     if (EIGEN_PREDICT_FALSE(dest + sizeof(value) > end)) return nullptr;
     EIGEN_USING_STD(memcpy)
     memcpy(dest, &value, sizeof(value));
+    internal::clear_serialized_padding<T>(dest, sizeof(value));
     return dest + sizeof(value);
   }
 
@@ -64,6 +100,7 @@ class Serializer<T, std::enable_if_t<std::is_trivially_copyable<T>::value && std
   EIGEN_DEVICE_FUNC const uint8_t* deserialize(const uint8_t* src, const uint8_t* end, T& value) const {
     if (EIGEN_PREDICT_FALSE(src == nullptr)) return nullptr;
     if (EIGEN_PREDICT_FALSE(src + sizeof(value) > end)) return nullptr;
+    if (EIGEN_PREDICT_FALSE(!internal::valid_serialized_values<T>(src, 1))) return nullptr;
     EIGEN_USING_STD(memcpy)
     memcpy(&value, src, sizeof(value));
     return src + sizeof(value);
@@ -95,6 +132,7 @@ class Serializer<DenseBase<Derived>, void> {
     dest += header_bytes;
     // An empty object may have a null data(), which memcpy does not accept even for zero bytes.
     if (data_bytes > 0) memcpy(dest, value.data(), data_bytes);
+    internal::clear_serialized_padding<Scalar>(dest, data_bytes);
     return dest + data_bytes;
   }
 
@@ -113,6 +151,10 @@ class Serializer<DenseBase<Derived>, void> {
                             (Derived::MaxRowsAtCompileTime != Dynamic && header.rows > Derived::MaxRowsAtCompileTime) ||
                             (Derived::MaxColsAtCompileTime != Dynamic && header.cols > Derived::MaxColsAtCompileTime)))
       return nullptr;
+    // Only a plain object can be resized: for a Map, Ref or Block, resize() just asserts that the sizes are unchanged.
+    if (EIGEN_PREDICT_FALSE(!Derived::IsPlainObjectBase &&
+                            (header.rows != value.rows() || header.cols != value.cols())))
+      return nullptr;
     // resize() forms rows * cols in Index, so bound the product by the largest Index as well as by the buffer.
     using Count = numext::uint64_t;
     const Count buffer_coeffs = static_cast<Count>(end - src) / sizeof(Scalar);
@@ -122,6 +164,7 @@ class Serializer<DenseBase<Derived>, void> {
                             static_cast<Count>(header.rows) > max_coeffs / static_cast<Count>(header.cols)))
       return nullptr;
     const size_t data_bytes = sizeof(Scalar) * header.rows * header.cols;
+    if (EIGEN_PREDICT_FALSE(!internal::valid_serialized_values<Scalar>(src, header.rows * header.cols))) return nullptr;
     value.resize(header.rows, header.cols);
     if (data_bytes > 0) memcpy(value.data(), src, data_bytes);
     return src + data_bytes;
