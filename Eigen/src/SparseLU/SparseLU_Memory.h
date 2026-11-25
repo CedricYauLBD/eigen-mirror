@@ -41,6 +41,14 @@ namespace internal {
 enum { LUNoMarker = 3 };
 enum { emptyIdxLU = -1 };
 inline Index LUnumTempV(Index& m, Index& w, Index& t, Index& b) { return (std::max)(m, (t + b) * w); }
+// Length to expand a vector of \a length elements to, for the ratio \a alpha > 1: at least one more element, and the
+// largest Index if the product does not fit (which is \a length itself once there is nothing left to add).
+inline Index LUexpandedLength(Index length, float alpha) {
+  const float new_len = alpha * float(length);
+  // float(highest()) is at most highest() + 1, so any smaller float converts to Index without overflow
+  if (new_len < float(NumTraits<Index>::highest())) return (std::max)(length + 1, Index(new_len));
+  return NumTraits<Index>::highest();
+}
 
 /**
  * Expand the existing storage to accommodate more fill-ins
@@ -59,8 +67,10 @@ Index SparseLUImpl<Scalar, StorageIndex>::expand(VectorType& vec, Index& length,
 
   if (num_expansions == 0 || keep_prev)
     new_len = length;  // First time allocate requested
-  else
-    new_len = (std::max)(length + 1, Index(alpha * length));
+  else {
+    new_len = LUexpandedLength(length, alpha);
+    if (new_len == length) return length;  // Already the largest length: report it as memory that is not available
+  }
 
   VectorType old_vec;  // Temporary vector to hold the previous values
   if (nbElts > 0) old_vec = vec.segment(0, nbElts);
@@ -91,7 +101,7 @@ Index SparseLUImpl<Scalar, StorageIndex>::expand(VectorType& vec, Index& length,
       Index tries = 0;  // Number of attempts
       do {
         alpha = (alpha + 1) / 2;
-        new_len = (std::max)(length + 1, Index(alpha * length));
+        new_len = LUexpandedLength(length, alpha);
 #ifdef EIGEN_EXCEPTIONS
         try
 #endif
@@ -136,14 +146,18 @@ Index SparseLUImpl<Scalar, StorageIndex>::memInit(Index m, Index n, Index annz, 
                                                   Index panel_size, GlobalLU_t& glu) {
   Index& num_expansions = glu.num_expansions;  // No memory expansions so far
   num_expansions = 0;
+  // The estimated fill is fillratio * (annz + 1), with annz + 1 clamped so that the products fit Index. These are only
+  // initial sizes: the loop below halves them until they can be allocated, and the buffers are expanded on demand.
+  const Index lfillratio = (std::max)(Index(4), fillratio);
+  const Index annz1 = (std::min)(annz, NumTraits<Index>::highest() / lfillratio - 1) + 1;
   // estimated number of nonzeros in U; at least one, since the allocation loop below exits only once every buffer is
   // non-empty, and the truncated estimate is 0 for n == 0 and for n > fillratio * (annz + 1)
-  glu.nzumax = glu.nzlumax = n == 0 ? Index(1) : (std::max)(Index(1), (std::min)(fillratio * (annz + 1) / n, m) * n);
-  glu.nzlmax = (std::max)(Index(4), fillratio) * (annz + 1) / 4;             // estimated  nnz in L factor
+  glu.nzumax = glu.nzlumax = n == 0 ? Index(1) : (std::max)(Index(1), (std::min)(fillratio * annz1 / n, m) * n);
+  glu.nzlmax = lfillratio * annz1 / 4;  // estimated  nnz in L factor
   // Return the estimated size to the user if necessary
-  Index tempSpace;
-  tempSpace = (2 * panel_size + 4 + LUNoMarker) * m * sizeof(Index) + (panel_size + 1) * m * sizeof(Scalar);
   if (lwork == emptyIdxLU) {
+    Index tempSpace;
+    tempSpace = (2 * panel_size + 4 + LUNoMarker) * m * sizeof(Index) + (panel_size + 1) * m * sizeof(Scalar);
     Index estimated_size;
     estimated_size = (5 * n + 5) * sizeof(Index) + tempSpace + (glu.nzlmax + glu.nzumax) * sizeof(Index) +
                      (glu.nzlumax + glu.nzumax) * sizeof(Scalar) + n;
@@ -169,7 +183,8 @@ Index SparseLUImpl<Scalar, StorageIndex>::memInit(Index m, Index n, Index annz, 
       glu.nzlumax /= 2;
       glu.nzumax /= 2;
       glu.nzlmax /= 2;
-      if (glu.nzlumax < annz) return glu.nzlumax;
+      // Never 0, which means success: the buffers are not allocated
+      if (glu.nzlumax < annz) return (std::max)(Index(1), glu.nzlumax);
     }
   } while (!glu.lusup.size() || !glu.ucol.size() || !glu.lsub.size() || !glu.usub.size());
 

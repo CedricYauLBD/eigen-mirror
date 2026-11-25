@@ -9,6 +9,7 @@
 #include "main.h"
 
 #include <Eigen/SparseCore>
+#include <Eigen/SparseLU>
 
 // Random insertion past the reserved room must grow the storage. Its growth limit is NumTraits<StorageIndex>::highest()
 // clamped to Index; a StorageIndex wider than Index used to wrap the limit to -1, so the insertion wrote past the end
@@ -49,10 +50,41 @@ void sparse_random_insertion_growth() {
   }
 }
 
+// SparseLU sizes its buffers from the number of nonzeros: initially as fillratio * (nonZeros + 1), then growing them by
+// a ratio. Both products used to overflow Index, and the first one left factorize() with a buffer it had not allocated.
+struct sparselu_buffer_sizes : internal::SparseLUImpl<float, int> {
+  static void run() {
+    sparselu_buffer_sizes lu;
+    GlobalLU_t glu;
+    const Index highest = NumTraits<Index>::highest();
+    const Index n = 20000, fillratio = 20, panel_size = 16;
+    // From highest / fillratio nonzeros on, fillratio * (annz + 1) does not fit Index.
+    for (Index annz : {highest / fillratio - 1, highest / fillratio, highest}) {
+      // lwork = -1 computes the initial sizes without allocating the buffers.
+      lu.memInit(n, n, annz, -1, fillratio, panel_size, glu);
+      VERIFY(glu.nzlmax > highest / 4 - fillratio);
+      VERIFY_IS_EQUAL(glu.nzumax, n * n);
+      VERIFY_IS_EQUAL(glu.nzlumax, n * n);
+    }
+
+    VERIFY_IS_EQUAL(internal::LUexpandedLength(1, 1.5f), Index(2));
+    VERIFY_IS_EQUAL(internal::LUexpandedLength(1000, 1.5f), Index(1500));
+    VERIFY_IS_EQUAL(internal::LUexpandedLength(highest / 3 * 2 + 1000, 1.5f), highest);
+    VERIFY_IS_EQUAL(internal::LUexpandedLength(highest, 1.5f), highest);
+    // A buffer of the largest length cannot grow: that is a failed expansion, which leaves the buffer as it is.
+    IndexVector vec(3);
+    Index length = highest, num_expansions = 1;
+    VERIFY(lu.expand(vec, length, 0, 0, num_expansions) != 0);
+    VERIFY_IS_EQUAL(length, highest);
+    VERIFY_IS_EQUAL(vec.size(), Index(3));
+  }
+};
+
 EIGEN_DECLARE_TEST(sparse_int_index) {
   STATIC_CHECK(sizeof(Index) == sizeof(int));
   for (int i = 0; i < g_repeat; ++i) {
     CALL_SUBTEST_1(sparse_random_insertion_growth<long long>());
     CALL_SUBTEST_2(sparse_random_insertion_growth<int>());
   }
+  CALL_SUBTEST_3(sparselu_buffer_sizes::run());
 }

@@ -16,9 +16,20 @@
 #undef EIGEN_DEFAULT_TO_ROW_MAJOR
 #endif
 
+// Lets test_sparselu_failed_lsub_expansion() make chosen dense allocations fail.
+static void on_dense_allocation(long int size, int);
+#define EIGEN_DENSE_STORAGE_CTOR_PLUGIN \
+  { on_dense_allocation(size, Size); }
+
 #include "sparse_solver.h"
 #include "fp_control.h"
 #include <Eigen/SparseLU>
+
+// Dense storage for more than fail_above and at most fail_up_to coefficients cannot be allocated.
+static Index fail_above = 0, fail_up_to = 0;
+static void on_dense_allocation(long int size, int) {
+  if (size > fail_above && size <= fail_up_to) internal::throw_std_bad_alloc();
+}
 
 template <typename T>
 void test_sparselu_T() {
@@ -254,6 +265,75 @@ void test_sparselu_determinants() {
   }
 }
 
+// SparseLU numbers rows and columns with StorageIndex, and a dummy root of the elimination tree after the last column.
+// A column count beyond that range used to wrap in analyzePattern(), or to loop forever in the postorder.
+template <typename T>
+void test_sparselu_narrow_index() {
+  using SpMat = SparseMatrix<T, ColMajor, signed char>;
+  using Solver = SparseLU<SpMat, NaturalOrdering<signed char> >;
+  const Index highest = NumTraits<signed char>::highest();
+  const auto diagonal = [](Index n) {
+    SpMat A(n, n);
+    for (Index i = 0; i < 8; ++i) A.insert(i, i) = T(i + 1);
+    A.makeCompressed();
+    return A;
+  };
+
+  Solver lu(diagonal(8));
+  VERIFY_IS_EQUAL(lu.info(), Success);
+  // The largest size that leaves room for the dummy root.
+  Solver atLimit;
+  atLimit.analyzePattern(diagonal(highest - 1));
+  VERIFY_IS_EQUAL(atLimit.cols(), highest - 1);
+#ifdef EIGEN_EXCEPTIONS
+  for (Index n : {Index(300), highest}) {
+    bool threw = false;
+    try {
+      lu.compute(diagonal(n));
+    } catch (const std::bad_alloc&) {
+      threw = true;
+    }
+    VERIFY(threw);
+    // The solver still holds the factorization of the first matrix.
+    VERIFY_IS_EQUAL(lu.cols(), 8);
+    VERIFY_IS_EQUAL(lu.info(), Success);
+  }
+#endif
+}
+
+// memXpand() empties the array it fails to expand. column_dfs() ignored that failure for lsub, the row indices of L,
+// and went on reading and writing them.
+void test_sparselu_failed_lsub_expansion() {
+#ifdef EIGEN_EXCEPTIONS
+  // Even and odd unknowns are two independent systems, each with three full leading columns and every unknown coupled
+  // to its predecessor. In natural order L fills in completely below them, and as neighbouring columns never share a
+  // supernode, every column of L keeps its own row indices in lsub: about n^2 / 4 of them for about 5 n nonzeros.
+  const Index n = 400;
+  SparseMatrix<double> A(n, n);
+  for (Index j = 0; j < n; ++j) {
+    A.insert(j, j) = 8.0;
+    if (j >= 2) A.insert(j - 2, j) = 1.0;
+    for (Index k = j % 2; k < (std::min<Index>)(j, 6); k += 2) A.insert(j, k) = 1.0;
+  }
+  A.makeCompressed();
+  const VectorXd b = VectorXd::Ones(n);
+
+  SparseLU<SparseMatrix<double>, NaturalOrdering<int> > lu;
+  // lsub starts with 5 (nnz + 1) entries and is expanded by a factor of at most 1.5. No other array of the
+  // factorization asks for a size in that range before lsub is full.
+  fail_above = 5 * (A.nonZeros() + 1);
+  fail_up_to = fail_above + fail_above / 2;
+  lu.compute(A);
+  fail_up_to = 0;
+  VERIFY_IS_EQUAL(lu.info(), NumericalIssue);
+  VERIFY(lu.lastErrorMessage().find("COLUMN_DFS") != std::string::npos);
+
+  lu.compute(A);
+  VERIFY_IS_EQUAL(lu.info(), Success);
+  VERIFY_IS_APPROX(A * lu.solve(b), b);
+#endif
+}
+
 EIGEN_DECLARE_TEST(sparselu) {
   CALL_SUBTEST_1(test_sparselu_T<float>());
   CALL_SUBTEST_2(test_sparselu_T<double>());
@@ -271,6 +351,8 @@ EIGEN_DECLARE_TEST(sparselu) {
   CALL_SUBTEST_10(test_sparselu_clear_error_state<double>());
   CALL_SUBTEST_10(test_sparselu_empty<double>());
   CALL_SUBTEST_10(test_sparselu_tiny_fill_estimate<double>());
+  CALL_SUBTEST_10(test_sparselu_narrow_index<double>());
+  CALL_SUBTEST_10(test_sparselu_failed_lsub_expansion());
   // The scaled column leads a supernode (0) or lies inside one (1); COLAMD is free to move it.
   for (Index scaledColumn = 0; scaledColumn < 2; ++scaledColumn) {
     CALL_SUBTEST_9((test_sparselu_subnormal_pivot<float, NaturalOrdering<int> >(4, scaledColumn, 1.0f)));

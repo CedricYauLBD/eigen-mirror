@@ -174,12 +174,76 @@ void test_simplicial_cholesky_scatter(Index bandwidth) {
   }
 }
 
+// The factor, the permutations and the elimination tree number rows and columns with StorageIndex. A size beyond
+// its range used to wrap, so that a 300 x 300 matrix with signed char indices got a 44 x 44 factor.
+template <template <typename, int, typename> class Solver, int UpLo>
+void test_simplicial_cholesky_narrow_index() {
+  using SpMat = SparseMatrix<double, ColMajor, signed char>;
+  const Index highest = NumTraits<signed char>::highest();
+  // Every stored index fits signed char, also when the size does not.
+  const auto diagonal = [=](Index n) {
+    SpMat A(n, n);
+    for (Index i = 0; i < (std::min)(n, highest); ++i) A.insert(i, i) = double(i + 1);
+    A.makeCompressed();
+    return A;
+  };
+
+  Solver<SpMat, UpLo, NaturalOrdering<signed char>> solver(diagonal(highest));
+  VERIFY_IS_EQUAL(solver.info(), Success);
+  const VectorXd b = VectorXd::LinSpaced(highest, 1, double(highest));
+  VERIFY_IS_APPROX(solver.solve(b), VectorXd::Ones(highest));
+#ifdef EIGEN_EXCEPTIONS
+  for (Index n : {highest + 1, Index(300)}) {
+    bool threw = false;
+    try {
+      solver.compute(diagonal(n));
+    } catch (const std::bad_alloc&) {
+      threw = true;
+    }
+    VERIFY(threw);
+    // The solver still holds the factorization of the first matrix.
+    VERIFY_IS_EQUAL(solver.rows(), highest);
+    VERIFY_IS_APPROX(solver.solve(b), VectorXd::Ones(highest));
+  }
+#endif
+}
+
+// In an arrowhead matrix the last unknown is coupled to all the others: the root of the elimination tree has n - 1
+// children and L has no fill-in. The analysis must be linear in the number of children of a node. If it is quadratic
+// it takes about n^2 / 2 = 5e11 steps here, so a regression shows up as a timeout, not as a failed VERIFY.
+// The shared harnesses compare against a dense reference, which does not fit at this size.
+template <typename Ordering>
+void test_simplicial_cholesky_many_children() {
+  using SparseMatrixType = SparseMatrix<double>;
+  const int n = 1000000;
+  std::vector<Triplet<double>> triplets;
+  triplets.reserve(2 * n - 1);
+  for (int j = 0; j < n - 1; ++j) {
+    triplets.emplace_back(j, j, 2.0);
+    triplets.emplace_back(n - 1, j, 1.0);
+  }
+  triplets.emplace_back(n - 1, n - 1, double(n));
+  SparseMatrixType arrowhead(n, n);
+  arrowhead.setFromTriplets(triplets.begin(), triplets.end());
+
+  SimplicialLLT<SparseMatrixType, Lower, Ordering> llt(arrowhead);
+  VERIFY_IS_EQUAL(llt.info(), Success);
+  VERIFY_IS_EQUAL(llt.matrixL().nestedExpression().nonZeros(), arrowhead.nonZeros());
+  VectorXd x = VectorXd::Ones(n);
+  VectorXd b = arrowhead.selfadjointView<Lower>() * x;
+  VERIFY_IS_APPROX(llt.solve(b), x);
+}
+
 EIGEN_DECLARE_TEST(simplicial_cholesky) {
   CALL_SUBTEST_31(test_simplicial_cholesky_scatter<float>(3));
   CALL_SUBTEST_31(test_simplicial_cholesky_scatter<float>(37));
   CALL_SUBTEST_32(test_simplicial_cholesky_scatter<std::complex<float>>(3));
   CALL_SUBTEST_32(test_simplicial_cholesky_scatter<std::complex<float>>(37));
+  CALL_SUBTEST_31((test_simplicial_cholesky_narrow_index<SimplicialLLT, Lower>()));
+  CALL_SUBTEST_31((test_simplicial_cholesky_narrow_index<SimplicialLDLT, Upper>()));
   CALL_SUBTEST_11((test_simplicial_cholesky_T<double, int, ColMajor>()));
+  CALL_SUBTEST_11(test_simplicial_cholesky_many_children<AMDOrdering<int>>());
+  CALL_SUBTEST_11(test_simplicial_cholesky_many_children<NaturalOrdering<int>>());
   CALL_SUBTEST_12((test_simplicial_cholesky_T<std::complex<double>, int, ColMajor>()));
   CALL_SUBTEST_13((test_simplicial_cholesky_T<double, long int, ColMajor>()));
   CALL_SUBTEST_21((test_simplicial_cholesky_T<double, int, RowMajor>()));

@@ -26,6 +26,52 @@ void test_least_square_diagonal_preconditioner_zero_columns() {
   VERIFY_IS_APPROX(precond.solve(rhs), expected);
 }
 
+// solve() takes a matrix whose columns are the right-hand sides, like every other sparse solver.
+template <typename T>
+void test_diagonal_preconditioner_matrix_rhs() {
+  using MatrixType = Matrix<T, Dynamic, Dynamic>;
+  const Index size = 5;
+  const Index nrhs = 3;
+  SparseMatrix<T> mat(size, size);
+  for (Index i = 0; i < size; ++i) mat.insert(i, i) = T(2) + internal::random<T>();
+  mat.insert(1, 0) = T(3);
+  mat.makeCompressed();
+
+  const MatrixType rhs = MatrixType::Random(size, nrhs);
+  MatrixType expected(size, nrhs);
+  for (Index i = 0; i < size; ++i) expected.row(i) = rhs.row(i) / mat.coeff(i, i);
+
+  DiagonalPreconditioner<T> precond(mat);
+  MatrixType x = precond.solve(rhs);
+  VERIFY_IS_EQUAL(x.rows(), size);
+  VERIFY_IS_EQUAL(x.cols(), nrhs);
+  VERIFY_IS_APPROX(x, expected);
+  // The solve is evaluated into a temporary.
+  x += precond.solve(rhs);
+  VERIFY_IS_APPROX(x, T(2) * expected);
+  // The destination cannot be resized.
+  x.setZero();
+  x.leftCols(nrhs) = precond.solve(rhs);
+  VERIFY_IS_APPROX(x, expected);
+  // In place.
+  x = rhs;
+  x = precond.solve(x);
+  VERIFY_IS_APPROX(x, expected);
+  // The number of columns is known at compile time.
+  const Matrix<T, Dynamic, 2> rhs2 = rhs.leftCols(2);
+  VERIFY_IS_APPROX(precond.solve(rhs2), expected.leftCols(2));
+  VERIFY_IS_APPROX(precond.solve(rhs.col(nrhs - 1)), expected.col(nrhs - 1));
+  // No right-hand side.
+  x = precond.solve(MatrixType(size, 0));
+  VERIFY_IS_EQUAL(x.rows(), size);
+  VERIFY_IS_EQUAL(x.cols(), 0);
+
+  LeastSquareDiagonalPreconditioner<T> ls_precond(mat);
+  for (Index i = 0; i < size; ++i) expected.row(i) = rhs.row(i) / mat.col(i).squaredNorm();
+  x = rhs - ls_precond.solve(rhs);
+  VERIFY_IS_APPROX(x, rhs - expected);
+}
+
 template <typename T>
 void test_lscg_T() {
   LeastSquaresConjugateGradient<SparseMatrix<T> > lscg_colmajor_diag;
@@ -464,6 +510,8 @@ EIGEN_DECLARE_TEST(lscg) {
   CALL_SUBTEST_2(test_lscg_T<std::complex<double> >());
   CALL_SUBTEST_3(test_least_square_diagonal_preconditioner_zero_columns<double>());
   CALL_SUBTEST_4(test_least_square_diagonal_preconditioner_zero_columns<std::complex<double> >());
+  CALL_SUBTEST_3(test_diagonal_preconditioner_matrix_rhs<double>());
+  CALL_SUBTEST_4(test_diagonal_preconditioner_matrix_rhs<std::complex<double>>());
   CALL_SUBTEST_5(test_lscg_extreme_rhs());
   CALL_SUBTEST_5(test_lscg_rounding_floor<>());
   CALL_SUBTEST_5(test_lscg_truthful_info<>());

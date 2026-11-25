@@ -107,6 +107,9 @@ class MetisOrdering {
     if (output_error != METIS_OK) {
       // FIXME The ordering interface should define a class of possible errors
       std::cerr << "ERROR WHILE CALLING THE METIS PACKAGE \n";
+      // Return the empty permutation, which callers take for the natural ordering (see NaturalOrdering).
+      // Leaving matperm as it is would hand them the result of an earlier call, for a matrix of another size.
+      matperm.resize(0);
       return;
     }
 

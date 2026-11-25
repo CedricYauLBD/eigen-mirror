@@ -48,9 +48,14 @@ struct column_dfs_traits : no_assignment_operator {
                     SparseLUImpl<Scalar, StorageIndex>& luImpl)
       : m_jcol(jcol), m_jsuper_ref(jsuper), m_glu(glu), m_luImpl(luImpl) {}
   bool update_segrep(Index /*krep*/, Index /*jj*/) { return true; }
-  void mem_expand(IndexVector& lsub, Index& nextl, Index chmark) {
-    if (nextl >= m_glu.nzlmax) m_luImpl.memXpand(lsub, m_glu.nzlmax, nextl, LSUB, m_glu.num_expansions);
+  // Returns 0 on success. Otherwise memXpand() has left lsub empty, and the dfs must stop without indexing it again.
+  Index mem_expand(IndexVector& lsub, Index& nextl, Index chmark) {
+    if (nextl >= m_glu.nzlmax) {
+      Index mem = m_luImpl.memXpand(lsub, m_glu.nzlmax, nextl, LSUB, m_glu.num_expansions);
+      if (mem) return mem;
+    }
     if (chmark != (m_jcol - 1)) m_jsuper_ref = emptyIdxLU;
+    return 0;
   }
   enum { ExpandMem = true };
 
@@ -108,8 +113,9 @@ Index SparseLUImpl<Scalar, StorageIndex>::column_dfs(const Index m, const Index 
     // krow was visited before, go to the next nonz;
     if (kmark == jcol) continue;
 
-    dfs_kernel(StorageIndex(jcol), perm_r, nseg, glu.lsub, segrep, repfnz, xprune, marker2, parent, xplore, glu, nextl,
-               krow, traits);
+    Index mem = dfs_kernel(StorageIndex(jcol), perm_r, nseg, glu.lsub, segrep, repfnz, xprune, marker2, parent, xplore,
+                           glu, nextl, krow, traits);
+    if (mem) return mem;
   }  // for each nonzero ...
 
   Index fsupc;

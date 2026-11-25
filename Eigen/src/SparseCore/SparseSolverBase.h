@@ -55,6 +55,20 @@ std::enable_if_t<Rhs::ColsAtCompileTime == 1 || Dest::ColsAtCompileTime == 1> so
   dest = dest_dense.sparseView();
 }
 
+/** \internal
+ * The direct solvers number the rows and columns of their permutations, elimination trees and factors with
+ * StorageIndex, whereas the dimensions of a matrix with a narrow StorageIndex can exceed the range of that type.
+ * Throws std::bad_alloc for such dimensions, as the sparse containers do when the index range is exhausted. Solvers
+ * call this before they modify their state, so that a solver that holds a factorization keeps it.
+ */
+template <typename StorageIndex>
+void check_sparse_solver_size_for_overflow(Index rows, Index cols) {
+  // StorageIndex can be wider than Index (long long with a 32-bit Index), so compare in the wider of the two.
+  using WideIndex = std::common_type_t<Index, StorageIndex>;
+  const WideIndex highest = NumTraits<StorageIndex>::highest();
+  if (WideIndex(rows) > highest || WideIndex(cols) > highest) throw_std_bad_alloc();
+}
+
 }  // end namespace internal
 
 /** \class SparseSolverBase

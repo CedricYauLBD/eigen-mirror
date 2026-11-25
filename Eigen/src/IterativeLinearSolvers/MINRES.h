@@ -70,7 +70,9 @@ EIGEN_DONT_INLINE void minres(const MatrixType& mat, const Rhs& rhs, Dest& x, co
   VectorType w(N);                         // will be initialized inside loop
   VectorType w_new(precond.solve(v_new));  // initialize w_new
   RealScalar beta_new2(v_new.dot(w_new));
-  eigen_assert(beta_new2 >= RealScalar(0) && "PRECONDITIONER IS NOT POSITIVE DEFINITE");
+  // Only a negative value shows an indefinite preconditioner; NaN comes from non-finite input and is left to the
+  // convergence checks below.
+  eigen_assert(!(beta_new2 < RealScalar(0)) && "PRECONDITIONER IS NOT POSITIVE DEFINITE");
   RealScalar beta_new(numext::sqrt(beta_new2));
   const RealScalar beta_one(beta_new);
   // Initialize other variables
@@ -116,7 +118,7 @@ EIGEN_DONT_INLINE void minres(const MatrixType& mat, const Rhs& rhs, Dest& x, co
     v_new -= alpha * v;            // overwrite v_new
     w_new = precond.solve(v_new);  // overwrite w_new
     beta_new2 = v_new.dot(w_new);  // compute beta_new
-    eigen_assert(beta_new2 >= RealScalar(0) && "PRECONDITIONER IS NOT POSITIVE DEFINITE");
+    eigen_assert(!(beta_new2 < RealScalar(0)) && "PRECONDITIONER IS NOT POSITIVE DEFINITE");
     beta_new = numext::sqrt(beta_new2);  // compute beta_new
 
     // Givens rotation
