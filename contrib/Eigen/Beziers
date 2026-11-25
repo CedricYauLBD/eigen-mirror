@@ -18,7 +18,8 @@ namespace Eigen {
 /**
  * \defgroup Beziers_Module Bezier curves and Bezier fitting module
  *
- * This module provides a simple multi-dimensional Bezier curve class (Bernstein basis) together with
+ * This module provides a simple multi-dimensional Bezier curve class (Bernstein basis), with evaluation,
+ * derivatives and de Casteljau subdivision (Bezier::split, Bezier::keepLeft, Bezier::keepRight), together with
  * - BezierFitting: linear least-squares fitting of a Bezier curve to an ordered point set for given
  *   (by default chord-length) parameters, which interpolates the points when the degree equals the
  *   number of points minus one;

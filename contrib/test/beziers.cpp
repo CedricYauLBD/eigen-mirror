@@ -212,6 +212,78 @@ void check_derivatives() {
   VERIFY_IS_APPROX(fixed.basisFunctionDerivatives(u, 5).matrix(), dynamic.basisFunctionDerivatives(u, 5).matrix());
 }
 
+template <typename ArrayA, typename ArrayB>
+bool split_close(const ArrayA& a, const ArrayB& b) {
+  using Scalar = typename ArrayA::Scalar;
+  return (a - b).abs().maxCoeff() <= test_precision<Scalar>() * numext::maxi(Scalar(1), b.abs().maxCoeff());
+}
+
+template <typename BezierType>
+void check_split() {
+  using Scalar = typename BezierType::Scalar;
+  using ControlPointVectorType = typename BezierType::ControlPointVectorType;
+
+  const Index degree = internal::random<Index>(0, 10);
+  const BezierType bezier = random_bezier<BezierType>(degree);
+  const ControlPointVectorType& P = bezier.ctrls();
+
+  const Scalar params[] = {internal::random<Scalar>(Scalar(0.05), Scalar(0.95)), Scalar(0), Scalar(1)};
+  for (const Scalar u : params) {
+    BezierType left, right;
+    bezier.split(u, left, right);
+    VERIFY_IS_EQUAL(left.degree(), degree);
+    VERIFY_IS_EQUAL(right.degree(), degree);
+
+    // End control points are copied, and the halves meet at C(u).
+    VERIFY_IS_EQUAL(left.ctrls().col(0).matrix(), P.col(0).matrix());
+    VERIFY_IS_EQUAL(right.ctrls().col(degree).matrix(), P.col(degree).matrix());
+    VERIFY(split_close(left.ctrls().col(degree), bezier(u)));
+    VERIFY(split_close(right.ctrls().col(0), bezier(u)));
+
+    // L(s) = C(u s), R(s) = C(u + (1-u) s), and their derivatives follow the chain rule.
+    for (int i = 0; i < 5; ++i) {
+      const Scalar s = internal::random<Scalar>(Scalar(0), Scalar(1));
+      const Scalar ul = u * s, ur = u + (Scalar(1) - u) * s;
+      VERIFY(split_close(left(s), de_casteljau(bezier, ul)));
+      VERIFY(split_close(right(s), de_casteljau(bezier, ur)));
+      VERIFY(split_close(left.derivatives(s, 1).col(1), u * bezier.derivatives(ul, 1).col(1)));
+      VERIFY(split_close(right.derivatives(s, 1).col(1), (Scalar(1) - u) * bezier.derivatives(ur, 1).col(1)));
+    }
+
+    // One-sided variants give the same halves in place.
+    BezierType keptLeft = bezier, keptRight = bezier;
+    keptLeft.keepLeft(u);
+    keptRight.keepRight(u);
+    VERIFY(split_close(keptLeft.ctrls(), left.ctrls()));
+    VERIFY(split_close(keptRight.ctrls(), right.ctrls()));
+
+    // The output may alias the curve being split.
+    BezierType aliasLeft = bezier, otherRight;
+    aliasLeft.split(u, aliasLeft, otherRight);
+    VERIFY(split_close(aliasLeft.ctrls(), left.ctrls()));
+    VERIFY(split_close(otherRight.ctrls(), right.ctrls()));
+    BezierType aliasRight = bezier, otherLeft;
+    aliasRight.split(u, otherLeft, aliasRight);
+    VERIFY(split_close(otherLeft.ctrls(), left.ctrls()));
+    VERIFY(split_close(aliasRight.ctrls(), right.ctrls()));
+  }
+
+  // Fixed degree curves agree with dynamic ones.
+  const Scalar u = internal::random<Scalar>(Scalar(0.05), Scalar(0.95));
+  const ControlPointVectorType c = ControlPointVectorType::Random(BezierType::Dimension, 4);
+  using FixedBezier = Bezier<Scalar, BezierType::Dimension, 3>;
+  const FixedBezier fixed(c);
+  FixedBezier fixedLeft, fixedRight;
+  fixed.split(u, fixedLeft, fixedRight);
+  BezierType dynamicLeft, dynamicRight;
+  BezierType(c).split(u, dynamicLeft, dynamicRight);
+  VERIFY(split_close(fixedLeft.ctrls(), dynamicLeft.ctrls()));
+  VERIFY(split_close(fixedRight.ctrls(), dynamicRight.ctrls()));
+  FixedBezier fixedKept = fixed;
+  fixedKept.keepLeft(u);
+  VERIFY(split_close(fixedKept.ctrls(), dynamicLeft.ctrls()));
+}
+
 template <typename BezierType>
 void check_chord_lengths() {
   typedef typename BezierType::Scalar Scalar;
@@ -401,6 +473,7 @@ template <typename BezierType>
 void beziers_all() {
   CALL_SUBTEST(check_evaluation<BezierType>());
   CALL_SUBTEST(check_derivatives<BezierType>());
+  CALL_SUBTEST(check_split<BezierType>());
   CALL_SUBTEST(check_chord_lengths<BezierType>());
   CALL_SUBTEST(check_fitting<BezierType>());
   CALL_SUBTEST(check_lsq_jacobian<BezierType>());

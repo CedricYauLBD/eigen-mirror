@@ -141,6 +141,25 @@ class Bezier {
    */
   static BasisDerivativeType BasisFunctionDerivatives(Scalar u, Index degree, Index order);
 
+  /**
+   * \brief Splits the curve at \a u into two curves of the same degree, each reparameterized to [0,1]:
+   * \f$ L(s) = C(u\,s) \f$ and \f$ R(s) = C(u + (1-u)\,s) \f$.
+   *
+   * \a u is usually in [0,1]; other values extrapolate the curve. \a left or \a right may be \c *this, which
+   * reuses its storage. \a left and \a right must be distinct.
+   *
+   * \sa keepLeft(), keepRight()
+   */
+  void split(Scalar u, Bezier& left, Bezier& right) const;
+
+  /** \brief Replaces the curve by its part on [0,u], reparameterized to [0,1]: \f$ C(s) \leftarrow C(u\,s) \f$. */
+  void keepLeft(Scalar u);
+
+  /**
+   * \brief Replaces the curve by its part on [u,1], reparameterized to [0,1]: \f$ C(s) \leftarrow C(u + (1-u)\,s) \f$.
+   */
+  void keepRight(Scalar u);
+
  private:
   ControlPointVectorType m_ctrls; /*!< Control points, one per column. */
 };
@@ -218,6 +237,43 @@ typename Bezier<Scalar_, Dim_, Degree_>::DerivativeType Bezier<Scalar_, Dim_, De
     }
   }
   return der;
+}
+
+// de Casteljau: P_j^(r) = (1-u) P_j^(r-1) + u P_{j+1}^(r-1), r = 1..p, j = 0..p-r.
+// The control points of C on [0,u] are L_r = P_0^(r); those of C on [u,1] are R_j = P_j^(p-j).
+
+template <typename Scalar_, int Dim_, int Degree_>
+void Bezier<Scalar_, Dim_, Degree_>::split(Scalar u, Bezier& left, Bezier& right) const {
+  eigen_assert(&left != &right);
+  const Index p = degree();
+  const Scalar u1 = Scalar(1) - u;
+  // Copying into right first makes the split alias-safe: afterwards only right is read, and right != left.
+  right.m_ctrls = m_ctrls;
+  ControlPointVectorType& w = right.m_ctrls;
+  left.m_ctrls.resize(Dimension, p + 1);
+  left.m_ctrls.col(0) = w.col(0);
+  for (Index r = 1; r <= p; ++r) {
+    for (Index j = 0; j <= p - r; ++j) w.col(j) = u1 * w.col(j) + u * w.col(j + 1);
+    left.m_ctrls.col(r) = w.col(0);
+  }
+}
+
+template <typename Scalar_, int Dim_, int Degree_>
+void Bezier<Scalar_, Dim_, Degree_>::keepLeft(Scalar u) {
+  const Index p = degree();
+  const Scalar u1 = Scalar(1) - u;
+  // Descending j keeps col(j-1) at level r-1; col(r) holds L_r after level r and is not written again.
+  for (Index r = 1; r <= p; ++r)
+    for (Index j = p; j >= r; --j) m_ctrls.col(j) = u1 * m_ctrls.col(j - 1) + u * m_ctrls.col(j);
+}
+
+template <typename Scalar_, int Dim_, int Degree_>
+void Bezier<Scalar_, Dim_, Degree_>::keepRight(Scalar u) {
+  const Index p = degree();
+  const Scalar u1 = Scalar(1) - u;
+  // col(p-r) holds R_{p-r} after level r and is not written again.
+  for (Index r = 1; r <= p; ++r)
+    for (Index j = 0; j <= p - r; ++j) m_ctrls.col(j) = u1 * m_ctrls.col(j) + u * m_ctrls.col(j + 1);
 }
 
 }  // namespace Eigen
