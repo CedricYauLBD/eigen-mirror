@@ -119,6 +119,8 @@ class LevenbergMarquardt : internal::no_assignment_operator {
         m_njev(0),
         m_fnorm(0.0),
         m_gnorm(0),
+        m_iter(0),
+        m_par(0),
         m_isInitialized(false),
         m_info(InvalidInput) {
     resetParameters();
@@ -262,7 +264,8 @@ class LevenbergMarquardt : internal::no_assignment_operator {
 template <typename FunctorType>
 LevenbergMarquardtSpace::Status LevenbergMarquardt<FunctorType>::minimize(FVectorType &x) {
   LevenbergMarquardtSpace::Status status = minimizeInit(x);
-  if (status == LevenbergMarquardtSpace::ImproperInputParameters) {
+  // Only NotStarted means that m_fvec holds the residuals at x: a functor that refuses x (UserAsked) ends the run.
+  if (status != LevenbergMarquardtSpace::NotStarted) {
     m_isInitialized = true;
     return status;
   }
@@ -293,6 +296,8 @@ LevenbergMarquardtSpace::Status LevenbergMarquardt<FunctorType>::minimizeInit(FV
   /* Function Body */
   m_nfev = 0;
   m_njev = 0;
+  // A run that the functor stops (UserAsked) sets no m_info: it must not report the Success of an earlier run.
+  m_info = InvalidInput;
 
   /*     check the input parameters for errors. */
   if (n <= 0 || m < n || m_ftol < 0. || m_xtol < 0. || m_gtol < 0. || m_maxfev <= 0 || m_factor <= 0.) {

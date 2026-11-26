@@ -632,9 +632,78 @@ void testDoglegZeroPivot() {
   VERIFY_IS_APPROX(x, Vector2d(-(1 + 2 * x1) / 4, x1));
 }
 
+// Wraps a functor so that it refuses to evaluate the residuals: a negative return value asks the solver to stop.
+template <typename Base>
+struct refusing_functor : Base {
+  int operator()(const VectorXd &, VectorXd &) const { return -1; }
+};
+
+// A functor that refuses the starting point stops the solver with UserAsked. The solver used to go on to a step on
+// residuals that were never evaluated and to report convergence.
+void testLmUserAskedAtStart() {
+  VectorXd x = VectorXd::Ones(3);
+
+  refusing_functor<lmder_functor> functor;
+  LevenbergMarquardt<refusing_functor<lmder_functor> > lm(functor);
+  VERIFY_IS_EQUAL(lm.minimize(x), LevenbergMarquardtSpace::UserAsked);
+  VERIFY_IS_EQUAL(lm.njev, 0);
+  VERIFY_IS_EQUAL(lm.lmder1(x), LevenbergMarquardtSpace::UserAsked);
+
+  refusing_functor<lmstr_functor> functor_str;
+  LevenbergMarquardt<refusing_functor<lmstr_functor> > lm_str(functor_str);
+  VERIFY_IS_EQUAL(lm_str.minimizeOptimumStorage(x), LevenbergMarquardtSpace::UserAsked);
+  VERIFY_IS_EQUAL(lm_str.njev, 0);
+  VERIFY_IS_EQUAL(lm_str.lmstr1(x), LevenbergMarquardtSpace::UserAsked);
+
+  // lmdif1() evaluates through NumericalDiff, which forwards the refusal at x before any difference is taken.
+  refusing_functor<lmdif_functor> functor_dif;
+  DenseIndex nfev;
+  VERIFY_IS_EQUAL(LevenbergMarquardt<refusing_functor<lmdif_functor> >::lmdif1(functor_dif, x, &nfev),
+                  LevenbergMarquardtSpace::UserAsked);
+  VERIFY_IS_EQUAL(nfev, 1);
+}
+
+// qrsolv() minimizes ||[R P^T; D] x - [qtb; 0]||. A zero entry of D has no row to eliminate, but the entries after it
+// still have (MINPACK), and the triangular solve stops at a zero on the diagonal of the eliminated factor, which
+// sdiag only receives afterwards.
+void testQrsolvZeroDiag() {
+  const Index n = 5;
+  MatrixXd r = MatrixXd::Zero(n, n);
+  for (Index i = 0; i < n; ++i)
+    for (Index j = i; j < n; ++j) r(i, j) = 1.0 + 0.5 * double(i + 1) * double(j + 1);
+  VectorXi ipvt(n);
+  ipvt << 2, 0, 4, 1, 3;
+  VectorXd diag(n), qtb(n);
+  diag << 0.75, 1.25, 0, 1.5, 0;  // diag[ipvt[0]] == 0 and diag[ipvt[2]] == 0
+  qtb << 1, 0.7, 0.4, 0.1, -0.2;
+
+  MatrixXd s = r;
+  VectorXd x(n), sdiag = VectorXd::Zero(n);
+  internal::qrsolv<double>(s, ipvt, diag, qtb, x, sdiag);
+
+  MatrixXd augmented(2 * n, n);
+  augmented.topRows(n) = r * PermutationMatrix<Dynamic, Dynamic, int>(ipvt).transpose();
+  augmented.bottomRows(n) = diag.asDiagonal();
+  VectorXd rhs = VectorXd::Zero(2 * n);
+  rhs.head(n) = qtb;
+  VERIFY_IS_APPROX(x, augmented.colPivHouseholderQr().solve(rhs));
+
+  // lmpar() reads the eliminated factor S out of the strict lower triangle of s, transposed, with its diagonal in
+  // sdiag: S^T S = R^T R + P^T D^2 P.
+  VERIFY_IS_APPROX(MatrixXd(s.triangularView<Upper>()), r);
+  MatrixXd eliminated = MatrixXd(s.triangularView<StrictlyLower>()).transpose();
+  eliminated.diagonal() = sdiag;
+  VectorXd permuted_diag(n);
+  for (Index j = 0; j < n; ++j) permuted_diag(j) = diag(ipvt(j));
+  VERIFY_IS_APPROX(MatrixXd(eliminated.transpose() * eliminated),
+                   MatrixXd(r.transpose() * r + MatrixXd(permuted_diag.cwiseAbs2().asDiagonal())));
+}
+
 EIGEN_DECLARE_TEST(NonLinearOptimization) {
   CALL_SUBTEST /*_2*/ (testR1mpyq());
   CALL_SUBTEST /*_2*/ (testDoglegZeroPivot());
+  CALL_SUBTEST /*_3*/ (testLmUserAskedAtStart());
+  CALL_SUBTEST /*_2*/ (testQrsolvZeroDiag());
 
   // Tests using the examples provided by (c)minpack
   CALL_SUBTEST /*_1*/ (testChkder());

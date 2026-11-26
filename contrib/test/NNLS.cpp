@@ -297,6 +297,29 @@ void test_nnls_reports_nonfinite_inactive_solution() {
   VERIFY_IS_EQUAL(nnls.info(), ComputationInfo::NumericalIssue);
 }
 
+template <typename = void>
+void test_nnls_inactive_set_emptied_by_rounding() {
+  // b is orthogonal to the column of A, so x = 0 and A'*b is pure rounding error.
+  // Where that gradient is positive and above the tolerance while the QR solve
+  // returns a negative coefficient, the only inactive variable goes straight back
+  // to the active set, and the solver must not solve on the empty set.
+  MatrixXd A(2, 1);
+  A << 11, -1595.7;
+  VectorXd b(2);
+  b << 4787.1, 33;
+
+  NNLS<MatrixXd> nnls(A);
+  const VectorXd x = nnls.solve(b);
+
+  // Which way the rounding goes depends on the platform. The solver either
+  // converges or selects the same column again until the iteration limit.
+  VERIFY(nnls.info() == ComputationInfo::Success || nnls.info() == ComputationInfo::NoConvergence);
+  VERIFY_LE(nnls.iterations(), nnls.maxIterations());
+  VERIFY_LE(0, x(0));
+  // x = q'*b / |A| with q = A / |A|; the two-term product q'*b cancels to a few eps * |b|.
+  VERIFY_LE(x(0), 8 * NumTraits<double>::epsilon() * b.norm() / A.norm());
+}
+
 // 4x2 problem, unconstrained solution positive
 template <typename = void>
 void test_nnls_known_1() {
@@ -530,6 +553,7 @@ EIGEN_DECLARE_TEST(NNLS) {
   CALL_SUBTEST_6(test_nnls_wide_matrix_at_row_capacity<>());
   CALL_SUBTEST_6(test_nnls_does_not_report_false_success_at_row_capacity<>());
   CALL_SUBTEST_6(test_nnls_reports_nonfinite_inactive_solution<>());
+  CALL_SUBTEST_6(test_nnls_inactive_set_emptied_by_rounding<>());
 
   for (int i = 0; i < g_repeat; i++) {
     // Essential NNLS properties, across different types.

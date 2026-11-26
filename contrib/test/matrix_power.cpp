@@ -234,6 +234,24 @@ void testNonFiniteExponent() {
   VERIFY(a.pow(std::numeric_limits<double>::infinity()).array().isNaN().all());
 }
 
+// The proxy returned by pow() referred to its argument, here the a + b that is gone when powOfSum() returns. Like the
+// proxies of the other matrix functions, it has to hold such an expression by value. powOfSum() is not inlined so that
+// the sum lives in a frame that no longer exists when the result is evaluated.
+template <typename MatrixType, typename Exponent>
+EIGEN_DONT_INLINE auto powOfSum(const MatrixType& a, const MatrixType& b, const Exponent& p) {
+  return (a + b).pow(p);
+}
+
+template <typename MatrixType, typename Exponent>
+void testPowOfTemporary(const Exponent& p) {
+  const MatrixType m = MatrixType::Random(4, 4);
+  const MatrixType a = m * m.adjoint(), b = MatrixType::Identity(4, 4);
+  const MatrixType sum = a + b;
+  const MatrixType expected = sum.pow(p);
+  const MatrixType actual = powOfSum(a, b, p);
+  VERIFY_IS_APPROX(actual, expected);
+}
+
 template <typename MatrixType>
 void testLogThenExp(const MatrixType& m_const, const typename MatrixType::RealScalar& tol) {
   // we need to pass by reference in order to prevent errors with
@@ -327,8 +345,10 @@ EIGEN_DECLARE_TEST(matrix_power) {
   CALL_SUBTEST_2(testSingular(Matrix2d(), 8 * NumTraits<double>::epsilon()));
   CALL_SUBTEST_7(testSingular(Matrix3dRowMajor(), 512 * NumTraits<double>::epsilon()));
   CALL_SUBTEST_3(testSingular(Matrix4cd(), 8 * NumTraits<std::complex<double>>::epsilon()));
+  CALL_SUBTEST_3(testPowOfTemporary<Matrix4cd>(std::complex<double>(0.5, 0.25)));
   CALL_SUBTEST_4(testSingular(MatrixXd(8, 8), 128 * NumTraits<double>::epsilon()));
   CALL_SUBTEST_4(testComputeResultSize<>());
+  CALL_SUBTEST_4(testPowOfTemporary<MatrixXd>(0.5));
   CALL_SUBTEST_1(testSingular(Matrix2f(), 8 * NumTraits<float>::epsilon()));
   CALL_SUBTEST_5(testSingular(Matrix3cf(), 8 * NumTraits<std::complex<float>>::epsilon()));
   CALL_SUBTEST_8(testSingular(Matrix4f(), 256 * NumTraits<float>::epsilon()));

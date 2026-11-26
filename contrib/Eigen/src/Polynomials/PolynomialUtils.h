@@ -22,6 +22,7 @@ namespace Eigen {
  * \param[in] poly : the vector of coefficients of the polynomial ordered
  *  by degrees i.e. poly[i] is the coefficient of degree i of the polynomial
  *  e.g. \f$ 1 + 3x^2 \f$ is stored as a vector \f$ [ 1, 0, 3 ] \f$.
+ *  An empty vector is the zero polynomial.
  * \param[in] x : the value to evaluate the polynomial at.
  *
  * \note for stability:
@@ -29,6 +30,10 @@ namespace Eigen {
  */
 template <typename Polynomials, typename T>
 inline T poly_eval_horner(const Polynomials& poly, const T& x) {
+  if (poly.size() == 0) {
+    return T(0);
+  }
+
   T val = poly[poly.size() - 1];
   for (DenseIndex i = poly.size() - 2; i >= 0; --i) {
     val = val * x + poly[i];
@@ -42,11 +47,16 @@ inline T poly_eval_horner(const Polynomials& poly, const T& x) {
  * \param[in] poly : the vector of coefficients of the polynomial ordered
  *  by degrees i.e. poly[i] is the coefficient of degree i of the polynomial
  *  e.g. \f$ 1 + 3x^2 \f$ is stored as a vector \f$ [ 1, 0, 3 ] \f$.
+ *  An empty vector is the zero polynomial.
  * \param[in] x : the value to evaluate the polynomial at.
  */
 template <typename Polynomials, typename T>
 inline T poly_eval(const Polynomials& poly, const T& x) {
   using Real = typename NumTraits<T>::Real;
+
+  if (poly.size() == 0) {
+    return T(0);
+  }
 
   if (numext::abs2(x) <= Real(1)) {
     return poly_eval_horner(poly, x);
@@ -92,6 +102,7 @@ inline typename NumTraits<typename Polynomial::Scalar>::Real cauchy_max_bound(co
  * \param[in] poly : the vector of coefficients of the polynomial ordered
  *  by degrees i.e. poly[i] is the coefficient of degree i of the polynomial
  *  e.g. \f$ 1 + 3x^2 \f$ is stored as a vector \f$ [ 1, 0, 3 ] \f$.
+ *  An empty vector gives the same bound as a constant polynomial, 1.
  */
 template <typename Polynomial>
 inline typename NumTraits<typename Polynomial::Scalar>::Real cauchy_min_bound(const Polynomial& poly) {
@@ -103,7 +114,7 @@ inline typename NumTraits<typename Polynomial::Scalar>::Real cauchy_min_bound(co
   while (i < poly.size() - 1 && Scalar(0) == poly(i)) {
     ++i;
   }
-  if (poly.size() - 1 == i) {
+  if (poly.size() - 1 <= i) {
     return Real(1);
   }
 

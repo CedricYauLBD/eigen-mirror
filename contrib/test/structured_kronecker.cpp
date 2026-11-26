@@ -1914,6 +1914,30 @@ void test_kron_identity_factor(Index p, Index m2, Index n2) {
   VERIFY_IS_EQUAL(makeKroneckerOperator(Mat::Identity(p, p), Mat::Identity(m2, m2)).determinant(), Scalar(1));
 }
 
+// A dimension of the operator that does not fit in Index is refused: 3 * n
+// wraps to 2, which would size the dense destination for 2 rows or columns and
+// then fill it for 3 * n of them.
+template <typename = void>
+void test_kron_dimension_overflow() {
+#ifdef EIGEN_EXCEPTIONS
+  const Index n = Index((std::numeric_limits<std::make_unsigned_t<Index>>::max)() / 3) + 1;
+  bool threw = false;
+  try {
+    const MatrixXd K = makeKroneckerOperator(MatrixXd::Ones(3, 1), MatrixXd::Identity(n, 1));
+  } catch (const std::bad_alloc&) {
+    threw = true;
+  }
+  VERIFY(threw);
+  threw = false;
+  try {
+    const MatrixXd K = makeKroneckerOperator(MatrixXd::Identity(1, n), MatrixXd::Ones(1, 3));
+  } catch (const std::bad_alloc&) {
+    threw = true;
+  }
+  VERIFY(threw);
+#endif
+}
+
 // Nested factors: A (x) (B (x) C) and (A (x) B) (x) C against the dense
 // reference, with dense, sparse and identity leaves. Moderate diagonal boost:
 // invertible, with determinants tame enough for a relative comparison. The
@@ -2071,6 +2095,60 @@ void test_kron_nested_svd(Index n1, Index n2, Index n3) {
   VERIFY_IS_APPROX((U.adjoint() * U).eval(), Mat(Mat::Identity(ref.cols(), ref.cols())));
   const Mat UL = f.KL.matrixU(), VL = f.KL.matrixV();
   VERIFY_IS_APPROX((UL * f.KL.singularValues().asDiagonal() * VL.adjoint()).eval(), ref);
+}
+
+// The decomposition accessors report no status, so a factor whose decomposition
+// fails contributes NaN, never the outputs that the decomposition left unset.
+template <typename Kron>
+void check_kron_spectrum_is_nan(const Kron& K, bool eigen) {
+  using Scalar = typename Kron::Scalar;
+  using RealScalar = typename NumTraits<Scalar>::Real;
+  using Mat = Matrix<Scalar, Dynamic, Dynamic>;
+  using CMat = Matrix<std::complex<RealScalar>, Dynamic, Dynamic>;
+  const Index k = numext::mini(K.lhs().rows(), K.lhs().cols()) * numext::mini(K.rhs().rows(), K.rhs().cols());
+  const Matrix<RealScalar, Dynamic, 1> sv = K.singularValues();
+  const Mat U = K.matrixU(), V = K.matrixV();
+  VERIFY_IS_EQUAL(sv.size(), k);
+  VERIFY(U.rows() == K.rows() && U.cols() == k);
+  VERIFY(V.rows() == K.cols() && V.cols() == k);
+  VERIFY(sv.array().isNaN().all());
+  VERIFY(U.array().isNaN().all());
+  VERIFY(V.array().isNaN().all());
+  // NaN singular values count as non-zero, as in SVDBase::rank().
+  VERIFY_IS_EQUAL(K.rank(), k);
+  if (!eigen) return;
+  const Matrix<std::complex<RealScalar>, Dynamic, 1> lambda = K.eigenvalues();
+  const CMat W = K.eigenvectors();
+  VERIFY_IS_EQUAL(lambda.size(), K.rows());
+  VERIFY(W.rows() == K.rows() && W.cols() == K.rows());
+  VERIFY(lambda.array().isNaN().all());
+  VERIFY(W.array().isNaN().all());
+}
+
+// Every SVD of a non-finite factor fails, in the JacobiSVD that BDCSVD falls
+// back to below 16 columns and in BDCSVD proper. The eigenvalue iteration fails
+// on diag(NaN, 1, ..., 1), whose leading subdiagonal entry never tests as
+// negligible. On an Inf entry it can converge, and then writes its outputs, so
+// the eigenpairs are checked for NaN only.
+template <typename Scalar>
+void test_kron_spectrum_nonfinite() {
+  using RealScalar = typename NumTraits<Scalar>::Real;
+  using Mat = Matrix<Scalar, Dynamic, Dynamic>;
+  const Mat B = Mat::Random(2, 2);
+  for (Index n : {3, 20}) {
+    for (RealScalar special : {NumTraits<RealScalar>::infinity(), NumTraits<RealScalar>::quiet_NaN()}) {
+      const bool eigen = (numext::isnan)(special);
+      Mat A = Mat::Identity(n, n);
+      A(0, 0) = Scalar(special);
+      check_kron_spectrum_is_nan(makeKroneckerOperator(A, B), eigen);
+      check_kron_spectrum_is_nan(makeKroneckerOperator(B, A), eigen);
+      check_kron_spectrum_is_nan(makeKroneckerOperator(B, makeKroneckerOperator(A, B)), eigen);
+      // Rectangular factors: the thin U and V differ in shape.
+      const Mat tall = A.leftCols(n - 1), wide = A.topRows(n - 1);
+      check_kron_spectrum_is_nan(makeKroneckerOperator(tall, B), false);
+      check_kron_spectrum_is_nan(makeKroneckerOperator(B, wide), false);
+    }
+  }
 }
 
 EIGEN_DECLARE_TEST(structured_kronecker) {
@@ -2238,6 +2316,7 @@ EIGEN_DECLARE_TEST(structured_kronecker) {
     CALL_SUBTEST_44((test_kron_identity_factor<float>(4, 3, 2)));
     CALL_SUBTEST_45((test_kron_identity_factor<std::complex<double>>(2, 3, 4)));
     CALL_SUBTEST_24((test_kron_identity_factor<double>(1, 1, 1)));
+    CALL_SUBTEST_24(test_kron_dimension_overflow<>());
     CALL_SUBTEST_25((test_kron_nested_products<double>(3, 4, 2)));
     CALL_SUBTEST_31((test_kron_nested_solve<double>(3, 4, 2)));
     CALL_SUBTEST_46((test_kron_nested_eigen<double>(3, 4, 2)));
@@ -2252,5 +2331,9 @@ EIGEN_DECLARE_TEST(structured_kronecker) {
     CALL_SUBTEST_54((test_kron_nested_svd<float>(2, 2, 3)));
     CALL_SUBTEST_55((test_kron_left_nested_products<double>(3, 4, 2)));
     CALL_SUBTEST_56((test_kron_left_nested_products<std::complex<double>>(2, 3, 3)));
+
+    // Factors whose decomposition fails.
+    CALL_SUBTEST_58((test_kron_spectrum_nonfinite<double>()));
+    CALL_SUBTEST_59((test_kron_spectrum_nonfinite<std::complex<float>>()));
   }
 }

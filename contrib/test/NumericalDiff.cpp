@@ -260,6 +260,51 @@ void test_constructors() {
   VERIFY_IS_APPROX(fjac, fexpected);
 }
 
+// Defined on [0, 1] only. Outside it stops with a negative status, as a functor does to end a fit, and leaves
+// fvec as it was.
+struct bounded_domain_functor : Functor<double> {
+  bounded_domain_functor() : Functor<double>(1, 3) {}
+  int operator()(const VectorXd &x, VectorXd &fvec) const {
+    if (x[0] < 0.0 || x[0] > 1.0) return -2;
+    fvec.setConstant(4.0 * x[0]);
+    return 0;
+  }
+};
+
+// A functor without a status.
+struct void_functor : Functor<double> {
+  void_functor() : Functor<double>(1, 3) {}
+  void operator()(const VectorXd &x, VectorXd &fvec) const { fvec.setConstant(4.0 * x[0]); }
+};
+
+// df() must pass a negative status of the functor on instead of differencing values the functor did not write.
+template <NumericalDiffMode Mode>
+void test_functor_status() {
+  VectorXd x(1);
+  MatrixXd jac(3, 1);
+  const MatrixXd expected = MatrixXd::Constant(3, 1, 4.0);
+
+  NumericalDiff<bounded_domain_functor, Mode> bounded;
+  x << 0.5;
+  VERIFY_IS_EQUAL(bounded.df(x, jac), 2);
+  VERIFY_IS_APPROX(jac, expected);
+  // x is in the domain, x + h is not.
+  x << 1.0;
+  VERIFY_IS_EQUAL(bounded.df(x, jac), -2);
+  // x is in the domain, and so is x + h, but x - h is not.
+  x << 0.0;
+  VERIFY_IS_EQUAL(bounded.df(x, jac), Mode == Central ? -2 : 2);
+  // x itself is not in the domain.
+  x << 2.0;
+  VERIFY_IS_EQUAL(bounded.df(x, jac), -2);
+
+  NumericalDiff<void_functor, Mode> without_status;
+  x << 0.5;
+  jac.setZero();
+  VERIFY_IS_EQUAL(without_status.df(x, jac), 2);
+  VERIFY_IS_APPROX(jac, expected);
+}
+
 EIGEN_DECLARE_TEST(NumericalDiff) {
   CALL_SUBTEST(test_forward());
   CALL_SUBTEST(test_central());
@@ -273,4 +318,6 @@ EIGEN_DECLARE_TEST(NumericalDiff) {
   // A non-dyadic eps also misaligns the absolute step taken for |x| < 1.
   CALL_SUBTEST(test_step_alignment<Forward>(1e-10));
   CALL_SUBTEST(test_step_alignment<Central>(1e-10));
+  CALL_SUBTEST(test_functor_status<Forward>());
+  CALL_SUBTEST(test_functor_status<Central>());
 }

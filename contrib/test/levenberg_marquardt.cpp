@@ -287,6 +287,23 @@ void testLmqrsolv() {
   eliminated.diagonal() = sdiag;
   VERIFY_IS_APPROX(MatrixXd(eliminated.transpose() * eliminated),
                    MatrixXd(r.transpose() * r + MatrixXd(diag.cwiseAbs2().asDiagonal())));
+
+  // A zero entry of D has no row to eliminate, but the entries after it still
+  // have (MINPACK), and the triangular solve stops at a zero on the diagonal of
+  // S, which sdiag only receives afterwards. In lmpar2() sqrt(par) * diag can
+  // underflow to such a zero.
+  diag(0) = 0.0;
+  diag(3) = 0.0;
+  s = r;
+  sdiag.setZero();
+  internal::lmqrsolv(s, perm, diag, qtb, x, sdiag);
+  augmented.bottomRows(n) = diag.asDiagonal();
+  VERIFY_IS_APPROX(x, augmented.colPivHouseholderQr().solve(rhs));
+  VERIFY_IS_APPROX(MatrixXd(s.triangularView<Upper>()), r);
+  eliminated = MatrixXd(s.triangularView<StrictlyLower>()).transpose();
+  eliminated.diagonal() = sdiag;
+  VERIFY_IS_APPROX(MatrixXd(eliminated.transpose() * eliminated),
+                   MatrixXd(r.transpose() * r + MatrixXd(diag.cwiseAbs2().asDiagonal())));
 }
 
 // Exponential decay with two exactly collinear offsets x2 and x3, so the
@@ -336,10 +353,51 @@ void testSparseFunctor() {
   VERIFY(lm.fnorm() <= 1e3 * NumTraits<double>::epsilon() * functor.m_y.norm());
 }
 
+// Wraps a functor so that a test can make it refuse to evaluate the residuals: a negative return value asks the
+// solver to stop.
+template <typename Base>
+struct refusing_functor : Base {
+  refusing_functor() : refuse(false) {}
+  int operator()(const VectorXd &x, VectorXd &fvec) const { return refuse ? -1 : Base::operator()(x, fvec); }
+  bool refuse;
+};
+
+// A functor that refuses the starting point stops minimize() with UserAsked. The solver used to go on to a step on
+// residuals that were never evaluated and to report convergence. info() must not report success either, also on a
+// solver that has converged before.
+void testUserAskedAtStart() {
+  refusing_functor<lmder_functor> functor;
+  LevenbergMarquardt<refusing_functor<lmder_functor> > lm(functor);
+  VectorXd x = VectorXd::Ones(3);
+
+  functor.refuse = true;
+  VERIFY_IS_EQUAL(lm.minimize(x), LevenbergMarquardtSpace::UserAsked);
+  VERIFY_IS_EQUAL(lm.njev(), 0);
+  VERIFY(lm.info() != Success);
+  VERIFY_IS_EQUAL(lm.lmder1(x), LevenbergMarquardtSpace::UserAsked);
+
+  functor.refuse = false;
+  lm.minimize(x);
+  VERIFY_IS_EQUAL(lm.info(), Success);
+  functor.refuse = true;
+  VERIFY_IS_EQUAL(lm.minimize(x), LevenbergMarquardtSpace::UserAsked);
+  VERIFY_IS_EQUAL(lm.njev(), 0);
+  VERIFY(lm.info() != Success);
+
+  // lmdif1() evaluates through NumericalDiff, which forwards the refusal at x before any difference is taken.
+  refusing_functor<lmdif_functor> functor_dif;
+  functor_dif.refuse = true;
+  DenseIndex nfev;
+  VERIFY_IS_EQUAL(LevenbergMarquardt<refusing_functor<lmdif_functor> >::lmdif1(functor_dif, x, &nfev),
+                  LevenbergMarquardtSpace::UserAsked);
+  VERIFY_IS_EQUAL(nfev, 1);
+}
+
 EIGEN_DECLARE_TEST(levenberg_marquardt) {
   CALL_SUBTEST(testLmqrsolv());
   CALL_SUBTEST(testCovarRankDeficient());
   CALL_SUBTEST(testSparseFunctor());
+  CALL_SUBTEST(testUserAskedAtStart());
 
   // Tests using the examples provided by (c)minpack
   CALL_SUBTEST(testLmder1());

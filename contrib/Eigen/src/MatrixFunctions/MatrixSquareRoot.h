@@ -26,6 +26,11 @@ void matrix_sqrt_quasi_triangular_2x2_diagonal_block(const MatrixType& T, Index 
   using Scalar = typename traits<MatrixType>::Scalar;
   Matrix<Scalar, 2, 2> block = T.template block<2, 2>(i, i);
   EigenSolver<Matrix<Scalar, 2, 2> > es(block);
+  // EigenSolver has no eigenvectors for a block with a nonfinite entry or with eigenvalues that overflow.
+  if (es.info() != Success) {
+    sqrtT.template block<2, 2>(i, i).setConstant(NumTraits<Scalar>::quiet_NaN());
+    return;
+  }
   sqrtT.template block<2, 2>(i, i) =
       (es.eigenvectors() * es.eigenvalues().cwiseSqrt().asDiagonal() * es.eigenvectors().inverse()).real();
 }
@@ -246,6 +251,14 @@ struct matrix_sqrt_compute<MatrixType, 0> {
 
     // Compute Schur decomposition of arg
     const RealSchur<PlainType> schurOfA(arg);
+    // A failed decomposition has no factors to use: RealSchur does not compute U for an argument with an infinite or
+    // NaN entry, and T is not quasi-triangular when the QR iteration did not converge.
+    if (schurOfA.info() != Success) {
+      using Scalar = typename PlainType::Scalar;
+      call_assignment_no_alias(result.derived(),
+                               PlainType::Constant(arg.rows(), arg.cols(), NumTraits<Scalar>::quiet_NaN()));
+      return;
+    }
     const PlainType& T = schurOfA.matrixT();
     const PlainType& U = schurOfA.matrixU();
 
@@ -269,6 +282,14 @@ struct matrix_sqrt_compute<MatrixType, 1> {
 
     // Compute Schur decomposition of arg
     const ComplexSchur<PlainType> schurOfA(arg);
+    // As for a real argument: T is not triangular when the QR iteration did not converge.
+    if (schurOfA.info() != Success) {
+      using Scalar = typename PlainType::Scalar;
+      using RealScalar = typename NumTraits<Scalar>::Real;
+      call_assignment_no_alias(result.derived(),
+                               PlainType::Constant(arg.rows(), arg.cols(), Scalar(NumTraits<RealScalar>::quiet_NaN())));
+      return;
+    }
     const PlainType& T = schurOfA.matrixT();
     const PlainType& U = schurOfA.matrixU();
 

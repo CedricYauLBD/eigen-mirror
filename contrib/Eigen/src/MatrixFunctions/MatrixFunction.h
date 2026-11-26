@@ -404,10 +404,17 @@ struct matrix_function_compute<MatrixType, 1> {
   template <typename MatA, typename AtomicType, typename ResultType>
   static void run(const MatA& A, AtomicType& atomic, ResultType& result) {
     using Traits = internal::traits<MatrixType>;
+    using Scalar = typename Traits::Scalar;
+    using RealScalar = typename NumTraits<Scalar>::Real;
 
     // compute Schur decomposition of A
     const ComplexSchur<MatrixType> schurOfA(A);
-    eigen_assert(schurOfA.info() == Success);
+    // Whether the QR iteration converges depends on the entries of A, so it is not a precondition to assert: a NaN or
+    // infinite entry usually stalls it. The steps below need a triangular T, and the caller cannot query info().
+    if (schurOfA.info() != Success) {
+      result = MatrixType::Constant(A.rows(), A.cols(), Scalar(NumTraits<RealScalar>::quiet_NaN()));
+      return;
+    }
     MatrixType T = schurOfA.matrixT();
     MatrixType U = schurOfA.matrixU();
 

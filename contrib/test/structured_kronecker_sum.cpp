@@ -672,6 +672,20 @@ void test_ksum_eigenvalues(Index n1, Index n2) {
     for (Index i2 = 0; i2 < n2; ++i2)
       for (Index i3 = 0; i3 < n1; ++i3) expectedNu[(i1 * n2 + i2) * n1 + i3] = a[i1] + c[i2] * a[i3];
   VERIFY_IS_APPROX(nu, expectedNu);
+
+  // A factor whose eigenvalue iteration fails, as on diag(NaN, 1, ..., 1),
+  // contributes NaN, never the outputs the eigensolver left unset; so does the
+  // dense SVD of the sum as a KroneckerOperator factor.
+  Mat N = Mat::Identity(n1, n1);
+  N(0, 0) = Scalar(NumTraits<RealScalar>::quiet_NaN());
+  const auto KN = makeKroneckerSum(N, B);
+  VERIFY(KN.eigenvalues().array().isNaN().all());
+  VERIFY(CMat(KN.eigenvectors()).array().isNaN().all());
+  const auto KSN = makeKroneckerOperator(B, KN);
+  VERIFY(KSN.singularValues().array().isNaN().all());
+  VERIFY(Mat(KSN.matrixU()).array().isNaN().all());
+  VERIFY(Mat(KSN.matrixV()).array().isNaN().all());
+  VERIFY_IS_EQUAL(KSN.rank(), KSN.rows());
 }
 
 // The finite-difference use case: an implicit Euler step of the heat equation
@@ -728,11 +742,28 @@ void test_ksum_fixed() {
   VERIFY_IS_APPROX(MatrixXd(Kd), ref);
 }
 
+// A dimension of the sum that does not fit in Index is refused: 3 * n wraps
+// to 2.
+template <typename = void>
+void test_ksum_dimension_overflow() {
+#ifdef EIGEN_EXCEPTIONS
+  const Index n = Index((std::numeric_limits<std::make_unsigned_t<Index>>::max)() / 3) + 1;
+  bool threw = false;
+  try {
+    const MatrixXd K = makeKroneckerSum(MatrixXd::Ones(3, 3), MatrixXd::Identity(n, n));
+  } catch (const std::bad_alloc&) {
+    threw = true;
+  }
+  VERIFY(threw);
+#endif
+}
+
 EIGEN_DECLARE_TEST(structured_kronecker_sum) {
   for (int i = 0; i < g_repeat; i++) {
     CALL_SUBTEST_1((test_ksum_product<double>(3, 4)));
     CALL_SUBTEST_1((test_ksum_product<double>(1, 1)));
     CALL_SUBTEST_1(test_ksum_fixed<>());
+    CALL_SUBTEST_1(test_ksum_dimension_overflow<>());
     CALL_SUBTEST_5((test_ksum_product<float>(4, 3)));
     CALL_SUBTEST_6((test_ksum_product<std::complex<double>>(3, 3)));
     CALL_SUBTEST_2((test_ksum_nested<double>(2, 3, 4)));

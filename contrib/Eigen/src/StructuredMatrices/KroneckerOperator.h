@@ -207,6 +207,15 @@ template <typename LhsMatrix, typename RhsMatrix>
 struct kron_factor_visitable<KroneckerOperator<LhsMatrix, RhsMatrix>, kKronKroneckerFactor>
     : kron_operator_visitable<LhsMatrix, RhsMatrix> {};
 
+/** \internal Throws \c std::bad_alloc, in all build modes, if the dimension
+ * \a a * \a b of a Kronecker product or sum does not fit in \c Index. The
+ * dimensions size the destinations that are then filled factor block by factor
+ * block, so a wrapped one would give a destination smaller than what is
+ * written. */
+inline void kron_check_dimension_for_overflow(Index a, Index b) {
+  if (b != 0 && a > NumTraits<Index>::highest() / b) throw_std_bad_alloc();
+}
+
 /** \internal Writes the columns of \a x, each reshaped to \a rows x \a cols,
  * as the block rows of \a stacked, (\a rows * \c x.cols()) x \a cols. In this
  * layout a factor applies to all columns with a single product: from the left
@@ -725,7 +734,12 @@ class kron_factor_solver<KroneckerOperator<LhsMatrix, RhsMatrix>, kKronKronecker
  * n_R^3) instead of O((n_L n_R)^3), and the eigenvalues of defective factors
  * keep the sensitivity of the factors' Jordan blocks instead of the longer
  * blocks of their product. A Kronecker-sum factor recurses the same way for
- * its eigenpairs, see KroneckerSum.h. */
+ * its eigenpairs, see KroneckerSum.h.
+ *
+ * A decomposition that fails leaves its outputs unset -- BDCSVD for a
+ * non-finite factor (InvalidInput) or on NumericalIssue, ComplexEigenSolver
+ * when the Schur iteration does not converge, e.g. on a NaN entry -- and the
+ * accessors have no info() to report it through, so they return NaN instead. */
 template <typename Factor, int Kind = kron_factor_kind<Factor>()>
 struct kron_factor_spectrum {
   using Ops = kron_factor_ops<Factor>;
@@ -740,24 +754,39 @@ struct kron_factor_spectrum {
   using SingularVectors = DenseMatrix;
 
   static ComplexMatrix complexFactor(const Factor& f) { return Ops::denseFactor(f).template cast<ComplexScalar>(); }
+  template <typename Result>
+  static Result nanResult(Index rows, Index cols) {
+    return Result::Constant(rows, cols, typename Result::Scalar(NumTraits<RealScalar>::quiet_NaN()));
+  }
+  // The two statuses with which BDCSVD writes its singular values and vectors.
+  template <typename Svd>
+  static bool hasResult(const Svd& svd) {
+    return svd.info() == Success || svd.info() == NoConvergence;
+  }
   static ComplexVector eigenvalues(const Factor& f) {
     ComplexEigenSolver<ComplexMatrix> es(complexFactor(f), /*computeEigenvectors=*/false);
-    eigen_assert(es.info() == Success);
+    if (es.info() != Success) return nanResult<ComplexVector>(f.rows(), 1);
     return es.eigenvalues();
   }
   static Eigenvectors eigenvectors(const Factor& f) {
     ComplexEigenSolver<ComplexMatrix> es(complexFactor(f));
-    eigen_assert(es.info() == Success);
+    if (es.info() != Success) return nanResult<ComplexMatrix>(f.rows(), f.cols());
     return es.eigenvectors();
   }
   static RealVector singularValues(const Factor& f) {
-    return BDCSVD<DenseMatrix>(Ops::denseFactor(f)).singularValues();
+    const BDCSVD<DenseMatrix> svd(Ops::denseFactor(f));
+    if (!hasResult(svd)) return nanResult<RealVector>(numext::mini(f.rows(), f.cols()), 1);
+    return svd.singularValues();
   }
   static SingularVectors matrixU(const Factor& f) {
-    return BDCSVD<DenseMatrix, ComputeThinU>(Ops::denseFactor(f)).matrixU();
+    const BDCSVD<DenseMatrix, ComputeThinU> svd(Ops::denseFactor(f));
+    if (!hasResult(svd)) return nanResult<DenseMatrix>(f.rows(), numext::mini(f.rows(), f.cols()));
+    return svd.matrixU();
   }
   static SingularVectors matrixV(const Factor& f) {
-    return BDCSVD<DenseMatrix, ComputeThinV>(Ops::denseFactor(f)).matrixV();
+    const BDCSVD<DenseMatrix, ComputeThinV> svd(Ops::denseFactor(f));
+    if (!hasResult(svd)) return nanResult<DenseMatrix>(f.cols(), numext::mini(f.rows(), f.cols()));
+    return svd.matrixV();
   }
 };
 
@@ -857,7 +886,10 @@ struct kron_factor_spectrum<KroneckerOperator<LhsMatrix, RhsMatrix>, kKronKronec
  * The decomposition family (\ref eigenvalues, \ref eigenvectors,
  * \ref singularValues, \ref matrixU, \ref matrixV, \ref leastSquaresSolve,
  * \ref rank) currently materializes a diagonal or identity factor densely for
- * the factor decomposition.
+ * the factor decomposition. None of them reports a status: a factor whose
+ * decomposition fails -- the SVD of every non-finite factor, an eigenvalue
+ * iteration that does not converge, e.g. on a NaN entry -- contributes NaN
+ * eigenvalues, eigenvectors, singular values and singular vectors.
  *
  * Either factor may also be a \c SparseMatrix, stored compressed. Its side of
  * a product is a sparse-dense product -- O(nnz) instead of O(m n) per column of
@@ -974,6 +1006,8 @@ class KroneckerOperator : public EigenBase<KroneckerOperator<LhsMatrix, RhsMatri
       : m_A(a.derived()), m_B(b.derived()) {
     EIGEN_INTERNAL_ASSERT_NONEMPTY_MSG(m_A, "KroneckerOperator factors must be non-empty");
     EIGEN_INTERNAL_ASSERT_NONEMPTY_MSG(m_B, "KroneckerOperator factors must be non-empty");
+    internal::kron_check_dimension_for_overflow(m_A.rows(), m_B.rows());
+    internal::kron_check_dimension_for_overflow(m_A.cols(), m_B.cols());
     LhsOps::prepare(m_A);
     RhsOps::prepare(m_B);
   }
@@ -1119,10 +1153,14 @@ class KroneckerOperator : public EigenBase<KroneckerOperator<LhsMatrix, RhsMatri
    * full rank against their own threshold can still form pairwise products
    * that are negligible at the product level, so the rank can be smaller than
    * the product of the factor ranks. This costs two SVDs; \ref leastSquaresSolve
-   * decides each factor's rank on its own instead. */
+   * decides each factor's rank on its own instead. A non-finite factor has NaN
+   * singular values, and every product with a NaN is counted. */
   Index rank() const {
-    BDCSVD<DenseMatrix> svdA(LhsOps::denseFactor(m_A)), svdB(RhsOps::denseFactor(m_B));
-    const RealVector &sa = svdA.singularValues(), &sb = svdB.singularValues();
+    // From the materialized factors: sorted, unlike the Kronecker order of a
+    // nested factor's own singular values, and NaN when the SVD fails.
+    using DenseSpectrum = internal::kron_factor_spectrum<DenseMatrix>;
+    const RealVector sa = DenseSpectrum::singularValues(LhsOps::denseFactor(m_A));
+    const RealVector sb = DenseSpectrum::singularValues(RhsOps::denseFactor(m_B));
     // An exactly zero factor zeroes the whole operator (and would make the
     // ratios below 0/0).
     if (sa[0] == RealScalar(0) || sb[0] == RealScalar(0)) return 0;

@@ -21,6 +21,28 @@ namespace Eigen {
 
 enum NumericalDiffMode { Forward, Central };
 
+namespace internal {
+
+// Returns the status of functor(x, values). As in the nonlinear solvers, a negative status asks the caller to stop,
+// and values need not have been written. A functor that returns no status, such as void, cannot ask.
+template <typename Functor, typename InputType, typename ValueType>
+int numerical_diff_evaluate(const Functor& functor, InputType& x, ValueType& values, true_type) {
+  return static_cast<int>(functor(x, values));
+}
+
+template <typename Functor, typename InputType, typename ValueType>
+int numerical_diff_evaluate(const Functor& functor, InputType& x, ValueType& values, false_type) {
+  functor(x, values);
+  return 0;
+}
+
+template <typename Functor, typename InputType, typename ValueType>
+int numerical_diff_evaluate(const Functor& functor, InputType& x, ValueType& values) {
+  return numerical_diff_evaluate(functor, x, values, is_convertible<decltype(functor(x, values)), int>());
+}
+
+}  // namespace internal
+
 /**
  * This class allows you to add a method df() to your functor, which will
  * use numerical differentiation to compute an approximate of the
@@ -115,6 +137,8 @@ class NumericalDiff : public Functor_ {
 
   /**
    * Computes the Jacobian of the functor at \a _x into \a jac and returns the number of functor evaluations.
+   * If the functor returns a negative value, df() stops and returns that value instead; \a jac is then only
+   * partly written and must not be used.
    *
    * The step along coordinate \c j is <tt>h = max(|x[j]| * rel_tol, abs_tol)</tt>, or <tt>h = rel_tol</tt> when that
    * is zero (possible only for <tt>abs_tol == 0</tt>), with rel_tol and abs_tol selected by the user. The rel_tol
@@ -131,18 +155,22 @@ class NumericalDiff : public Functor_ {
     /* Local variables */
     Scalar h;
     int nfev = 0;
+    int iflag;
     const typename InputType::Index n = _x.size();
     ValueType val1, val2;
     InputType x = _x;
     // TODO: We should do this only if the size is not already known.
     val1.resize(Functor::values());
     val2.resize(Functor::values());
+    // A qualified call, which ignores overrides of operator() in classes derived from NumericalDiff.
+    const auto evaluate = [this](InputType& point, ValueType& values) { return Functor::operator()(point, values); };
 
     // initialization
     switch (mode) {
       case Forward:
         // compute f(x)
-        Functor::operator()(x, val1);
+        iflag = internal::numerical_diff_evaluate(evaluate, x, val1);
+        if (iflag < 0) return iflag;
         nfev++;
         break;
       case Central:
@@ -167,21 +195,24 @@ class NumericalDiff : public Functor_ {
       switch (mode) {
         case Forward:
           x[j] = x_plus;
-          Functor::operator()(x, val2);
+          iflag = internal::numerical_diff_evaluate(evaluate, x, val2);
+          if (iflag < 0) return iflag;
           nfev++;
           x[j] = _x[j];
           jac.col(j) = (val2 - val1) / h;
           break;
         case Central: {
           x[j] = x_plus;
-          Functor::operator()(x, val2);
+          iflag = internal::numerical_diff_evaluate(evaluate, x, val2);
+          if (iflag < 0) return iflag;
           nfev++;
           // x[j] - h can round (a tie when x[j] < 0 has |x[j]| within h above a power of two), so
           // divide by the separation of the two evaluation points rather than by 2*h.
           Scalar x_minus = _x[j] - h;
           internal::pbarrier(x_minus);
           x[j] = x_minus;
-          Functor::operator()(x, val1);
+          iflag = internal::numerical_diff_evaluate(evaluate, x, val1);
+          if (iflag < 0) return iflag;
           nfev++;
           x[j] = _x[j];
           jac.col(j) = (val2 - val1) / (x_plus - x_minus);

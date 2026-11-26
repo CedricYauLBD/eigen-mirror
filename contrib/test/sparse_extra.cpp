@@ -11,6 +11,10 @@
 #include <cstdlib>
 #include <string>
 
+#ifndef _WIN32
+#include <sys/stat.h>
+#endif
+
 #include "sparse.h"
 
 #ifdef min
@@ -22,6 +26,7 @@
 #endif
 
 #include <Eigen/SparseExtra>
+#include <Eigen/ArpackSupport>
 
 // Read from an environment variable TEST_TMPDIR, if available,
 // and append the provided filename. Defaults to local directory.
@@ -202,6 +207,124 @@ void check_marketio_dense() {
   VERIFY_IS_EQUAL(m1, m2);
 }
 
+// The dimensions come from the file. A destination that cannot be resized has to reject the ones it does not have
+// already, without storing anything.
+void check_marketio_dense_views() {
+  std::string filename = GetTestTempFilename("dense_extra_views.mtx");
+
+  VectorXd storage = VectorXd::Zero(4);
+  Map<VectorXd> map(storage.data(), 4);
+  Ref<VectorXd> ref(storage);
+  Map<MatrixXd> square(storage.data(), 2, 2);
+  MatrixXd columns = MatrixXd::Zero(4, 2);
+  Block<MatrixXd, Dynamic, 1, true> column(columns, 0);
+  Transpose<Map<MatrixXd>> transposed_square(square);
+
+  VectorXd too_long = VectorXd::Constant(8, 7.0);
+  saveMarketDense(too_long, filename);
+  VERIFY(!loadMarketDense(map, filename));
+  VERIFY(!loadMarketDense(ref, filename));
+  VERIFY(!loadMarketDense(column, filename));
+  VERIFY(!loadMarketVector(map, filename));
+
+  // The right number of coefficients in another shape.
+  RowVectorXd wrong_shape = RowVectorXd::Constant(4, 7.0);
+  saveMarketDense(wrong_shape, filename);
+  VERIFY(!loadMarketDense(map, filename));
+  VERIFY(!loadMarketDense(square, filename));
+  VERIFY(!loadMarketDense(transposed_square, filename));
+
+  VERIFY(storage.isZero(0.0));
+  VERIFY(columns.isZero(0.0));
+
+  VectorXd v = VectorXd::LinSpaced(4, 1.0, 4.0);
+  saveMarketDense(v, filename);
+  VERIFY(loadMarketDense(map, filename));
+  VERIFY_IS_EQUAL(storage, v);
+  storage.setZero();
+  VERIFY(loadMarketDense(ref, filename));
+  VERIFY_IS_EQUAL(storage, v);
+  VERIFY(loadMarketDense(column, filename));
+  VERIFY_IS_EQUAL(columns.col(0), v);
+  VERIFY(columns.col(1).isZero(0.0));
+
+  // These forward resize() to the matrix they wrap.
+  MatrixXd m;
+  Transpose<MatrixXd> transposed(m);
+  ArrayWrapper<MatrixXd> array(m);
+  MatrixXd expected = MatrixXd::Constant(3, 2, 7.0);
+  saveMarketDense(expected, filename);
+  VERIFY(loadMarketDense(transposed, filename));
+  VERIFY_IS_EQUAL(m, expected.transpose());
+  VERIFY(loadMarketDense(array, filename));
+  VERIFY_IS_EQUAL(m, expected);
+}
+
+// A size line that the file does not back with coefficients is a parsing error, whatever it would take to allocate.
+void check_marketio_dense_truncated() {
+  std::string filename = GetTestTempFilename("dense_extra_truncated.mtx");
+  const MatrixXd untouched = MatrixXd::Constant(2, 2, 7.0);
+  // The product of the third pair does not fit a 64-bit Index.
+  for (const char* sizes : {"30000000 30000000", "900000000000000 1", "2305843009213693953 8", "3 3"}) {
+    std::ofstream out(filename.c_str());
+    out << "%%MatrixMarket matrix array real general\n" << sizes << "\n1.0\n";
+    out.close();
+    MatrixXd m = untouched;
+    VERIFY(!loadMarketDense(m, filename));
+    VERIFY_IS_EQUAL(m, untouched);
+  }
+}
+
+#ifndef _WIN32
+// The rhs and the reference solution of MatrixMarketIterator come from files of their own, which declare their own
+// sizes: rhs().size() == matrix().rows() and refX().size() is matrix().cols() or 0, whatever these files say.
+void check_marketiterator_vector_sizes() {
+  const std::string folder = GetTestTempFilename("sparse_extra_iterator");
+  mkdir(folder.c_str(), 0700);
+  const std::string rhs_file = folder + "/system_b.mtx";
+  const std::string refx_file = folder + "/system_x.mtx";
+  const Index rows = 4, cols = 3;
+  SparseMatrix<double> mat = MatrixXd::Random(rows, cols).sparseView();
+  VERIFY(saveMarket(mat, folder + "/system.mtx"));
+
+  for (Index size = 2; size <= 5; ++size) {
+    VectorXd vec = VectorXd::Random(size);
+    VERIFY(saveMarketDense(vec, rhs_file));
+    VERIFY(saveMarketDense(vec, refx_file));
+
+    // Neither iterator has loaded its matrix when it is asked for a vector.
+    MatrixMarketIterator<double> rhs_first(folder);
+    VERIFY(bool(rhs_first));
+    VERIFY_IS_EQUAL(rhs_first.rhs().size(), rows);
+    if (size == rows) VERIFY_IS_EQUAL(rhs_first.rhs(), vec);
+    VERIFY_IS_EQUAL(rhs_first.matrix().rows(), rows);
+
+    MatrixMarketIterator<double> refx_first(folder);
+    VERIFY(bool(refx_first));
+    VERIFY_IS_EQUAL(refx_first.refX().size(), size == cols ? cols : Index(0));
+    VERIFY_IS_EQUAL(refx_first.hasrefX(), size == cols);
+    if (size == cols) VERIFY_IS_EQUAL(refx_first.refX(), vec);
+    VERIFY_IS_EQUAL(refx_first.matrix().cols(), cols);
+  }
+
+  // Files that declare the right size and end before their last entry.
+  const char* header = "%%MatrixMarket matrix array real general\n";
+  {
+    std::ofstream rhs_out(rhs_file.c_str()), refx_out(refx_file.c_str());
+    rhs_out << header << rows << " 1\n1\n";
+    refx_out << header << cols << " 1\n1\n";
+  }
+  MatrixMarketIterator<double> truncated(folder);
+  VERIFY(bool(truncated));
+  VERIFY_IS_EQUAL(truncated.refX().size(), Index(0));
+  VERIFY(!truncated.hasrefX());
+  // The rhs is generated together with the solution it belongs to.
+  VERIFY_IS_EQUAL(truncated.rhs().size(), rows);
+  VERIFY_IS_EQUAL(truncated.refX().size(), cols);
+  VERIFY_IS_APPROX(truncated.rhs(), mat * truncated.refX());
+}
+#endif
+
 template <typename Scalar>
 void check_sparse_inverse() {
   using MatrixType = SparseMatrix<Scalar>;
@@ -290,6 +413,54 @@ void check_sparse_inverse_random_entries() {
   }
 }
 
+// ARPACK is not linked into the tests. These stand-ins for its double precision entry points write the last element
+// of resid(n), v(ldv, ncv), workd(3 * n) and workl(lworkl), the arrays that dsaupd_ documents, and report an error.
+// dsaupd_ is not inlined, so that the compiler cannot drop these writes together with the allocations.
+static int arpack_calls = 0;
+
+extern "C" EIGEN_DONT_INLINE void dsaupd_(int* ido, char*, int* n, char*, int*, double*, double* resid, int* ncv,
+                                          double* v, int* ldv, int*, int*, double* workd, double* workl, int* lworkl,
+                                          int* info) {
+  ++arpack_calls;
+  resid[*n - 1] = 0;
+  v[std::size_t(*ldv) * std::size_t(*ncv) - 1] = 0;
+  workd[3 * std::size_t(*n) - 1] = 0;
+  workl[*lworkl - 1] = 0;
+  *ido = 99;
+  *info = -9999;
+}
+
+extern "C" void dseupd_(int*, char*, int*, double*, double*, int*, double*, char*, int*, char*, int*, double*, double*,
+                        int*, double*, int*, int*, int*, double*, double*, int*, int*) {}
+
+template <typename SparseMatrixType>
+void check_arpack_workspaces() {
+  ArpackGeneralizedSelfAdjointEigenSolver<SparseMatrixType> eigs;
+
+  arpack_calls = 0;
+  eigs.compute(SparseMatrixType(50, 50), 5, "LM", EigenvaluesOnly);
+  VERIFY_IS_EQUAL(arpack_calls, 1);
+
+  // ARPACK's int arguments cannot express ncv = 2 * 30000, for which lworkl = ncv^2 + 8 ncv > INT_MAX, or nev >= n.
+  arpack_calls = 0;
+  eigs.compute(SparseMatrixType(100000, 100000), 30000, "LM", EigenvaluesOnly);
+  VERIFY_IS_EQUAL(arpack_calls, 0);
+  eigs.compute(SparseMatrixType(50, 50), 50, "LM", EigenvaluesOnly);
+  VERIFY_IS_EQUAL(arpack_calls, 0);
+
+  // v has n * ncv = 2147484 * 2000 = 2^32 + 704 elements. The request is representable but seldom satisfiable; ASan
+  // aborts on such requests instead of failing them.
+#if defined(EIGEN_EXCEPTIONS) && !defined(__SANITIZE_ADDRESS__) && !__has_feature(address_sanitizer)
+  bool threw = false;
+  try {
+    eigs.compute(SparseMatrixType(2147484, 2147484), 1000, "LM", EigenvaluesOnly);
+  } catch (const std::bad_alloc&) {
+    threw = true;
+  }
+  VERIFY(threw || arpack_calls == 1);
+#endif
+}
+
 EIGEN_DECLARE_TEST(sparse_extra) {
   for (int i = 0; i < g_repeat; i++) {
     int s = Eigen::internal::random<int>(1, 50);
@@ -315,6 +486,7 @@ EIGEN_DECLARE_TEST(sparse_extra) {
     CALL_SUBTEST_4((check_marketio_dense<Matrix<double, 3, Dynamic> >()));
     CALL_SUBTEST_4((check_marketio_dense<Matrix<double, 3, 4> >()));
     CALL_SUBTEST_4((check_marketio_dense<Matrix<double, Dynamic, Dynamic, ColMajor, 5, 5> >()));
+    CALL_SUBTEST_4(check_marketio_dense_views());
 
     CALL_SUBTEST_5((check_marketio_vector<Matrix<float, 1, Dynamic> >()));
     CALL_SUBTEST_5((check_marketio_vector<Matrix<double, 1, Dynamic> >()));
@@ -335,6 +507,13 @@ EIGEN_DECLARE_TEST(sparse_extra) {
     CALL_SUBTEST_7((check_random_setter_target_modes<SparseMatrix<std::complex<float>, ColMajor, long int> >()));
     CALL_SUBTEST_7((check_random_setter_target_modes<SparseMatrix<float, RowMajor, long int> >()));
 
+    CALL_SUBTEST_7((check_arpack_workspaces<SparseMatrix<double>>()));
+
     TEST_SET_BUT_UNUSED_VARIABLE(s);
   }
+  CALL_SUBTEST_4(check_marketio_dense_truncated());
+
+#ifndef _WIN32
+  CALL_SUBTEST_4(check_marketiterator_vector_sizes());
+#endif
 }

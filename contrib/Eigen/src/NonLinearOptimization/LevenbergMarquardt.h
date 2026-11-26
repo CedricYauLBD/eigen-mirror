@@ -54,7 +54,7 @@ class LevenbergMarquardt {
  public:
   LevenbergMarquardt(FunctorType &_functor) : functor(_functor) {
     nfev = njev = iter = 0;
-    fnorm = gnorm = 0.;
+    fnorm = gnorm = par = 0.;
     useExternalScaling = false;
   }
 
@@ -142,7 +142,8 @@ LevenbergMarquardtSpace::Status LevenbergMarquardt<FunctorType, Scalar>::lmder1(
 template <typename FunctorType, typename Scalar>
 LevenbergMarquardtSpace::Status LevenbergMarquardt<FunctorType, Scalar>::minimize(FVectorType &x) {
   LevenbergMarquardtSpace::Status status = minimizeInit(x);
-  if (status == LevenbergMarquardtSpace::ImproperInputParameters) return status;
+  // Only NotStarted means that fvec holds the residuals at x: a functor that refuses x (UserAsked) ends the run.
+  if (status != LevenbergMarquardtSpace::NotStarted) return status;
   do {
     status = minimizeOneStep(x);
   } while (status == LevenbergMarquardtSpace::Running);
@@ -553,7 +554,7 @@ LevenbergMarquardtSpace::Status LevenbergMarquardt<FunctorType, Scalar>::minimiz
 template <typename FunctorType, typename Scalar>
 LevenbergMarquardtSpace::Status LevenbergMarquardt<FunctorType, Scalar>::minimizeOptimumStorage(FVectorType &x) {
   LevenbergMarquardtSpace::Status status = minimizeOptimumStorageInit(x);
-  if (status == LevenbergMarquardtSpace::ImproperInputParameters) return status;
+  if (status != LevenbergMarquardtSpace::NotStarted) return status;
   do {
     status = minimizeOptimumStorageOneStep(x);
   } while (status == LevenbergMarquardtSpace::Running);

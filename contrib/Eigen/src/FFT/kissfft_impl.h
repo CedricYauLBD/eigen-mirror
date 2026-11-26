@@ -396,8 +396,12 @@ struct kissfft_impl {
     // TODO: look for PlanKey(nfft, ! inverse) and conjugate the twiddles
     PlanData &pd = m_plans[PlanKey(nfft, inverse)];
     if (pd.m_twiddles.size() == 0) {
-      pd.make_twiddles(nfft, inverse);
-      pd.factorize(nfft);
+      // Cached only once complete: a throw half-way leaves the entry empty, not with twiddles but without
+      // the stages or the scratch buffer of bfly_generic.
+      PlanData plan;
+      plan.make_twiddles(nfft, inverse);
+      plan.factorize(nfft);
+      pd = std::move(plan);
     }
     return pd;
   }

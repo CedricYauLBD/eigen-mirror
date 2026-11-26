@@ -281,6 +281,9 @@ class KroneckerSum : public EigenBase<KroneckerSum<LhsMatrix, RhsMatrix>> {
    * into the operator's factor types as for \ref KroneckerOperator. */
   template <typename LhsDerived, typename RhsDerived>
   KroneckerSum(const EigenBase<LhsDerived>& a, const EigenBase<RhsDerived>& b) : m_A(a.derived()), m_B(b.derived()) {
+    // Ahead of the asserts: a sum this refuses has a factor whose size() does
+    // not fit in Index either.
+    internal::kron_check_dimension_for_overflow(m_A.rows(), m_B.rows());
     eigen_assert(m_A.size() > 0 && m_B.size() > 0 && "KroneckerSum factors must be non-empty");
     eigen_assert(m_A.rows() == m_A.cols() && m_B.rows() == m_B.cols() && "KroneckerSum factors must be square");
     LhsOps::prepare(m_A);

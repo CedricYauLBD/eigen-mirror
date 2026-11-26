@@ -268,6 +268,37 @@ void test_autodiff_jacobian() {
   CALL_SUBTEST((forward_jacobian_with_scalar_arg(integratorFunctor<double>(10))));
 }
 
+// f(x) = [max(x0, 0); x0 + x1]. For x0 < 0 the first output is a constant without derivatives.
+template <int Size>
+struct ClampedFunc {
+  using InputType = Matrix<double, Size, 1>;
+  using ValueType = Matrix<double, Size, 1>;
+
+  template <typename T>
+  void operator()(const Matrix<T, Size, 1>& x, Matrix<T, Size, 1>* v) const {
+    (*v)[0] = x[0] > 0.0 ? x[0] : T(0.0);
+    (*v)[1] = x[0] + x[1];
+  }
+};
+
+// The Jacobian row of an output that does not depend on the inputs at x must be zero.
+template <int Size>
+void test_autodiff_jacobian_constant_output() {
+  using JacobianType = typename AutoDiffJacobian<ClampedFunc<Size>>::JacobianType;
+  AutoDiffJacobian<ClampedFunc<Size>> autoj;
+  for (double x0 : {1.0, -1.0}) {
+    Matrix<double, Size, 1> x(2), y(2);
+    x << x0, 2.0;
+    JacobianType j = JacobianType::Constant(2, 2, 7.0);
+    autoj(x, &y, &j);
+
+    JacobianType jref(2, 2);
+    jref << (x0 > 0.0 ? 1.0 : 0.0), 0.0, 1.0, 1.0;
+    VERIFY_IS_EQUAL(y, Vector2d(x0 > 0.0 ? x0 : 0.0, x0 + 2.0));
+    VERIFY_IS_EQUAL(j, jref);
+  }
+}
+
 template <int>
 void test_autodiff_hessian() {
   using AD = AutoDiffScalar<VectorXd>;
@@ -680,6 +711,8 @@ EIGEN_DECLARE_TEST(autodiff) {
     CALL_SUBTEST_4(test_autodiff_hessian<1>());
   }
   CALL_SUBTEST_2(test_autodiff_vector_derivative_specific_values<1>());
+  CALL_SUBTEST_3(test_autodiff_jacobian_constant_output<2>());
+  CALL_SUBTEST_3(test_autodiff_jacobian_constant_output<Dynamic>());
 
   CALL_SUBTEST_5(bug_1222());
   CALL_SUBTEST_5(bug_1223());

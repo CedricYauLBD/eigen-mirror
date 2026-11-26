@@ -374,6 +374,13 @@ Philip Davies and Nicholas J. Higham,
 
 The actual work is done by the MatrixFunction class.
 
+The algorithm starts from the Schur decomposition of \p M, computed by
+ComplexSchur. If that decomposition does not converge, which is the
+usual outcome for an infinite or NaN entry and is possible for finite
+entries of extreme magnitude, the result is a matrix of NaNs. The same
+holds for the functions implemented by matrixFunction(): log(), sin(),
+cos(), sinh() and cosh().
+
 Example: The following program checks that
 \f[ \exp \left[ \begin{array}{ccc}
       0 & \frac14\pi & 0 \\
@@ -458,7 +465,9 @@ In the <b>real case</b>, the matrix \f$ M \f$ should be invertible and
 it should have no eigenvalues which are real and negative (pairs of
 complex conjugate eigenvalues are allowed). In that case, the matrix
 has a square root which is also real, and this is the square root
-computed by this function.
+computed by this function. The entries of \f$ M \f$ should be finite:
+if the real Schur decomposition fails, for instance because of an
+infinite or NaN entry, the result is a matrix of NaNs.
 
 The matrix square root is computed by first reducing the matrix to
 quasi-triangular form with the real Schur decomposition. The square

@@ -109,6 +109,56 @@ void check_kronecker_compressed_results() {
   check_kronecker_compressed<RowMajor>(da, sb_row, expected);
 }
 
+#ifdef EIGEN_EXCEPTIONS
+template <typename Dest, typename Lhs, typename Rhs>
+bool kronecker_product_throws_bad_alloc(Dest& dst, const Lhs& a, const Rhs& b) {
+  try {
+    dst = kroneckerProduct(a, b);
+  } catch (const std::bad_alloc&) {
+    return true;
+  }
+  return false;
+}
+#endif
+
+// kroneckerProduct(A, B) stores nnz(A) * nnz(B) entries, nnz(A.col(j)) * nnz(B.col(l)) of them in one column. The
+// destination takes as many as its StorageIndex can number, and throws past that instead of wrapping a count.
+template <int Options>
+void check_sparse_kronecker_product_entry_count() {
+  using SpMat = SparseMatrix<double, Options>;
+  using ShortSpMat = SparseMatrix<double, Options, short>;
+  // An operand without zeros that gives the product `outer` inner vectors of `inner` entries each.
+  const auto full = [](Index inner, Index outer) -> MatrixXd {
+    const Index rows = SpMat::IsRowMajor ? outer : inner, cols = SpMat::IsRowMajor ? inner : outer;
+    return MatrixXd::Random(rows, cols).array() + 2.0;
+  };
+
+  // 217 * 151 == NumTraits<short>::highest()
+  MatrixXd a = full(217, 1), b = full(151, 1);
+  SpMat sparse_a = a.sparseView();
+  ShortSpMat short_ab = kroneckerProduct(sparse_a, b);
+  VERIFY_IS_EQUAL(short_ab.nonZeros(), Index(NumTraits<short>::highest()));
+  VERIFY_IS_APPROX(MatrixXd(short_ab), reference_kron<double>(a, b));
+
+#ifdef EIGEN_EXCEPTIONS
+  // 256 * (2 * 64) == NumTraits<short>::highest() + 1
+  a = full(256, 1);
+  b = full(64, 2);
+  sparse_a = a.sparseView();
+  VERIFY(kronecker_product_throws_bad_alloc(short_ab, sparse_a, b));
+
+  // One inner vector of 65280 * 65792 == 2^32 - 65536 entries, which is -65536 as an int. The inner size of this
+  // product needs a 64-bit Index.
+  if (sizeof(Index) > sizeof(int)) {
+    a = full(65280, 1);
+    b = full(65792, 1);
+    sparse_a = a.sparseView();
+    SpMat ab;
+    VERIFY(kronecker_product_throws_bad_alloc(ab, sparse_a, b));
+  }
+#endif
+}
+
 EIGEN_DECLARE_TEST(kronecker_product) {
   // DM = dense matrix; SM = sparse matrix
 
@@ -207,6 +257,16 @@ EIGEN_DECLARE_TEST(kronecker_product) {
   DM_ab2 = kroneckerProduct(DM_a2, DM_b2);
   CALL_SUBTEST(check_dimension(DM_ab2, 10 * 4, 9 * 8));
 
+#ifdef EIGEN_EXCEPTIONS
+  // test that a dimension of the result that does not fit in Index is refused: 3 * n wraps to 2, which would size the
+  // destination for 2 rows or columns and then fill it for 3 * n of them
+  const Index n = Index((std::numeric_limits<std::make_unsigned_t<Index>>::max)() / 3) + 1;
+  VERIFY(kronecker_product_throws_bad_alloc(DM_ab2, VectorXd::Ones(3), VectorXd::Ones(n)));
+  VERIFY(kronecker_product_throws_bad_alloc(DM_ab2, RowVectorXd::Ones(3), RowVectorXd::Ones(n)));
+  SparseMatrix<double, ColMajor, Index> SM_a3(3, 1), SM_bn(n, 1), SM_a3bn;
+  VERIFY(kronecker_product_throws_bad_alloc(SM_a3bn, SM_a3, SM_bn));
+#endif
+
   // test linear coefficient access for vector results
   Vector2i vector_a;
   vector_a << 10, 20;
@@ -276,6 +336,9 @@ EIGEN_DECLARE_TEST(kronecker_product) {
     VERIFY_IS_APPROX(kroneckerProduct(2 * dA, dB).eval(), dC);
     VERIFY_IS_APPROX(MatrixXf(sC2), dC);
   }
+
+  CALL_SUBTEST(check_sparse_kronecker_product_entry_count<ColMajor>());
+  CALL_SUBTEST(check_sparse_kronecker_product_entry_count<RowMajor>());
 }
 
 #endif
