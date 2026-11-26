@@ -11,6 +11,10 @@
 #ifndef EIGEN_BLAS_COMMON_H
 #define EIGEN_BLAS_COMMON_H
 
+// Sizes, increments and leading dimensions are passed on as Eigen::Index, which also holds the element offsets. Index
+// is internal to these Fortran-interface libraries, so they keep the default even where the C++ code narrows it.
+#undef EIGEN_DEFAULT_DENSE_INDEX_TYPE
+
 #include "../Eigen/Core"
 #include "../Eigen/Jacobi"
 
@@ -21,6 +25,10 @@
 #endif
 
 #include "blas.h"
+
+// A target whose pointers are narrower than EIGEN_BLAS_INT cannot address more than Index holds anyway.
+static_assert(sizeof(Eigen::Index) >= (std::min)(sizeof(EIGEN_BLAS_INT), sizeof(std::ptrdiff_t)),
+              "Eigen::Index is too narrow to hold every EIGEN_BLAS_INT and every element offset");
 
 constexpr size_t kBlasNameLength = 6;
 

@@ -70,6 +70,10 @@ cholmod_sparse viewAsCholmod(Ref<SparseMatrix<Scalar_, Options_, StorageIndex_> 
   res.p = mat.outerIndexPtr();
   res.i = mat.innerIndexPtr();
   res.x = mat.valuePtr();
+  // A matrix that never stored an entry has no index and value arrays yet, but CHOLMOD rejects a matrix whose arrays
+  // are null. With no entries nothing is read through them, so any valid pointer does.
+  if (res.i == nullptr) res.i = res.p;
+  if (res.x == nullptr) res.x = res.p;
   res.z = 0;
   res.sorted = 1;
   if (mat.isCompressed()) {
@@ -278,8 +282,8 @@ class CholmodBase : public SparseSolverBase<Derived> {
     internal::cm_finish<StorageIndex>(m_cholmod);
   }
 
-  inline StorageIndex cols() const { return internal::convert_index<StorageIndex, Index>(m_cholmodFactor->n); }
-  inline StorageIndex rows() const { return internal::convert_index<StorageIndex, Index>(m_cholmodFactor->n); }
+  inline StorageIndex cols() const { return m_size; }
+  inline StorageIndex rows() const { return m_size; }
 
   /** \brief Reports whether previous computation was successful.
    *
@@ -311,9 +315,11 @@ class CholmodBase : public SparseSolverBase<Derived> {
     }
     cholmod_sparse A = viewAsCholmod(matrix.template selfadjointView<UpLo>());
     m_cholmodFactor = internal::cm_analyze<StorageIndex>(A, m_cholmod);
+    m_size = internal::convert_index<StorageIndex>(matrix.rows());
 
+    // The analysis fails, and leaves m_cholmodFactor == nullptr, if CHOLMOD rejects the matrix or runs out of memory.
     this->m_isInitialized = true;
-    this->m_info = Success;
+    this->m_info = (m_cholmodFactor != nullptr ? Success : NumericalIssue);
     m_analysisIsOk = true;
     m_factorizationIsOk = false;
   }
@@ -330,8 +336,8 @@ class CholmodBase : public SparseSolverBase<Derived> {
     cholmod_sparse A = viewAsCholmod(matrix.template selfadjointView<UpLo>());
     internal::cm_factorize_p<StorageIndex>(&A, m_shiftOffset, 0, 0, m_cholmodFactor, m_cholmod);
 
-    // If the factorization failed, either the input matrix was zero (so m_cholmodFactor == nullptr), or minor is the
-    // column at which it failed. On success minor == n.
+    // If the factorization failed, either the analysis had failed already (so m_cholmodFactor == nullptr), or minor is
+    // the column at which it failed. On success minor == n.
     this->m_info =
         (m_cholmodFactor != nullptr && m_cholmodFactor->minor == m_cholmodFactor->n ? Success : NumericalIssue);
     m_factorizationIsOk = true;
@@ -348,9 +354,12 @@ class CholmodBase : public SparseSolverBase<Derived> {
     eigen_assert(m_factorizationIsOk &&
                  "The decomposition is not in a valid state for solving, you must first call either compute() or "
                  "symbolic()/numeric()");
-    const Index size = m_cholmodFactor->n;
-    EIGEN_UNUSED_VARIABLE(size);
-    eigen_assert(size == b.rows());
+    eigen_assert(m_size == b.rows());
+    // Without a factor there is nothing to solve with: info() reports the failure already, and the result is zero.
+    if (m_cholmodFactor == nullptr) {
+      dest.setZero();
+      return;
+    }
 
     // Cholmod needs column-major storage without inner-stride, which corresponds to the default behavior of Ref.
     Ref<const Matrix<typename Rhs::Scalar, Dynamic, Dynamic, ColMajor> > b_ref(b.derived());
@@ -374,9 +383,12 @@ class CholmodBase : public SparseSolverBase<Derived> {
     eigen_assert(m_factorizationIsOk &&
                  "The decomposition is not in a valid state for solving, you must first call either compute() or "
                  "symbolic()/numeric()");
-    const Index size = m_cholmodFactor->n;
-    EIGEN_UNUSED_VARIABLE(size);
-    eigen_assert(size == b.rows());
+    eigen_assert(m_size == b.rows());
+    // Without a factor there is nothing to solve with: info() reports the failure already, and the result is zero.
+    if (m_cholmodFactor == nullptr) {
+      dest.derived().resize(b.rows(), b.cols());
+      return;
+    }
 
     // note: cs stands for Cholmod Sparse
     Ref<SparseMatrix<typename RhsDerived::Scalar, ColMajor, typename RhsDerived::StorageIndex> > b_ref(
@@ -418,6 +430,8 @@ class CholmodBase : public SparseSolverBase<Derived> {
                  "The decomposition is not in a valid state for solving, you must first call either compute() or "
                  "symbolic()/numeric()");
 
+    if (m_cholmodFactor == nullptr) return NumTraits<RealScalar>::quiet_NaN();
+
     RealScalar logDet = 0;
     Scalar* x = static_cast<Scalar*>(m_cholmodFactor->x);
     if (m_cholmodFactor->is_super) {
@@ -455,6 +469,7 @@ class CholmodBase : public SparseSolverBase<Derived> {
  protected:
   mutable cholmod_common m_cholmod;
   cholmod_factor* m_cholmodFactor;
+  StorageIndex m_size = 0;  // The number of rows and columns of the analyzed matrix
   double m_shiftOffset[2];
   mutable ComputationInfo m_info;
   int m_factorizationIsOk;

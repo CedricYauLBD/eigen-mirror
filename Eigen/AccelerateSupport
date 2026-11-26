@@ -43,6 +43,9 @@
  * \code
  * AccelerateLDLT<SparseMatrix<float>, Lower> ldlt;
  * \endcode
+ *
+ * The input matrix should be in compressed form, otherwise a compressed copy of it is made for the factorization.
+ * See SparseMatrix::makeCompressed().
  */
 
 // IWYU pragma: begin_exports

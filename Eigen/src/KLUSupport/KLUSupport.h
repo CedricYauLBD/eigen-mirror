@@ -194,8 +194,9 @@ class KLU : public SparseSolverBase<KLU<MatrixType_> > {
     m_symbolic = klu_analyze(internal::convert_index<int>(mp_matrix.rows()),
                              const_cast<StorageIndex *>(mp_matrix.outerIndexPtr()),
                              const_cast<StorageIndex *>(mp_matrix.innerIndexPtr()), &m_common);
+    // The analysis has run: a matrix that KLU rejects is reported through info(), not by its assertion.
+    m_isInitialized = true;
     if (m_symbolic) {
-      m_isInitialized = true;
       m_info = Success;
       m_analysisIsOk = true;
       m_extractedDataAreDirty = true;
@@ -203,9 +204,11 @@ class KLU : public SparseSolverBase<KLU<MatrixType_> > {
   }
 
   void factorize_impl() {
-    m_numeric = klu_factor(const_cast<StorageIndex *>(mp_matrix.outerIndexPtr()),
-                           const_cast<StorageIndex *>(mp_matrix.innerIndexPtr()),
-                           const_cast<Scalar *>(mp_matrix.valuePtr()), m_symbolic, &m_common, Scalar());
+    // Without a symbolic analysis there is nothing to factorize, and the arrays of the rejected matrix may be null.
+    m_numeric = m_symbolic ? klu_factor(const_cast<StorageIndex *>(mp_matrix.outerIndexPtr()),
+                                        const_cast<StorageIndex *>(mp_matrix.innerIndexPtr()),
+                                        const_cast<Scalar *>(mp_matrix.valuePtr()), m_symbolic, &m_common, Scalar())
+                           : nullptr;
 
     m_info = m_numeric ? Success : NumericalIssue;
     m_factorizationIsOk = m_numeric ? 1 : 0;

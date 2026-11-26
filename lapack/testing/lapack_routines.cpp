@@ -17,6 +17,13 @@
 #include "main.h"
 #include "../lapack.h"
 
+#if defined(__unix__) || defined(__APPLE__)
+#include <sys/mman.h>
+#if defined(MAP_NORESERVE) && SIZE_MAX > 0xFFFFFFFFu
+#define EIGEN_TEST_LARF_LARGE_INCREMENT
+#endif
+#endif
+
 namespace {
 
 using std::complex;
@@ -143,6 +150,36 @@ void test_larf() {
     for (int incv : {-3, -2, -1, 1, 2})
       for (int zeros : {0, 1, 2}) check_larf<Scalar>(side, incv, zeros);
 }
+
+#ifdef EIGEN_TEST_LARF_LARGE_INCREMENT
+// xLARF with |INCV| = 2^30 and a reflector of order 3: the last entry of v is 2^31 entries away from the first, an
+// offset that a 32-bit integer cannot hold. The result must be the one for the same v stored with |INCV| = 1. The
+// mapping only reserves address space, and three of its pages are touched.
+void test_larf_large_increment() {
+  const std::size_t stride = std::size_t(1) << 30, bytes = (2 * stride + 1) * sizeof(double);
+  void* map = mmap(nullptr, bytes, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
+  if (map == MAP_FAILED) {
+    std::cerr << "Skipping the xLARF test with a large increment: cannot reserve " << bytes << " bytes.\n";
+    return;
+  }
+  double* v = static_cast<double*>(map);
+  // v in storage order. xLARF scans it for zeros from its last entry, which is v[0] for INCV < 0.
+  const double entries[][3] = {{1, 0.5, 0.25}, {1, 0.5, 0}, {0, 0, 1}};
+  for (const auto& entry : entries)
+    for (int sign : {1, -1})
+      for (char side : {'L', 'R'}) {
+        double v_unit[3], tau = 0.5;
+        for (int i = 0; i < 3; ++i) v[i * stride] = v_unit[i] = entry[i];
+        int m = side == 'L' ? 3 : 2, n = side == 'L' ? 2 : 3, ldc = m;
+        int incv = sign * (1 << 30), incv_unit = sign;
+        ColMat<double> C = ColMat<double>::Random(m, n), expected = C, work(2, 1);
+        BLASFUNC(dlarf)(&side, &m, &n, v_unit, &incv_unit, &tau, expected.data(), &ldc, work.data());
+        BLASFUNC(dlarf)(&side, &m, &n, v, &incv, &tau, C.data(), &ldc, work.data());
+        VERIFY_IS_APPROX(C, expected);
+      }
+  VERIFY_IS_EQUAL(munmap(map, bytes), 0);
+}
+#endif
 
 complex<float> ladiv(float a, float b, float c, float d) {
   float p, q;
@@ -509,6 +546,10 @@ EIGEN_DECLARE_TEST(lapack_routines) {
   CALL_SUBTEST(test_larfb_nan_propagation());
   CALL_SUBTEST(test_larf<double>());
   CALL_SUBTEST(test_larf<complex<double> >());
+
+#ifdef EIGEN_TEST_LARF_LARGE_INCREMENT
+  CALL_SUBTEST(test_larf_large_increment());
+#endif
   CALL_SUBTEST(test_ladiv());
   CALL_SUBTEST(test_ladiv_special<float>());
   CALL_SUBTEST(test_ladiv_special<double>());

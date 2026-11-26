@@ -183,9 +183,32 @@ void test_spqr_q_product_strided_rhs() {
   VERIFY_IS_APPROX(solver.matrixQ() * (tall + tall), Q * DenseMatrix(tall + tall));
 }
 
+// A matrix that never stored an entry has no index and value arrays. It is a valid matrix of rank 0.
+template <typename Scalar>
+void test_spqr_matrix_without_entries() {
+  using MatrixType = SparseMatrix<Scalar, ColMajor>;
+  using DenseVector = Matrix<Scalar, Dynamic, 1>;
+
+  MatrixType A(4, 3);
+  DenseVector b = DenseVector::Ones(4);
+
+  SPQR<MatrixType> solver;
+  solver.compute(A);
+  VERIFY_IS_EQUAL(solver.info(), Success);
+  VERIFY_IS_EQUAL(solver.rows(), 4);
+  VERIFY_IS_EQUAL(solver.cols(), 3);
+  VERIFY_IS_EQUAL(solver.rank(), 0);
+
+  DenseVector x = solver.solve(b);
+  VERIFY_IS_EQUAL(solver.info(), Success);
+  VERIFY_IS_EQUAL(x, DenseVector::Zero(3));
+}
+
 EIGEN_DECLARE_TEST(spqr_support) {
   CALL_SUBTEST_1(test_spqr_scalar<double>());
+  CALL_SUBTEST_1(test_spqr_matrix_without_entries<double>());
   CALL_SUBTEST_2(test_spqr_scalar<std::complex<double> >());
+  CALL_SUBTEST_2(test_spqr_matrix_without_entries<std::complex<double> >());
   CALL_SUBTEST_3(test_spqr_fixed_ordering_uses_identity_permutation<>());
   CALL_SUBTEST_3(test_spqr_matrix_q_times_identity_expression<>());
   CALL_SUBTEST_4(test_spqr_q_product_strided_rhs<double>());
