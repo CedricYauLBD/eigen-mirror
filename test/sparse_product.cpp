@@ -1208,6 +1208,33 @@ void test_sparse_diagonal_expression_products() {
   VERIFY_IS_APPROX(res.toDense(), refRight);
 }
 
+// A narrow StorageIndex bounds the stored inner indices, not the dimensions: n exceeds its range, and the far entry
+// lies in the last outer vector, so that its inner index fits. The diagonal of a sparse matrix has that matrix's
+// StorageIndex, and so has its product with the selfadjoint view.
+template <int Order>
+void test_selfadjoint_diagonal_narrow_index() {
+  using SpMat = SparseMatrix<double, Order, short>;
+  const Index n = Index(NumTraits<short>::highest()) + 1000;
+  const Index last = n - 1;
+  SpMat m(n, n);
+  m.insert(1, 1) = 3.0;
+  (SpMat::IsRowMajor ? m.insert(last, 1) : m.insert(1, last)) = 2.0;
+  m.makeCompressed();
+  const SpMat& cm = m;
+  const auto farCoeff = [&](const SpMat& s) { return SpMat::IsRowMajor ? s.coeff(last, 1) : s.coeff(1, last); };
+
+  // m(1, 1) scales row 1 from the left and column 1 from the right; m(last, last) is zero.
+  const SpMat left = cm.diagonal().asDiagonal() * cm.template selfadjointView<Upper | Lower>();
+  VERIFY_IS_EQUAL(left.nonZeros(), 2);
+  VERIFY_IS_EQUAL(left.coeff(1, 1), 9.0);
+  VERIFY_IS_EQUAL(farCoeff(left), SpMat::IsRowMajor ? 0.0 : 6.0);
+
+  const SpMat right = cm.template selfadjointView<Upper | Lower>() * cm.diagonal().asDiagonal();
+  VERIFY_IS_EQUAL(right.nonZeros(), 2);
+  VERIFY_IS_EQUAL(right.coeff(1, 1), 9.0);
+  VERIFY_IS_EQUAL(farCoeff(right), SpMat::IsRowMajor ? 6.0 : 0.0);
+}
+
 // Pruned selects the pruning kernel and drops the entries whose product row or column is empty.
 template <bool Pruned, int LOrder, int ROrder, int DstOrder>
 void test_sparse_product_operand_order() {
@@ -1467,6 +1494,90 @@ void check_sparse_triangular_view_products_all_modes() {
   }
 }
 
+struct counting_identity_op {
+  double operator()(double x) const {
+    ++calls;
+    return x;
+  }
+  static Index calls;
+};
+Index counting_identity_op::calls = 0;
+
+// A product nested in the diagonal operand is evaluated once, and not once for every entry of the selfadjoint view.
+template <int Order>
+void test_selfadjoint_diagonal_product_evaluates_diagonal_once() {
+  const Index n = 20;
+  MatrixXd refLo(n, n);
+  SparseMatrix<double, Order> mLo(n, n), mUp, res;
+  initSparse(0.2, refLo, mLo, MakeLowerTriangular | ForceNonZeroDiag);
+  mUp = mLo.transpose();
+  const MatrixXd refS = refLo.selfadjointView<Lower>();
+  const VectorXd v = VectorXd::Random(n);
+  const MatrixXd refD = (refLo * v).asDiagonal();
+  const auto absProduct = (mLo * v.unaryExpr(counting_identity_op())).cwiseAbs().asDiagonal();
+  // As the whole diagonal, the product also failed the assertion of ProductImpl::coeff().
+  const auto product = (mLo * v.unaryExpr(counting_identity_op())).asDiagonal();
+
+  counting_identity_op::calls = 0;
+  res = absProduct * mLo.template selfadjointView<Lower>();
+  VERIFY_IS_EQUAL(counting_identity_op::calls, n);
+  VERIFY_IS_APPROX(MatrixXd(res), refD.cwiseAbs() * refS);
+
+  counting_identity_op::calls = 0;
+  res = mUp.template selfadjointView<Upper>() * absProduct;
+  VERIFY_IS_EQUAL(counting_identity_op::calls, n);
+  VERIFY_IS_APPROX(MatrixXd(res), refS * refD.cwiseAbs());
+
+  counting_identity_op::calls = 0;
+  res = product * mUp.template selfadjointView<Upper>();
+  VERIFY_IS_EQUAL(counting_identity_op::calls, n);
+  VERIFY_IS_APPROX(MatrixXd(res), refD * refS);
+
+  counting_identity_op::calls = 0;
+  res = mLo.template selfadjointView<Lower>() * product;
+  VERIFY_IS_EQUAL(counting_identity_op::calls, n);
+  VERIFY_IS_APPROX(MatrixXd(res), refS * refD);
+}
+
+// A product nests a sparse selfadjointView by value: the view is a temporary that is destroyed before a range-for
+// iterates over the product, and before a product returned from a function is evaluated.
+template <int Order>
+void test_selfadjoint_view_product_nesting() {
+  using SparseMatrixType = SparseMatrix<double, Order>;
+  using ViewType = SparseSelfAdjointView<const SparseMatrixType, Lower>;
+  STATIC_CHECK((!std::is_reference<typename Product<ViewType, VectorXd>::LhsNested>::value));
+  STATIC_CHECK((!std::is_reference<typename Product<RowVectorXd, ViewType>::RhsNested>::value));
+  STATIC_CHECK((!std::is_reference<typename Product<ViewType, SparseMatrixType>::LhsNested>::value));
+  STATIC_CHECK((!std::is_reference<typename Product<SparseMatrixType, ViewType>::RhsNested>::value));
+
+  const Index n = 7;
+  MatrixXd refLo(n, n);
+  SparseMatrixType mLo(n, n);
+  initSparse<double>(0.5, refLo, mLo, MakeLowerTriangular);
+  const MatrixXd refS = refLo.selfadjointView<Lower>();
+  const VectorXd v = VectorXd::Random(n);
+  const VectorXd expected = refS * v;
+
+  VectorXd res(n);
+  Index k = 0;
+  for (double x : mLo.template selfadjointView<Lower>() * v) res(k++) = x;
+  VERIFY_IS_EQUAL(k, n);
+  VERIFY_IS_APPROX(res, expected);
+
+  k = 0;
+  for (double x : v.transpose() * mLo.template selfadjointView<Lower>()) res(k++) = x;
+  VERIFY_IS_EQUAL(k, n);
+  VERIFY_IS_APPROX(res, expected);
+
+  auto timesDense = [&mLo](const VectorXd& rhs) { return mLo.template selfadjointView<Lower>() * rhs; };
+  res = timesDense(v);
+  VERIFY_IS_APPROX(res, expected);
+
+  auto timesSparse = [&mLo](const SparseMatrixType& rhs) { return mLo.template selfadjointView<Lower>() * rhs; };
+  const SparseMatrixType sparseRes = timesSparse(mLo);
+  VERIFY_IS_APPROX(sparseRes.toDense(), refS * refLo);
+}
+
 EIGEN_DECLARE_TEST(sparse_product) {
   sparse_structured_view_product_sfinae<SparseMatrix<double, ColMajor>>();
   sparse_structured_view_product_sfinae<SparseMatrix<double, RowMajor>>();
@@ -1484,6 +1595,8 @@ EIGEN_DECLARE_TEST(sparse_product) {
     CALL_SUBTEST_1((sparse_product<SparseMatrix<double, ColMajor>>()));
     CALL_SUBTEST_1((sparse_product<SparseMatrix<double, RowMajor>>()));
     CALL_SUBTEST_1((bug_942<double>()));
+    CALL_SUBTEST_1((test_selfadjoint_view_product_nesting<ColMajor>()));
+    CALL_SUBTEST_1((test_selfadjoint_view_product_nesting<RowMajor>()));
     CALL_SUBTEST_2((sparse_product<SparseMatrix<std::complex<double>, ColMajor>>()));
     CALL_SUBTEST_2((sparse_product<SparseMatrix<std::complex<double>, RowMajor>>()));
     CALL_SUBTEST_3((sparse_product<SparseMatrix<float, ColMajor, long int>>()));
@@ -1498,6 +1611,10 @@ EIGEN_DECLARE_TEST(sparse_product) {
     CALL_SUBTEST_8((test_sparse_diagonal_products<RowMajor>()));
     CALL_SUBTEST_8((test_sparse_diagonal_expression_products<ColMajor>()));
     CALL_SUBTEST_8((test_sparse_diagonal_expression_products<RowMajor>()));
+    CALL_SUBTEST_8((test_selfadjoint_diagonal_narrow_index<ColMajor>()));
+    CALL_SUBTEST_8((test_selfadjoint_diagonal_narrow_index<RowMajor>()));
+    CALL_SUBTEST_8((test_selfadjoint_diagonal_product_evaluates_diagonal_once<ColMajor>()));
+    CALL_SUBTEST_8((test_selfadjoint_diagonal_product_evaluates_diagonal_once<RowMajor>()));
     CALL_SUBTEST_9((test_sparse_product_operand_order<false, ColMajor, ColMajor, ColMajor>()));
     CALL_SUBTEST_9((test_sparse_product_operand_order<false, ColMajor, ColMajor, RowMajor>()));
     CALL_SUBTEST_9((test_sparse_product_operand_order<false, ColMajor, RowMajor, ColMajor>()));

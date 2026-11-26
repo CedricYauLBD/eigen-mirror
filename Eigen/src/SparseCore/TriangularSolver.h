@@ -218,9 +218,12 @@ void reach_insert_column(Res& res, Index col, StorageIndex* xi, Index top, Index
   // Only the iterator upper reach is descending; it is read back to front, so k walks
   // up while the load walks down. Every other order is ascending by this point.
   constexpr bool Descending = Ordered && Upper;
+  // The columns come in order, so append. insert() has no free slot in the column once
+  // the solution outgrows the rhs (fill-in) and then shifts the columns already stored.
+  res.startVec(col);
   for (Index k = top; k < n; ++k) {
     StorageIndex j = xi[Descending ? top + n - 1 - k : k];
-    if (!numext::is_exactly_zero(xwork[j])) res.insert(j, col) = xwork[j];
+    if (!numext::is_exactly_zero(xwork[j])) res.insertBackByOuterInner(col, j) = xwork[j];
     xwork[j] = Scalar(0);
     mark[j] = 0;
   }

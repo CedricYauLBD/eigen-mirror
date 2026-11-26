@@ -283,6 +283,9 @@ struct sparse_time_dense_product_impl<SparseLhsType, DenseRhsType, DenseResType,
             part_lo = std::lower_bound(part_lo, part_last, StorageIndex(target));
             part[t] = part_lo - outer;
           }
+          // rhs can be a lazy expression whose functors must not run concurrently: evaluate it here, on the
+          // calling thread. The Ref binds existing storage in place, whatever its strides.
+          const Ref<const typename Rhs::PlainObject, 0, Stride<Dynamic, Dynamic>> rhs_ref(rhs);
           for (Index c = 0; c < rhs.cols(); ++c) {
             typename Res::Scalar* y = res.data() + c * res.outerStride();
 #pragma omp parallel for schedule(static, 1) num_threads(threads)
@@ -291,7 +294,7 @@ struct sparse_time_dense_product_impl<SparseLhsType, DenseRhsType, DenseResType,
               const Index j_lo = part[t], j_hi = part[t + 1];
               for (Index j = j_lo; j < j_hi; ++j) {
                 typename ScalarBinaryOpTraits<AlphaType, typename Rhs::Scalar>::ReturnType rhs_j(alpha *
-                                                                                                 rhs.coeff(j, c));
+                                                                                                 rhs_ref.coeff(j, c));
                 const Index start = outer ? outer[j] : 0;
                 const Index end = innerNnz ? start + innerNnz[j] : (outer ? outer[j + 1] : mat.nonZeros());
                 Index k = start;
@@ -313,8 +316,12 @@ struct sparse_time_dense_product_impl<SparseLhsType, DenseRhsType, DenseResType,
             // accumulator. Each thread owns a contiguous range of row blocks
             // (static schedule) so the zero stores stay independent, and the
             // accumulator is summed in the exact t = 0..threads-1 order, keeping
-            // the result bit-identical to the scalar reduction it replaces.
-            constexpr Index kReduceBlock = 512;
+            // the result bit-identical to the scalar reduction it replaces. The
+            // accumulator is on the stack of every thread of the team, so its length
+            // is capped by EIGEN_STACK_ALLOCATION_LIMIT (and is at least 1); the
+            // length does not change the result.
+            constexpr Index kStackReduceBlock = Index(EIGEN_STACK_ALLOCATION_LIMIT / sizeof(ResScalar));
+            constexpr Index kReduceBlock = numext::maxi(Index(1), numext::mini(Index(512), kStackReduceBlock));
 #pragma omp parallel for schedule(static) num_threads(threads)
             for (Index i0 = 0; i0 < m; i0 += kReduceBlock) {
               const Index i1 = numext::mini(i0 + kReduceBlock, m);

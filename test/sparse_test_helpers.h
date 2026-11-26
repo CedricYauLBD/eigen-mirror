@@ -6,8 +6,11 @@
 #define EIGEN_SPARSE_TEST_HELPERS_H
 
 #include <array>
+#include <cstddef>
+#include <iterator>
 #include <limits>
 #include <type_traits>
+#include <vector>
 
 #include <Eigen/SparseCore>
 
@@ -76,6 +79,34 @@ void init_sparse_diagonal(MatrixType& matrix) {
   matrix.insert(3, 3) = Scalar(40);
   matrix.makeCompressed();
 }
+
+// A single-pass iterator over a vector of triplets. All copies share one position, as the iterators of a stream do,
+// so a range that has been counted or scanned cannot be read again.
+template <typename Triplet>
+struct single_pass_triplet_iterator {
+  using iterator_category = std::input_iterator_tag;
+  using value_type = Triplet;
+  using difference_type = std::ptrdiff_t;
+  using pointer = const Triplet*;
+  using reference = const Triplet&;
+
+  const std::vector<Triplet>* source;
+  std::size_t* next;
+
+  reference operator*() const { return (*source)[*next]; }
+  pointer operator->() const { return &(*source)[*next]; }
+  single_pass_triplet_iterator& operator++() {
+    ++*next;
+    return *this;
+  }
+  single_pass_triplet_iterator operator++(int) {
+    single_pass_triplet_iterator old = *this;
+    ++*next;
+    return old;
+  }
+  bool operator==(const single_pass_triplet_iterator&) const { return *next == source->size(); }
+  bool operator!=(const single_pass_triplet_iterator& other) const { return !(*this == other); }
+};
 
 }  // namespace Eigen
 

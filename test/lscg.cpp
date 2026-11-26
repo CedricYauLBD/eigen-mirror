@@ -459,6 +459,52 @@ void test_iterative_scaling_factor() {
   VERIFY_IS_EQUAL(internal::iterative_solver_scaling_factor(bigNorm), bigNorm);
 }
 
+// The right-hand side of a sparse solve may refer to the destination, and the solution may have another size:
+// B = solver.solve(B) with a non square matrix has to read B before B is resized or overwritten.
+template <typename T>
+void test_lscg_sparse_rhs_aliases_destination() {
+  using SpMat = SparseMatrix<T>;
+  using DenseMat = Matrix<T, Dynamic, Dynamic>;
+  const Index cols = internal::random<Index>(5, 20);
+  const Index rows = 2 * cols;
+  const Index rhsCols = internal::random<Index>(8, 50);
+  SpMat tall(rows, cols), square(cols, cols);
+  for (Index j = 0; j < cols; ++j) {
+    tall.insert(cols + j, j) = T(2);
+    square.insert(j, j) = T(4);
+  }
+  const DenseMat dB = DenseMat::Random(rows, rhsCols);
+  const DenseMat dC = DenseMat::Random(cols, rhsCols);
+  const SpMat B = dB.sparseView();
+  const SpMat C = dC.sparseView();
+  SpMat X;
+
+  // The solution has fewer rows than the right-hand side.
+  LeastSquaresConjugateGradient<SpMat> lscg(tall);
+  // The dense solve does not go through the sparse assignment.
+  DenseMat refX = lscg.solve(dB);
+  X = B;
+  X = lscg.solve(X);
+  VERIFY_IS_EQUAL(lscg.info(), Success);
+  VERIFY_IS_APPROX(DenseMat(X), refX);
+
+  // The solution has the size of the right-hand side.
+  lscg.compute(square);
+  refX = lscg.solve(dC);
+  X = C;
+  X = lscg.solve(X);
+  VERIFY_IS_EQUAL(lscg.info(), Success);
+  VERIFY_IS_APPROX(DenseMat(X), refX);
+
+  // The solution has fewer columns than the matrix the right-hand side is taken from.
+  for (Index start : {Index(0), rhsCols - 3}) {
+    X = C;
+    X = lscg.solve(X.middleCols(start, 2));
+    VERIFY_IS_EQUAL(lscg.info(), Success);
+    VERIFY_IS_APPROX(DenseMat(X), refX.middleCols(start, 2));
+  }
+}
+
 EIGEN_DECLARE_TEST(lscg) {
   CALL_SUBTEST_1(test_lscg_T<double>());
   CALL_SUBTEST_2(test_lscg_T<std::complex<double> >());
@@ -478,4 +524,6 @@ EIGEN_DECLARE_TEST(lscg) {
   CALL_SUBTEST_5(test_lscg_power_of_two_scale<long double>());
   CALL_SUBTEST_5(
       (check_matrix_free_accessors<LeastSquaresConjugateGradient<MatrixFreeOperator, IdentityPreconditioner>>()));
+  CALL_SUBTEST_1(test_lscg_sparse_rhs_aliases_destination<double>());
+  CALL_SUBTEST_2(test_lscg_sparse_rhs_aliases_destination<std::complex<double>>());
 }

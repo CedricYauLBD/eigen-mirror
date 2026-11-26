@@ -125,7 +125,8 @@ int coletree(const MatrixType& mat, IndexVector& parent, IndexVector& firstRowEl
  */
 template <typename IndexVector>
 void nr_etdfs(typename IndexVector::Scalar n, IndexVector& parent, IndexVector& first_kid, IndexVector& next_kid,
-              IndexVector& post, typename IndexVector::Scalar postnum) {
+              IndexVector& post, Index postnum) {
+  // postnum counts the n + 1 nodes, dummy root included: n + 1 need not be representable as StorageIndex.
   using StorageIndex = typename IndexVector::Scalar;
   StorageIndex current = n, first, next;
   while (postnum != n) {
@@ -134,7 +135,7 @@ void nr_etdfs(typename IndexVector::Scalar n, IndexVector& parent, IndexVector& 
     // no kid for the current node
     if (first == -1) {
       // Numbering this node because it has no kid
-      post(current) = postnum++;
+      post(current) = StorageIndex(postnum++);
 
       // looking for the next kid
       next = next_kid(current);
@@ -142,13 +143,13 @@ void nr_etdfs(typename IndexVector::Scalar n, IndexVector& parent, IndexVector& 
         // No more kids : back to the parent node
         current = parent(current);
         // numbering the parent node
-        post(current) = postnum++;
+        post(current) = StorageIndex(postnum++);
 
         // Get the next kid
         next = next_kid(current);
       }
       // stopping criterion
-      if (postnum == n + 1) return;
+      if (postnum == Index(n) + 1) return;
 
       // Updating current node
       current = next;
@@ -173,11 +174,12 @@ void treePostorder(typename IndexVector::Scalar n, IndexVector& parent, IndexVec
                    PostorderChildren order = PostorderChildren::Increasing) {
   using StorageIndex = typename IndexVector::Scalar;
   IndexVector first_kid, next_kid;  // Linked list of children
-  StorageIndex postnum;
+  Index postnum;
   // Allocate storage for working arrays and results
-  first_kid.resize(n + 1);
-  next_kid.setZero(n + 1);
-  post.setZero(n + 1);
+  const Index size = Index(n) + 1;
+  first_kid.resize(size);
+  next_kid.setZero(size);
+  post.setZero(size);
 
   // Set up structure describing children
   first_kid.setConstant(-1);

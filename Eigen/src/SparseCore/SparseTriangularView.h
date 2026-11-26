@@ -47,7 +47,7 @@ class TriangularViewImpl<MatrixType, Mode, Sparse> : public SparseMatrixBase<Tri
   template <typename RhsType, typename DstType>
   EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE void _solve_impl(const RhsType& rhs, DstType& dst) const {
     EIGEN_IF_CONSTEXPR ((std::is_same<RhsType, DstType>::value)) {
-      if (internal::extract_data(dst) != internal::extract_data(rhs)) dst = rhs;
+      if (!internal::is_same_dense(dst, rhs)) dst = rhs;
     } else {
       dst = rhs;
     }

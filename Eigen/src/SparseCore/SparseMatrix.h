@@ -851,8 +851,7 @@ class SparseMatrix : public SparseCompressedBase<SparseMatrix<Scalar_, Options_,
 
   /** Constructs a sparse matrix from the sparse expression \a other */
   template <typename OtherDerived>
-  inline SparseMatrix(const SparseMatrixBase<OtherDerived>& other)
-      : m_outerSize(0), m_innerSize(0), m_outerIndex(0), m_innerNonZeros(0) {
+  inline SparseMatrix(const SparseMatrixBase<OtherDerived>& other) : SparseMatrix() {
     EIGEN_STATIC_ASSERT(
         (std::is_same<Scalar, typename OtherDerived::Scalar>::value),
         YOU_MIXED_DIFFERENT_NUMERIC_TYPES__YOU_NEED_TO_USE_THE_CAST_METHOD_OF_MATRIXBASE_TO_CAST_NUMERIC_TYPES_EXPLICITLY)
@@ -869,8 +868,7 @@ class SparseMatrix : public SparseCompressedBase<SparseMatrix<Scalar_, Options_,
 
   /** Constructs a sparse matrix from the sparse selfadjoint view \a other */
   template <typename OtherDerived, unsigned int UpLo>
-  inline SparseMatrix(const SparseSelfAdjointView<OtherDerived, UpLo>& other)
-      : m_outerSize(0), m_innerSize(0), m_outerIndex(0), m_innerNonZeros(0) {
+  inline SparseMatrix(const SparseSelfAdjointView<OtherDerived, UpLo>& other) : SparseMatrix() {
     Base::operator=(other);
   }
 
@@ -883,23 +881,18 @@ class SparseMatrix : public SparseCompressedBase<SparseMatrix<Scalar_, Options_,
   }
 
   /** Copy constructor (it performs a deep copy) */
-  inline SparseMatrix(const SparseMatrix& other)
-      : Base(), m_outerSize(0), m_innerSize(0), m_outerIndex(0), m_innerNonZeros(0) {
-    *this = other.derived();
-  }
+  inline SparseMatrix(const SparseMatrix& other) : SparseMatrix() { *this = other.derived(); }
 
   /** \brief Copy constructor with in-place evaluation */
   template <typename OtherDerived>
-  SparseMatrix(const ReturnByValue<OtherDerived>& other)
-      : Base(), m_outerSize(0), m_innerSize(0), m_outerIndex(0), m_innerNonZeros(0) {
+  SparseMatrix(const ReturnByValue<OtherDerived>& other) : SparseMatrix() {
     initAssignment(other);
     other.evalTo(*this);
   }
 
   /** \brief Copy constructor with in-place evaluation */
   template <typename OtherDerived>
-  explicit SparseMatrix(const DiagonalBase<OtherDerived>& other)
-      : Base(), m_outerSize(0), m_innerSize(0), m_outerIndex(0), m_innerNonZeros(0) {
+  explicit SparseMatrix(const DiagonalBase<OtherDerived>& other) : SparseMatrix() {
     *this = other.derived();
   }
 

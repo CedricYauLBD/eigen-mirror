@@ -331,6 +331,84 @@ void sparse_triangular_solve_workspace_overflow() {
     VERIFY(sparse_triangular_solve_throws_bad_alloc<std::int64_t>(n));
 }
 
+// dst = tri.solve(rhs) where rhs and dst are distinct objects of one type for which the triangular view cannot
+// compare data pointers (inner stride unknown at compile time, or no direct access): rhs must still be copied.
+template <typename Scalar>
+void sparse_triangular_solve_same_type(int size) {
+  double density = (std::max)(8. / (size * size), 0.01);
+  using DenseMatrix = Matrix<Scalar, Dynamic, Dynamic>;
+  using StridedMap = Map<DenseMatrix, 0, Stride<Dynamic, Dynamic> >;
+  const Index nrhs = 3;
+
+  SparseMatrix<Scalar> m(size, size);
+  DenseMatrix refMat = DenseMatrix::Zero(size, size);
+  initSparse<Scalar>(density, refMat, m, ForceNonZeroDiag | MakeLowerTriangular);
+  const DenseMatrix b = DenseMatrix::Random(size, nrhs);
+  const DenseMatrix ref = refMat.template triangularView<Lower>().solve(b);
+
+  // strided rhs and dst: every other row and column of a larger buffer
+  {
+    DenseMatrix rhsBuf = DenseMatrix::Random(2 * size, 2 * nrhs), dstBuf = DenseMatrix::Random(2 * size, 2 * nrhs);
+    const Stride<Dynamic, Dynamic> stride(2 * rhsBuf.outerStride(), 2);
+    StridedMap rhs(rhsBuf.data(), size, nrhs, stride), dst(dstBuf.data(), size, nrhs, stride);
+    rhs = b;
+    dst = m.template triangularView<Lower>().solve(rhs);
+    VERIFY_IS_APPROX(dst, ref);
+    VERIFY_IS_APPROX(rhs, b);
+
+    // the same matrix on both sides is solved in place
+    dst = b;
+    dst = m.template triangularView<Lower>().solve(dst);
+    VERIFY_IS_APPROX(dst, ref);
+  }
+
+  // rhs and dst without direct access
+  {
+    DenseMatrix rhs = b.rowwise().reverse(), dst = DenseMatrix::Random(size, nrhs);
+    dst.rowwise().reverse() = m.template triangularView<Lower>().solve(rhs.rowwise().reverse());
+    VERIFY_IS_APPROX(dst.rowwise().reverse(), ref);
+    VERIFY_IS_APPROX(rhs.rowwise().reverse(), b);
+
+    dst = b.rowwise().reverse();
+    dst.rowwise().reverse() = m.template triangularView<Lower>().solve(dst.rowwise().reverse());
+    VERIFY_IS_APPROX(dst.rowwise().reverse(), ref);
+  }
+}
+
+// L = 2 (I - S), S the down shift: inv(L) = (I + S + S^2 + ...) / 2 is a full triangle of 0.5, so each
+// column of the solution of L X = I fills in below its single rhs entry, and likewise above it for L^T.
+// The solution has n (n + 1) / 2 entries for the n of the rhs. It has to be appended: storing it with one
+// insert() per entry shifts the finished columns, which takes O(n^4) and leaves the result uncompressed.
+template <typename SparseRhs>
+void sparse_triangular_solve_fill_in(Index n) {
+  using Scalar = typename SparseRhs::Scalar;
+  using DenseMatrix = Matrix<Scalar, Dynamic, Dynamic>;
+  SparseMatrix<Scalar> L(n, n);
+  L.reserve(VectorXi::Constant(n, 2));
+  for (Index j = 0; j < n; ++j) {
+    L.insert(j, j) = Scalar(2);
+    if (j + 1 < n) L.insert(j + 1, j) = Scalar(-2);
+  }
+  L.makeCompressed();
+  SparseMatrix<Scalar> U = L.transpose();
+  DenseMatrix refX = DenseMatrix::Constant(n, n, Scalar(0.5));
+
+  SparseRhs B(n, n);
+  B.setIdentity();
+  L.template triangularView<Lower>().solveInPlace(B);
+  VERIFY(B.isCompressed());
+  VERIFY_IS_EQUAL(B.innerIndicesAreSorted(), B.outerSize());
+  VERIFY_IS_EQUAL(B.nonZeros(), n * (n + 1) / 2);
+  VERIFY_IS_APPROX(B.toDense(), DenseMatrix(refX.template triangularView<Lower>()));
+
+  B.setIdentity();
+  U.template triangularView<Upper>().solveInPlace(B);
+  VERIFY(B.isCompressed());
+  VERIFY_IS_EQUAL(B.innerIndicesAreSorted(), B.outerSize());
+  VERIFY_IS_EQUAL(B.nonZeros(), n * (n + 1) / 2);
+  VERIFY_IS_APPROX(B.toDense(), DenseMatrix(refX.template triangularView<Upper>()));
+}
+
 EIGEN_DECLARE_TEST(sparse_solvers) {
   for (int i = 0; i < g_repeat; i++) {
     CALL_SUBTEST_1((sparse_triangular_solve_rhs_order<double, ColMajor>()));
@@ -340,6 +418,10 @@ EIGEN_DECLARE_TEST(sparse_solvers) {
     int s = internal::random<int>(1, 300);
     CALL_SUBTEST_2(sparse_solvers<std::complex<double> >(s, s));
     CALL_SUBTEST_1(sparse_solvers<double>(s, s));
+    CALL_SUBTEST_1(sparse_triangular_solve_same_type<double>(s));
+    CALL_SUBTEST_2(sparse_triangular_solve_same_type<std::complex<double> >(s));
   }
   CALL_SUBTEST_1(sparse_triangular_solve_workspace_overflow());
+  CALL_SUBTEST_1(sparse_triangular_solve_fill_in<SparseMatrix<double> >(1000));
+  CALL_SUBTEST_1((sparse_triangular_solve_fill_in<SparseMatrix<double, RowMajor> >(1000)));
 }

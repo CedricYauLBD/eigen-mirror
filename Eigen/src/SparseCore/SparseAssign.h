@@ -338,11 +338,11 @@ template <typename DstXprType, typename DecType, typename RhsType, typename Scal
 struct Assignment<DstXprType, Solve<DecType, RhsType>, internal::assign_op<Scalar, Scalar>, Sparse2Sparse> {
   using SrcXprType = Solve<DecType, RhsType>;
   static void run(DstXprType &dst, const SrcXprType &src, const internal::assign_op<Scalar, Scalar> &) {
-    Index dstRows = src.rows();
-    Index dstCols = src.cols();
-    if ((dst.rows() != dstRows) || (dst.cols() != dstCols)) dst.resize(dstRows, dstCols);
-
-    src.dec()._solve_impl(src.rhs(), dst);
+    // src.rhs() may refer to dst, as in B = dec.solve(B.col(j)), and must be read before dst is resized or written:
+    // eval through a temporary
+    DstXprType tmp(src.rows(), src.cols());
+    src.dec()._solve_impl(src.rhs(), tmp);
+    dst = tmp.markAsRValue();
   }
 };
 

@@ -449,7 +449,7 @@ class StorageRef {
 
  private:
   StorageRef() = delete;
-  // these constructors are called by the CompressedStorageIterator constructors for convenience only
+  // these constructors are called by CompressedStorageIterator::operator* only
   StorageRef(StorageIndex* innerIndexIterator, Scalar* valueIterator)
       : m_innerIndexIterator(innerIndexIterator), m_valueIterator(valueIterator) {}
   StorageRef(const StorageRef& other) = default;
@@ -469,21 +469,16 @@ class CompressedStorageIterator {
 
   CompressedStorageIterator() = delete;
   CompressedStorageIterator(difference_type index, StorageIndex* innerIndexPtr, Scalar* valuePtr)
-      : m_index(index), m_data(innerIndexPtr, valuePtr) {}
-  CompressedStorageIterator(difference_type index, reference data) : m_index(index), m_data(data) {}
+      : m_index(index), m_innerIndexPtr(innerIndexPtr), m_valuePtr(valuePtr) {}
   CompressedStorageIterator(const CompressedStorageIterator& other) = default;
   CompressedStorageIterator(CompressedStorageIterator&& other) = default;
-  inline CompressedStorageIterator& operator=(const CompressedStorageIterator& other) {
-    m_index = other.m_index;
-    m_data = other.m_data;
-    return *this;
-  }
+  CompressedStorageIterator& operator=(const CompressedStorageIterator& other) = default;
 
   inline CompressedStorageIterator operator+(difference_type offset) const {
-    return CompressedStorageIterator(m_index + offset, m_data);
+    return CompressedStorageIterator(m_index + offset, m_innerIndexPtr, m_valuePtr);
   }
   inline CompressedStorageIterator operator-(difference_type offset) const {
-    return CompressedStorageIterator(m_index - offset, m_data);
+    return CompressedStorageIterator(m_index - offset, m_innerIndexPtr, m_valuePtr);
   }
   inline difference_type operator-(const CompressedStorageIterator& other) const { return m_index - other.m_index; }
   inline CompressedStorageIterator& operator++() {
@@ -502,7 +497,7 @@ class CompressedStorageIterator {
     m_index -= offset;
     return *this;
   }
-  inline reference operator*() const { return reference(m_data.keyPtr() + m_index, m_data.valuePtr() + m_index); }
+  inline reference operator*() const { return reference(m_innerIndexPtr + m_index, m_valuePtr + m_index); }
   inline reference operator[](int index) { return *(*this + index); }
 
 #define MAKE_COMP(OP) \
@@ -517,7 +512,10 @@ class CompressedStorageIterator {
 
  protected:
   difference_type m_index;
-  reference m_data;
+  // The start of the arrays is held as two pointers and not as a `reference`: assigning a StorageRef assigns the entry
+  // it refers to, so assigning an iterator would write the first entry of the arrays instead of rebinding.
+  StorageIndex* m_innerIndexPtr;
+  Scalar* m_valuePtr;
 };
 
 template <typename Derived, class Comp, bool IsVector>

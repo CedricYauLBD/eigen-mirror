@@ -1186,6 +1186,59 @@ void sparse_sub_assign_eigenbase() {
   VERIFY_IS_APPROX(MatrixXd(A), refA);
 }
 
+// Regression test: the source of a selfadjoint view assignment may refer to the destination or to a block of it, so
+// the destination must not be cleared and refilled while the source is read.
+template <typename Scalar, int Options>
+void sparse_assign_aliased_selfadjoint_view() {
+  using SparseMatrixType = SparseMatrix<Scalar, Options>;
+  using DenseMatrix = Matrix<Scalar, Dynamic, Dynamic>;
+  const Index size = internal::random<Index>(2, 50), trailing = internal::random<Index>(1, size);
+  DenseMatrix refA(size, size), refS(size, size), refSum, refLo, refUp;
+  SparseMatrixType A(size, size), S(size, size), K;
+  initSparse<Scalar>(0.3, refA, A);
+  initSparse<Scalar>(0.3, refS, S);
+  refSum = refA + refS;
+  refLo = refSum.template selfadjointView<Lower>();
+  refUp = refSum.template selfadjointView<Upper>();
+  PermutationMatrix<Dynamic, Dynamic, typename SparseMatrixType::StorageIndex> P;
+  randomPermutationVector(P.indices(), size);
+
+  // SparseMatrix = SparseSelfAdjointView
+  K = A;
+  K = K.template selfadjointView<Lower>();
+  VERIFY_IS_APPROX(K, DenseMatrix(refA.template selfadjointView<Lower>()));
+
+  K = A;
+  K.uncompress();
+  K = K.template selfadjointView<Upper>();
+  VERIFY_IS_APPROX(K, DenseMatrix(refA.template selfadjointView<Upper>()));
+
+  K = A;
+  K = (K + S).template selfadjointView<Lower>();
+  VERIFY_IS_APPROX(K, refLo);
+
+  K = A;
+  K = (K + S).template selfadjointView<Upper>();
+  VERIFY_IS_APPROX(K, refUp);
+
+  K = A;
+  K = K.bottomRightCorner(trailing, trailing).template selfadjointView<Lower>();
+  VERIFY_IS_APPROX(K, DenseMatrix(refA.bottomRightCorner(trailing, trailing).template selfadjointView<Lower>()));
+
+  // SparseSelfAdjointView = SparseSelfAdjointView, with and without a permutation
+  K = A;
+  K.template selfadjointView<Lower>() = K.template selfadjointView<Lower>();
+  VERIFY_IS_APPROX(K, DenseMatrix(refA.template triangularView<Lower>()));
+
+  K = A;
+  K.template selfadjointView<Upper>() = (K + S).template selfadjointView<Lower>();
+  VERIFY_IS_APPROX(K, DenseMatrix(refLo.template triangularView<Upper>()));
+
+  K = A;
+  K.template selfadjointView<Lower>() = (K + S).template selfadjointView<Upper>().twistedBy(P);
+  VERIFY_IS_APPROX(K, DenseMatrix(((P * refUp) * P.inverse()).eval().template triangularView<Lower>()));
+}
+
 // Regression test: AmbiVector::coeff() must return the correct linked-list element.
 template <int>
 void ambivector_coeff() {
@@ -1233,6 +1286,21 @@ void ambivector_coeff() {
   VERIFY_IS_APPROX(vec.coeff(3), 3.0);
   VERIFY_IS_APPROX(vec.coeff(7), 7.0);
   VERIFY_IS_EQUAL(vec.coeff(0), 0.0);
+}
+
+// Regression test: assigning one of the iterators that sortInnerIndices() passes to std::sort must rebind it. It must
+// not write to the entry at the start of the arrays, which belongs to an inner vector another thread may be sorting.
+template <int>
+void compressed_storage_iterator_assignment() {
+  using Iterator = internal::CompressedStorageIterator<double, int>;
+  int indices1[] = {3, 1}, indices2[] = {7, 5};
+  double values1[] = {30, 10}, values2[] = {70, 50};
+  Iterator it(0, indices1, values1);
+  it = Iterator(1, indices2, values2);
+  VERIFY_IS_EQUAL(indices1[0], 3);
+  VERIFY_IS_EQUAL(values1[0], 30.0);
+  VERIFY_IS_EQUAL((*it).key(), 5);
+  VERIFY_IS_EQUAL((*it).value(), 50.0);
 }
 
 template <typename Pattern, typename SparseMatrixType>
@@ -1974,7 +2042,12 @@ EIGEN_DECLARE_TEST(sparse_basic) {
   CALL_SUBTEST_1((sparse_isapprox_extreme_scales<double, RowMajor>()));
   CALL_SUBTEST_1((sparse_isapprox_extreme_scales<std::complex<double>, ColMajor>()));
   CALL_SUBTEST_1(sparse_sub_assign_eigenbase<0>());
+  for (int i = 0; i < g_repeat; ++i) {
+    CALL_SUBTEST_1((sparse_assign_aliased_selfadjoint_view<double, ColMajor>()));
+    CALL_SUBTEST_1((sparse_assign_aliased_selfadjoint_view<std::complex<double>, RowMajor>()));
+  }
   CALL_SUBTEST_1(ambivector_coeff<0>());
+  CALL_SUBTEST_1(compressed_storage_iterator_assignment<0>());
   CALL_SUBTEST_1(sparsity_pattern_ref_sparse_expressions<0>());
   CALL_SUBTEST_1(materialize_at_plus_a_pattern_basic<0>());
   for (int i = 0; i < g_repeat; ++i) {

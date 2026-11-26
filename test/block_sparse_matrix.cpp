@@ -295,6 +295,48 @@ void test_block_sparse_dense_product(int bRows, int bCols) {
     RowVec v = RowVec::Random(rows);
     VERIFY_IS_APPROX(v * A, v * dA);
   }
+
+  // In-place products: the destination is also an operand, and is resized when A is not square.
+  {
+    const DenseMat lhs = DenseMat::Random(5, rows);
+    DenseMat x = lhs;
+    x *= A;
+    VERIFY_IS_APPROX(x, lhs * dA);
+    x = lhs;
+    x.applyOnTheRight(A);
+    VERIFY_IS_APPROX(x, lhs * dA);
+
+    const DenseMat rhs = DenseMat::Random(cols, 5);
+    x = rhs;
+    x.applyOnTheLeft(A);
+    VERIFY_IS_APPROX(x, dA * rhs);
+
+    RowVec v = RowVec::Random(rows);
+    const RowVec vA = v * dA;
+    v *= A;
+    VERIFY_IS_APPROX(v, vA);
+
+    DenseVec w = DenseVec::Random(cols);
+    const DenseVec Aw = dA * w;
+    w.applyOnTheLeft(A);
+    VERIFY_IS_APPROX(w, Aw);
+  }
+
+  // In-place products on a destination that cannot be resized.
+  if (rows == cols) {
+    const DenseMat ref = DenseMat::Random(rows + 2, cols + 3);
+    DenseMat x = ref;
+    x.topLeftCorner(rows, cols) *= A;
+    DenseMat expected = ref;
+    expected.topLeftCorner(rows, cols) = ref.topLeftCorner(rows, cols) * dA;
+    VERIFY_IS_APPROX(x, expected);
+
+    x = ref;
+    x.bottomRightCorner(rows, cols).applyOnTheLeft(A);
+    expected = ref;
+    expected.bottomRightCorner(rows, cols) = dA * ref.bottomRightCorner(rows, cols);
+    VERIFY_IS_APPROX(x, expected);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -758,6 +800,35 @@ void test_block_sparse_resize_bad_alloc() {
 #endif
 }
 
+// setFromTriplets() takes input iterators, so it must not count a single-pass range before reading it. The sizes
+// cover an empty range, the first growth of the temporaries, that capacity filled exactly, and later growths.
+template <int Options>
+void test_block_sparse_single_pass_triplets() {
+  using BSM = BlockSparseMatrix<double, Options, 2, 3>;
+  using Triplet = typename BSM::TripletType;
+  const int blockRows = 5, blockCols = 4;
+  for (int count : {0, 1, 16, 17, 50}) {
+    // (7 * i) % 5 and (3 * i) % 4 repeat a block only after 20 triplets.
+    std::vector<Triplet> triplets;
+    MatrixXd reference = MatrixXd::Zero(2 * blockRows, 3 * blockCols);
+    for (int i = 0; i < count; ++i) {
+      triplets.emplace_back((7 * i) % blockRows, (3 * i) % blockCols, Matrix<double, 2, 3>::Random());
+      reference.block<2, 3>(2 * triplets.back().row(), 3 * triplets.back().col()) += triplets.back().value();
+    }
+    std::size_t next = 0;
+    const single_pass_triplet_iterator<Triplet> range{&triplets, &next};
+    BSM A(blockRows, blockCols);
+    A.setFromTriplets(range, range);
+    VERIFY_IS_EQUAL(next, triplets.size());
+    VERIFY_IS_EQUAL(A.nonZeroBlocks(), Index((std::min)(count, 20)));
+    VERIFY_IS_APPROX(MatrixXd(A.toSparse()), reference);
+
+    BSM B(blockRows, blockCols);
+    B.setFromTriplets(triplets.begin(), triplets.end());
+    VERIFY_IS_EQUAL(MatrixXd(B.toSparse()), MatrixXd(A.toSparse()));
+  }
+}
+
 template <typename = void>
 void test_block_triplet_traits() {
   // Flat scalar array means BlockTriplet should be trivially copyable and
@@ -815,11 +886,15 @@ EIGEN_DECLARE_TEST(block_sparse_matrix) {
   CALL_SUBTEST_12((test_block_sparse_dense_product<2, 2, ColMajor>(4, 5)));
   CALL_SUBTEST_12((test_block_sparse_dense_product<3, 3, ColMajor>(3, 4)));
   CALL_SUBTEST_12((test_block_sparse_dense_product<2, 3, ColMajor>(4, 3)));
+  CALL_SUBTEST_12((test_block_sparse_dense_product<2, 2, ColMajor>(5, 4)));
+  CALL_SUBTEST_12((test_block_sparse_dense_product<2, 2, ColMajor>(4, 4)));
 
   // Block-sparse * dense and dense * block-sparse (RowMajor)
   CALL_SUBTEST_13((test_block_sparse_dense_product<2, 2, RowMajor>(4, 5)));
   CALL_SUBTEST_13((test_block_sparse_dense_product<3, 3, RowMajor>(3, 4)));
   CALL_SUBTEST_13((test_block_sparse_dense_product<2, 3, RowMajor>(4, 3)));
+  CALL_SUBTEST_13((test_block_sparse_dense_product<2, 2, RowMajor>(5, 4)));
+  CALL_SUBTEST_13((test_block_sparse_dense_product<2, 2, RowMajor>(4, 4)));
 
   // Transpose / adjoint (ColMajor and RowMajor, square and non-square blocks)
   CALL_SUBTEST_14((test_block_sparse_transpose<2, 2, ColMajor>(4, 5)));
@@ -853,6 +928,8 @@ EIGEN_DECLARE_TEST(block_sparse_matrix) {
   CALL_SUBTEST_18((test_block_sparse<3, 3, ColMajor, std::complex<double>>(4, 5)));
   CALL_SUBTEST_18((test_block_sparse<2, 2, RowMajor, std::complex<double>>(4, 6)));
   CALL_SUBTEST_18(test_block_sparse_integer_division<>());
+  CALL_SUBTEST_18(test_block_sparse_single_pass_triplets<ColMajor>());
+  CALL_SUBTEST_18(test_block_sparse_single_pass_triplets<RowMajor>());
   CALL_SUBTEST_18((test_block_sparse_dense_product<2, 2, ColMajor, std::complex<double>>(4, 5)));
   CALL_SUBTEST_18((test_block_sparse_dense_product<2, 2, RowMajor, std::complex<double>>(4, 5)));
   CALL_SUBTEST_18((test_block_sparse_transpose<2, 2, ColMajor, std::complex<double>>(4, 5)));

@@ -15,6 +15,35 @@
 // (Eigen/Sparse -> Eigen/SparseCore conditional include under EIGEN_USE_THREADS.)
 #include <Eigen/SparseCore>
 
+#include <atomic>
+#include <thread>
+
+// A 32 KB scalar that multiplies with double, like a forward-mode derivative type with a few thousand
+// fixed-size partials.
+struct WideScalar {
+  WideScalar(double v = 0) : value(v), padding() {}
+  WideScalar& operator+=(const WideScalar& other) {
+    value += other.value;
+    return *this;
+  }
+  double value;
+  unsigned char padding[32768 - sizeof(double)];
+};
+
+inline WideScalar operator+(const WideScalar& a, const WideScalar& b) { return WideScalar(a.value + b.value); }
+inline WideScalar operator*(const WideScalar& a, const WideScalar& b) { return WideScalar(a.value * b.value); }
+inline WideScalar operator*(double a, const WideScalar& b) { return WideScalar(a * b.value); }
+
+namespace Eigen {
+template <>
+struct NumTraits<WideScalar> : GenericNumTraits<WideScalar> {};
+template <>
+struct ScalarBinaryOpTraits<double, WideScalar, internal::scalar_product_op<double, WideScalar>> {
+  using ReturnType = WideScalar;
+  static constexpr bool IsCommutative = true;
+};
+}  // namespace Eigen
+
 template <typename SparseMatrixType, typename DenseVectorType>
 void verify_threaded_spmv(Index rows, Index cols, double density) {
   using Scalar = typename SparseMatrixType::Scalar;
@@ -266,6 +295,112 @@ void verify_threaded_scatter_overaligned() {
   Eigen::setNbThreads(prev_threads);
 }
 
+// A lazy right-hand side must be evaluated on the calling thread in the ColMajor OMP scatter/reduce path, so that a
+// functor with state is never called concurrently. Without OpenMP this still checks the serial results.
+template <typename Scalar>
+void verify_threaded_scatter_lazy_rhs() {
+  using SpMat = SparseMatrix<Scalar, ColMajor>;
+  using RowSpMat = SparseMatrix<Scalar, RowMajor>;
+  using Vec = Matrix<Scalar, Dynamic, 1>;
+  using RowVec = Matrix<Scalar, 1, Dynamic>;
+  using Mat = Matrix<Scalar, Dynamic, Dynamic>;
+
+  const int prev_threads = Eigen::nbThreads();
+  Eigen::setNbThreads(4);
+
+  // Same pattern as above: ~22600 nnz, which passes both gates of the
+  // scatter/reduce path with 4 threads.
+  const Index n = 300;
+  Mat refMat = Mat::Zero(n, n);
+  for (Index j = 0; j < n; ++j) {
+    for (Index i = 0; i < n; ++i) {
+      if (i == j || (i + j) % 4 == 0) refMat(i, j) = internal::random<Scalar>();
+    }
+  }
+  const SpMat A = refMat.sparseView();
+  VERIFY(A.nonZeros() > 20000);
+  const RowSpMat At = A.transpose();
+
+  // The functor records which threads call it. It is called concurrently if
+  // the kernel is wrong, so its own state is atomic.
+  const std::thread::id caller = std::this_thread::get_id();
+  std::atomic<bool> called_from_team(false);
+  std::atomic<Index> calls(0);
+  const auto twice = [&](const Scalar& v) {
+    if (std::this_thread::get_id() != caller) called_from_team = true;
+    ++calls;
+    return Scalar(v + v);
+  };
+
+  const Vec x = Vec::Random(n);
+  const Vec y_ref = refMat * (x + x);
+
+  // sparse * dense, the accumulating form, and dense * sparse, which reaches
+  // the same kernel through the transposed product.
+  Vec y = A * x.unaryExpr(twice);
+  VERIFY_IS_APPROX(y, y_ref);
+  y.setZero();
+  y.noalias() += A * x.unaryExpr(twice);
+  VERIFY_IS_APPROX(y, y_ref);
+  RowVec yt = x.unaryExpr(twice).transpose() * At;
+  VERIFY_IS_APPROX(yt, y_ref.transpose());
+  // Several columns.
+  const Mat X = Mat::Random(n, 3);
+  Mat Y = A * X.unaryExpr(twice);
+  VERIFY_IS_APPROX(Y, refMat * (X + X));
+  VERIFY(calls > 0);
+  VERIFY(!called_from_team);
+
+  // Right-hand sides with storage and strides take the same path: columns
+  // from the middle of a larger matrix, and a row of a matrix.
+  const Mat B = Mat::Random(n + 3, 5);
+  Y = A * B.block(2, 1, n, 3);
+  VERIFY_IS_APPROX(Y, refMat * B.block(2, 1, n, 3));
+  const Mat W = Mat::Random(3, n);
+  y = A * W.row(1).transpose();
+  VERIFY_IS_APPROX(y, refMat * W.row(1).transpose());
+
+  Eigen::setNbThreads(prev_threads);
+}
+
+// The reduction of the ColMajor SpMV OMP scatter/reduce path sums the per-thread
+// buffers through a block of result scalars in the stack frame of every thread
+// of the team. The block must respect EIGEN_STACK_ALLOCATION_LIMIT for any
+// scalar: 512 scalars of 32 KB are 16 MB, more than a default thread stack.
+// Without OpenMP this exercises the serial scatter with the same scalar.
+void verify_threaded_scatter_wide_scalar() {
+  STATIC_CHECK((internal::functor_is_commutative<internal::scalar_product_op<double, WideScalar>>::value));
+
+  const int prev_threads = Eigen::nbThreads();
+  Eigen::setNbThreads(4);
+
+  // A full 101x199 matrix: 20099 nnz, above the 20000-nnz threshold and above
+  // threads*m = 4*101 for the gate. 101 rows leave a partial last block for
+  // any block length but 1. The entries are small integers, so every partial
+  // sum is exact and the result does not depend on the order of the additions.
+  const Index rows = 101, cols = 199;
+  SparseMatrix<double, ColMajor> A(rows, cols);
+  A.reserve(VectorXi::Constant(cols, int(rows)));
+  for (Index j = 0; j < cols; ++j)
+    for (Index i = 0; i < rows; ++i) A.insert(i, j) = double((i + 2 * j) % 5 + 1);
+  A.makeCompressed();
+  VERIFY(A.nonZeros() > 20000);
+
+  Matrix<WideScalar, Dynamic, 1> x(cols);
+  for (Index j = 0; j < cols; ++j) x(j) = WideScalar(double(j % 3 + 1));
+
+  const Matrix<WideScalar, Dynamic, 1> y = A * x;
+
+  VERIFY_IS_EQUAL(y.size(), rows);
+  for (Index i = 0; i < rows; ++i) {
+    double expected = 0;
+    for (Index j = 0; j < cols; ++j) expected += double((i + 2 * j) % 5 + 1) * double(j % 3 + 1);
+    VERIFY_IS_EQUAL(y(i).value, expected);
+  }
+
+  Eigen::setNbThreads(prev_threads);
+}
+
 template <typename Scalar>
 void run_grid() {
   using Vec = Matrix<Scalar, Dynamic, 1>;
@@ -298,5 +433,8 @@ EIGEN_DECLARE_TEST(sparse_threaded_product) {
     CALL_SUBTEST_4(verify_threaded_scatter_ieee754<double>());
     CALL_SUBTEST_4(verify_threaded_scatter_ieee754<float>());
     CALL_SUBTEST_4(verify_threaded_scatter_overaligned());
+    CALL_SUBTEST_4(verify_threaded_scatter_lazy_rhs<double>());
+    CALL_SUBTEST_4(verify_threaded_scatter_lazy_rhs<std::complex<float>>());
+    CALL_SUBTEST_4(verify_threaded_scatter_wide_scalar());
   }
 }
