@@ -830,7 +830,7 @@ class scaled_product {
       magnitude *= RealScalar(2);
       --exponent;
     }
-    return numext::log(magnitude) + RealScalar(exponent) * numext::log(RealScalar(2));
+    return numext::log(magnitude) + RealScalar(exponent) * ln2(std::is_floating_point<RealScalar>());
   }
 
  private:
@@ -839,6 +839,11 @@ class scaled_product {
   EIGEN_DEVICE_FUNC static constexpr RealScalar upper_bound() {
     return NumTraits<RealScalar>::highest() / RealScalar(2);
   }
+
+  // The literal for the built-in types: Clang folds log(2) of a 128-bit long double with the accuracy of double (seen
+  // with Clang 21 for riscv64). Other scalar types need not convert from long double, or hold more digits than it.
+  EIGEN_DEVICE_FUNC static constexpr RealScalar ln2(std::true_type) { return RealScalar(EIGEN_LN2); }
+  EIGEN_DEVICE_FUNC static RealScalar ln2(std::false_type) { return numext::log(RealScalar(2)); }
 
   EIGEN_DEVICE_FUNC static EIGEN_STRONG_INLINE bool in_range(const RealScalar& x) {
     const RealScalar magnitude = numext::abs(x);

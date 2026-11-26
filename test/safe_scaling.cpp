@@ -674,6 +674,15 @@ void check_preserving_subnormals_fallbacks() {
   VERIFY_IS_EQUAL(internal::max_preserving_subnormals(1.5L, 2.5L), 2.5L);
 }
 
+// log(x) evaluated at run time. Clang folds the log of a constant with the accuracy of double where long double has
+// 113 digits (seen with Clang 21 for riscv64).
+template <typename T>
+T runtime_log(const T& x) {
+  volatile T staged = x;
+  const T operand = staged;
+  return std::log(operand);
+}
+
 // prod_k x_k with every factor and every partial product renormalized by the C library's frexp: the form
 // scaled_product must agree with bit for bit, since scaling by a power of two is exact (see
 // scaling_commutes_with_multiplication() for the exception).
@@ -693,7 +702,8 @@ struct EagerProduct {
     return std::ldexp(mantissa, int((std::min)((std::max)(exponent, -limit), limit)));
   }
   long double logAbs() const {
-    return std::log(std::abs(static_cast<long double>(mantissa))) + static_cast<long double>(exponent) * std::log(2.0L);
+    return std::log(std::abs(static_cast<long double>(mantissa))) +
+           static_cast<long double>(exponent) * runtime_log(2.0L);
   }
 
   RealScalar mantissa = RealScalar(1);
@@ -845,8 +855,8 @@ void check_scaled_product_real() {
   VERIFY_IS_EQUAL(product({small, -small, small}).value(), RealScalar(0));
   VERIFY((std::signbit)(product({small, -small, small}).value()));
   // log(mantissa), exponent log(2) and their sum each round once.
-  VERIFY(numext::abs(product({big, -big, big}).logAbs() - RealScalar(3) * std::log(big)) <=
-         RealScalar(4) * NumTraits<RealScalar>::epsilon() * RealScalar(3) * std::log(big));
+  VERIFY(numext::abs(product({big, -big, big}).logAbs() - RealScalar(3) * runtime_log(big)) <=
+         RealScalar(4) * NumTraits<RealScalar>::epsilon() * RealScalar(3) * runtime_log(big));
   // Infinities and NaNs propagate as in the plain product.
   VERIFY_IS_EQUAL(product({big, big, -inf, small}).value(), -inf);
   VERIFY((numext::isnan)(product({big, big, inf, RealScalar(0)}).value()));
@@ -856,7 +866,7 @@ void check_scaled_product_real() {
 
   // logAbs() of a product next to one is the log of that product, not a cancelling sum.
   const RealScalar nearOne = RealScalar(1) + 4 * NumTraits<RealScalar>::epsilon();
-  VERIFY_IS_EQUAL(product({big, nearOne, small}).logAbs(), std::log(nearOne));
+  VERIFY_IS_EQUAL(product({big, nearOne, small}).logAbs(), runtime_log(nearOne));
   VERIFY_IS_EQUAL(Product().logAbs(), RealScalar(0));
 
   // Products of products, including a product with itself, and quotients.
@@ -883,8 +893,8 @@ void check_scaled_product_real() {
   // One log for the whole expression: within the rounding of that log and of the product.
   Vector graded(6);
   graded << big, RealScalar(3) * big, big, small, RealScalar(-5) * small, small;
-  VERIFY(numext::abs(internal::log_abs_prod(graded) - std::log(RealScalar(15))) <=
-         RealScalar(4) * NumTraits<RealScalar>::epsilon() * std::log(RealScalar(15)));
+  VERIFY(numext::abs(internal::log_abs_prod(graded) - runtime_log(RealScalar(15))) <=
+         RealScalar(4) * NumTraits<RealScalar>::epsilon() * runtime_log(RealScalar(15)));
 }
 
 template <typename RealScalar>
@@ -938,8 +948,8 @@ void check_scaled_product_complex() {
   VERIFY_IS_EQUAL(product({Complex(small, 0), Complex(high, high), Complex(high, high), Complex(small, 0)}).abs(),
                   RealScalar(2) * (high * small) * (high * small));
   VERIFY(numext::abs(product({Complex(0, big), Complex(big, 0), Complex(0, big)}).logAbs() -
-                     RealScalar(3) * std::log(big)) <=
-         RealScalar(4) * NumTraits<RealScalar>::epsilon() * RealScalar(3) * std::log(big));
+                     RealScalar(3) * runtime_log(big)) <=
+         RealScalar(4) * NumTraits<RealScalar>::epsilon() * RealScalar(3) * runtime_log(big));
   Product quotient = product({Complex(small, small)});
   quotient.divide(Complex(0, big));
   quotient.divide(Complex(0, big));
