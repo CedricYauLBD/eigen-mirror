@@ -361,7 +361,17 @@ struct trmv_selector<Mode, ColMajor> {
 
 template <int Mode>
 struct trmv_selector<Mode, RowMajor> {
-  template <typename Lhs, typename Rhs, typename Dest>
+  // The kernel steps through dest.data() with dest.innerStride(), which address the coefficients only of a destination
+  // with direct access. The RealView of a strided complex vector reports both without it, so evaluate into a plain
+  // object there.
+  template <typename Lhs, typename Rhs, typename Dest, std::enable_if_t<!has_direct_access<Dest>::value, bool> = true>
+  static void run(const Lhs& lhs, const Rhs& rhs, Dest& dest, const typename Dest::Scalar& alpha) {
+    typename Dest::PlainObject actualDest(dest);
+    run(lhs, rhs, actualDest, alpha);
+    dest = actualDest;
+  }
+
+  template <typename Lhs, typename Rhs, typename Dest, std::enable_if_t<has_direct_access<Dest>::value, bool> = true>
   static void run(const Lhs& lhs, const Rhs& rhs, Dest& dest, const typename Dest::Scalar& alpha) {
     using LhsScalar = typename Lhs::Scalar;
     using RhsScalar = typename Rhs::Scalar;

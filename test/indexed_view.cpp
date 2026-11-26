@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "main.h"
+#include <Eigen/LU>
 
 using Eigen::placeholders::all;
 using Eigen::placeholders::last;
@@ -1022,6 +1023,115 @@ void check_vector_coeffRef() {
   VERIFY_IS_EQUAL(VectorXd(essential(slots)), expected);
 }
 
+// The size of seq(first, last, incr) must not be computed through last - first + incr, which can overflow.
+void check_seq_size_overflow() {
+  const Index highest = NumTraits<Index>::highest();
+  const Index lowest = NumTraits<Index>::lowest();
+  VectorXd v = VectorXd::LinSpaced(4, 1, 4);
+  Vector4d v4 = v;
+
+  VERIFY_IS_EQUAL(seq(0, 3, highest - 1).size(), Index(1));
+  VERIFY_IS_EQUAL(seq(0, 3, highest).size(), Index(1));
+  VERIFY_IS_EQUAL(seq(3, 0, lowest + 1).size(), Index(1));
+  VERIFY_IS_EQUAL(seq(3, 0, lowest).size(), Index(1));
+  VERIFY_IS_EQUAL(seq(fix<0>, fix<3>, highest - 1).size(), Index(1));
+
+  VERIFY_IS_EQUAL(v(seq(0, 3, highest - 1)).size(), Index(1));
+  VERIFY_IS_EQUAL(v(seq(0, last, highest - 1)).size(), Index(1));
+  VERIFY_IS_EQUAL(v(seq(3, 0, lowest + 1)).size(), Index(1));
+  VERIFY_IS_EQUAL(v(seq(last, 0, lowest + 1)).size(), Index(1));
+  VERIFY_IS_EQUAL(v(seq(last, fix<0>, lowest + 1)).size(), Index(1));
+  VERIFY_IS_EQUAL(v4(seq(0, last, highest - 1)).size(), Index(1));
+  Index count = 0;
+  for (double& x : v(seq(0, last, highest - 1))) {
+    x = 0;
+    ++count;
+  }
+  VERIFY_IS_EQUAL(count, Index(1));
+  VERIFY_IS_EQUAL(v, Vector4d(0, 2, 3, 4));
+
+  // The sizes are otherwise those of (last - first + incr) / incr, empty sequences included.
+  for (Index f = -1; f <= 5; ++f)
+    for (Index l = -1; l <= 5; ++l)
+      for (Index incr = -4; incr <= 4; ++incr) {
+        if (incr == 0) continue;
+        VERIFY_IS_EQUAL(seq(f, l, incr).size(), (l - f + incr) / incr);
+      }
+  VERIFY_IS_EQUAL(v(seq(0, last, 2)).size(), Index(2));
+  VERIFY_IS_EQUAL(v(seq(0, last, 3)).size(), Index(2));
+  VERIFY_IS_EQUAL(v(seq(1, last, 3)).size(), Index(1));
+  VERIFY_IS_EQUAL(v(seq(last + 1, last, 2)).size(), Index(0));
+  VERIFY_IS_EQUAL(v(seq(last, 0, -2)).size(), Index(2));
+  VERIFY_IS_EQUAL(v(seq(last, 0, fix<-3>)).size(), Index(2));
+
+  // Compile-time sizes are preserved.
+  VERIFY(is_same_seq_type(seq(fix<1>, fix<6>, fix<2>), seqN(fix<1>, fix<3>, fix<2>)));
+  VERIFY_IS_EQUAL(int(v4(seq(fix<0>, last, fix<2>)).SizeAtCompileTime), 2);
+  VERIFY_IS_EQUAL(int(v4(seq(last, fix<0>, fix<-3>)).SizeAtCompileTime), 2);
+  VERIFY_IS_EQUAL(int(v4(seq(0, last, 2)).SizeAtCompileTime), int(Dynamic));
+}
+
+// lastN(size, incr) computes its first index, last - (size - 1) * incr, in Index whatever the types of its arguments.
+void check_lastN_index_arithmetic() {
+  EIGEN_IF_CONSTEXPR (std::numeric_limits<Index>::digits > std::numeric_limits<int>::digits) {
+    // (count - 1) * step == 2^31 does not fit in an int.
+    int count = 3, step = 1 << 30;
+    Index back = 2 * Index(step) + 5;
+    VERIFY_IS_EQUAL(lastN(count, step).firstObject().eval(last = back), Index(5));
+    VERIFY_IS_EQUAL(lastN(count, fix<1 << 30>).firstObject().eval(last = back), Index(5));
+    VERIFY_IS_EQUAL(lastN(fix<3>, step).firstObject().eval(last = back), Index(5));
+    VERIFY_IS_EQUAL(lastN(3u, step).firstObject().eval(last = back), Index(5));
+    VERIFY_IS_EQUAL(lastN(fix<Dynamic>(count), fix<DynamicIndex>(step)).firstObject().eval(last = back), Index(5));
+  }
+
+  const VectorXd v = VectorXd::LinSpaced(6, 0, 5);
+  // An unsigned size of 0 must not wrap around in size - 1.
+  VERIFY_IS_EQUAL(v(lastN(0u, fix<1>)).size(), Index(0));
+  VERIFY_IS_EQUAL(v(lastN(0u, 2)).size(), Index(0));
+  VERIFY(MATCH(v(lastN(3u, 2)), "1\n3\n5"));
+  VERIFY(MATCH(v(lastN(std::size_t(3), short(2))), "1\n3\n5"));
+  VERIFY(MATCH(v(lastN(fix<3>, fix<2>)), "1\n3\n5"));
+  VERIFY(MATCH(v(lastN(fix<3>(3), fix<2>(2))), "1\n3\n5"));
+  VERIFY(MATCH(v(lastN(fix<Dynamic>(3), fix<DynamicIndex>(2))), "1\n3\n5"));
+  VERIFY(MATCH(v(lastN(lastp1 / 2, 2)), "1\n3\n5"));
+  VERIFY(v(lastN(fix<3>(3), fix<2>(2))).SizeAtCompileTime == 3);
+}
+
+// traits<>::Alignment promises an alignment of data(). MapBase asserts it (reached through reshaped()) and the
+// vectorized 4x4 inverse stores with it. A view can start at any coefficient, so it must not inherit the promise.
+template <typename Scalar>
+void check_indexed_view_alignment() {
+  using ColMat = Matrix<Scalar, Dynamic, Dynamic, ColMajor>;
+  using RowMat = Matrix<Scalar, Dynamic, Dynamic, RowMajor>;
+  using Vec = Matrix<Scalar, Dynamic, 1>;
+  using Mat4 = Matrix<Scalar, 4, 4>;
+  STATIC_CHECK(int(internal::traits<decltype(std::declval<ColMat&>()(seqN(1, 4), seqN(1, 4, 2)))>::Alignment) == 0);
+  STATIC_CHECK(int(internal::traits<decltype(std::declval<Vec&>()(seqN(1, 4, 2)))>::Alignment) == 0);
+
+  const Vec v = Vec::Random(32);
+  const Mat4 m = Mat4::Random() + Scalar(8) * Mat4::Identity();
+  const Mat4 inv = m.inverse();
+  // start moves the first coefficient of each view across the scalar offsets inside a packet.
+  for (Index start = 0; start < 4; ++start) {
+    const Vec strided = v(seqN(start, 12, 2));
+    VERIFY_IS_EQUAL(ColMat(v(seqN(start, 12, 2)).reshaped(3, 4)), ColMat(strided.reshaped(3, 4)));
+
+    // Both views have a unit inner increment, so the kernel's packet stores are contiguous coefficients.
+    ColMat colGrid = ColMat::Zero(9, 9), colExpected = ColMat::Zero(9, 9);
+    RowMat rowGrid = RowMat::Zero(9, 9), rowExpected = RowMat::Zero(9, 9);
+    for (Index j = 0; j < 4; ++j) {
+      for (Index i = 0; i < 4; ++i) {
+        colExpected(start + i, 1 + 2 * j) = inv(i, j);
+        rowExpected(1 + 2 * i, start + j) = inv(i, j);
+      }
+    }
+    colGrid(seqN(start, 4), seqN(1, 4, 2)) = m.inverse();
+    VERIFY_IS_APPROX(colGrid, colExpected);
+    rowGrid(seqN(1, 4, 2), seqN(start, 4)) = m.inverse();
+    VERIFY_IS_APPROX(rowGrid, rowExpected);
+  }
+}
+
 EIGEN_DECLARE_TEST(indexed_view) {
   for (int i = 0; i < g_repeat; i++) {
     CALL_SUBTEST_1(check_indexed_view());
@@ -1036,6 +1146,10 @@ EIGEN_DECLARE_TEST(indexed_view) {
   CALL_SUBTEST_1((check_indexed_view_strides<Matrix<double, 6, 8, RowMajor>>()));
   CALL_SUBTEST_1(check_aliasing());
   CALL_SUBTEST_1(check_vector_coeffRef());
+  CALL_SUBTEST_1(check_seq_size_overflow());
+  CALL_SUBTEST_1(check_lastN_index_arithmetic());
+  CALL_SUBTEST_1(check_indexed_view_alignment<float>());
+  CALL_SUBTEST_1(check_indexed_view_alignment<double>());
 
   // static checks of some internals:
   STATIC_CHECK((internal::is_valid_index_type<int>::value));

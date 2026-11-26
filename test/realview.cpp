@@ -171,6 +171,9 @@ void test_realview(const T&) {
   }
   D.realView().col(0).tail(realViewRows - 1) = C.realView().col(0).tail(realViewRows - 1).reverse();
   VERIFY_IS_CWISE_EQUAL(B.realView().col(0).tail(realViewRows - 1), D.realView().col(0).tail(realViewRows - 1));
+
+  internal::aligned_free(data1);
+  internal::aligned_free(data2);
 }
 
 template <typename ComplexScalar, bool Enable = internal::packet_traits<ComplexScalar>::Vectorizable>
@@ -475,6 +478,96 @@ void test_realview_coeff_ref_availability() {
   }
 }
 
+// A range-for keeps the RealView alive, but not a temporary that it views: the view must hold its own copy of any
+// expression that is nested by value.
+template <typename ComplexScalar>
+void test_realview_of_temporary(const ComplexScalar&) {
+  using RealScalar = typename NumTraits<ComplexScalar>::Real;
+  using ComplexMatrix = Matrix<ComplexScalar, Dynamic, Dynamic>;
+  using RealMatrix = Matrix<RealScalar, Dynamic, Dynamic>;
+  const ComplexMatrix a = ComplexMatrix::Random(6, 8);
+
+  ComplexMatrix b = a;
+  for (RealScalar& x : b.col(2).realView()) x *= RealScalar(2);
+  for (RealScalar& x : b.row(2).realView()) x *= RealScalar(2);
+  ComplexMatrix expected = a;
+  expected.col(2) *= RealScalar(2);
+  expected.row(2) *= RealScalar(2);
+  VERIFY_IS_CWISE_EQUAL(b, expected);
+
+  const Matrix<ComplexScalar, Dynamic, 1> sum = a.col(1) + a.col(2);
+  Index k = 0;
+  for (RealScalar x : (a.col(1) + a.col(2)).realView()) {
+    VERIFY_IS_EQUAL(x, sum.realView()(k));
+    ++k;
+  }
+  VERIFY_IS_EQUAL(k, 2 * a.rows());
+
+  // An IndexedView owns its index list.
+  const std::vector<int> picked = {4, 0, 2};
+  for (RealScalar& x : b(picked, 1).realView()) x = RealScalar(0);
+  for (int i : picked) expected(i, 1) = ComplexScalar(0);
+  VERIFY_IS_CWISE_EQUAL(b, expected);
+
+  // The evaluator of an IndexedView refers to the expression, which must be the one that the view holds.
+  const ComplexMatrix aPicked = a(picked, picked);
+  VERIFY_IS_CWISE_EQUAL(RealMatrix(a(picked, picked).realView()), RealMatrix(aPicked.realView()));
+}
+
+// The row-major triangular product kernel addresses its destination through data() and innerStride(), so it evaluates
+// into a temporary for a view without direct access and writes the viewed coefficients only.
+template <typename ComplexScalar>
+void test_strided_realview_product_destination(const ComplexScalar&) {
+  using RealScalar = typename NumTraits<ComplexScalar>::Real;
+  using RealMatrix = Matrix<RealScalar, Dynamic, Dynamic>;
+  using RowMajorRealMatrix = Matrix<RealScalar, Dynamic, Dynamic, RowMajor>;
+  using RowMajorComplexMatrix = Matrix<ComplexScalar, Dynamic, Dynamic, RowMajor>;
+  using RealVector = Matrix<RealScalar, Dynamic, 1>;
+  const RowMajorRealMatrix t = RowMajorRealMatrix::Random(8, 8);
+  const RealMatrix tLower = t.template triangularView<Lower>(), tUnitLower = t.template triangularView<UnitLower>();
+  const RealVector x = RealVector::Random(8);
+  for (Index j = 0; j < 3; ++j) {
+    RowMajorComplexMatrix z = RowMajorComplexMatrix::Zero(4, 3), zExpected = z;
+    STATIC_CHECK(!internal::has_direct_access<decltype(z.col(j).realView())>::value);
+    z.col(j).realView().noalias() = t.template triangularView<Lower>() * x;
+    zExpected.col(j).realView() = RealVector(tLower * x);
+    VERIFY_IS_APPROX(z, zExpected);
+    // A row vector times a column-major triangular factor runs the same row-major kernel.
+    z.col(j).realView().transpose().noalias() += x.transpose() * t.transpose().template triangularView<UnitUpper>();
+    zExpected.col(j).realView() += RealVector(tUnitLower * x);
+    VERIFY_IS_APPROX(z, zExpected);
+  }
+  // A destination with direct access keeps the direct path.
+  RealVector y = RealVector::Zero(8);
+  y.noalias() = t.template triangularView<Lower>() * x;
+  VERIFY_IS_APPROX(y, RealVector(tLower * x));
+}
+
+// A RealView cannot hold half a complex coefficient, so resize() must reject an odd inner size, not round it down.
+template <typename ComplexScalar>
+void test_odd_resize(const ComplexScalar&) {
+  VectorX<ComplexScalar> v;
+  v.realView().resize(8);
+  VERIFY_IS_EQUAL(v.size(), 4);
+  v.realView().resize(6, 1);
+  VERIFY_IS_EQUAL(v.size(), 3);
+  VERIFY_RAISES_ASSERT(v.realView().resize(7));
+  VERIFY_RAISES_ASSERT(v.realView().resize(7, 1));
+
+  Matrix<ComplexScalar, Dynamic, Dynamic, RowMajor> m;
+  m.realView().resize(3, 4);
+  VERIFY_IS_EQUAL(m.rows(), 3);
+  VERIFY_IS_EQUAL(m.cols(), 2);
+  VERIFY_RAISES_ASSERT(m.realView().resize(4, 3));
+
+  // A Map cannot be resized, and an odd size must not pass for the size it already has.
+  ComplexScalar buffer[3];
+  Map<VectorX<ComplexScalar>> map(buffer, 3);
+  map.realView().resize(6);
+  VERIFY_RAISES_ASSERT(map.realView().resize(7));
+  VERIFY_RAISES_ASSERT(map.realView().resize(7, 1));
+}
+
 template <typename Scalar, int Rows, int Cols, int MaxRows = Rows, int MaxCols = Cols>
 void test_realview_readonly() {
   // if Rows == 1, don't test ColMajor as it is not a valid array
@@ -547,6 +640,12 @@ EIGEN_DECLARE_TEST(realview) {
     CALL_SUBTEST_12((test_realview_linear_coeff_ref<std::complex<double>, ColMajor>()));
     CALL_SUBTEST_12((test_realview_linear_coeff_ref<std::complex<double>, RowMajor>()));
     CALL_SUBTEST_11(test_realview_coeff_ref_availability());
+    CALL_SUBTEST_11(test_realview_of_temporary(std::complex<float>()));
+    CALL_SUBTEST_12(test_realview_of_temporary(std::complex<double>()));
+    CALL_SUBTEST_11(test_strided_realview_product_destination(std::complex<float>()));
+    CALL_SUBTEST_12(test_strided_realview_product_destination(std::complex<double>()));
+    CALL_SUBTEST_11(test_odd_resize(std::complex<float>()));
+    CALL_SUBTEST_12(test_odd_resize(std::complex<double>()));
     CALL_SUBTEST_13((test_realview_long_double<Dynamic, Dynamic, Dynamic, Dynamic>()));
     CALL_SUBTEST_13((test_realview_long_double<17, 19, 17, 19>()));
   }

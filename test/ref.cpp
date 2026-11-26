@@ -423,6 +423,74 @@ void test_ref_default_outer_stride() {
   check_ref_default_outer_stride_fixed<std::complex<double>, ColMajor>();
 }
 
+// A Ref, and a const Ref of the expression or of that Ref, must map the coefficients of the expression.
+template <typename PlainType, typename StrideType, typename XprType>
+void check_strided_ref(XprType &xpr) {
+  Ref<PlainType, 0, StrideType> ref(xpr);
+  VERIFY(ref.data() == xpr.data());
+  VERIFY_IS_EQUAL(ref, xpr);
+  const Ref<const PlainType, 0, StrideType> constRef(xpr), nestedRef(ref);
+  VERIFY(constRef.data() == xpr.data());
+  VERIFY_IS_EQUAL(constRef, xpr);
+  VERIFY(nestedRef.data() == xpr.data());
+  VERIFY_IS_EQUAL(nestedRef, xpr);
+  ref(ref.rows() - 1, ref.cols() - 1) = -1;
+  VERIFY_IS_EQUAL(xpr(xpr.rows() - 1, xpr.cols() - 1), -1.0);
+}
+
+// A default outer stride is the inner stride times the inner size, also for an inner size of 1.
+template <int Options>
+void test_ref_inner_stride_matrix() {
+  using MatrixType = Matrix<double, Dynamic, Dynamic, Options>;
+  using MapType = Map<MatrixType, 0, InnerStride<>>;
+  double data[24];
+  for (Index innerSize = 1; innerSize <= 3; ++innerSize) {
+    for (Index outerSize = 1; outerSize <= 4; outerSize += 3) {
+      const Index rows = Options == RowMajor ? outerSize : innerSize;
+      const Index cols = Options == RowMajor ? innerSize : outerSize;
+      VectorXd::Map(data, 24).setLinSpaced(0, 23);
+      MapType map(data, rows, cols, InnerStride<>(2));
+      check_strided_ref<MatrixType, InnerStride<>>(map);
+      MapType reversed(data + 23, rows, cols, InnerStride<>(-2));
+      check_strided_ref<MatrixType, InnerStride<>>(reversed);
+
+      // A strided vector as a matrix with a single inner vector or a single outer vector.
+      Map<VectorXd, 0, InnerStride<>> col(data, outerSize, InnerStride<>(3));
+      check_strided_ref<MatrixType, InnerStride<>>(col);
+      Map<RowVectorXd, 0, InnerStride<>> row(data, outerSize, InnerStride<>(3));
+      check_strided_ref<MatrixType, InnerStride<>>(row);
+
+      Matrix<std::complex<double>, Dynamic, Dynamic, Options> field(rows, cols);
+      field.setRandom();
+      Ref<MatrixType, 0, InnerStride<>> re(field.real()), im(field.imag());
+      VERIFY_IS_EQUAL(re, field.real());
+      VERIFY_IS_EQUAL(im, field.imag());
+    }
+  }
+
+  // One row of a column-major matrix, or one column of a row-major one: its only stride is the outer stride.
+  MatrixType full = MatrixType::Random(3, 3);
+  Block<MatrixType> strip = Options == RowMajor ? full.block(0, 1, 3, 1) : full.block(1, 0, 1, 3);
+  check_strided_ref<MatrixType, InnerStride<>>(strip);
+}
+
+// A compile-time stride can be negative, also in a dimension that holds a single coefficient.
+void test_ref_negative_fixed_strides() {
+  using RowMajorMatrixXd = Matrix<double, Dynamic, Dynamic, RowMajor>;
+  double data[16];
+  for (Index n = 1; n <= 3; ++n) {
+    VectorXd::Map(data, 16).setLinSpaced(0, 15);
+    Map<VectorXd, 0, InnerStride<-2>> v(data + 8, n);
+    check_strided_ref<VectorXd, InnerStride<-2>>(v);
+    Map<MatrixXd, 0, OuterStride<-4>> m(data + 8, 3, n);
+    check_strided_ref<MatrixXd, OuterStride<-4>>(m);
+    Map<RowMajorMatrixXd, 0, OuterStride<-4>> bottomUp(data + 8, n, 3);
+    check_strided_ref<RowMajorMatrixXd, OuterStride<-4>>(bottomUp);
+    Map<MatrixXd, 0, InnerStride<-2>> s(data + 15, n, 2);
+    check_strided_ref<MatrixXd, InnerStride<-2>>(s);
+  }
+}
+
 template <typename B>
 EIGEN_DONT_INLINE void call_ref_1(Ref<VectorXf> a, const B &b) {
   VERIFY_IS_EQUAL(a, b);
@@ -560,6 +628,20 @@ void test_cref_move_ctor(const DenseBase<Derived> &expr) {
   VERIFY(test_is_equal(data1, obj_data2, MatrixType::MaxSizeAtCompileTime == Dynamic && owns_data));
 }
 
+// A Ref to an empty object has a null data(), like its unused m_object: the move must still keep the sizes.
+template <typename CRef, typename Derived>
+void test_cref_move_ctor_empty(const DenseBase<Derived> &expr) {
+  CRef cref1(expr.derived());
+  VERIFY_IS_EQUAL(cref1.rows(), expr.rows());
+  VERIFY_IS_EQUAL(cref1.cols(), expr.cols());
+  CRef cref2(std::move(cref1));
+  VERIFY_IS_EQUAL(cref2.rows(), expr.rows());
+  VERIFY_IS_EQUAL(cref2.cols(), expr.cols());
+  CRef cref3(std::move(cref2));
+  VERIFY_IS_EQUAL(cref3.rows(), expr.rows());
+  VERIFY_IS_EQUAL(cref3.cols(), expr.cols());
+}
+
 template <typename MatrixType>
 void test_contiguous_ref_no_copy(const PlainObjectBase<MatrixType> &obj) {
   using Ref_ = Ref<MatrixType, Unaligned, Stride<0, 0>>;
@@ -569,6 +651,56 @@ void test_contiguous_ref_no_copy(const PlainObjectBase<MatrixType> &obj) {
   VERIFY(test_is_equal(ref.data(), m.data(), true));
   CRef_ cref(m);
   VERIFY(test_is_equal(cref.data(), m.data(), true));
+}
+
+// A vector-shaped expression of a matrix type has its orientation at run time only. A Ref to a compile-time vector
+// accepts either orientation, whether it references the expression in place or evaluates it into its own object.
+template <typename VectorType>
+void test_cref_runtime_transpose() {
+  using Scalar = typename VectorType::Scalar;
+  using CRef = Ref<const VectorType>;
+  using ColMajorMatrix = Matrix<Scalar, Dynamic, Dynamic, ColMajor>;
+  using RowMajorMatrix = Matrix<Scalar, Dynamic, Dynamic, RowMajor>;
+  const Index n = VectorType::SizeAtCompileTime == Dynamic ? 5 : Index(VectorType::SizeAtCompileTime);
+  const ColMajorMatrix m = ColMajorMatrix::Random(n, n), row = m.row(1), col = m.col(1);
+  const RowMajorMatrix rm = m, rrow = row, rcol = col;
+  const VectorType from_row = m.row(1), from_col = m.col(1);
+
+  // Referenced in place.
+  VERIFY_IS_EQUAL(CRef(row), from_row);
+  VERIFY_IS_EQUAL(CRef(col), from_col);
+  VERIFY_IS_EQUAL(CRef(rrow), from_row);
+  VERIFY_IS_EQUAL(CRef(rcol), from_col);
+  VERIFY_IS_EQUAL(CRef(m.middleCols(1, 1)), from_col);
+  VERIFY_IS_EQUAL(CRef(rm.middleRows(1, 1)), from_row);
+
+  // Copied, because the inner stride is not 1.
+  VERIFY_IS_EQUAL(CRef(m.middleRows(1, 1)), from_row);
+  VERIFY_IS_EQUAL(CRef(rm.middleCols(1, 1)), from_col);
+
+  // Evaluated by the dense assignment loop.
+  VERIFY_IS_EQUAL(CRef(row + row), VectorType(from_row + from_row));
+  VERIFY_IS_EQUAL(CRef(col + col), VectorType(from_col + from_col));
+  VERIFY_IS_EQUAL(CRef(rrow + rrow), VectorType(from_row + from_row));
+  VERIFY_IS_EQUAL(CRef(rcol + rcol), VectorType(from_col + from_col));
+
+  // Evaluated by assignments that write the destination themselves.
+  const VectorType row_product = m.row(1) * m, col_product = m * m.col(1);
+  VERIFY_IS_APPROX(CRef(row * m), row_product);
+  VERIFY_IS_APPROX(CRef(m * col), col_product);
+  VERIFY_IS_APPROX(CRef(rrow * rm), row_product);
+  VERIFY_IS_APPROX(CRef(rm * rcol), col_product);
+  const TriangularView<const ColMajorMatrix, UnitLower> lower(m);
+  const ColMajorMatrix row_solve = lower.template solve<OnTheRight>(row), col_solve = lower.solve(col);
+  VERIFY_IS_APPROX(CRef(lower.template solve<OnTheRight>(row)), VectorType(row_solve.row(0)));
+  VERIFY_IS_APPROX(CRef(lower.solve(col)), VectorType(col_solve.col(0)));
+
+  // Another Ref, in place and evaluated.
+  const Ref<const ColMajorMatrix> row_ref(row), col_ref(col);
+  VERIFY_IS_EQUAL(CRef(row_ref), from_row);
+  VERIFY_IS_EQUAL(CRef(col_ref), from_col);
+  VERIFY_IS_EQUAL(CRef(row_ref + row_ref), VectorType(from_row + from_row));
+  VERIFY_IS_EQUAL(CRef(col_ref + col_ref), VectorType(from_col + from_col));
 }
 
 EIGEN_DECLARE_TEST(ref) {
@@ -604,6 +736,12 @@ EIGEN_DECLARE_TEST(ref) {
   CALL_SUBTEST_9(test_cref_move_ctor<MatrixXd>(MatrixXd(9, 5)));
   CALL_SUBTEST_9(test_cref_move_ctor<Matrix3d>(Matrix3d::Ones()));
   CALL_SUBTEST_9(test_cref_move_ctor<Matrix3d>(Matrix3d()));
+  CALL_SUBTEST_9(test_cref_move_ctor_empty<Ref<const MatrixXd>>(MatrixXd(5, 0)));
+  CALL_SUBTEST_9(test_cref_move_ctor_empty<Ref<const MatrixXd>>(MatrixXd(0, 5)));
+  CALL_SUBTEST_9(test_cref_move_ctor_empty<Ref<const MatrixXd>>(2 * MatrixXd(5, 0)));
+  CALL_SUBTEST_9(test_cref_move_ctor_empty<Ref<const MatrixXd>>(MatrixXd(5, 4).middleCols(1, 0)));
+  CALL_SUBTEST_9(test_cref_move_ctor_empty<Ref<const RowMatrixXd>>(RowMatrixXd(0, 5)));
+  CALL_SUBTEST_9((test_cref_move_ctor_empty<Ref<const MatrixXd, Unaligned, Stride<0, 0>>>(MatrixXd(5, 0))));
   CALL_SUBTEST_10(test_contiguous_ref_no_copy(VectorXd(9)));
   CALL_SUBTEST_10(test_contiguous_ref_no_copy(Vector3d()));
   CALL_SUBTEST_10(test_contiguous_ref_no_copy(MatrixXd(9, 5)));
@@ -611,4 +749,12 @@ EIGEN_DECLARE_TEST(ref) {
   CALL_SUBTEST_10(test_ref_alignment_matching());
   CALL_SUBTEST_10(test_ref_zero_strides());
   CALL_SUBTEST_10(test_ref_default_outer_stride());
+  CALL_SUBTEST_10(test_ref_inner_stride_matrix<ColMajor>());
+  CALL_SUBTEST_10(test_ref_inner_stride_matrix<RowMajor>());
+  CALL_SUBTEST_10(test_ref_negative_fixed_strides());
+  CALL_SUBTEST_11(test_cref_runtime_transpose<VectorXd>());
+  CALL_SUBTEST_11(test_cref_runtime_transpose<RowVectorXd>());
+  CALL_SUBTEST_11(test_cref_runtime_transpose<Vector3d>());
+  CALL_SUBTEST_11(test_cref_runtime_transpose<RowVector3d>());
+  CALL_SUBTEST_11(test_cref_runtime_transpose<RowVectorXcf>());
 }

@@ -44,7 +44,10 @@ struct traits<CwiseUnaryView<ViewOp, MatrixType, StrideType> > : traits<MatrixTy
                                           ? int(Dynamic)
                                           : outer_stride_at_compile_time<MatrixType>::value *
                                                 int(sizeof(typename traits<MatrixType>::Scalar) / sizeof(Scalar)))
-                                   : int(StrideType::OuterStrideAtCompileTime)
+                                   : int(StrideType::OuterStrideAtCompileTime),
+    // As in Block: the viewed member, e.g. the imaginary part, can lie at a nonzero offset inside a coefficient,
+    // so data() does not have the alignment of the nested expression's storage.
+    Alignment = 0
   };
 };
 
@@ -65,7 +68,8 @@ class CwiseUnaryViewImpl<ViewOp, MatrixType, StrideType, Dense, false>
   EIGEN_DENSE_PUBLIC_INTERFACE(Derived)
   EIGEN_INHERIT_ASSIGNMENT_OPERATORS(CwiseUnaryViewImpl)
 
-  EIGEN_DEVICE_FUNC inline const Scalar* data() const { return &(this->coeffRef(0)); }
+  // coeffRef(0) applies the functor to coefficient 0 of the nested expression, which an empty view does not have.
+  EIGEN_DEVICE_FUNC inline const Scalar* data() const { return this->size() > 0 ? &(this->coeffRef(0)) : nullptr; }
 
   EIGEN_DEVICE_FUNC constexpr Index innerStride() const {
     return StrideType::InnerStrideAtCompileTime != 0
@@ -105,7 +109,7 @@ class CwiseUnaryViewImpl<ViewOp, MatrixType, StrideType, Dense, true>
 
   using Base::coeffRef;
   using Base::data;
-  EIGEN_DEVICE_FUNC inline Scalar* data() { return &(this->coeffRef(0)); }
+  EIGEN_DEVICE_FUNC inline Scalar* data() { return this->size() > 0 ? &(this->coeffRef(0)) : nullptr; }
 
   EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE Scalar& coeffRef(Index row, Index col) {
     return internal::evaluator<Derived>(derived()).coeffRef(row, col);

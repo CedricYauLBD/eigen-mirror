@@ -24,6 +24,53 @@ struct cleanup_seq_incr {
   using type = typename cleanup_index_type<T, DynamicIndex>::type;
 };
 
+// Size of seq(f, l, incr) given diff = l - f, i.e., (diff + incr) / incr. The sum can be out of range for a valid
+// sequence, e.g., seq(0, 3, NumTraits<Index>::highest()) == {0}, but only if diff and incr have the same sign, in which
+// case the quotient is diff / incr + 1.
+constexpr Index seq_size(Index diff, Index incr) {
+  return ((diff < 0) == (incr < 0)) ? diff / incr + 1 : (diff + incr) / incr;
+}
+
+// Compile-time size. If Diff + Incr overflows, this overload is discarded and the size is computed at runtime.
+template <int Diff, int Incr>
+constexpr FixedInt<(Diff + Incr) / Incr> seq_size(FixedInt<Diff>, FixedInt<Incr>) {
+  return {};
+}
+
+// Symbolic size of seq(f, l, incr), evaluated through seq_size(Index, Index) once the symbols are known.
+template <typename DiffExpr, typename IncrExpr>
+class SeqSizeExpr : public symbolic::BaseExpr<SeqSizeExpr<DiffExpr, IncrExpr>> {
+ public:
+  constexpr SeqSizeExpr() = default;
+  constexpr SeqSizeExpr(const DiffExpr& diff, const IncrExpr& incr) : m_diff(diff), m_incr(incr) {}
+
+  template <typename... Tags, typename... Types>
+  constexpr Index eval_impl(const symbolic::SymbolValue<Tags, Types>&... values) const {
+    return seq_size(m_diff.eval_impl(values...), m_incr.eval_impl(values...));
+  }
+
+  template <typename... Tags, typename... Types>
+  static constexpr Index eval_at_compile_time_impl(const symbolic::SymbolValue<Tags, Types>&...) {
+    constexpr Index diff = DiffExpr::eval_at_compile_time_impl(symbolic::SymbolValue<Tags, Types>{}...);
+    constexpr Index incr = IncrExpr::eval_at_compile_time_impl(symbolic::SymbolValue<Tags, Types>{}...);
+    return (diff == Undefined || incr == Undefined) ? Undefined : seq_size(diff, incr);
+  }
+
+ protected:
+  DiffExpr m_diff;
+  IncrExpr m_incr;
+};
+
+// Non-symbolic operands are wrapped in a ValueExpr, as the operators of symbolic::BaseExpr do.
+template <typename T>
+using seq_size_operand = std::conditional_t<symbolic::is_symbolic<T>::value, T, symbolic::ValueExpr<T>>;
+
+template <typename Diff, typename Incr,
+          std::enable_if_t<symbolic::is_symbolic<Diff>::value || symbolic::is_symbolic<Incr>::value, int> = 0>
+constexpr SeqSizeExpr<seq_size_operand<Diff>, seq_size_operand<Incr>> seq_size(const Diff& diff, const Incr& incr) {
+  return {seq_size_operand<Diff>(diff), seq_size_operand<Incr>(incr)};
+}
+
 }  // namespace internal
 
 //--------------------------------------------------------------------------------
@@ -127,6 +174,7 @@ seqN(FirstType first, SizeType size) {
  * \code
  * seqN(f, (l-f+incr)/incr, incr);
  * \endcode
+ * except that the size is computed without overflow when \c l-f+incr is not representable as an Index.
  *
  * \sa seqN(FirstType,SizeType,IncrType), seq(FirstType,LastType)
  */
@@ -158,9 +206,9 @@ template <typename FirstType, typename LastType, typename IncrType>
 auto seq(FirstType f, LastType l, IncrType incr) {
   using CleanedIncrType = typename internal::cleanup_seq_incr<IncrType>::type;
   return seqN(typename internal::cleanup_index_type<FirstType>::type(f),
-              (typename internal::cleanup_index_type<LastType>::type(l) -
-               typename internal::cleanup_index_type<FirstType>::type(f) + CleanedIncrType(incr)) /
-                  CleanedIncrType(incr),
+              internal::seq_size(typename internal::cleanup_index_type<LastType>::type(l) -
+                                     typename internal::cleanup_index_type<FirstType>::type(f),
+                                 CleanedIncrType(incr)),
               CleanedIncrType(incr));
 }
 
@@ -175,7 +223,11 @@ namespace placeholders {
  * \sa lastN(SizeType), seqN(FirstType,SizeType), seq(FirstType,LastType,IncrType) */
 template <typename SizeType, typename IncrType>
 auto lastN(SizeType size, IncrType incr) {
-  return seqN(Eigen::placeholders::last - (size - fix<1>()) * incr, size, incr);
+  // As in seq(), convert integers to Index before doing any arithmetic: (size - 1) * incr may not fit in their type.
+  using CleanedSizeType = typename internal::cleanup_index_type<SizeType>::type;
+  using CleanedIncrType = typename internal::cleanup_seq_incr<IncrType>::type;
+  return seqN(Eigen::placeholders::last - (CleanedSizeType(size) - fix<1>()) * CleanedIncrType(incr),
+              CleanedSizeType(size), CleanedIncrType(incr));
 }
 
 /** \returns a symbolic ArithmeticSequence representing the last \a size elements with a unit increment.

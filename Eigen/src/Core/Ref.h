@@ -144,24 +144,35 @@ class RefBase : public MapBase<Derived> {
     const Index expr_inner_actual = expr.innerStride();
     const Index expr_outer_actual = expr.outerStride();
 
+    // A compile-time stride is the default 0, Dynamic, or a fixed value, which can be negative.
+    const bool inner_fixed =
+        StrideType::InnerStrideAtCompileTime != Dynamic && StrideType::InnerStrideAtCompileTime != 0;
+    const bool outer_fixed =
+        StrideType::OuterStrideAtCompileTime != Dynamic && StrideType::OuterStrideAtCompileTime != 0;
+
     // If this is a column-major row vector or row-major column vector, the inner-stride
     // is arbitrary, so set it to either the compile-time inner stride or 1.
+    // Exception: a default outer stride is inner size * inner stride, here 1 * inner stride.
+    // With a runtime inner stride, as in InnerStride<>, the inner stride must then be the
+    // outer stride of expr for outerStride() to address the other inner vectors.
     const bool row_vector = (rows == 1);
     const bool col_vector = (cols == 1);
-    const Index inner_stride =
-        ((!row_major && row_vector) || (row_major && col_vector))
-            ? (StrideType::InnerStrideAtCompileTime > 0 ? Index(StrideType::InnerStrideAtCompileTime) : 1)
-        : swap_stride ? expr_outer_actual
-                      : expr_inner_actual;
+    const bool outer_arbitrary = (!row_major && col_vector) || (row_major && row_vector);
+    const bool outer_follows_inner = StrideType::InnerStrideAtCompileTime == Dynamic &&
+                                     StrideType::OuterStrideAtCompileTime == 0 && !outer_arbitrary;
+    const Index inner_stride = ((!row_major && row_vector) || (row_major && col_vector))
+                                   ? (inner_fixed           ? Index(StrideType::InnerStrideAtCompileTime)
+                                      : outer_follows_inner ? (swap_stride ? expr_inner_actual : expr_outer_actual)
+                                                            : 1)
+                               : swap_stride ? expr_outer_actual
+                                             : expr_inner_actual;
 
     // If this is a column-major column vector or row-major row vector, the outer-stride
     // is arbitrary, so set it to either the compile-time outer stride or vector size.
     const Index outer_stride =
-        ((!row_major && col_vector) || (row_major && row_vector))
-            ? (StrideType::OuterStrideAtCompileTime > 0 ? Index(StrideType::OuterStrideAtCompileTime)
-                                                        : rows * cols * inner_stride)
-        : swap_stride ? expr_inner_actual
-                      : expr_outer_actual;
+        outer_arbitrary ? (outer_fixed ? Index(StrideType::OuterStrideAtCompileTime) : rows * cols * inner_stride)
+        : swap_stride   ? expr_inner_actual
+                        : expr_outer_actual;
 
     // Check if given inner/outer strides are compatible with compile-time strides.
     const bool inner_valid = (StrideType::InnerStrideAtCompileTime == Dynamic) ||
@@ -357,7 +368,9 @@ class Ref<const TPlainObjectType, Options, StrideType>
   }
 
   EIGEN_DEVICE_FUNC constexpr inline Ref(Ref&& other) {
-    if (other.data() == other.m_object.data()) {
+    // other owns its data iff data() points into m_object. Null pointers tell nothing: an unused m_object and an empty
+    // external object are both null, and the unused m_object is 0 x 0, not the size of the referenced object.
+    if (other.data() != nullptr && other.data() == other.m_object.data()) {
       m_object = std::move(other.m_object);
       Base::construct(m_object);
     } else
@@ -382,10 +395,32 @@ class Ref<const TPlainObjectType, Options, StrideType>
 
   template <typename Expression>
   EIGEN_DEVICE_FUNC void construct(const Expression& expr, std::false_type) {
-    internal::call_assignment_no_alias(m_object, expr, internal::assign_op<Scalar, Scalar>());
+    // Base::construct() lets a compile-time vector reference a vector of the other orientation, so the copy has to
+    // accept one too. The assignment transposes only if the orientation of expr is known at compile time.
+    constexpr bool may_transpose_at_runtime =
+        TPlainObjectType::IsVectorAtCompileTime && int(TPlainObjectType::SizeAtCompileTime) != 1 &&
+        int(Expression::RowsAtCompileTime) == Dynamic && int(Expression::ColsAtCompileTime) == Dynamic;
+    assign_to_object(expr, internal::bool_constant<may_transpose_at_runtime>());
     const bool success = Base::construct(m_object);
     EIGEN_ONLY_USED_FOR_DEBUG(success);
     eigen_assert(success);
+  }
+
+  template <typename Expression>
+  EIGEN_DEVICE_FUNC void assign_to_object(const Expression& expr, std::false_type) {
+    internal::call_assignment_no_alias(m_object, expr, internal::assign_op<Scalar, Scalar>());
+  }
+
+  template <typename Expression>
+  EIGEN_DEVICE_FUNC void assign_to_object(const Expression& expr, std::true_type) {
+    const bool transpose = int(TPlainObjectType::RowsAtCompileTime) == 1 ? (expr.cols() == 1 && expr.rows() != 1)
+                                                                         : (expr.rows() == 1 && expr.cols() != 1);
+    if (transpose) {
+      Transpose<TPlainObjectType> transposed(m_object);
+      internal::call_assignment_no_alias(transposed, expr, internal::assign_op<Scalar, Scalar>());
+    } else {
+      assign_to_object(expr, std::false_type());
+    }
   }
 
  protected:

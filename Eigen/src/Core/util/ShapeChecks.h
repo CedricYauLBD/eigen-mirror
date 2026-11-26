@@ -20,6 +20,12 @@ constexpr int size_at_compile_time(int rows, int cols) {
   return rows * cols;
 }
 
+/** \internal Whether a \a rows x \a cols reshape holds exactly \a size coefficients. The test divides because the
+ * product \c rows * \c cols can overflow, and a wrapped product can equal \a size for a shape unrelated to it. */
+EIGEN_DEVICE_FUNC constexpr bool reshape_preserves_size(Index rows, Index cols, Index size) {
+  return rows >= 0 && cols >= 0 && (cols == 0 ? size == 0 : (size / cols == rows && size % cols == 0));
+}
+
 template <typename T, typename = void>
 struct shape_expression {
   using type = T;
@@ -277,11 +283,11 @@ struct fixed_dimensions {
 #define EIGEN_INTERNAL_ASSERT_NONEMPTY_SIZE(Xpr, Size) \
   EIGEN_INTERNAL_ASSERT_NONEMPTY_SIZE_MSG(Xpr, Size, "you are using an empty matrix")
 
-#define EIGEN_INTERNAL_ASSERT_RESHAPE_SIZE(Xpr, Rows, Cols)                                                   \
-  EIGEN_INTERNAL_CHECK_SHAPE(                                                                                 \
-      (Rows) * (Cols) == (Xpr).rows() * (Xpr).cols() && "Reshaping must preserve the number of coefficients", \
-      YOU_MIXED_MATRICES_OF_DIFFERENT_SIZES,                                                                  \
-      Eigen::internal::reshape_dimensions<EIGEN_INTERNAL_SHAPE_TYPE(Xpr), Rows, Cols>)
+#define EIGEN_INTERNAL_ASSERT_RESHAPE_SIZE(Xpr, Rows, Cols)                                                      \
+  EIGEN_INTERNAL_CHECK_SHAPE(Eigen::internal::reshape_preserves_size(Rows, Cols, (Xpr).rows() * (Xpr).cols()) && \
+                                 "Reshaping must preserve the number of coefficients",                           \
+                             YOU_MIXED_MATRICES_OF_DIFFERENT_SIZES,                                              \
+                             Eigen::internal::reshape_dimensions<EIGEN_INTERNAL_SHAPE_TYPE(Xpr), Rows, Cols>)
 
 #define EIGEN_INTERNAL_ASSERT_SOLVER_RHS_MSG(Solver, Rhs, Transposed, Message)                                \
   EIGEN_INTERNAL_CHECK_SHAPE(((Transposed) ? (Solver).cols() : (Solver).rows()) == (Rhs).rows() && (Message), \
