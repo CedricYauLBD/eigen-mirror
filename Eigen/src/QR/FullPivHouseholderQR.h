@@ -32,7 +32,10 @@ struct FullPivHouseholderQRMatrixQReturnType;
 
 template <typename MatrixType, typename PermutationIndex>
 struct traits<FullPivHouseholderQRMatrixQReturnType<MatrixType, PermutationIndex> > {
-  using ReturnType = typename MatrixType::PlainObject;
+  // Q is rows x rows, which MatrixType's own plain type cannot hold unless it is square.
+  using ReturnType = Matrix<typename MatrixType::Scalar, MatrixType::RowsAtCompileTime, MatrixType::RowsAtCompileTime,
+                            plain_object_options<MatrixType>::value, MatrixType::MaxRowsAtCompileTime,
+                            MatrixType::MaxRowsAtCompileTime>;
 };
 
 }  // end namespace internal
@@ -88,9 +91,11 @@ class FullPivHouseholderQR : public SolverBase<FullPivHouseholderQR<MatrixType_,
   };
   using MatrixQReturnType = internal::FullPivHouseholderQRMatrixQReturnType<MatrixType, PermutationIndex>;
   using HCoeffsType = typename internal::plain_diag_type<MatrixType>::type;
+  // Row transpositions hold indices in [0, rows); PermutationIndex is only required to represent cols.
+  using TranspositionIndex = std::common_type_t<PermutationIndex, DefaultPermutationIndex>;
   using IntDiagSizeVectorType =
-      Matrix<PermutationIndex, 1, internal::min_size_prefer_dynamic(ColsAtCompileTime, RowsAtCompileTime), RowMajor, 1,
-             internal::min_size_prefer_fixed(MaxColsAtCompileTime, MaxRowsAtCompileTime)>;
+      Matrix<TranspositionIndex, 1, internal::min_size_prefer_dynamic(ColsAtCompileTime, RowsAtCompileTime), RowMajor,
+             1, internal::min_size_prefer_fixed(MaxColsAtCompileTime, MaxRowsAtCompileTime)>;
   using PermutationType = PermutationMatrix<ColsAtCompileTime, MaxColsAtCompileTime, PermutationIndex>;
   using RowVectorType = typename internal::plain_row_type<MatrixType>::type;
   using ColVectorType = typename internal::plain_col_type<MatrixType>::type;
@@ -385,7 +390,8 @@ FullPivHouseholderQR<MatrixType, PermutationIndex>& FullPivHouseholderQR<MatrixT
 
 template <typename MatrixType, typename PermutationIndex>
 void FullPivHouseholderQR<MatrixType, PermutationIndex>::computeInPlace() {
-  eigen_assert(m_qr.cols() <= NumTraits<PermutationIndex>::highest());
+  eigen_assert(m_qr.rows() <= NumTraits<TranspositionIndex>::highest() &&
+               m_qr.cols() <= NumTraits<PermutationIndex>::highest());
   Index rows = m_qr.rows();
   Index cols = m_qr.cols();
   Index size = (std::min)(rows, cols);
@@ -423,15 +429,15 @@ void FullPivHouseholderQR<MatrixType, PermutationIndex>::computeInPlace() {
     if (internal::isMuchSmallerThan(biggest_in_corner, biggest, m_precision)) {
       this->m_nonzero_pivots = k;
       for (Index i = k; i < size; i++) {
-        m_rows_transpositions.coeffRef(i) = internal::convert_index<PermutationIndex>(i);
-        m_cols_transpositions.coeffRef(i) = internal::convert_index<PermutationIndex>(i);
+        m_rows_transpositions.coeffRef(i) = internal::convert_index<TranspositionIndex>(i);
+        m_cols_transpositions.coeffRef(i) = internal::convert_index<TranspositionIndex>(i);
         m_hCoeffs.coeffRef(i) = Scalar(0);
       }
       break;
     }
 
-    m_rows_transpositions.coeffRef(k) = internal::convert_index<PermutationIndex>(row_of_biggest_in_corner);
-    m_cols_transpositions.coeffRef(k) = internal::convert_index<PermutationIndex>(col_of_biggest_in_corner);
+    m_rows_transpositions.coeffRef(k) = internal::convert_index<TranspositionIndex>(row_of_biggest_in_corner);
+    m_cols_transpositions.coeffRef(k) = internal::convert_index<TranspositionIndex>(col_of_biggest_in_corner);
     if (k != row_of_biggest_in_corner) {
       m_qr.row(k).tail(cols - k).swap(m_qr.row(row_of_biggest_in_corner).tail(cols - k));
       ++number_of_transpositions;

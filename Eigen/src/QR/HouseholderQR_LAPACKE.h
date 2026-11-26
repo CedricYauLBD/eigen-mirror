@@ -47,6 +47,8 @@ namespace lapacke_helpers {
 template <typename MatrixQR, typename HCoeffs>
 struct lapacke_hqr {
   static void run(MatrixQR& mat, HCoeffs& hCoeffs, Index maxBlockSize = 32, typename MatrixQR::Scalar* tempData = 0) {
+    // LAPACK rejects the zero leading dimension of an empty input, which has no reflector to compute.
+    if (mat.diagonalSize() == 0) return;
     lapack_int m = to_lapack(mat.rows());
     lapack_int n = to_lapack(mat.cols());
     lapack_int lda = to_lapack(mat.outerStride());

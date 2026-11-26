@@ -66,6 +66,8 @@ void eigensolver(const MatrixType& m) {
     ei2.setMaxIterations(1).compute(a);
     VERIFY_IS_EQUAL(ei2.info(), NoConvergence);
     VERIFY_IS_EQUAL(ei2.getMaxIterations(), 1);
+    // No eigenvalue is known, and none of the previous decomposition remains.
+    VERIFY(ei2.eigenvalues().array().isNaN().all());
   }
 
   EigenSolver<MatrixType> eiNoEivecs(a, false);
@@ -81,6 +83,7 @@ void eigensolver(const MatrixType& m) {
     a(0, 0) = std::numeric_limits<typename MatrixType::RealScalar>::quiet_NaN();
     EigenSolver<MatrixType> eiNaN(a);
     VERIFY_IS_NOT_EQUAL(eiNaN.info(), Success);
+    VERIFY(eiNaN.eigenvalues().array().isNaN().all());
   }
 
   // regression test for bug 1098
@@ -112,6 +115,40 @@ void eigensolver_verify_assert(const MatrixType& m) {
   eig.compute(a, false);
   VERIFY_RAISES_ASSERT(eig.eigenvectors());
   VERIFY_RAISES_ASSERT(eig.pseudoEigenvectors());
+}
+
+// After a failed compute(), eigenvectors() passed its assertions and indexed the eigenvalues of an earlier
+// decomposition by the columns of a U that had another size.
+void eigensolver_failed_compute() {
+  const MatrixXd a = MatrixXd::Random(8, 8);
+  MatrixXd nonfinite = MatrixXd::Identity(3, 3);
+  nonfinite(1, 1) = std::numeric_limits<double>::quiet_NaN();
+
+  EigenSolver<MatrixXd> fresh;
+  fresh.compute(nonfinite);
+  VERIFY_IS_EQUAL(fresh.info(), NumericalIssue);
+  VERIFY_IS_EQUAL(fresh.eigenvalues().size(), 3);
+  VERIFY_IS_EQUAL(fresh.pseudoEigenvalueMatrix().rows(), 3);
+  VERIFY_RAISES_ASSERT(fresh.eigenvectors());
+  VERIFY_RAISES_ASSERT(fresh.pseudoEigenvectors());
+
+  // The failing 3x3 input finds a 4x4 U and 2 eigenvalues.
+  EigenSolver<MatrixXd> reused(a.topLeftCorner(4, 4));
+  reused.compute(a.topLeftCorner(2, 2), false);
+  reused.compute(nonfinite);
+  VERIFY_IS_EQUAL(reused.info(), NumericalIssue);
+  VERIFY_IS_EQUAL(reused.eigenvalues().size(), 3);
+  VERIFY_RAISES_ASSERT(reused.eigenvectors());
+  VERIFY_RAISES_ASSERT(reused.pseudoEigenvectors());
+
+  reused.setMaxIterations(1).compute(a);
+  VERIFY_IS_EQUAL(reused.info(), NoConvergence);
+  VERIFY_IS_EQUAL(reused.eigenvalues().size(), 8);
+  VERIFY_RAISES_ASSERT(reused.eigenvectors());
+  VERIFY_RAISES_ASSERT(reused.pseudoEigenvectors());
+
+  reused.setMaxIterations(RealSchur<MatrixXd>::m_maxIterationsPerRow * 8).compute(a);
+  CALL_SUBTEST(check_eigensolver_for_given_mat(reused, a));
 }
 
 template <typename CoeffType>
@@ -312,6 +349,40 @@ void eigensolver_tiny_imaginary_pair() {
   VERIFY((A * U - U * eig.pseudoEigenvalueMatrix()).cwiseAbs().maxCoeff() <= RealScalar(100) * eps);
 }
 
+// MatrixBase::eigenvalues(), SelfAdjointView::eigenvalues() and operatorNorm() have no info(): they return what the
+// solver holds after a failure, which must be NaN or a computed eigenvalue, not unwritten or stale memory.
+template <int>
+void eigenvalues_of_failed_decomposition() {
+  const double inf = std::numeric_limits<double>::infinity();
+  MatrixXd a = MatrixXd::Random(5, 5);
+  a(2, 2) = std::numeric_limits<double>::quiet_NaN();
+  VERIFY(a.eigenvalues().array().isNaN().all());
+  VERIFY(a.cast<std::complex<double>>().eigenvalues().array().isNaN().all());
+  VERIFY(a.selfadjointView<Lower>().eigenvalues().array().isNaN().all());
+  VERIFY((numext::isnan)(a.operatorNorm()));
+  VERIFY((numext::isnan)(a.selfadjointView<Lower>().operatorNorm()));
+
+  // A finite matrix with the eigenvalues 0, c / 4, c / 2 and 2 * c, which overflows. Its Schur form is valid, so
+  // EigenSolver reports the overflow and still computes every eigenvalue.
+  const double c = 0.6 * (std::numeric_limits<double>::max)();
+  MatrixXd big = MatrixXd::Zero(4, 4);
+  big.topLeftCorner<2, 2>().setConstant(c);
+  big(2, 2) = c / 4;
+  big(3, 3) = c / 2;
+  EigenSolver<MatrixXd> eig(MatrixXd::Identity(4, 4), false);
+  VERIFY_IS_EQUAL(eig.compute(big, false).info(), NumericalIssue);
+  const VectorXcd eivals = eig.eigenvalues();
+  // n * eps * ||big||_2 = 8 * eps * c bounds the backward error of the Schur form.
+  const double kTol = 8 * NumTraits<double>::epsilon() * c;
+  const Index overflowed = eivals(0).real() == inf ? 0 : 1;
+  VERIFY_IS_EQUAL(eivals(overflowed), std::complex<double>(inf, 0));
+  VERIFY(numext::abs(eivals(1 - overflowed)) <= kTol);
+  VERIFY(numext::abs(eivals(2) - c / 4) <= kTol);
+  VERIFY(numext::abs(eivals(3) - c / 2) <= kTol);
+  // big * big.adjoint() overflows as well.
+  VERIFY(!(numext::isfinite)(big.operatorNorm()));
+}
+
 EIGEN_DECLARE_TEST(eigensolver_generic) {
   int s = 0;
   for (int i = 0; i < g_repeat; i++) {
@@ -356,6 +427,8 @@ EIGEN_DECLARE_TEST(eigensolver_generic) {
   });
 
   CALL_SUBTEST_2(eigensolver_generic_extra<0>());
+  CALL_SUBTEST_2(eigenvalues_of_failed_decomposition<0>());
+  CALL_SUBTEST_2(eigensolver_failed_compute());
 
   CALL_SUBTEST_5(eigensolver_scale_sweep<float>());
   CALL_SUBTEST_5(eigensolver_scale_sweep<double>());

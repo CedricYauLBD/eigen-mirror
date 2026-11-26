@@ -524,7 +524,8 @@ EIGEN_DEVICE_FUNC SelfAdjointEigenSolver<MatrixType>& SelfAdjointEigenSolver<Mat
   // and call computeFromTridiagonal().
   const RealScalar maxCoeff = internal::safe_scaling<RealScalar>::max_abs_component(mat);
   if (!(numext::isfinite)(maxCoeff)) {
-    // Input contains Inf or NaN.
+    // Input contains Inf or NaN: no eigenvalue is known.
+    m_eivalues.setConstant(NumTraits<RealScalar>::quiet_NaN());
     m_info = NoConvergence;
     m_isInitialized = true;
     m_eigenvectorsOk = false;

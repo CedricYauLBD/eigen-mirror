@@ -78,8 +78,8 @@ class Hyperplane {
     offset() = d;
   }
 
-  /** Constructs a hyperplane passing through the two points. If the dimension of the ambient space
-   * is greater than 2, then there isn't uniqueness, so an arbitrary choice is made.
+  /** Constructs a hyperplane passing through the two points. The dimension of the ambient space must be
+   * at least 2. If it is greater than 2, then there isn't uniqueness, so an arbitrary choice is made.
    */
   EIGEN_DEVICE_FUNC static inline Hyperplane Through(const VectorType& p0, const VectorType& p1) {
     Hyperplane result(p0.size());
@@ -109,8 +109,8 @@ class Hyperplane {
   }
 
   /** Constructs a hyperplane passing through the parametrized line \a parametrized.
-   * If the dimension of the ambient space is greater than 2, then there isn't uniqueness,
-   * so an arbitrary choice is made.
+   * The dimension of the ambient space must be at least 2. If it is greater than 2, then there isn't
+   * uniqueness, so an arbitrary choice is made.
    */
   // FIXME: for consistency, consider implementing as a static Through function.
   EIGEN_DEVICE_FUNC explicit Hyperplane(const ParametrizedLine<Scalar, AmbientDimAtCompileTime>& parametrized)

@@ -162,6 +162,36 @@ void jacobisvd_fullpiv_runtime_thin_asserts(Index rows, Index cols) {
   SVD full(m, ComputeFullU | ComputeFullV);
   svd_check_full(m, full);
 }
+
+// compute(matrix, options) must check the options it is given, not the ones that a previous decomposition or the
+// preallocating constructor left behind. MatrixType has one fixed dimension: the first shape allows thin unitaries,
+// the second one only full ones.
+template <typename MatrixType>
+void jacobisvd_runtime_options_checked_per_call(Index thinRows, Index thinCols, Index fullRows, Index fullCols) {
+  const unsigned int thin = ComputeThinU | ComputeThinV;
+  const unsigned int full = ComputeFullU | ComputeFullV;
+  const MatrixType thinInput = MatrixType::Random(thinRows, thinCols);
+  const MatrixType fullInput = MatrixType::Random(fullRows, fullCols);
+
+  JacobiSVD<MatrixType> svd;
+  svd.compute(thinInput, thin);
+  svd_check_runtime_options_match(thinInput, svd, thin);
+  svd.compute(fullInput, full);
+  svd_check_runtime_options_match(fullInput, svd, full);
+  svd.compute(thinInput, thin);
+  svd.compute(fullInput, 0u);
+  svd_check_runtime_options_match(fullInput, svd, 0u);
+
+  JacobiSVD<MatrixType> preallocated(thinRows, thinCols, thin);
+  preallocated.compute(fullInput, full);
+  svd_check_full(fullInput, preallocated);
+
+  // Thin unitaries for the second shape remain the caller's error, also after a decomposition with full ones.
+  JacobiSVD<MatrixType> invalid;
+  VERIFY_RAISES_ASSERT(invalid.compute(fullInput, thin));
+  invalid.compute(thinInput, full);
+  VERIFY_RAISES_ASSERT(invalid.compute(fullInput, thin));
+}
 EIGEN_DIAGNOSTICS(pop)
 
 template <typename = void>
@@ -492,6 +522,40 @@ void jacobisvd_rank_deficient_family(Index rows, Index cols) {
   }
 }
 
+// A QR preconditioner whose reallocation for a new shape throws must leave the decomposition destructible and reusable.
+template <typename MatrixType, int QRPreconditioner>
+void jacobisvd_failed_reallocation() {
+#ifdef EIGEN_EXCEPTIONS
+  // The allocation of huge x 4 coefficients must fail in any environment: their byte size overflows std::size_t.
+  if (sizeof(Index) < sizeof(std::size_t)) return;
+  const Index huge = NumTraits<Index>::highest() / 4;
+  using SVDType = JacobiSVD<MatrixType, QRPreconditioner>;
+  const MatrixType tall = MatrixType::Random(6, 4), wide = MatrixType::Random(4, 6);
+  const typename SVDType::SingularValuesType tallValues = SVDType(tall).singularValues();
+  const typename SVDType::SingularValuesType wideValues = SVDType(wide).singularValues();
+
+  SVDType svd(tall);
+  bool threw = false;
+  try {
+    svd.compute(MatrixType::Zero(huge, 4));
+  } catch (const std::bad_alloc&) {
+    threw = true;
+  }
+  VERIFY(threw);
+  VERIFY_IS_APPROX(svd.compute(tall).singularValues(), tallValues);
+
+  svd.compute(wide);
+  threw = false;
+  try {
+    svd.compute(MatrixType::Zero(4, huge));
+  } catch (const std::bad_alloc&) {
+    threw = true;
+  }
+  VERIFY(threw);
+  VERIFY_IS_APPROX(svd.compute(wide).singularValues(), wideValues);
+#endif
+}
+
 EIGEN_DECLARE_TEST(jacobisvd) {
   CALL_SUBTEST_60((svd_normal_equation_roundoff<float, ColMajor>()));
   CALL_SUBTEST_60((svd_normal_equation_roundoff<double, RowMajor>()));
@@ -539,6 +603,8 @@ EIGEN_DECLARE_TEST(jacobisvd) {
     CALL_SUBTEST_64((svd_precondition_square_matrix_runtime_options<MatrixXcd>(r)));
     CALL_SUBTEST_68((jacobisvd_fullpiv_runtime_thin_asserts<0>(8, 5)));
     CALL_SUBTEST_68((jacobisvd_fullpiv_runtime_thin_asserts<PreconditionSquareMatrix>(6, 6)));
+    CALL_SUBTEST_68((jacobisvd_runtime_options_checked_per_call<Matrix<double, 4, Dynamic>>(4, 6, 4, 2)));
+    CALL_SUBTEST_68((jacobisvd_runtime_options_checked_per_call<Matrix<double, Dynamic, 4>>(6, 4, 2, 4)));
     CALL_SUBTEST_69((jacobisvd_thin_full_options<Matrix<double, Dynamic, Dynamic, RowMajor>>(
         Matrix<double, Dynamic, Dynamic, RowMajor>(8, 8))));
 
@@ -590,6 +656,11 @@ EIGEN_DECLARE_TEST(jacobisvd) {
 
   // Check that preallocation avoids subsequent mallocs
   CALL_SUBTEST_55(svd_preallocate<void>());
+  CALL_SUBTEST_55((svd_allocation_failure<MatrixXf, ComputeThinU | ComputeThinV>(4, 3, 6, 5)));
+
+  CALL_SUBTEST_55((jacobisvd_failed_reallocation<MatrixXd, ColPivHouseholderQRPreconditioner>()));
+  CALL_SUBTEST_55((jacobisvd_failed_reallocation<MatrixXf, HouseholderQRPreconditioner>()));
+  CALL_SUBTEST_55((jacobisvd_failed_reallocation<MatrixXcd, FullPivHouseholderQRPreconditioner>()));
 
   CALL_SUBTEST_56(svd_underoverflow<void>());
   CALL_SUBTEST_56((svd_overflowing_modulus<MatrixXcf>(6)));

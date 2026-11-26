@@ -63,7 +63,10 @@ template <typename MatrixType, typename ResultType>
 struct compute_inverse_size4<Architecture::Target, float, MatrixType, ResultType> {
   enum {
     MatrixAlignment = traits<MatrixType>::Alignment,
-    ResultAlignment = traits<ResultType>::Alignment,
+    // The start alignment carries over to every inner vector only if the outer stride is a multiple of the packet size.
+    ResultAlignment = outer_stride_at_compile_time<ResultType>::value % int(unpacket_traits<Packet4f>::size) == 0
+                          ? int(traits<ResultType>::Alignment)
+                          : int(Unaligned),
     StorageOrdersMatch = (MatrixType::Flags & RowMajorBit) == (ResultType::Flags & RowMajorBit)
   };
   using ActualMatrixType =
@@ -200,7 +203,10 @@ template <typename MatrixType, typename ResultType>
 struct compute_inverse_size4<Architecture::Target, double, MatrixType, ResultType> {
   enum {
     MatrixAlignment = traits<MatrixType>::Alignment,
-    ResultAlignment = traits<ResultType>::Alignment,
+    // The start alignment carries over to every inner vector only if the outer stride is a multiple of the packet size.
+    ResultAlignment = outer_stride_at_compile_time<ResultType>::value % int(unpacket_traits<Packet2d>::size) == 0
+                          ? int(traits<ResultType>::Alignment)
+                          : int(Unaligned),
     StorageOrdersMatch = (MatrixType::Flags & RowMajorBit) == (ResultType::Flags & RowMajorBit)
   };
   using ActualMatrixType =

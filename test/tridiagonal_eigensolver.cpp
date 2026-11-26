@@ -946,6 +946,22 @@ void tridiagonal_eigensolver_block_assignment_overflow() {
   check(ad, ae, Scalar(1));
 }
 
+// The Rayleigh-Ritz refinement symmetrizes the projection of T onto a cluster, whose entries reach the cluster's
+// eigenvalues: beyond highest / 2, adding it to its transpose before halving overflowed, and the refinement used the
+// eigenvectors of the helper eigensolver that had rejected the infinite sum. Couplings of a few eps ||T|| put the whole
+// spectrum into one cluster that inverse iteration leaves above the refinement threshold. The copy scaled by 1/4, which
+// the vectors are checked against, takes the same path below highest / 2.
+template <typename Scalar>
+void tridiagonal_eigensolver_refinement_overflow() {
+  using VectorType = Matrix<Scalar, Dynamic, 1>;
+  const Scalar big = Scalar(0.75) * NumTraits<Scalar>::highest();
+  const Scalar coupling = Scalar(8) * NumTraits<Scalar>::epsilon() * big;
+  for (Index n : {Index(8), Index(16), Index(40)}) {
+    const VectorType d = VectorType::Constant(n, big), e = VectorType::Constant(n - 1, coupling);
+    tridiagonal_check_scaled_pair(d, e, -2);
+  }
+}
+
 EIGEN_DECLARE_TEST(tridiagonal_eigensolver) {
   CALL_SUBTEST_1(tridiagonal_eigensolver_subnormal_staged<double>());
   CALL_SUBTEST_2(tridiagonal_eigensolver_subnormal_staged<float>());
@@ -964,6 +980,8 @@ EIGEN_DECLARE_TEST(tridiagonal_eigensolver) {
   CALL_SUBTEST_2(tridiagonal_eigensolver_flushed_subnormal_coupling<float>());
   CALL_SUBTEST_1(tridiagonal_eigensolver_block_assignment_overflow<double>());
   CALL_SUBTEST_2(tridiagonal_eigensolver_block_assignment_overflow<float>());
+  CALL_SUBTEST_1(tridiagonal_eigensolver_refinement_overflow<double>());
+  CALL_SUBTEST_2(tridiagonal_eigensolver_refinement_overflow<float>());
   for (int i = 0; i < g_repeat; i++) {
     CALL_SUBTEST_1(tridiagonal_eigensolver_bisection<double>());
     CALL_SUBTEST_2(tridiagonal_eigensolver_bisection<float>());

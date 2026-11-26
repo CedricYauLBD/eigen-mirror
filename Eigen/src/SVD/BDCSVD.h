@@ -319,6 +319,7 @@ void BDCSVD<MatrixType, Options>::allocate(Index rows, Index cols, unsigned int 
   copyWorkspace = MatrixX(m_isTranspose ? cols : rows, m_isTranspose ? rows : cols);
   bid = internal::UpperBidiagonalization<MatrixX>(m_useQrDecomp ? diagSize() : copyWorkspace.rows(),
                                                   m_useQrDecomp ? diagSize() : copyWorkspace.cols());
+  m_isAllocated = true;
 }  // end allocate
 
 template <typename MatrixType, int Options>
@@ -327,6 +328,7 @@ void BDCSVD<MatrixType, Options>::allocate_small(Index rows, Index cols, unsigne
 
   smallSvd.allocate(rows, cols, internal::get_computation_options(Options | computationOptions));
   m_isTranspose = (cols > rows);
+  m_isAllocated = true;
 }
 
 template <typename MatrixType, int Options>

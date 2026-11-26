@@ -153,6 +153,59 @@ void qr_empty_rhs() {
   VERIFY_IS_EQUAL(empty_dec.transpose().solve(MatrixType(0, 0)).cols(), 0);
 }
 
+// matrixQ() is rows x rows whatever the shape of MatrixType, also when an expression evaluates it into a temporary.
+template <typename MatrixType>
+void qr_matrixq_in_expression(Index rows, Index cols) {
+  using Scalar = typename MatrixType::Scalar;
+  using MatrixQXpr = typename FullPivHouseholderQR<MatrixType>::MatrixQReturnType;
+  using DynamicMatrix = Matrix<Scalar, Dynamic, Dynamic>;
+  STATIC_CHECK(int(MatrixQXpr::ColsAtCompileTime) == int(MatrixType::RowsAtCompileTime));
+  STATIC_CHECK(int(MatrixQXpr::MaxColsAtCompileTime) == int(MatrixType::MaxRowsAtCompileTime));
+
+  MatrixType m1 = MatrixType::Random(rows, cols);
+  FullPivHouseholderQR<MatrixType> qr(m1);
+
+  // Assigning matrixQ() evaluates it into the destination, without a temporary.
+  DynamicMatrix q = qr.matrixQ();
+  VERIFY_IS_EQUAL(q.rows(), rows);
+  VERIFY_IS_EQUAL(q.cols(), rows);
+  VERIFY_IS_UNITARY(q);
+  DynamicMatrix r = qr.matrixQR().template triangularView<Upper>();
+  VERIFY_IS_APPROX(DynamicMatrix(m1), q * r * qr.colsPermutation().inverse());
+
+  DynamicMatrix m2 = DynamicMatrix::Random(rows, 3);
+  VERIFY_IS_APPROX(DynamicMatrix(qr.matrixQ().eval()), q);
+  VERIFY_IS_APPROX(DynamicMatrix(qr.matrixQ() * m2), q * m2);
+  VERIFY_IS_APPROX(DynamicMatrix(qr.matrixQ().adjoint() * m2), q.adjoint() * m2);
+  VERIFY_IS_APPROX(DynamicMatrix(qr.matrixQ().transpose() * m2), q.transpose() * m2);
+}
+
+// PermutationIndex bounds the number of columns only: every pivot row here is beyond its range.
+template <typename PermutationIndex>
+void qr_tall_narrow_index() {
+  using QRType = FullPivHouseholderQR<MatrixXd, PermutationIndex>;
+  const Index rows = Index(NumTraits<PermutationIndex>::highest()) + 100, cols = 4;
+  MatrixXd m = MatrixXd::Random(rows, cols);
+  for (Index k = 0; k < cols; ++k) m(rows - 1 - k, k) = 100.0 / double(k + 1);
+
+  QRType qr(m);
+  VERIFY_IS_EQUAL(qr.rank(), cols);
+  for (Index k = 0; k < cols; ++k) VERIFY_IS_EQUAL(Index(qr.rowsTranspositions()(k)), rows - 1 - k);
+
+  MatrixXd q = qr.matrixQ();
+  VERIFY_IS_UNITARY(q);
+  MatrixXd r = qr.matrixQR().template triangularView<Upper>();
+  VERIFY_IS_APPROX(m, q * r * qr.colsPermutation().inverse());
+
+  MatrixXd b = MatrixXd::Random(rows, 3), c = MatrixXd::Random(cols, 3);
+  MatrixXd x = qr.solve(b);
+  VERIFY_IS_APPROX(m.adjoint() * (m * x), m.adjoint() * b);
+  x = qr.transpose().solve(c);
+  VERIFY_IS_APPROX(m.transpose() * x, c);
+  x = qr.adjoint().solve(c);
+  VERIFY_IS_APPROX(m.adjoint() * x, c);
+}
+
 EIGEN_DECLARE_TEST(qr_fullpivoting) {
   for (int i = 0; i < 1; i++) {
     CALL_SUBTEST_5(qr<Matrix3f>());
@@ -186,4 +239,17 @@ EIGEN_DECLARE_TEST(qr_fullpivoting) {
   CALL_SUBTEST_7((FullPivHouseholderQR<Matrix<float, 10, 20> >(Matrix<float, 10, 20>::Random())));
   CALL_SUBTEST_7((FullPivHouseholderQR<Matrix<float, 20, 10> >(20, 10)));
   CALL_SUBTEST_7((FullPivHouseholderQR<Matrix<float, 20, 10> >(Matrix<float, 20, 10>::Random())));
+
+  CALL_SUBTEST_9((qr_matrixq_in_expression<Matrix<double, 5, 3> >(5, 3)));
+  CALL_SUBTEST_9((qr_matrixq_in_expression<Matrix<float, 3, 5, RowMajor> >(3, 5)));
+  CALL_SUBTEST_9((qr_matrixq_in_expression<Matrix<std::complex<double>, 6, 4> >(6, 4)));
+  CALL_SUBTEST_9((qr_matrixq_in_expression<Matrix<double, 5, 1> >(5, 1)));
+  CALL_SUBTEST_9((qr_matrixq_in_expression<Matrix<double, 1, 5> >(1, 5)));
+  CALL_SUBTEST_9((qr_matrixq_in_expression<Matrix<double, Dynamic, Dynamic, ColMajor, 8, 3> >(8, 3)));
+  CALL_SUBTEST_9((qr_matrixq_in_expression<Matrix<double, Dynamic, Dynamic, ColMajor, 8, 3> >(4, 3)));
+  CALL_SUBTEST_9((qr_matrixq_in_expression<Matrix<float, Dynamic, 3, RowMajor> >(6, 3)));
+  CALL_SUBTEST_9((qr_matrixq_in_expression<Matrix<std::complex<float>, 4, Dynamic> >(4, 7)));
+  CALL_SUBTEST_9(qr_matrixq_in_expression<MatrixXcd>(7, 4));
+  CALL_SUBTEST_10(qr_tall_narrow_index<signed char>());
+  CALL_SUBTEST_10(qr_tall_narrow_index<unsigned char>());
 }

@@ -1847,6 +1847,79 @@ void householder_real_sequence_complex_matrix(Index size) {
   VERIFY_IS_APPROX(ComplexMatrix(A * complex_sequence), A.template cast<std::complex<Real>>() * Z);
 }
 
+// makeHouseholder() sizes a resizable essential part on every path, including those that only zero it or write it
+// coefficient by coefficient: a stale size must not reach applyHouseholderOnTheLeft() together with a nonzero tau.
+template <typename Scalar>
+void householder_resizes_essential() {
+  using Real = typename NumTraits<Scalar>::Real;
+  using VectorType = Matrix<Scalar, Dynamic, 1>;
+  using RowVectorType = Matrix<Scalar, 1, Dynamic>;
+  const long double small = static_cast<long double>(numext::sqrt((std::numeric_limits<Real>::min)()));
+  const long double large = static_cast<long double>(numext::sqrt((std::numeric_limits<Real>::max)()));
+  // Re(head), Im(head), and the value of every tail coefficient. A real Scalar drops Im(head).
+  const long double inputs[5][3] = {{2, 0, 0},               // zero tail, real head: tau = 0
+                                    {1, 2, 0},               // zero tail, complex head: tau != 0, zero essential part
+                                    {2, 1, 3},               // direct construction
+                                    {small, small, small},   // scaled construction, the squares underflow
+                                    {large, large, large}};  // scaled construction, the squares overflow
+  constexpr Index size = 5;
+  for (const auto& input : inputs) {
+    VectorType x = VectorType::Constant(size, householder_make<Scalar>(input[2]));
+    x[0] = householder_make<Scalar>(input[0], input[1]);
+    for (Index staleSize : {Index(0), Index(1), size - 1, size + 3}) {
+      const Scalar stale(Real(7));
+      VectorType essential = VectorType::Constant(staleSize, stale);
+      Scalar tau;
+      Real beta;
+      x.makeHouseholder(essential, tau, beta);
+      VERIFY_IS_EQUAL(essential.size(), size - 1);
+      VectorType reflected = x;
+      Scalar workspace;
+      reflected.applyHouseholderOnTheLeft(essential, tau, &workspace);
+      VERIFY_IS_APPROX(reflected[0], Scalar(beta));
+      VERIFY_IS_MUCH_SMALLER_THAN(reflected.tail(size - 1).cwiseAbs().maxCoeff(), numext::abs(beta));
+
+      // A row vector keeps its orientation, also behind a Transpose, which only has resize(rows, cols).
+      RowVectorType row = RowVectorType::Constant(staleSize, stale);
+      Scalar rowTau;
+      x.makeHouseholder(row, rowTau, beta);
+      VERIFY_IS_EQUAL(row.cols(), size - 1);
+      VERIFY_IS_EQUAL(rowTau, tau);
+      VERIFY_IS_EQUAL(VectorType(row.transpose()), essential);
+      row.setConstant(staleSize, stale);
+      auto transposed = row.transpose();
+      x.makeHouseholder(transposed, rowTau, beta);
+      VERIFY_IS_EQUAL(row.cols(), size - 1);
+      VERIFY_IS_EQUAL(rowTau, tau);
+      VERIFY_IS_EQUAL(VectorType(row.transpose()), essential);
+    }
+  }
+}
+
+// Without array access to the components of a complex scalar, the scaled construction writes essential.coeffRef(i).
+template <typename = void>
+void householder_resizes_essential_custom_complex() {
+  using Scalar = reordered_complex::Complex<float>;
+  using VectorType = Matrix<Scalar, Dynamic, 1>;
+  const float small = numext::sqrt((std::numeric_limits<float>::min)());
+  constexpr Index size = 4;
+  VectorType x = VectorType::Constant(size, Scalar(small));
+  x[0] = Scalar(0);
+  for (Index staleSize : {Index(0), Index(1), size - 1, size + 3}) {
+    VectorType essential = VectorType::Constant(staleSize, Scalar(7));
+    Scalar tau;
+    float beta;
+    x.makeHouseholder(essential, tau, beta);
+    VERIFY_IS_EQUAL(essential.size(), size - 1);
+    // beta = -sqrt(3) * small, and every essential coefficient is small / (0 - beta).
+    VERIFY_IS_APPROX(beta, -numext::sqrt(3.0f) * small);
+    for (Index i = 0; i < size - 1; ++i) {
+      VERIFY_IS_APPROX(numext::real(essential[i]), 1.0f / numext::sqrt(3.0f));
+      VERIFY_IS_EQUAL(numext::imag(essential[i]), 0.0f);
+    }
+  }
+}
+
 EIGEN_DECLARE_TEST(householder) {
   CALL_SUBTEST_26(householder_ordered_result_types<OnTheLeft>());
   CALL_SUBTEST_26(householder_ordered_result_types<OnTheRight>());
@@ -1883,6 +1956,11 @@ EIGEN_DECLARE_TEST(householder) {
   CALL_SUBTEST_10(householder_blocked_right_regression<double>());
   CALL_SUBTEST_11(householder_blocked_right_regression<std::complex<double>>());
   CALL_SUBTEST_12(householder_small_tail<>());
+  CALL_SUBTEST_12(householder_resizes_essential<float>());
+  CALL_SUBTEST_12(householder_resizes_essential<double>());
+  CALL_SUBTEST_12(householder_resizes_essential<std::complex<float>>());
+  CALL_SUBTEST_12(householder_resizes_essential<std::complex<double>>());
+  CALL_SUBTEST_12(householder_resizes_essential_custom_complex<>());
   CALL_SUBTEST_13(householder_large_components<>());
   CALL_SUBTEST_27(householder_xlarfg_special_values<float>());
   CALL_SUBTEST_27(householder_xlarfg_special_values<double>());

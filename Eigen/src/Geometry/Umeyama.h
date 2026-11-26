@@ -85,6 +85,10 @@ struct umeyama_transform_matrix_type {
  * \f}
  * minimizing the residual above. This transformation is always returned as an
  * Eigen::Matrix.
+ *
+ * \note If \f$ \Sigma_{\mathbf{x}\mathbf{y}} \f$ is not finite, no transformation is estimated and
+ * \f$ c\mathbf{R} \f$ and \f$ \mathbf{t} \f$ are returned as NaN. This is the case when a coordinate is NaN or
+ * infinite, and when the coordinates are finite but so large that their products overflow.
  */
 template <typename Derived, typename OtherDerived>
 typename internal::umeyama_transform_matrix_type<Derived, OtherDerived>::type umeyama(
@@ -125,6 +129,12 @@ typename internal::umeyama_transform_matrix_type<Derived, OtherDerived>::type um
 
   // Initialize the resulting transformation with an identity matrix...
   TransformationMatrixType Rt = TransformationMatrixType::Identity(m + 1, m + 1);
+
+  // A sigma that is not finite has no SVD: JacobiSVD reports InvalidInput and leaves U and V unwritten.
+  if (svd.info() != Success) {
+    Rt.topRows(m).setConstant(NumTraits<Scalar>::quiet_NaN());
+    return Rt;
+  }
 
   // Eq. (39)
   VectorType S = VectorType::Ones(m);

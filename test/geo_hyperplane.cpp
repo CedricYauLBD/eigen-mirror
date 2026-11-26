@@ -242,6 +242,20 @@ void planes() {
   }
 }
 
+// A 1-dimensional space has no hyperplane through two distinct points or along a line: the normal
+// would be a unit vector orthogonal to their difference, and unitOrthogonal() needs 2 coefficients.
+template <typename Scalar>
+void hyperplane_through_1d() {
+  using Plane = Hyperplane<Scalar, Dynamic>;
+  using Line = ParametrizedLine<Scalar, Dynamic>;
+  using Vector = Matrix<Scalar, Dynamic, 1>;
+
+  const Vector p0 = Vector::Constant(1, Scalar(1)), p1 = Vector::Constant(1, Scalar(2));
+  VERIFY_RAISES_ASSERT(Plane::Through(p0, p1));
+  const Line line = Line::Through(p0, p1);
+  VERIFY_RAISES_ASSERT(Plane plane(line));
+}
+
 template <typename Scalar>
 void hyperplane_alignment() {
   using Plane3a = Hyperplane<Scalar, 3, AutoAlign>;
@@ -277,5 +291,7 @@ EIGEN_DECLARE_TEST(geo_hyperplane) {
     CALL_SUBTEST_3(lines<double>());
     CALL_SUBTEST_2(planes<float>());
     CALL_SUBTEST_5(planes<double>());
+    CALL_SUBTEST_3(hyperplane_through_1d<double>());
+    CALL_SUBTEST_4(hyperplane_through_1d<std::complex<double> >());
   }
 }

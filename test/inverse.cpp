@@ -189,6 +189,43 @@ void inverse_product_fixed_size() {
   VERIFY(max_abs_diff(ref_times_v(inverse_product_case<7>(v, b, d)), vd) <= tol * vd.norm());
 }
 
+// The alignment of a map is that of its first coefficient only: with an outer stride that is not a multiple of the
+// packet size, the other inner vectors are not aligned.
+template <typename MatrixType>
+void inverse_into_aligned_strided_map(const MatrixType&) {
+  using Scalar = typename MatrixType::Scalar;
+  using DynamicMatrixType = Matrix<Scalar, Dynamic, Dynamic, MatrixType::Options>;
+  const Index size = MatrixType::RowsAtCompileTime;
+  const Scalar padding(-7);
+  MatrixType m;
+  createRandomPIMatrixOfRank(size, size, size, m);
+  const MatrixType m_inv = m.inverse();
+  for (Index stride = size; stride <= 3 * size; ++stride) {
+    Scalar* array = internal::aligned_new<Scalar>(size * stride);
+    Map<Matrix<Scalar, Dynamic, 1>>(array, size * stride).setConstant(padding);
+    Map<const MatrixType, Unaligned, OuterStride<>> result(array, OuterStride<>(stride));
+
+    Map<MatrixType, AlignedMax, OuterStride<>> fixed_map(array, OuterStride<>(stride));
+    fixed_map = m.inverse();
+    VERIFY_IS_APPROX(result, m_inv);
+
+    Map<DynamicMatrixType, AlignedMax, OuterStride<>> dynamic_map(array, size, size, OuterStride<>(stride));
+    dynamic_map = m_inv.inverse();
+    VERIFY_IS_APPROX(result, m);
+
+    bool invertible = false;
+    m.computeInverseWithCheck(fixed_map, invertible);
+    VERIFY(invertible);
+    VERIFY_IS_APPROX(result, m_inv);
+
+    // the coefficients between the inner vectors are not part of the map
+    for (Index outer = 0; outer < size; ++outer)
+      for (Index inner = size; inner < stride; ++inner) VERIFY_IS_EQUAL(array[outer * stride + inner], padding);
+
+    internal::aligned_delete(array, size * stride);
+  }
+}
+
 template <typename Scalar>
 void inverse_zerosized() {
   Matrix<Scalar, Dynamic, Dynamic> A(0, 0);
@@ -285,6 +322,8 @@ EIGEN_DECLARE_TEST(inverse) {
     CALL_SUBTEST_4(inverse(Matrix4f()));
     CALL_SUBTEST_4(inverse(Matrix<float, 4, 4, DontAlign>()));
     CALL_SUBTEST_4((inverse_strided_destination<float, 4>()));
+    CALL_SUBTEST_4(inverse_into_aligned_strided_map(Matrix4f()));
+    CALL_SUBTEST_4(inverse_into_aligned_strided_map(Matrix<float, 4, 4, RowMajor>()));
 
     s = internal::random<int>(50, 320);
     CALL_SUBTEST_5(inverse(MatrixXf(s, s)));
@@ -300,6 +339,8 @@ EIGEN_DECLARE_TEST(inverse) {
     CALL_SUBTEST_7(inverse(Matrix4d()));
     CALL_SUBTEST_7(inverse(Matrix<double, 4, 4, DontAlign>()));
     CALL_SUBTEST_7((inverse_strided_destination<double, 4>()));
+    CALL_SUBTEST_7(inverse_into_aligned_strided_map(Matrix4d()));
+    CALL_SUBTEST_7(inverse_into_aligned_strided_map(Matrix<double, 4, 4, RowMajor>()));
 
     CALL_SUBTEST_8(inverse(Matrix4cd()));
 

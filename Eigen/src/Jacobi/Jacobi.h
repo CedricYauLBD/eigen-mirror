@@ -532,7 +532,10 @@ struct apply_rotation_in_the_plane_selector<Scalar, OtherScalar, SizeAtCompileTi
       }
     }
 
-    EIGEN_IF_CONSTEXPR (SizeAtCompileTime != Dynamic && MinAlignment >= RequiredAlignment) {
+    // The loop below has no scalar tail. Alignment does not imply a whole number of packets: the inner vectors of a Map
+    // with a padded outer stride are aligned whatever their size.
+    EIGEN_IF_CONSTEXPR (SizeAtCompileTime != Dynamic && SizeAtCompileTime % PacketSize == 0 &&
+                        MinAlignment >= RequiredAlignment) {
       /*** fixed-size vectorized path ***/
       const OtherPacket pc = pset1<OtherPacket>(c);
       const OtherPacket ps = pset1<OtherPacket>(s);
@@ -566,6 +569,8 @@ EIGEN_DEVICE_FUNC void inline apply_rotation_in_the_plane(DenseBase<VectorX>& xp
 
   EIGEN_INTERNAL_ASSERT_SAME_SIZE(xpr_x, xpr_y);
   Index size = xpr_x.size();
+  // An empty operand can have a null data pointer, and &coeffRef(0) would bind a reference to it.
+  if (size == 0) return;
   Index incrx = xpr_x.derived().innerStride();
   Index incry = xpr_y.derived().innerStride();
 

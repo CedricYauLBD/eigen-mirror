@@ -184,8 +184,9 @@ class EigenSolver {
    *
    * \pre Either the constructor
    * EigenSolver(const MatrixType&,bool) or the member function
-   * compute(const MatrixType&, bool) has been called before, and
-   * \p computeEigenvectors was set to true (the default).
+   * compute(const MatrixType&, bool) has been called before,
+   * \p computeEigenvectors was set to true (the default), and info()
+   * is \c Success.
    *
    * Column \f$ k \f$ of the returned matrix is an eigenvector corresponding
    * to eigenvalue number \f$ k \f$ as returned by eigenvalues().  The
@@ -206,8 +207,9 @@ class EigenSolver {
    *
    * \pre Either the constructor
    * EigenSolver(const MatrixType&,bool) or the member function
-   * compute(const MatrixType&, bool) has been called before, and
-   * \p computeEigenvectors was set to true (the default).
+   * compute(const MatrixType&, bool) has been called before,
+   * \p computeEigenvectors was set to true (the default), and info()
+   * is \c Success.
    *
    * The real matrix \f$ V \f$ returned by this function and the
    * block-diagonal matrix \f$ D \f$ returned by pseudoEigenvalueMatrix()
@@ -409,18 +411,15 @@ EigenSolver<MatrixType>& EigenSolver<MatrixType>::computeFromSchur(bool computeE
     const MatrixType& matT = m_realSchur.m_matT;
     const Index n = matT.cols();
 
-    // Compute eigenvalues from matT
+    // Compute eigenvalues from matT. An overflow is reported once all of them are written, so that eigenvalues()
+    // holds no stale entry.
     m_eivalues.resize(n);
+    bool allFinite = true;
     Index i = 0;
     while (i < n) {
       if (i == n - 1 || matT.coeff(i + 1, i) == Scalar(0)) {
         m_eivalues.coeffRef(i) = matT.coeff(i, i);
-        if (!(numext::isfinite)(m_eivalues.coeffRef(i))) {
-          m_isInitialized = true;
-          m_eigenvectorsOk = false;
-          m_info = NumericalIssue;
-          return *this;
-        }
+        allFinite = allFinite && (numext::isfinite)(m_eivalues.coeffRef(i));
         ++i;
       } else {
         Scalar p = Scalar(0.5) * (matT.coeff(i, i) - matT.coeff(i + 1, i + 1));
@@ -439,25 +438,34 @@ EigenSolver<MatrixType>& EigenSolver<MatrixType>::computeFromSchur(bool computeE
 
         m_eivalues.coeffRef(i) = ComplexScalar(matT.coeff(i + 1, i + 1) + p, z);
         m_eivalues.coeffRef(i + 1) = ComplexScalar(matT.coeff(i + 1, i + 1) + p, -z);
-        if (!((numext::isfinite)(m_eivalues.coeffRef(i)) && (numext::isfinite)(m_eivalues.coeffRef(i + 1)))) {
-          m_isInitialized = true;
-          m_eigenvectorsOk = false;
-          m_info = NumericalIssue;
-          return *this;
-        }
+        allFinite =
+            allFinite && (numext::isfinite)(m_eivalues.coeffRef(i)) && (numext::isfinite)(m_eivalues.coeffRef(i + 1));
         i += 2;
       }
+    }
+    if (!allFinite) {
+      m_isInitialized = true;
+      m_eigenvectorsOk = false;
+      m_info = NumericalIssue;
+      return *this;
     }
 
     // Compute eigenvectors.
     if (computeEigenvectors) doComputeEigenvectors();
-  } else if (!m_realSchur.m_matT.allFinite()) {
+  } else {
+    // No eigenvalue is known: NaN, not what the vector held before.
+    const Scalar nan = NumTraits<Scalar>::quiet_NaN();
+    const Index n = m_realSchur.m_matT.cols();
+    m_eivalues.setConstant(n, ComplexScalar(nan, nan));
+    // RealSchur leaves U at its previous size for a nonfinite input, and eigenvectors() indexes m_eivalues by the
+    // columns of U: give U the size of the input for builds without assertions.
+    if (computeEigenvectors) m_realSchur.m_matU.setZero(n, n);
     // RealSchur reports both nonfinite input and iteration exhaustion as NoConvergence.
-    m_info = NumericalIssue;
+    if (!m_realSchur.m_matT.allFinite()) m_info = NumericalIssue;
   }
 
   m_isInitialized = true;
-  m_eigenvectorsOk = computeEigenvectors;
+  m_eigenvectorsOk = computeEigenvectors && m_info == Success;
 
   return *this;
 }

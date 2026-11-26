@@ -81,6 +81,8 @@ struct ColPivHouseholderQR_LAPACKE_impl {
   static bool run(MatrixType& qr, HCoeffsType& hCoeffs, PermutationType& colsPermutation, Index& nonzero_pivots,
                   RealScalar& maxpivot, bool usePrescribedThreshold, RealScalar prescribedThreshold, Index& det_p,
                   bool& isInitialized) {
+    // LAPACK rejects the zero leading dimension of an empty input, and an empty diagonal has no largest pivot.
+    if (qr.diagonalSize() == 0) return false;
     isInitialized = false;
     hCoeffs.resize(qr.diagonalSize());
     nonzero_pivots = 0;

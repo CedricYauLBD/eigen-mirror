@@ -404,7 +404,7 @@ template <typename TMatrix>
 RealSchur<MatrixType>& RealSchur<MatrixType>::computeFromHessenbergInPlace(TMatrix& matT, bool computeU) {
   Index maxIters = m_maxIters;
   if (maxIters == -1) maxIters = m_maxIterationsPerRow * matT.rows();
-  Scalar* workspace = &m_workspaceVector.coeffRef(0);
+  Scalar* workspace = m_workspaceVector.data();
 
   // The matrix matT is divided in three parts.
   // Rows 0,...,il-1 are decoupled from the rest because matT(il,il-1) is zero.

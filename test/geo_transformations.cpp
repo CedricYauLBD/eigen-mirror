@@ -973,6 +973,16 @@ void transform_from_full_matrix() {
   VERIFY_IS_EQUAL(t2.matrix(), expected.topRows(r));
 }
 
+// operator new has to align the storage like the stored matrix, which has no last row in AffineCompact mode.
+template <typename TransformType>
+void transform_aligned_new() {
+  std::vector<std::unique_ptr<TransformType>> transforms;
+  for (int i = 0; i < 20; ++i) {
+    transforms.emplace_back(new TransformType);
+    VERIFY(std::uintptr_t(transforms.back().get()) % alignof(TransformType) == 0);
+  }
+}
+
 EIGEN_DECLARE_TEST(geo_transformations) {
   for (int i = 0; i < g_repeat; i++) {
     CALL_SUBTEST_1((transformations<double, Affine, AutoAlign>()));
@@ -988,10 +998,16 @@ EIGEN_DECLARE_TEST(geo_transformations) {
     CALL_SUBTEST_2((transformations<float, AffineCompact, AutoAlign>()));
     CALL_SUBTEST_2((non_projective_only<float, AffineCompact, AutoAlign>()));
     CALL_SUBTEST_2((transform_alignment<float>()));
+    CALL_SUBTEST_2((transform_aligned_new<Transform<float, 8, AffineCompact>>()));
+    CALL_SUBTEST_2((transform_aligned_new<Transform<float, 3, Affine>>()));
 
     CALL_SUBTEST_3((transformations<double, Projective, AutoAlign>()));
     CALL_SUBTEST_3((transformations<double, Projective, DontAlign>()));
     CALL_SUBTEST_3((transform_alignment<double>()));
+    CALL_SUBTEST_3((transform_aligned_new<Transform<double, 2, AffineCompact>>()));
+    CALL_SUBTEST_3((transform_aligned_new<Transform<double, 4, AffineCompact>>()));
+    CALL_SUBTEST_3((transform_aligned_new<Transform<double, 8, AffineCompact>>()));
+    CALL_SUBTEST_3((transform_aligned_new<Transform<double, 3, Projective>>()));
 
     CALL_SUBTEST_4((transformations<float, Affine, RowMajor | AutoAlign>()));
     CALL_SUBTEST_4((transformations<float, Projective, AutoAlign>()));

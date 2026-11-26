@@ -113,6 +113,49 @@ void run_fixed_size_test(int num_elements) {
   VERIFY(error < Scalar(16) * std::numeric_limits<Scalar>::epsilon());
 }
 
+// A covariance matrix that is not finite has no SVD. umeyama() must then return NaN and not a transformation built from
+// factors that the SVD did not compute.
+template <typename PointsType>
+void run_non_finite_test() {
+  using Scalar = typename PointsType::Scalar;
+  using MatrixX = Matrix<Scalar, Dynamic, Dynamic>;
+
+  const Index dim = 3;
+  const Index num_elements = 5;
+
+  // the origin, one point on each axis, and (1, 1, 1)
+  PointsType points = PointsType::Zero(dim, num_elements);
+  points.block(0, 1, dim, dim).setIdentity();
+  points.col(dim + 1).setOnes();
+
+  // finite, but the products of two demeaned coordinates overflow
+  const PointsType huge_points = ((std::numeric_limits<Scalar>::max)() / Scalar(8)) * points;
+  VERIFY(huge_points.allFinite());
+  PointsType nan_points = points;
+  nan_points(1, 2) = std::numeric_limits<Scalar>::quiet_NaN();
+  PointsType inf_points = points;
+  inf_points(1, 2) = std::numeric_limits<Scalar>::infinity();
+
+  const MatrixX identity = MatrixX::Identity(dim + 1, dim + 1);
+
+  for (bool with_scaling : {false, true}) {
+    // A successful call first: it frees blocks of the sizes that the failing calls below allocate.
+    const MatrixX cR_t = umeyama(points, points, with_scaling);
+    VERIFY_IS_APPROX(cR_t, identity);
+
+    const auto verify_not_estimated = [&](const PointsType& src, const PointsType& dst) {
+      const MatrixX not_estimated = umeyama(src, dst, with_scaling);
+      VERIFY(not_estimated.topRows(dim).array().isNaN().all());
+      VERIFY_IS_EQUAL(not_estimated.row(dim), identity.row(dim));
+    };
+    verify_not_estimated(huge_points, huge_points);
+    verify_not_estimated(nan_points, points);
+    verify_not_estimated(points, nan_points);
+    verify_not_estimated(inf_points, points);
+    verify_not_estimated(points, inf_points);
+  }
+}
+
 EIGEN_DECLARE_TEST(umeyama) {
   for (int i = 0; i < g_repeat; ++i) {
     const int num_elements = internal::random<int>(40, 500);
@@ -131,6 +174,10 @@ EIGEN_DECLARE_TEST(umeyama) {
     CALL_SUBTEST_7((run_fixed_size_test<double, 3>(num_elements)));
     CALL_SUBTEST_8((run_fixed_size_test<double, 4>(num_elements)));
   }
+
+  CALL_SUBTEST_1(run_non_finite_test<MatrixXd>());
+  CALL_SUBTEST_2(run_non_finite_test<MatrixXf>());
+  CALL_SUBTEST_7((run_non_finite_test<Matrix<double, 3, Dynamic>>()));
 
   // Those two calls don't compile and result in meaningful error messages!
   // umeyama(MatrixXcf(),MatrixXcf());

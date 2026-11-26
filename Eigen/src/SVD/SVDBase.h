@@ -335,7 +335,8 @@ class SVDBase : public SolverBase<SVDBase<Derived> > {
                                          "SVDBase::solve(): invalid number of rows of the right hand side matrix b");
   }
 
-  // return true if already allocated
+  // Returns true if already allocated. Otherwise sizes the members of SVDBase, clears m_isAllocated and returns false;
+  // the derived class sets m_isAllocated once its own workspace is sized as well.
   bool allocate(Index rows, Index cols, unsigned int computationOptions);
 
   MatrixUType m_matrixU;
@@ -422,7 +423,9 @@ bool SVDBase<Derived>::allocate(Index rows, Index cols, unsigned int computation
   m_rows.setValue(rows);
   m_cols.setValue(cols);
   m_isInitialized = false;
-  m_isAllocated = true;
+  // Set by the derived allocate() once its workspace is sized, so that a retry after a throwing allocation does not
+  // take the early return above with the workspace of the previous shape.
+  m_isAllocated = false;
   m_computationOptions = computationOptions;
   m_computeFullU = ShouldComputeFullU || internal::should_svd_compute_full_u(computationOptions);
   m_computeThinU = ShouldComputeThinU || internal::should_svd_compute_thin_u(computationOptions);

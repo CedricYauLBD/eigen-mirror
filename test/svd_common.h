@@ -575,6 +575,26 @@ void svd_preallocate() {
   VERIFY_IS_APPROX(wide, wideSvd.matrixU() * wideSvd.singularValues().asDiagonal() * wideSvd.matrixV().adjoint());
 }
 
+// A compute() that fails to allocate must leave an object that decomposes the same shape again like a new one. The
+// failure is the first allocation of that compute(): it is raised as an assertion, which unwinds through allocate()
+// the way std::bad_alloc does.
+template <typename MatrixType, int Options>
+void svd_allocation_failure(Index previousRows, Index previousCols, Index rows, Index cols) {
+  using SvdType = SVD_STATIC_OPTIONS(MatrixType, Options);
+  const MatrixType previous = MatrixType::Random(previousRows, previousCols);
+  const MatrixType m = MatrixType::Random(rows, cols);
+  const SvdType expected(m);
+  SvdType svd(previous);
+  internal::set_is_malloc_allowed(false);
+  VERIFY_RAISES_ASSERT(svd.compute(m));
+  internal::set_is_malloc_allowed(true);
+  svd.compute(m);
+  VERIFY_IS_EQUAL(svd.info(), Success);
+  VERIFY_IS_APPROX(svd.singularValues(), expected.singularValues());
+  if (svd.computeU()) VERIFY_IS_APPROX(svd.matrixU(), expected.matrixU());
+  if (svd.computeV()) VERIFY_IS_APPROX(svd.matrixV(), expected.matrixV());
+}
+
 template <typename MatrixType, int QRPreconditioner = 0>
 void svd_verify_assert_full_only(const MatrixType& m) {
   enum { RowsAtCompileTime = MatrixType::RowsAtCompileTime };

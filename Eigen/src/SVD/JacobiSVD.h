@@ -64,6 +64,18 @@ class qr_preconditioner_impl<MatrixType, Options, QRPreconditioner, Case, false>
   }
 };
 
+// Replaces qr in place by a decomposition preallocated for rows x cols matrices. If that allocation throws, qr is left
+// empty rather than destroyed, so that its owner can still destroy or reallocate it.
+template <typename QRType>
+void qr_preconditioner_reallocate(QRType& qr, Index rows, Index cols) {
+  internal::destroy_at(&qr);
+  EIGEN_TRY { internal::construct_at(&qr, rows, cols); }
+  EIGEN_CATCH(...) {
+    internal::construct_at(&qr);
+    EIGEN_THROW;
+  }
+}
+
 /*** preconditioner using FullPivHouseholderQR ***/
 
 template <typename MatrixType, int Options>
@@ -79,8 +91,7 @@ class qr_preconditioner_impl<MatrixType, Options, FullPivHouseholderQRPreconditi
 
   void allocate(const SVDType& svd) {
     if (svd.rows() != m_qr.rows() || svd.cols() != m_qr.cols()) {
-      internal::destroy_at(&m_qr);
-      internal::construct_at(&m_qr, svd.rows(), svd.cols());
+      qr_preconditioner_reallocate(m_qr, svd.rows(), svd.cols());
     }
     if (svd.m_computeFullU) m_workspace.resize(svd.rows());
   }
@@ -123,8 +134,7 @@ class qr_preconditioner_impl<MatrixType, Options, FullPivHouseholderQRPreconditi
 
   void allocate(const SVDType& svd) {
     if (svd.cols() != m_qr.rows() || svd.rows() != m_qr.cols()) {
-      internal::destroy_at(&m_qr);
-      internal::construct_at(&m_qr, svd.cols(), svd.rows());
+      qr_preconditioner_reallocate(m_qr, svd.cols(), svd.rows());
     }
     if (svd.m_computeFullV) m_workspace.resize(svd.cols());
   }
@@ -165,8 +175,7 @@ class qr_preconditioner_impl<MatrixType, Options, ColPivHouseholderQRPreconditio
 
   void allocate(const SVDType& svd) {
     if (svd.rows() != m_qr.rows() || svd.cols() != m_qr.cols()) {
-      internal::destroy_at(&m_qr);
-      internal::construct_at(&m_qr, svd.rows(), svd.cols());
+      qr_preconditioner_reallocate(m_qr, svd.rows(), svd.cols());
     }
     if (svd.m_computeFullU)
       m_workspace.resize(svd.rows());
@@ -221,8 +230,7 @@ class qr_preconditioner_impl<MatrixType, Options, ColPivHouseholderQRPreconditio
 
   void allocate(const SVDType& svd) {
     if (svd.cols() != m_qr.rows() || svd.rows() != m_qr.cols()) {
-      internal::destroy_at(&m_qr);
-      internal::construct_at(&m_qr, svd.cols(), svd.rows());
+      qr_preconditioner_reallocate(m_qr, svd.cols(), svd.rows());
     }
     if (svd.m_computeFullV)
       m_workspace.resize(svd.cols());
@@ -271,8 +279,7 @@ class qr_preconditioner_impl<MatrixType, Options, HouseholderQRPreconditioner, P
 
   void allocate(const SVDType& svd) {
     if (svd.rows() != m_qr.rows() || svd.cols() != m_qr.cols()) {
-      internal::destroy_at(&m_qr);
-      internal::construct_at(&m_qr, svd.rows(), svd.cols());
+      qr_preconditioner_reallocate(m_qr, svd.rows(), svd.cols());
     }
     if (svd.m_computeFullU)
       m_workspace.resize(svd.rows());
@@ -326,8 +333,7 @@ class qr_preconditioner_impl<MatrixType, Options, HouseholderQRPreconditioner, P
 
   void allocate(const SVDType& svd) {
     if (svd.cols() != m_qr.rows() || svd.rows() != m_qr.cols()) {
-      internal::destroy_at(&m_qr);
-      internal::construct_at(&m_qr, svd.cols(), svd.rows());
+      qr_preconditioner_reallocate(m_qr, svd.cols(), svd.rows());
     }
     if (svd.m_computeFullV)
       m_workspace.resize(svd.cols());
@@ -787,7 +793,7 @@ class JacobiSVD : public SVDBase<JacobiSVD<MatrixType_, Options_>> {
   template <typename Derived>
   EIGEN_DEPRECATED_WITH_REASON("Options should be specified using the class template parameter.")
   JacobiSVD& compute(const MatrixBase<Derived>& matrix, unsigned int computationOptions) {
-    internal::check_svd_options_assertions<MatrixType, Options>(m_computationOptions, matrix.rows(), matrix.cols());
+    internal::check_svd_options_assertions<MatrixType, Options>(computationOptions, matrix.rows(), matrix.cols());
     return compute_impl(matrix, computationOptions);
   }
 
@@ -808,6 +814,7 @@ class JacobiSVD : public SVDBase<JacobiSVD<MatrixType_, Options_>> {
     m_workMatrix.resize(diagSize(), diagSize());
     if (cols() > rows()) m_qr_precond_morecols.allocate(*this);
     if (internal::svd_precondition_more_rows(Options, rows(), cols())) m_qr_precond_morerows.allocate(*this);
+    m_isAllocated = true;
   }
 
  private:

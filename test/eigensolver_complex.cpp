@@ -100,6 +100,10 @@ void eigensolver(const MatrixType& m) {
     ei2.setMaxIterations(1).compute(a);
     VERIFY_IS_EQUAL(ei2.info(), NoConvergence);
     VERIFY_IS_EQUAL(ei2.getMaxIterations(), 1);
+    // No eigenvalue is known, and none of the previous decomposition remains.
+    VERIFY(ei2.eigenvalues().real().array().isNaN().all());
+    VERIFY(ei2.eigenvalues().imag().array().isNaN().all());
+    VERIFY_RAISES_ASSERT(ei2.eigenvectors());
   }
 
   ComplexEigenSolver<MatrixType> eiNoEivecs(a, false);
@@ -119,6 +123,9 @@ void eigensolver(const MatrixType& m) {
     a(0, 0) = std::numeric_limits<typename MatrixType::RealScalar>::quiet_NaN();
     ComplexEigenSolver<MatrixType> eiNaN(a);
     VERIFY_IS_EQUAL(eiNaN.info(), NoConvergence);
+    VERIFY(eiNaN.eigenvalues().real().array().isNaN().all());
+    VERIFY(eiNaN.eigenvalues().imag().array().isNaN().all());
+    VERIFY_RAISES_ASSERT(eiNaN.eigenvectors());
   }
 
   // regression test for bug 1098

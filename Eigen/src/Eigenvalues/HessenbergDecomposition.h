@@ -264,6 +264,8 @@ class HessenbergDecomposition {
 
   void computeInPlace() {
     if (m_matrix.rows() < 2) {
+      // No Householder coefficient: drop the ones of the size hint or of an earlier decomposition.
+      m_hCoeffs.resize(0, 1);
       m_isInitialized = true;
       return;
     }

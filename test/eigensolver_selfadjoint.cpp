@@ -260,6 +260,9 @@ void selfadjointeigensolver(const MatrixType& m) {
     symmC(0, 0) = std::numeric_limits<typename MatrixType::RealScalar>::quiet_NaN();
     SelfAdjointEigenSolver<MatrixType> eiSymmNaN(symmC);
     VERIFY_IS_EQUAL(eiSymmNaN.info(), NoConvergence);
+    // No eigenvalue is known, and none of the previous decomposition remains.
+    VERIFY(eiSymmNaN.eigenvalues().array().isNaN().all());
+    VERIFY(eiSymm.compute(symmC, EigenvaluesOnly).eigenvalues().array().isNaN().all());
   }
 
   // regression test for bug 1098
@@ -1831,6 +1834,25 @@ void selfadjoint_iterative_low_precision_coupling() {
 }
 #endif
 
+// A 1 x 1 matrix has no Householder coefficient: the constructors allocated one that nothing computed.
+void tridiagonalization_1x1() {
+  const MatrixXd A = MatrixXd::Constant(1, 1, 3.0);
+  MatrixXd B = A;
+  VERIFY_IS_EQUAL(Tridiagonalization<MatrixXd>(A).householderCoefficients().size(), 0);
+  VERIFY_IS_EQUAL(Tridiagonalization<MatrixXd>(B).householderCoefficients().size(), 0);
+  VERIFY_IS_EQUAL(Tridiagonalization<Ref<MatrixXd>>(B).householderCoefficients().size(), 0);
+  VERIFY_IS_EQUAL(Tridiagonalization<MatrixXcd>(A.cast<std::complex<double>>()).householderCoefficients().size(), 0);
+  Tridiagonalization<MatrixXd> tridiagonal(MatrixXd::Identity(4, 4));
+  VERIFY_IS_EQUAL(tridiagonal.householderCoefficients().size(), 3);
+  VERIFY_IS_EQUAL(tridiagonal.compute(A).householderCoefficients().size(), 0);
+  VERIFY_IS_EQUAL(MatrixXd(tridiagonal.matrixQ()), MatrixXd::Identity(1, 1));
+  VERIFY_IS_EQUAL(MatrixXd(tridiagonal.matrixT()), A);
+  // A fixed-size 1 x 1 matrix keeps the single entry of its coefficient type, which compute() must not resize.
+  Tridiagonalization<Matrix<double, 1, 1>> fixed;
+  VERIFY_IS_EQUAL(fixed.compute(A).householderCoefficients().size(), 1);
+  VERIFY_IS_EQUAL(fixed.diagonal()(0), 3.0);
+}
+
 EIGEN_DECLARE_TEST(eigensolver_selfadjoint) {
   CALL_SUBTEST_20(selfadjoint_iterative_scaling_rounding<>());
   CALL_SUBTEST_20((selfadjoint_overflowing_modulus<MatrixXcf>(6)));
@@ -1868,6 +1890,7 @@ EIGEN_DECLARE_TEST(eigensolver_selfadjoint) {
   CALL_SUBTEST_21((selfadjoint_iterative_low_precision_coupling<float>()));
   int s = 0;
   CALL_SUBTEST_4(generalizedselfadjointeigensolver_no_malloc<MatrixXd>());
+  CALL_SUBTEST_4(tridiagonalization_1x1());
   // An empty matrix took the maximum of no coefficients.
   CALL_SUBTEST_4({
     MatrixXd A(0, 0);
