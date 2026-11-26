@@ -53,6 +53,7 @@ struct Lapack;
     LW_MEMBER(getrf, P##getrf)       \
     LW_MEMBER(getri, P##getri)       \
     LW_MEMBER(geqrf, P##geqrf)       \
+    LW_MEMBER(larf, P##larf)         \
     LW_MEMBER(qrgen, P##OR##gqr)     \
     LW_MEMBER(qrmul, P##OR##mqr)     \
   };
@@ -1237,6 +1238,21 @@ void test_ilp64_arguments() {
   VERIFY(work >= double(big));
 }
 
+// xLARF with a one-element reflector reads only v[0], so INCV may be the most negative integer. Neither the trimming of
+// zero entries nor the reversed view of v may negate or subtract that increment as a signed integer.
+template <typename Scalar>
+void test_larf_most_negative_increment() {
+  Int incv = (std::numeric_limits<Int>::min)();
+  for (Scalar v0 : {Scalar(0), Scalar(1)})
+    for (char side : {'L', 'R'}) {
+      Int one = 1, ldc = 1;
+      Scalar tau = Scalar(0.5), c = Scalar(3), work = Scalar(0);
+      // H C = (1 - tau |v0|^2) C for a 1 x 1 matrix C.
+      Lapack<Scalar>::larf(&side, &one, &one, rp(&v0), &incv, rp(&tau), rp(&c), &ldc, rp(&work));
+      VERIFY_IS_EQUAL(c, v0 == Scalar(0) ? Scalar(3) : Scalar(1.5));
+    }
+}
+
 void test_no_stray_xerbla() { VERIFY_IS_EQUAL(g_xerbla.calls, 0); }
 
 }  // namespace
@@ -1268,6 +1284,7 @@ EIGEN_DECLARE_TEST(lapack_wrappers) {
     LW_FOR_ALL_SCALARS(test_ev_order_one);
     LW_FOR_ALL_SCALARS(test_ev_work_one);
     LW_FOR_ALL_SCALARS(test_qr_all);
+    LW_FOR_ALL_SCALARS(test_larf_most_negative_increment);
   }
 #undef LW_FOR_ALL_SCALARS
   CALL_SUBTEST(test_workspace_query_rounding());
