@@ -13,6 +13,11 @@
 
 #include <Eigen/SuperLUSupport>
 
+// SuperLU, through release 7.0.1 at least, does not free the column-permuted matrix that sp_preorder() allocates when
+// gssvx returns for a matrix with a zero pivot, as in test_superlu_singular_determinant(). The matrix is local to
+// gssvx, so Eigen cannot free it either. This keeps LeakSanitizer from failing the test for it.
+extern "C" const char* __lsan_default_suppressions() { return "leak:sp_preorder\n"; }
+
 // The last pivot of this rank-2 matrix is exactly zero; determinant() used to skip it and return 1.
 void test_superlu_singular_determinant() {
   SparseMatrix<double> A(3, 3);
