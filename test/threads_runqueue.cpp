@@ -11,6 +11,7 @@
 
 #define EIGEN_USE_THREADS
 #include <cstdlib>
+#include <memory>
 #include "main.h"
 #include <Eigen/ThreadPool>
 
@@ -109,7 +110,8 @@ void test_basic_runqueue() {
   VERIFY_IS_EQUAL(0u, q.Size());
 }
 
-// Counts moves, to detect when a std::vector holding it reallocates.
+// Counts move constructions, to detect when a std::vector holding it reallocates. Move assignments are not counted:
+// the queue resets each slot it pops with one.
 struct CountedWork {
   static int moves;
   int value;
@@ -117,7 +119,6 @@ struct CountedWork {
   CountedWork(CountedWork&& other) noexcept : value(other.value) { moves++; }
   CountedWork& operator=(CountedWork&& other) noexcept {
     value = other.value;
-    moves++;
     return *this;
   }
 };
@@ -125,7 +126,7 @@ int CountedWork::moves = 0;
 
 // PopBackHalf stores back_ only after taking its last element, so a std::bad_alloc from the result vector in between
 // would leave a hole in the queue. The vector must grow before the first element is taken: each element taken is
-// moved exactly once, and the elements already in the vector only if it grew.
+// move-constructed exactly once, and the elements already in the vector only if it grew.
 void test_pop_back_half_grows_result_first() {
   RunQueue<CountedWork, 16> q;
   std::vector<CountedWork> stolen;
@@ -264,9 +265,103 @@ void test_stress_runqueue() {
   VERIFY(total.load() == 0);
 }
 
+// A Work whose move leaves the source owning a copy, as libc++'s std::function does for a small target.
+struct CopyOnMoveWork {
+  CopyOnMoveWork() = default;
+  explicit CopyOnMoveWork(const std::shared_ptr<int>& o) : owner(o) {}
+  CopyOnMoveWork(CopyOnMoveWork&& other) : owner(other.owner) {}
+  CopyOnMoveWork& operator=(CopyOnMoveWork&& other) {
+    owner = other.owner;
+    return *this;
+  }
+  std::shared_ptr<int> owner;
+};
+
+// A popped element must not stay alive in its slot of the queue: what it owns would be released only when the slot
+// is reused, and a thread pool task can wait for that release.
+void test_pop_releases_element() {
+  RunQueue<CopyOnMoveWork, 4> q;
+  const std::shared_ptr<int> owner = std::make_shared<int>(0);
+
+  q.PushFront(CopyOnMoveWork(owner));
+  VERIFY(q.PopFront().owner == owner);
+  VERIFY(owner.use_count() == 1);
+
+  q.PushBack(CopyOnMoveWork(owner));
+  VERIFY(q.PopBack().owner == owner);
+  VERIFY(owner.use_count() == 1);
+
+  for (int i = 0; i < 4; ++i) q.PushBack(CopyOnMoveWork(owner));
+  std::vector<CopyOnMoveWork> stolen;
+  VERIFY_IS_EQUAL(2u, q.PopBackHalf(&stolen));
+  stolen.clear();
+  VERIFY(owner.use_count() == 3);
+  q.Flush();
+  VERIFY(owner.use_count() == 1);
+}
+
+// A Work that, like CopyOnMoveWork, stays alive in the slot it is moved from, and whose destructor pushes a new element
+// onto the front of its queue, as the destructor of a closure that schedules a task from its worker thread does.
+struct PushOnDestroyWork;
+using PushOnDestroyQueue = RunQueue<PushOnDestroyWork, 4>;
+struct PushOnDestroyState {
+  PushOnDestroyQueue* queue = nullptr;
+  int pushes_left = 0;
+  int accepted = 0;
+};
+struct PushOnDestroyWork {
+  PushOnDestroyWork() = default;
+  explicit PushOnDestroyWork(PushOnDestroyState* s) : state(s) {}
+  PushOnDestroyWork(PushOnDestroyWork&& other) : state(other.state), marker(other.marker) {}
+  PushOnDestroyWork& operator=(PushOnDestroyWork&& other) {
+    release();
+    state = other.state;
+    marker = other.marker;
+    return *this;
+  }
+  ~PushOnDestroyWork() { release(); }
+  void release() {
+    PushOnDestroyState* s = state;
+    state = nullptr;
+    if (s == nullptr || s->pushes_left == 0) return;
+    --s->pushes_left;
+    PushOnDestroyWork pushed;
+    pushed.marker = true;
+    // A queue that does not accept the element returns it.
+    const PushOnDestroyWork rejected = s->queue->PushFront(std::move(pushed));
+    if (!rejected.marker) ++s->accepted;
+  }
+  PushOnDestroyState* state = nullptr;
+  bool marker = false;
+};
+
+// PopFront() destroys what the move left in the slot. That destructor can push onto the front of the same queue,
+// which must stay consistent: it holds the pushed element exactly if it accepted it.
+void test_pop_front_with_pushing_destructor() {
+  PushOnDestroyQueue q;
+  PushOnDestroyState state;
+  state.queue = &q;
+  q.PushFront(PushOnDestroyWork(&state));
+  VERIFY_IS_EQUAL(1u, q.Size());
+  // Only the copy left in the slot pushes, once.
+  state.pushes_left = 1;
+  PushOnDestroyWork popped = q.PopFront();
+  VERIFY_IS_EQUAL(0, state.pushes_left);
+  VERIFY(popped.state == &state);
+  VERIFY_IS_EQUAL(static_cast<unsigned>(state.accepted), q.Size());
+  for (int i = 0; i < state.accepted; ++i) VERIFY(q.PopFront().marker);
+  VERIFY(q.Empty());
+  // Every slot is free again.
+  for (int i = 0; i < 4; ++i) q.PushFront(PushOnDestroyWork());
+  VERIFY_IS_EQUAL(4u, q.Size());
+  q.Flush();
+}
+
 EIGEN_DECLARE_TEST(threads_runqueue) {
   CALL_SUBTEST_1(test_basic_runqueue());
   CALL_SUBTEST_1(test_pop_back_half_grows_result_first());
+  CALL_SUBTEST_1(test_pop_releases_element());
+  CALL_SUBTEST_1(test_pop_front_with_pushing_destructor());
   CALL_SUBTEST_2(test_empty_runqueue());
   CALL_SUBTEST_3(test_stress_runqueue());
 }
