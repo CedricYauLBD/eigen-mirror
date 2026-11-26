@@ -1961,16 +1961,26 @@ class Serializer<SparseMatrix<Scalar, Options, StorageIndex>, void> {
     memcpy(dest, value.outerIndexPtr(), data_bytes);
     dest += data_bytes;
 
-    // Inner indices.
-    data_bytes = sizeof(StorageIndex) * header.inner_buffer_size;
-    if (data_bytes != 0) memcpy(dest, value.innerIndexPtr(), data_bytes);
-    dest += data_bytes;
-
-    // Values.
-    data_bytes = sizeof(Scalar) * header.inner_buffer_size;
-    if (data_bytes != 0) memcpy(dest, value.valuePtr(), data_bytes);
-    internal::clear_serialized_padding<Scalar>(dest, data_bytes);
-    dest += data_bytes;
+    // Inner indices and values. The reserved slots after the live entries of an uncompressed matrix hold whatever the
+    // memory held before, so they are written as zeros rather than copied.
+    const std::size_t index_bytes = sizeof(StorageIndex) * header.inner_buffer_size;
+    const std::size_t value_bytes = sizeof(Scalar) * header.inner_buffer_size;
+    uint8_t* const dest_values = dest + index_bytes;
+    if (header.compressed) {
+      if (index_bytes != 0) memcpy(dest, value.innerIndexPtr(), index_bytes);
+      if (value_bytes != 0) memcpy(dest_values, value.valuePtr(), value_bytes);
+    } else if (index_bytes != 0) {
+      memset(dest, 0, index_bytes + value_bytes);
+      for (Index j = 0; j < header.outer_size; ++j) {
+        const Index start = value.outerIndexPtr()[j];
+        const Index live = value.innerNonZeroPtr()[j];
+        if (live == 0) continue;
+        memcpy(dest + sizeof(StorageIndex) * start, value.innerIndexPtr() + start, sizeof(StorageIndex) * live);
+        memcpy(dest_values + sizeof(Scalar) * start, value.valuePtr() + start, sizeof(Scalar) * live);
+      }
+    }
+    internal::clear_serialized_padding<Scalar>(dest_values, value_bytes);
+    dest += index_bytes + value_bytes;
 
     return dest;
   }
@@ -2003,7 +2013,8 @@ class Serializer<SparseMatrix<Scalar, Options, StorageIndex>, void> {
     // No array backs the inner size, so the buffer does not bound it. Reject one that makes rows * cols wrap: size()
     // would return the wrapped product, and a dense destination would allocate that many coefficients, too few for the
     // entries assigned to it. The limit is 64 bits rather than Index, since with a 32-bit Index ordinary sparse
-    // matrices have more coefficients than Index can count.
+    // matrices have more coefficients than Index can count: resize() accepts them and serialize() writes them, so
+    // they must be read back. Their size() overflows however they were made.
     using Count = numext::uint64_t;
     const Count inner_size = static_cast<Count>(SparseMat::IsRowMajor ? header.cols : header.rows);
     const Count max_coeffs = static_cast<Count>(NumTraits<numext::int64_t>::highest());

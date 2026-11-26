@@ -227,6 +227,39 @@ void test_dense_view_destinations() {
   test_dense_view_destination(storage, storage.head(4));
 }
 
+// A view with strides is not one contiguous run of coefficients: the payload must land in the view, and no coefficient
+// of the backing matrix outside it may change.
+template <int Options>
+void test_strided_dense_view_destinations() {
+  using Backing = Matrix<double, Dynamic, Dynamic, Options>;
+  const Backing original = Backing::Random(5, 6);
+  const Matrix<double, Dynamic, Dynamic, Options> sent = Matrix<double, Dynamic, Dynamic, Options>::Random(2, 3);
+  std::vector<uint8_t> buffer(Eigen::serialize_size(sent));
+  uint8_t* begin = buffer.data();
+  uint8_t* end = begin + buffer.size();
+  VERIFY(Eigen::serialize(begin, end, sent) == end);
+
+  Backing backing = original;
+  auto block = backing.block(1, 2, 2, 3);
+  Backing expected = original;
+  expected.block(1, 2, 2, 3) = sent;
+  VERIFY(Serializer<DenseBase<decltype(block)>>().deserialize(begin, end, block) == end);
+  VERIFY_IS_CWISE_EQUAL(backing, expected);
+
+  backing = original;
+  Map<Backing, 0, Stride<Dynamic, Dynamic>> map(backing.data() + 1, 2, 3, Stride<Dynamic, Dynamic>(10, 3));
+  Backing expected_map = original;
+  Map<Backing, 0, Stride<Dynamic, Dynamic>>(expected_map.data() + 1, 2, 3, Stride<Dynamic, Dynamic>(10, 3)) = sent;
+  VERIFY(Serializer<DenseBase<decltype(map)>>().deserialize(begin, end, map) == end);
+  VERIFY_IS_CWISE_EQUAL(backing, expected_map);
+
+  // A rejected buffer leaves the whole backing matrix as it was.
+  backing = original;
+  auto wrong = backing.block(1, 2, 3, 2);
+  VERIFY(Serializer<DenseBase<decltype(wrong)>>().deserialize(begin, end, wrong) == nullptr);
+  VERIFY_IS_CWISE_EQUAL(backing, original);
+}
+
 // Serializes `valid` into a buffer with room to spare, applies `corrupt` to the header and payload, and checks that
 // deserializing the result is a parsing error that leaves no entries in the destination.
 template <typename T, typename Corrupt>
@@ -450,8 +483,8 @@ void test_malformed_bool() {
   m.makeCompressed();
   verify_rejected(m, [](Header&, uint8_t* p) { p[6 * sizeof(int) + 1] = 2; });
 
-  // Uncompressed, the payload is innerNonZeros[3], outer[4], inner[capacity], values[capacity]. serialize() copies the
-  // unused entries too, which nothing has written, so any byte must be accepted there.
+  // Uncompressed, the payload is innerNonZeros[3], outer[4], inner[capacity], values[capacity]. The unused entries are
+  // zeros that nothing has written, but a sender other than serialize() may put any byte there.
   T u = m;
   u.reserve(Eigen::VectorXi::Constant(3, 2));
   VERIFY(!u.isCompressed());
@@ -468,6 +501,59 @@ void test_malformed_bool() {
   int unused = 0;
   for (int j = 0; j < 3; ++j) {
     for (int k = outer[j] + inner_non_zeros[j]; k < outer[j + 1]; ++k, ++unused) payload[values + k] = 2;
+  }
+  VERIFY(unused > 0);
+  T clone;
+  VERIFY(serializer.deserialize(buffer.data(), buffer.data() + buffer.size(), clone) != nullptr);
+  VERIFY_IS_CWISE_EQUAL(clone.toDense(), m.toDense());
+}
+
+// serialize() writes the reserved slots of an uncompressed matrix as zeros: it copies only the live entries, so the
+// bytes the memory held before do not reach the buffer.
+template <int Options>
+void test_uncompressed_unused_slots() {
+  using T = SparseMatrix<float, Options, int>;
+  T m(4, 4);
+  m.insert(0, 0) = 1;
+  m.insert(2, 0) = 2;
+  m.insert(1, 1) = 3;
+  m.insert(3, 3) = 4;
+  m.makeCompressed();
+  T u = m;
+  u.reserve(Eigen::VectorXi::Constant(4, 3));
+  VERIFY(!u.isCompressed());
+  // Poison the reserved slots.
+  const int* outer = u.outerIndexPtr();
+  const int* inner_non_zeros = u.innerNonZeroPtr();
+  for (int j = 0; j < 4; ++j) {
+    for (int k = outer[j] + inner_non_zeros[j]; k < outer[j + 1]; ++k) {
+      u.innerIndexPtr()[k] = 0x5A5A5A5A;
+      u.valuePtr()[k] = 12345.f;
+    }
+  }
+  Serializer<T> serializer;
+  std::vector<uint8_t> buffer(serializer.size(u));
+  VERIFY(serializer.serialize(buffer.data(), buffer.data() + buffer.size(), u) != nullptr);
+  const std::size_t capacity = outer[4];
+  const uint8_t* payload = buffer.data() + sizeof(typename Serializer<T>::Header);
+  const uint8_t* inner_bytes = payload + (4 + 5) * sizeof(int);
+  const uint8_t* value_bytes = inner_bytes + capacity * sizeof(int);
+  int unused = 0;
+  for (int j = 0; j < 4; ++j) {
+    for (int k = outer[j]; k < outer[j + 1]; ++k) {
+      int index;
+      float value;
+      std::memcpy(&index, inner_bytes + k * sizeof(int), sizeof(int));
+      std::memcpy(&value, value_bytes + k * sizeof(float), sizeof(float));
+      if (k < outer[j] + inner_non_zeros[j]) {
+        VERIFY_IS_EQUAL(index, u.innerIndexPtr()[k]);
+        VERIFY_IS_EQUAL(value, u.valuePtr()[k]);
+      } else {
+        VERIFY_IS_EQUAL(index, 0);
+        VERIFY_IS_EQUAL(value, 0.f);
+        ++unused;
+      }
+    }
   }
   VERIFY(unused > 0);
   T clone;
@@ -595,6 +681,10 @@ EIGEN_DECLARE_TEST(serializer) {
   CALL_SUBTEST_1(test_padding<std::complex<long double>>());
   CALL_SUBTEST_1(test_malformed_dense_headers());
   CALL_SUBTEST_1(test_dense_view_destinations());
+  CALL_SUBTEST_1(test_strided_dense_view_destinations<ColMajor>());
+  CALL_SUBTEST_1(test_strided_dense_view_destinations<RowMajor>());
+  CALL_SUBTEST_1(test_uncompressed_unused_slots<ColMajor>());
+  CALL_SUBTEST_1(test_uncompressed_unused_slots<RowMajor>());
   CALL_SUBTEST_1(test_malformed_sparse_matrix<ColMajor>());
   CALL_SUBTEST_1(test_malformed_sparse_matrix<RowMajor>());
   CALL_SUBTEST_1(test_unsorted_sparse_matrix<ColMajor>());

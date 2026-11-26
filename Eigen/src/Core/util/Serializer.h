@@ -166,7 +166,20 @@ class Serializer<DenseBase<Derived>, void> {
     const size_t data_bytes = sizeof(Scalar) * header.rows * header.cols;
     if (EIGEN_PREDICT_FALSE(!internal::valid_serialized_values<Scalar>(src, header.rows * header.cols))) return nullptr;
     value.resize(header.rows, header.cols);
-    if (data_bytes > 0) memcpy(value.data(), src, data_bytes);
+    EIGEN_IF_CONSTEXPR (Derived::IsPlainObjectBase) {
+      if (data_bytes > 0) memcpy(value.data(), src, data_bytes);
+    } else {
+      // A Map, Ref or Block can have strides, so the coefficients are not one contiguous run: store them one by one,
+      // in the storage order that serialize() wrote.
+      const Index outer_size = Derived::IsRowMajor ? header.rows : header.cols;
+      const Index inner_size = Derived::IsRowMajor ? header.cols : header.rows;
+      const uint8_t* coeff = src;
+      for (Index o = 0; o < outer_size; ++o) {
+        for (Index i = 0; i < inner_size; ++i, coeff += sizeof(Scalar)) {
+          memcpy(&value.coeffRef(Derived::IsRowMajor ? o : i, Derived::IsRowMajor ? i : o), coeff, sizeof(Scalar));
+        }
+      }
+    }
     return src + data_bytes;
   }
 };
