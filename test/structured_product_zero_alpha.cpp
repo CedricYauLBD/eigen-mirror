@@ -111,12 +111,15 @@ void selfadjoint_zero_alpha(Index n, const Scalar& nonfinite) {
     VERIFY_IS_EQUAL(strided(0, 0), Scalar(3));
     strided.template triangularView<UpLo>() = (small * large) * (small * large).adjoint();
     VERIFY_IS_EQUAL(strided(0, 0), Scalar(1));
-    const Scalar denormal((std::numeric_limits<RealScalar>::denorm_min)());
-    const auto nested = Scalar(0.25) * (large * denormal);
-    const Scalar value = Scalar(0.25) * (large(0) * denormal);
-    storage.setZero();
-    strided.template selfadjointView<UpLo>().rankUpdate(nested);
-    VERIFY_IS_EQUAL(strided(0, 0), value * numext::conj(value));
+    // 32-bit Arm NEON flushes subnormals to zero, so the vectorized product of a subnormal differs from the scalar one.
+    if (!EIGEN_ARCH_ARM) {
+      const Scalar denormal((std::numeric_limits<RealScalar>::denorm_min)());
+      const auto nested = Scalar(0.25) * (large * denormal);
+      const Scalar value = Scalar(0.25) * (large(0) * denormal);
+      storage.setZero();
+      strided.template selfadjointView<UpLo>().rankUpdate(nested);
+      VERIFY_IS_EQUAL(strided(0, 0), value * numext::conj(value));
+    }
   }
 }
 
