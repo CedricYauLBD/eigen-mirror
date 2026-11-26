@@ -971,14 +971,28 @@ void sparse_basic(const SparseMatrixType& ref) {
       SparseMatrixType m2 = m1;
       m2.makeCompressed();
 
+      // The inner indices need not be sorted: m3 is compressed and m4 is not, both in descending order.
+      SparseMatrixType m3 = m2;
+      m3.template sortInnerIndices<std::greater<>>();
+      SparseMatrixType m4 = m3;
+      m4.uncompress();
+
       m1.conservativeResize(rows + incRows, cols + incCols);
       m2.conservativeResize(rows + incRows, cols + incCols);
+      m3.conservativeResize(rows + incRows, cols + incCols);
+      m4.conservativeResize(rows + incRows, cols + incCols);
       refMat1.conservativeResize(rows + incRows, cols + incCols);
       if (incRows > 0) refMat1.bottomRows(incRows).setZero();
       if (incCols > 0) refMat1.rightCols(incCols).setZero();
 
       VERIFY_IS_APPROX(m1, refMat1);
       VERIFY_IS_APPROX(m2, refMat1);
+      for (SparseMatrixType* m : {&m3, &m4}) {
+        for (Index j = 0; j < m->outerSize(); ++j)
+          for (typename SparseMatrixType::InnerIterator it(*m, j); it; ++it) VERIFY(it.index() < m->innerSize());
+        m->sortInnerIndices();
+        VERIFY_IS_APPROX(*m, refMat1);
+      }
 
       // Insert new values
       if (incRows > 0) m1.insert(m1.rows() - 1, 0) = refMat1(refMat1.rows() - 1, 0) = 1;
@@ -1434,6 +1448,58 @@ void bug1105() {
   }
 }
 
+// reserve() throws when Index or StorageIndex cannot hold the stored entries plus the reserved slots, whose sum must
+// not wrap around into a small reservation, and leaves the matrix as it was.
+template <int Options, typename StorageIndex>
+void sparse_reserve_overflow() {
+#ifdef EIGEN_EXCEPTIONS
+  using SpMat = SparseMatrix<double, Options, StorageIndex>;
+  using SizesType = Matrix<Index, Dynamic, 1>;
+  const Index highest = numext::mini<Index>(NumTraits<StorageIndex>::highest(), NumTraits<Index>::highest());
+  // 4 * (highest / 2 + 1) + 8 == 8 in the narrower of Index and StorageIndex.
+  SizesType sizes = SizesType::Constant(5, highest / 2 + 1);
+  sizes(4) = 8;
+  for (int compressed = 0; compressed < 2; ++compressed) {
+    SpMat m(5, 5);
+    m.insert(2, 2) = 1.0;
+    if (compressed) m.makeCompressed();
+    bool threw = false;
+    try {
+      m.reserve(sizes);
+    } catch (const std::bad_alloc&) {
+      threw = true;
+    }
+    VERIFY(threw);
+    VERIFY_IS_EQUAL(m.isCompressed(), compressed == 1);
+    VERIFY_IS_EQUAL(m.nonZeros(), 1);
+    VERIFY_IS_EQUAL(m.coeff(2, 2), 1.0);
+    // The matrix is still usable, and each inner vector takes what was reserved for it.
+    m.reserve(SizesType::Constant(5, 2));
+    for (Index k = 0; k < 5; ++k) m.coeffRef(k, k) = double(k + 1);
+    m.coeffRef(0, 4) = 6.0;
+    m.coeffRef(4, 0) = 7.0;
+    VERIFY_IS_EQUAL(m.nonZeros(), 7);
+    for (Index k = 0; k < 5; ++k) VERIFY_IS_EQUAL(m.coeff(k, k), double(k + 1));
+    VERIFY_IS_EQUAL(m.coeff(0, 4), 6.0);
+    VERIFY_IS_EQUAL(m.coeff(4, 0), 7.0);
+  }
+
+  // The single-size overload adds to the stored entries as well.
+  SpMat m(5, 5);
+  m.insert(2, 2) = 1.0;
+  m.makeCompressed();
+  bool threw = false;
+  try {
+    m.reserve(NumTraits<Index>::highest());
+  } catch (const std::bad_alloc&) {
+    threw = true;
+  }
+  VERIFY(threw);
+  VERIFY_IS_EQUAL(m.nonZeros(), 1);
+  VERIFY_IS_EQUAL(m.coeff(2, 2), 1.0);
+#endif
+}
+
 // A short StorageIndex bounds the number of stored entries, not the outer dimension, which exceeds its range here.
 template <int Options>
 void sparse_insert_narrow_index() {
@@ -1727,6 +1793,18 @@ void sparse_shift_moves() {
     verify_movable_entries(m, ref);
   }
 
+  // conservativeResize() to 5 inner indices drops the index 6. In descending order it is the first entry of its
+  // vector, and the entries behind it are packed.
+  for (bool compressed : {true, false}) {
+    SpMat m = base;
+    m.template sortInnerIndices<std::greater<>>();
+    if (!compressed) m.uncompress();
+    MovableScalarCounters::reset();
+    m.conservativeResize(SpMat::IsRowMajor ? n : 5, SpMat::IsRowMajor ? 5 : n);
+    VERIFY_SHIFT_COUNTS(0);
+    verify_movable_entries(m, SpMat::IsRowMajor ? MatrixXd(baseRef.leftCols(5)) : MatrixXd(baseRef.topRows(5)));
+  }
+
   // setFromTriplets() sums duplicate entries and packs the first entry of each coefficient in front. Its copies are
   // those of reading the triplets and of the transposing assignment that sorts the result.
   {
@@ -1876,6 +1954,10 @@ EIGEN_DECLARE_TEST(sparse_basic) {
   CALL_SUBTEST_5((big_sparse_triplet<SparseMatrix<double, ColMajor, long int>>(10000, 10000, 0.125)));
 
   CALL_SUBTEST_5(bug1105<0>());
+  CALL_SUBTEST_2((sparse_reserve_overflow<ColMajor, Index>()));
+  CALL_SUBTEST_2((sparse_reserve_overflow<RowMajor, Index>()));
+  CALL_SUBTEST_2((sparse_reserve_overflow<ColMajor, short>()));
+  CALL_SUBTEST_2((sparse_reserve_overflow<RowMajor, short>()));
   CALL_SUBTEST_2((sparse_insert_narrow_index<ColMajor>()));
   CALL_SUBTEST_2((sparse_insert_narrow_index<RowMajor>()));
   CALL_SUBTEST_2((sparse_insert_full_index_range<ColMajor>()));

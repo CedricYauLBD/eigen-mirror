@@ -200,6 +200,72 @@ void verify_threaded_scatter_ieee754() {
   Eigen::setNbThreads(prev_threads);
 }
 
+// As strictly aligned as Eigen's dynamic storage: with AVX or wider packets this
+// is more than std::allocator provides before C++17. Construction checks it.
+struct alignas(EIGEN_DEFAULT_ALIGN_BYTES) OverAlignedScalar {
+  double value;
+  OverAlignedScalar(double v = 0) : value(v) { VERIFY(std::uintptr_t(this) % alignof(OverAlignedScalar) == 0); }
+  OverAlignedScalar(const OverAlignedScalar& other) : value(other.value) {
+    VERIFY(std::uintptr_t(this) % alignof(OverAlignedScalar) == 0);
+  }
+  OverAlignedScalar& operator=(const OverAlignedScalar&) = default;
+  OverAlignedScalar& operator+=(const OverAlignedScalar& other) {
+    value += other.value;
+    return *this;
+  }
+  friend OverAlignedScalar operator*(const OverAlignedScalar& a, const OverAlignedScalar& b) {
+    return a.value * b.value;
+  }
+};
+
+namespace Eigen {
+// The threaded kernel is reserved for scalars whose product is known to commute.
+template <>
+struct ScalarBinaryOpTraits<OverAlignedScalar, OverAlignedScalar> {
+  using ReturnType = OverAlignedScalar;
+  static constexpr bool IsCommutative = true;
+};
+}  // namespace Eigen
+
+// The per-thread accumulators of the ColMajor SpMV OMP scatter/reduce path
+// hold result scalars, so they must be aligned as the result itself is.
+void verify_threaded_scatter_overaligned() {
+  using Scalar = OverAlignedScalar;
+  STATIC_CHECK((internal::functor_is_commutative<internal::scalar_product_op<Scalar> >::value));
+  const int prev_threads = Eigen::nbThreads();
+  Eigen::setNbThreads(4);
+
+  // 4 entries per column -> 32768 nnz: above the 20000-nnz threshold and, for
+  // up to 4 threads, at least threads*m for the gate. The accumulators are
+  // then large enough for glibc to map them separately, 16 bytes past a page
+  // boundary: misaligned unless the allocator sees to it.
+  const Index n = 8192, nnz_per_col = 4;
+  SparseMatrix<Scalar, ColMajor> A(n, n);
+  A.reserve(VectorXi::Constant(n, int(nnz_per_col)));
+  VectorXd x_ref(n), y_ref = VectorXd::Zero(n);
+  for (Index j = 0; j < n; ++j) {
+    x_ref[j] = double(j % 7 + 1);
+    for (Index k = 0; k < nnz_per_col; ++k) {
+      const Index i = (j + k * k) % n;
+      A.insert(i, j) = Scalar(double(k + 1));
+      y_ref[i] += double(k + 1) * x_ref[j];
+    }
+  }
+  A.makeCompressed();
+  VERIFY(A.nonZeros() > 20000);
+
+  Matrix<Scalar, Dynamic, 1> x(n);
+  for (Index j = 0; j < n; ++j) x[j] = Scalar(x_ref[j]);
+  // Twice: the second product reuses the accumulators, which the first one
+  // must have left zeroed.
+  for (int pass = 0; pass < 2; ++pass) {
+    const Matrix<Scalar, Dynamic, 1> y = A * x;
+    for (Index i = 0; i < n; ++i) VERIFY_IS_EQUAL(y[i].value, y_ref[i]);
+  }
+
+  Eigen::setNbThreads(prev_threads);
+}
+
 template <typename Scalar>
 void run_grid() {
   using Vec = Matrix<Scalar, Dynamic, 1>;
@@ -231,5 +297,6 @@ EIGEN_DECLARE_TEST(sparse_threaded_product) {
     CALL_SUBTEST_3(run_grid<std::complex<double> >());
     CALL_SUBTEST_4(verify_threaded_scatter_ieee754<double>());
     CALL_SUBTEST_4(verify_threaded_scatter_ieee754<float>());
+    CALL_SUBTEST_4(verify_threaded_scatter_overaligned());
   }
 }

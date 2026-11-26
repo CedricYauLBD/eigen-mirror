@@ -254,9 +254,19 @@ class SparseVector : public SparseCompressedBase<SparseVector<Scalar_, Options_,
    */
   void conservativeResize(Index newSize) {
     if (newSize < m_size) {
-      Index i = 0;
-      while (i < m_data.size() && m_data.index(i) < newSize) ++i;
-      m_data.resize(i);
+      // The indices need not be sorted (insertBackUnordered()): k stops at the first entry to drop, and the entries
+      // behind it that stay are packed.
+      Index n = m_data.size();
+      Index k = 0;
+      while (k < n && m_data.index(k) < newSize) ++k;
+      for (Index i = k + 1; i < n; ++i) {
+        if (m_data.index(i) < newSize) {
+          m_data.value(k) = internal::move_if_assignable(m_data.value(i));
+          m_data.index(k) = m_data.index(i);
+          ++k;
+        }
+      }
+      m_data.resize(k);
     }
     m_size = newSize;
   }

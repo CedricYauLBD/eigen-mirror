@@ -207,8 +207,10 @@ void AmbiVector<Scalar_, StorageIndex_>::init(int mode) {
   }
 }
 
-/** Must be called whenever we might perform a write access
- * with an index smaller than the previous one.
+/** Moves the search position of coeffRef() back to the first element.
+ *
+ * coeffRef() does this by itself when it is given an index smaller than the
+ * previous one, so calling it is never required.
  *
  * Don't worry, this function is extremely cheap.
  */
@@ -259,9 +261,10 @@ Scalar_& AmbiVector<Scalar_, StorageIndex_>::coeffRef(Index i) {
       ++m_llSize;
       return el.value;
     } else {
+      // The indices need not come sorted (e.g. a column of SparseQR::matrixR()). Searching forward from a node
+      // past i would insert a second node for i, and the capacity is one node per index.
+      if (i < llElements[m_llCurrent].index) restart();
       StorageIndex nextel = llElements[m_llCurrent].next;
-      eigen_assert(i >= llElements[m_llCurrent].index &&
-                   "you must call restart() before inserting an element with lower or equal index");
       while (nextel >= 0 && llElements[nextel].index <= i) {
         m_llCurrent = nextel;
         nextel = llElements[nextel].next;

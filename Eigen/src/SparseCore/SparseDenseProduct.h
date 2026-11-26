@@ -244,7 +244,10 @@ struct sparse_time_dense_product_impl<SparseLhsType, DenseRhsType, DenseResType,
         // require avg nnz per row >= threads so the reduction can't dominate.
         // `outer` is null for SparseVector lhs; the nnz-balanced partition needs
         // the outer-index array, so fall back to the serial scatter below.
-        if (outer && threads > 1 && mat.nonZeros() > 20000 && mat.nonZeros() >= Index(threads) * m) {
+        // The gate divides rather than forming `threads * m`, which can overflow
+        // Index. Where it holds, `threads * m <= nonZeros()`, so the `t * m`
+        // scratch offsets below fit in Index as well.
+        if (outer && threads > 1 && mat.nonZeros() > 20000 && mat.nonZeros() / threads >= m) {
           // Per-calling-thread persistent scratch (per template instantiation).
           // Grows monotonically; reused across calls. The buffer is left at
           // all-zeros after each call by folding the zero-out into the reduction
@@ -252,7 +255,9 @@ struct sparse_time_dense_product_impl<SparseLhsType, DenseRhsType, DenseResType,
           // is required: two unrelated host threads concurrently calling
           // y = A*x would otherwise race on this static buffer (and a reallocating
           // grow on one would dangle the other's scratch_ptr).
-          thread_local static std::vector<ResScalar> scratch_buf;
+          // aligned_allocator: before C++17 std::allocator ignores the alignment of an
+          // over-aligned ResScalar (e.g. AutoDiffScalar<Vector4d> with AVX).
+          thread_local static std::vector<ResScalar, aligned_allocator<ResScalar>> scratch_buf;
           const std::size_t need = static_cast<std::size_t>(threads) * static_cast<std::size_t>(m);
           if (scratch_buf.size() < need) scratch_buf.assign(need, ResScalar(0));
           ResScalar* scratch_ptr = scratch_buf.data();
@@ -270,8 +275,11 @@ struct sparse_time_dense_product_impl<SparseLhsType, DenseRhsType, DenseResType,
           // T * log n.
           const StorageIndex* const part_last = outer + n + 1;
           const StorageIndex* part_lo = outer;
+          // target = (t * nnz) / threads, split so that `t * nnz`, which can
+          // overflow Index, is never formed: t * nnz_rem < threads^2.
+          const Index nnz_quot = mat.nonZeros() / threads, nnz_rem = mat.nonZeros() % threads;
           for (Index t = 1; t < threads; ++t) {
-            const Index target = (t * mat.nonZeros()) / threads;
+            const Index target = t * nnz_quot + (t * nnz_rem) / threads;
             part_lo = std::lower_bound(part_lo, part_last, StorageIndex(target));
             part[t] = part_lo - outer;
           }

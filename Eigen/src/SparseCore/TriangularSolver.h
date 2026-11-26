@@ -233,6 +233,8 @@ template <bool Upper, bool UnitDiag, typename Lhs, typename Rhs, typename Res, t
           std::enable_if_t<rhs_matching_slice<Lhs, Rhs>::value, int> = 0>
 void reach_solve_columns(const Lhs& lhs, const Rhs& other, Res& res, uint8_t* mark, Scalar* xwork, Index n) {
   using StorageIndex = typename traits<Lhs>::StorageIndex;
+  // 2 * n must not overflow Index.
+  if (n > NumTraits<Index>::highest() / 2) throw_std_bad_alloc();
   Matrix<StorageIndex, Dynamic, 1> iwork(2 * n);  // xi | pstack
   StorageIndex* xi = iwork.data();
   for (Index col = 0; col < other.cols(); ++col) {
@@ -258,6 +260,9 @@ template <bool Upper, bool UnitDiag, typename Lhs, typename Rhs, typename Res, t
           std::enable_if_t<!rhs_matching_slice<Lhs, Rhs>::value, int> = 0>
 void reach_solve_columns(const Lhs& lhs, const Rhs& other, Res& res, uint8_t* mark, Scalar* xwork, Index n) {
   using StorageIndex = typename traits<Lhs>::StorageIndex;
+  // 3 * n must not overflow Index: it can wrap to a small size that the allocation accepts, while xi, pstack and
+  // bIdx still take n entries each.
+  if (n > NumTraits<Index>::highest() / 3) throw_std_bad_alloc();
   Matrix<StorageIndex, Dynamic, 1> iwork(3 * n);  // xi | pstack | bIdx
   StorageIndex* xi = iwork.data();
   StorageIndex* bIdx = iwork.data() + 2 * n;

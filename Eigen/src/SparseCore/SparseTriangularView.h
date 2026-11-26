@@ -154,11 +154,11 @@ struct unary_evaluator<TriangularView<ArgType, Mode>, IteratorBased> : evaluator
 
     inline Index row() const { return (ArgType::Flags & RowMajorBit ? Base::outer() : Index(this->index())); }
     inline Index col() const { return (ArgType::Flags & RowMajorBit ? Index(this->index()) : Base::outer()); }
-    inline StorageIndex index() const {
+    inline Index index() const {
       EIGEN_IF_CONSTEXPR (HasUnitDiag) {
-        if (m_returnOne) return internal::convert_index<StorageIndex>(Base::outer());
+        if (m_returnOne) return Base::outer();
       }
-      return Base::index();
+      return internal::convert_index<Index>(Base::index());
     }
     inline Scalar value() const {
       EIGEN_IF_CONSTEXPR (HasUnitDiag) {

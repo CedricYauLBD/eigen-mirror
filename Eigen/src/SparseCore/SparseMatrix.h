@@ -115,6 +115,14 @@ struct functor_traits<sparse_reserve_op<Scalar>> {
   enum { Cost = 1, PacketAccess = false, IsRepeatable = true };
 };
 
+// The largest entry count or position: computed in Index and stored as StorageIndex, so both must hold it.
+// StorageIndex can be wider than Index (long long with a 32-bit Index).
+template <typename StorageIndex>
+inline Index sparse_max_stored_entries() {
+  using WideIndex = typename std::common_type<Index, StorageIndex>::type;
+  return static_cast<Index>(numext::mini<WideIndex>(NumTraits<StorageIndex>::highest(), NumTraits<Index>::highest()));
+}
+
 }  // end namespace internal
 
 template <typename Scalar_, int Options_, typename StorageIndex_>
@@ -331,6 +339,9 @@ class SparseMatrix : public SparseCompressedBase<SparseMatrix<Scalar_, Options_,
       \endcode
     * for \c i in the [0,this->outerSize()[ range.
     * Typical choices include std::vector<int>, Eigen::VectorXi, Eigen::VectorXi::Constant, etc.
+    *
+    * \throws std::bad_alloc if \c Index or \c StorageIndex cannot hold the number of stored entries plus the
+    * reserved ones; the matrix is then left unchanged.
     */
   template <class SizesType>
   inline void reserve(const SizesType& reserveSizes);
@@ -345,9 +356,18 @@ class SparseMatrix : public SparseCompressedBase<SparseMatrix<Scalar_, Options_,
  protected:
   template <class SizesType>
   inline void reserveInnerVectors(const SizesType& reserveSizes) {
+    // Each size is checked against the room left, before anything is modified: the sum itself can wrap around to a
+    // small reservation.
+    const Index maxSize = internal::sparse_max_stored_entries<StorageIndex>();
     if (isCompressed()) {
+      const Index maxReserveSize = maxSize - m_data.size();
       Index totalReserveSize = 0;
-      for (Index j = 0; j < m_outerSize; ++j) totalReserveSize += internal::convert_index<Index>(reserveSizes[j]);
+      for (Index j = 0; j < m_outerSize; ++j) {
+        // Negative: passed as such, or an unsigned size beyond the range of Index.
+        Index reserveSize = internal::convert_index<Index>(reserveSizes[j]);
+        if (reserveSize < 0 || reserveSize > maxReserveSize - totalReserveSize) internal::throw_std_bad_alloc();
+        totalReserveSize += reserveSize;
+      }
 
       // if reserveSizes is empty, don't do anything!
       if (totalReserveSize == 0) return;
@@ -399,7 +419,12 @@ class SparseMatrix : public SparseCompressedBase<SparseMatrix<Scalar_, Options_,
             internal::convert_index<Index>(m_outerIndex[j + 1] - m_outerIndex[j] - m_innerNonZeros[j]);
         Index reserveSize = internal::convert_index<Index>(reserveSizes[j]);
         Index toReserve = numext::maxi(reserveSize, alreadyReserved);
-        count += toReserve + internal::convert_index<Index>(m_innerNonZeros[j]);
+        Index innerNNZ = internal::convert_index<Index>(m_innerNonZeros[j]);
+        if (toReserve > maxSize - count - innerNNZ) {
+          internal::conditional_aligned_delete_auto<StorageIndex, true>(newOuterIndex, m_outerSize + 1);
+          internal::throw_std_bad_alloc();
+        }
+        count += toReserve + innerNNZ;
       }
       newOuterIndex[m_outerSize] = internal::convert_index<StorageIndex>(count);
 
@@ -742,10 +767,20 @@ class SparseMatrix : public SparseCompressedBase<SparseMatrix<Scalar_, Options_,
       for (Index j = 0; j < m_outerSize; j++) {
         Index start = m_outerIndex[j];
         Index end = isCompressed() ? m_outerIndex[j + 1] : start + m_innerNonZeros[j];
-        Index lb = m_data.searchLowerIndex(start, end, newInnerSize);
-        if (lb != end) {
+        // The inner indices need not be sorted (SparseQR::matrixR() returns such a matrix), so a binary search cannot
+        // find the entries to drop: k stops at the first one, and the entries behind it that stay are packed.
+        Index k = start;
+        while (k < end && m_data.index(k) < newInnerSize) ++k;
+        for (Index i = k + 1; i < end; ++i) {
+          if (m_data.index(i) < newInnerSize) {
+            m_data.value(k) = internal::move_if_assignable(m_data.value(i));
+            m_data.index(k) = m_data.index(i);
+            ++k;
+          }
+        }
+        if (k != end) {
           uncompress();
-          m_innerNonZeros[j] = StorageIndex(lb - start);
+          m_innerNonZeros[j] = StorageIndex(k - start);
         }
       }
     }
@@ -1180,13 +1215,14 @@ void set_from_triplets(const InputIterator& begin, const InputIterator& end, Spa
   StorageIndex* outer = trmat.outerIndexPtr();
 
   // outer[j + 1] = number of triplets in vector j.
+  const Index maxSize = sparse_max_stored_entries<StorageIndex>();
   Index nonZeros = 0;
   for (InputIterator it(begin); it != end; ++it) {
     eigen_assert(it->row() >= 0 && it->row() < mat.rows() && it->col() >= 0 && it->col() < mat.cols());
     StorageIndex j = convert_index<StorageIndex>(IsRowMajor ? it->col() : it->row());
-    eigen_assert(nonZeros < NumTraits<StorageIndex>::highest() &&
-                 "non-zero count exceeds StorageIndex range, use a wider StorageIndex (e.g. int64_t)");
-    if (nonZeros >= NumTraits<StorageIndex>::highest()) internal::throw_std_bad_alloc();
+    eigen_assert(nonZeros < maxSize &&
+                 "non-zero count exceeds the range of StorageIndex (use a wider one, e.g. int64_t) or of Index");
+    if (nonZeros >= maxSize) internal::throw_std_bad_alloc();
     ++outer[j + 1];
     nonZeros++;
   }
@@ -1239,6 +1275,7 @@ void set_from_triplets_sorted(const InputIterator& begin, const InputIterator& e
   StorageIndex previous_j = kEmptyIndexValue;
   StorageIndex previous_i = kEmptyIndexValue;
   // scan triplets to determine allocation size before constructing matrix
+  const Index maxSize = sparse_max_stored_entries<StorageIndex>();
   Index nonZeros = 0;
   for (InputIterator it(begin); it != end; ++it) {
     eigen_assert(it->row() >= 0 && it->row() < mat.rows() && it->col() >= 0 && it->col() < mat.cols());
@@ -1248,9 +1285,9 @@ void set_from_triplets_sorted(const InputIterator& begin, const InputIterator& e
     // identify duplicates by examining previous location
     bool duplicate = (previous_j == j) && (previous_i == i);
     if (!duplicate) {
-      eigen_assert(nonZeros < NumTraits<StorageIndex>::highest() &&
-                   "non-zero count exceeds StorageIndex range, use a wider StorageIndex (e.g. int64_t)");
-      if (nonZeros >= NumTraits<StorageIndex>::highest()) internal::throw_std_bad_alloc();
+      eigen_assert(nonZeros < maxSize &&
+                   "non-zero count exceeds the range of StorageIndex (use a wider one, e.g. int64_t) or of Index");
+      if (nonZeros >= maxSize) internal::throw_std_bad_alloc();
       nonZeros++;
       mat.outerIndexPtr()[j + 1]++;
       previous_j = j;
@@ -1386,9 +1423,10 @@ class sparse_transposed_copy_source<Src, true> {
     if (m_outer == nullptr) {
       count(outer, 0, m_vectorNonZeros);
     } else if (m_innerNonZeros == nullptr) {
-      count(outer, m_outer[0], m_outer[m_outerSize]);
+      count(outer, convert_index<Index>(m_outer[0]), convert_index<Index>(m_outer[m_outerSize]));
     } else {
-      for (Index j = 0; j < m_outerSize; ++j) count(outer, m_outer[j], m_outer[j] + m_innerNonZeros[j]);
+      for (Index j = 0; j < m_outerSize; ++j)
+        count(outer, convert_index<Index>(m_outer[j]), convert_index<Index>(m_outer[j] + m_innerNonZeros[j]));
     }
   }
 
@@ -1399,8 +1437,8 @@ class sparse_transposed_copy_source<Src, true> {
       return;
     }
     for (Index j = 0; j < m_outerSize; ++j) {
-      Index end = m_innerNonZeros == nullptr ? m_outer[j + 1] : m_outer[j] + m_innerNonZeros[j];
-      scatter(j, m_outer[j], end, cursor, indices, values);
+      Index end = convert_index<Index>(m_innerNonZeros == nullptr ? m_outer[j + 1] : m_outer[j] + m_innerNonZeros[j]);
+      scatter(j, convert_index<Index>(m_outer[j]), end, cursor, indices, values);
     }
   }
 
@@ -1627,33 +1665,35 @@ void SparseMatrix<Scalar_, Options_, StorageIndex_>::collapseDuplicates(DenseBas
   eigen_assert(wi.size() == m_innerSize);
   constexpr StorageIndex kEmptyIndexValue(-1);
   wi.setConstant(kEmptyIndexValue);
-  StorageIndex count = 0;
+  Index count = 0;
   const bool is_compressed = isCompressed();
   // for each inner-vector, wi[inner_index] will hold the position of first element into the index/value buffers
   for (Index j = 0; j < m_outerSize; ++j) {
-    const StorageIndex newBegin = count;
-    const StorageIndex end = is_compressed ? m_outerIndex[j + 1] : m_outerIndex[j] + m_innerNonZeros[j];
-    for (StorageIndex k = m_outerIndex[j]; k < end; ++k) {
-      StorageIndex i = m_data.index(k);
-      if (wi(i) >= newBegin) {
+    const Index newBegin = count;
+    const Index end =
+        internal::convert_index<Index>(is_compressed ? m_outerIndex[j + 1] : m_outerIndex[j] + m_innerNonZeros[j]);
+    for (Index k = internal::convert_index<Index>(m_outerIndex[j]); k < end; ++k) {
+      const Index i = internal::convert_index<Index>(m_data.index(k));
+      const Index primary = internal::convert_index<Index>(wi(i));
+      if (primary >= newBegin) {
         // entry at k is a duplicate
         // accumulate it into the primary entry located at wi(i)
-        m_data.value(wi(i)) = dup_func(m_data.value(wi(i)), m_data.value(k));
+        m_data.value(primary) = dup_func(m_data.value(primary), m_data.value(k));
       } else {
         // k is the primary entry in j with inner index i
         // shift it to the left and record its location at wi(i). Until the first duplicate it is already in place,
         // where a self-move would leave it unspecified; a trivially copyable scalar is assigned anyway.
         if (std::is_trivially_copyable<Scalar>::value || count != k) {
-          m_data.index(count) = i;
+          m_data.index(count) = m_data.index(k);
           m_data.value(count) = internal::move_if_assignable(m_data.value(k));
         }
-        wi(i) = count;
+        wi(i) = internal::convert_index<StorageIndex>(count);
         ++count;
       }
     }
-    m_outerIndex[j] = newBegin;
+    m_outerIndex[j] = internal::convert_index<StorageIndex>(newBegin);
   }
-  m_outerIndex[m_outerSize] = count;
+  m_outerIndex[m_outerSize] = internal::convert_index<StorageIndex>(count);
   m_data.resize(count);
 
   // turn the matrix into compressed form (if it is not already)
@@ -1701,7 +1741,7 @@ SparseMatrix<Scalar, Options_, StorageIndex_>::operator=(const SparseMatrixBase<
     // outer[i + 1] = start of vector i; placing the entries of vector i advances it to the start of vector i + 1.
     Index count = 0;
     for (Index i = 0; i < destOuterSize; ++i) {
-      Index size = outer[i + 1];
+      Index size = internal::convert_index<Index>(outer[i + 1]);
       outer[i + 1] = internal::convert_index<StorageIndex>(count);
       count += size;
     }

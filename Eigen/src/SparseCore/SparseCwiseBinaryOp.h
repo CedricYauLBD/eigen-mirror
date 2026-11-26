@@ -82,16 +82,16 @@ struct binary_evaluator<CwiseBinaryOp<BinaryOp, Lhs, Rhs>, IteratorBased, Iterat
 
     EIGEN_STRONG_INLINE InnerIterator& operator++() {
       if (m_lhsIter && m_rhsIter && (m_lhsIter.index() == m_rhsIter.index())) {
-        m_id = convert_index<StorageIndex>(m_lhsIter.index());
+        m_id = convert_index<Index>(m_lhsIter.index());
         m_value = m_functor(m_lhsIter.value(), m_rhsIter.value());
         ++m_lhsIter;
         ++m_rhsIter;
       } else if (m_lhsIter && (!m_rhsIter || (m_lhsIter.index() < m_rhsIter.index()))) {
-        m_id = convert_index<StorageIndex>(m_lhsIter.index());
+        m_id = convert_index<Index>(m_lhsIter.index());
         m_value = m_functor(m_lhsIter.value(), typename Rhs::Scalar(0));
         ++m_lhsIter;
       } else if (m_rhsIter && (!m_lhsIter || (m_lhsIter.index() > m_rhsIter.index()))) {
-        m_id = convert_index<StorageIndex>(m_rhsIter.index());
+        m_id = convert_index<Index>(m_rhsIter.index());
         m_value = m_functor(typename Lhs::Scalar(0), m_rhsIter.value());
         ++m_rhsIter;
       } else {
@@ -102,7 +102,8 @@ struct binary_evaluator<CwiseBinaryOp<BinaryOp, Lhs, Rhs>, IteratorBased, Iterat
 
     EIGEN_STRONG_INLINE Scalar value() const { return m_value; }
 
-    EIGEN_STRONG_INLINE StorageIndex index() const { return m_id; }
+    // Index, not StorageIndex: along a block that crosses outer vectors, the operands' indices are outer positions.
+    EIGEN_STRONG_INLINE Index index() const { return m_id; }
     EIGEN_STRONG_INLINE Index outer() const { return m_lhsIter.outer(); }
     EIGEN_STRONG_INLINE Index row() const { return Lhs::IsRowMajor ? m_lhsIter.row() : index(); }
     EIGEN_STRONG_INLINE Index col() const { return Lhs::IsRowMajor ? index() : m_lhsIter.col(); }
@@ -114,7 +115,7 @@ struct binary_evaluator<CwiseBinaryOp<BinaryOp, Lhs, Rhs>, IteratorBased, Iterat
     RhsIterator m_rhsIter;
     const BinaryOp& m_functor;
     Scalar m_value;
-    StorageIndex m_id;
+    Index m_id;
   };
 
   enum {
@@ -411,7 +412,7 @@ struct sparse_conjunction_evaluator<XprType, IteratorBased, IteratorBased> : eva
 
     EIGEN_STRONG_INLINE Scalar value() const { return m_functor(m_lhsIter.value(), m_rhsIter.value()); }
 
-    EIGEN_STRONG_INLINE StorageIndex index() const { return m_lhsIter.index(); }
+    EIGEN_STRONG_INLINE Index index() const { return convert_index<Index>(m_lhsIter.index()); }
     EIGEN_STRONG_INLINE Index outer() const { return m_lhsIter.outer(); }
     EIGEN_STRONG_INLINE Index row() const { return m_lhsIter.row(); }
     EIGEN_STRONG_INLINE Index col() const { return m_lhsIter.col(); }
@@ -612,16 +613,16 @@ struct sparse_disjunction_evaluator<XprType, IteratorBased, IteratorBased> : eva
 
     EIGEN_STRONG_INLINE InnerIterator& operator++() {
       if (m_lhsIter && m_rhsIter && (m_lhsIter.index() == m_rhsIter.index())) {
-        m_id = m_lhsIter.index();
+        m_id = convert_index<Index>(m_lhsIter.index());
         m_value = m_functor(m_lhsIter.value(), m_rhsIter.value());
         ++m_lhsIter;
         ++m_rhsIter;
       } else if (m_lhsIter && (!m_rhsIter || (m_lhsIter.index() < m_rhsIter.index()))) {
-        m_id = m_lhsIter.index();
+        m_id = convert_index<Index>(m_lhsIter.index());
         m_value = m_lhsIter.value();
         ++m_lhsIter;
       } else if (m_rhsIter && (!m_lhsIter || (m_lhsIter.index() > m_rhsIter.index()))) {
-        m_id = m_rhsIter.index();
+        m_id = convert_index<Index>(m_rhsIter.index());
         m_value = m_rhsIter.value();
         ++m_rhsIter;
       } else {
@@ -632,7 +633,7 @@ struct sparse_disjunction_evaluator<XprType, IteratorBased, IteratorBased> : eva
 
     EIGEN_STRONG_INLINE Scalar value() const { return m_value; }
 
-    EIGEN_STRONG_INLINE StorageIndex index() const { return m_id; }
+    EIGEN_STRONG_INLINE Index index() const { return m_id; }
     EIGEN_STRONG_INLINE Index outer() const { return m_lhsIter.outer(); }
     EIGEN_STRONG_INLINE Index row() const { return LhsArg::IsRowMajor ? m_lhsIter.row() : index(); }
     EIGEN_STRONG_INLINE Index col() const { return LhsArg::IsRowMajor ? index() : m_lhsIter.col(); }
@@ -644,7 +645,7 @@ struct sparse_disjunction_evaluator<XprType, IteratorBased, IteratorBased> : eva
     RhsIterator m_rhsIter;
     const BinaryOp& m_functor;
     Scalar m_value;
-    StorageIndex m_id;
+    Index m_id;
   };
 
   enum {

@@ -728,6 +728,36 @@ void test_block_sparse_isapprox_custom_complex() {
   VERIFY(!sparse.isApprox(-sparse));
 }
 
+// resize() recorded the new dimensions before allocating the outer index array. When that threw, it left them over
+// an empty array, and nonZeroBlocks() read outside it. The size here is one that Eigen refuses without calling malloc.
+template <int Options>
+void test_block_sparse_resize_bad_alloc() {
+#ifdef EIGEN_EXCEPTIONS
+  using BSM = BlockSparseMatrix<double, Options, 2, 2>;
+  const Index huge = NumTraits<Index>::highest() / Index(sizeof(typename BSM::StorageIndex));
+  BSM A(3, 3);
+  A.setIdentity();
+  bool threw = false;
+  try {
+    A.resize(BSM::IsRowMajor ? huge : 2, BSM::IsRowMajor ? 2 : huge);
+  } catch (const std::bad_alloc&) {
+    threw = true;
+  }
+  VERIFY(threw);
+  VERIFY_IS_EQUAL(A.blockRows(), 3);
+  VERIFY_IS_EQUAL(A.blockCols(), 3);
+  VERIFY_IS_EQUAL(A.nonZeroBlocks(), 0);
+  VERIFY_IS_EQUAL(MatrixXd(A.toSparse()), MatrixXd(MatrixXd::Zero(6, 6)));
+  // The matrix remains usable.
+  A.setIdentity();
+  VERIFY_IS_EQUAL(MatrixXd(A.toSparse()), MatrixXd(MatrixXd::Identity(6, 6)));
+  A.resize(2, 4);
+  VERIFY_IS_EQUAL(A.blockRows(), 2);
+  VERIFY_IS_EQUAL(A.blockCols(), 4);
+  VERIFY_IS_EQUAL(A.nonZeroBlocks(), 0);
+#endif
+}
+
 template <typename = void>
 void test_block_triplet_traits() {
   // Flat scalar array means BlockTriplet should be trivially copyable and
@@ -813,6 +843,10 @@ EIGEN_DECLARE_TEST(block_sparse_matrix) {
   CALL_SUBTEST_17((test_block_sparse_isapprox_extreme_scales<double, RowMajor>()));
   CALL_SUBTEST_17((test_block_sparse_isapprox_extreme_scales<std::complex<double>, ColMajor>()));
   CALL_SUBTEST_17(test_block_sparse_isapprox_custom_complex<>());
+
+  // Allocation failures
+  CALL_SUBTEST_17(test_block_sparse_resize_bad_alloc<ColMajor>());
+  CALL_SUBTEST_17(test_block_sparse_resize_bad_alloc<RowMajor>());
 
   // Complex scalar coverage: conjugation paths in adjoint, selfadjoint, triangular products
   CALL_SUBTEST_18((test_block_sparse<2, 2, ColMajor, std::complex<double>>(4, 6)));

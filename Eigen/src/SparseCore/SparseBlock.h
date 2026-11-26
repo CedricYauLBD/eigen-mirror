@@ -28,17 +28,17 @@ class BlockImpl<XprType, BlockRows, BlockCols, true, Sparse>
  protected:
   enum { OuterSize = IsRowMajor ? BlockRows : BlockCols };
   using Base = SparseCompressedBase<BlockType>;
-  using Base::convert_index;
 
  public:
   EIGEN_SPARSE_PUBLIC_INTERFACE(BlockType)
 
-  inline BlockImpl(XprType& xpr, Index i) : m_matrix(xpr), m_outerStart(convert_index(i)), m_outerSize(OuterSize) {}
+  // Outer positions and counts stay Index: StorageIndex bounds the stored inner indices, not the outer dimension.
+  inline BlockImpl(XprType& xpr, Index i) : m_matrix(xpr), m_outerStart(i), m_outerSize(OuterSize) {}
 
   inline BlockImpl(XprType& xpr, Index startRow, Index startCol, Index blockRows, Index blockCols)
       : m_matrix(xpr),
-        m_outerStart(convert_index(IsRowMajor ? startRow : startCol)),
-        m_outerSize(convert_index(IsRowMajor ? blockRows : blockCols)) {}
+        m_outerStart(IsRowMajor ? startRow : startCol),
+        m_outerSize(IsRowMajor ? blockRows : blockCols) {}
 
   EIGEN_STRONG_INLINE Index rows() const { return IsRowMajor ? m_outerSize.value() : m_matrix.rows(); }
   EIGEN_STRONG_INLINE Index cols() const { return IsRowMajor ? m_matrix.cols() : m_outerSize.value(); }
@@ -136,7 +136,6 @@ template <typename SparseMatrixType, int BlockRows, int BlockCols>
 class sparse_matrix_block_impl : public SparseCompressedBase<Block<SparseMatrixType, BlockRows, BlockCols, true> > {
   using BlockType = Block<SparseMatrixType, BlockRows, BlockCols, true>;
   using Base = SparseCompressedBase<Block<SparseMatrixType, BlockRows, BlockCols, true>>;
-  using Base::convert_index;
 
  public:
   enum { IsRowMajor = internal::traits<BlockType>::IsRowMajor };
@@ -146,13 +145,13 @@ class sparse_matrix_block_impl : public SparseCompressedBase<Block<SparseMatrixT
 
  public:
   inline sparse_matrix_block_impl(SparseMatrixType& xpr, Index i)
-      : m_matrix(xpr), m_outerStart(convert_index(i)), m_outerSize(OuterSize) {}
+      : m_matrix(xpr), m_outerStart(i), m_outerSize(OuterSize) {}
 
   inline sparse_matrix_block_impl(SparseMatrixType& xpr, Index startRow, Index startCol, Index blockRows,
                                   Index blockCols)
       : m_matrix(xpr),
-        m_outerStart(convert_index(IsRowMajor ? startRow : startCol)),
-        m_outerSize(convert_index(IsRowMajor ? blockRows : blockCols)) {}
+        m_outerStart(IsRowMajor ? startRow : startCol),
+        m_outerSize(IsRowMajor ? blockRows : blockCols) {}
 
   template <typename OtherDerived>
   inline BlockType& operator=(const SparseMatrixBase<OtherDerived>& other) {
@@ -358,7 +357,6 @@ class BlockImpl<XprType, BlockRows, BlockCols, InnerPanel, Sparse>
     : public SparseMatrixBase<Block<XprType, BlockRows, BlockCols, InnerPanel> >, internal::no_assignment_operator {
   using BlockType = Block<XprType, BlockRows, BlockCols, InnerPanel>;
   using Base = SparseMatrixBase<BlockType>;
-  using Base::convert_index;
 
  public:
   enum { IsRowMajor = internal::traits<BlockType>::IsRowMajor };
@@ -370,19 +368,15 @@ class BlockImpl<XprType, BlockRows, BlockCols, InnerPanel, Sparse>
    */
   inline BlockImpl(XprType& xpr, Index i)
       : m_matrix(xpr),
-        m_startRow((BlockRows == 1) && (BlockCols == XprType::ColsAtCompileTime) ? convert_index(i) : 0),
-        m_startCol((BlockRows == XprType::RowsAtCompileTime) && (BlockCols == 1) ? convert_index(i) : 0),
+        m_startRow((BlockRows == 1) && (BlockCols == XprType::ColsAtCompileTime) ? i : 0),
+        m_startCol((BlockRows == XprType::RowsAtCompileTime) && (BlockCols == 1) ? i : 0),
         m_blockRows(BlockRows == 1 ? 1 : xpr.rows()),
         m_blockCols(BlockCols == 1 ? 1 : xpr.cols()) {}
 
   /** Dynamic-size constructor
    */
   inline BlockImpl(XprType& xpr, Index startRow, Index startCol, Index blockRows, Index blockCols)
-      : m_matrix(xpr),
-        m_startRow(convert_index(startRow)),
-        m_startCol(convert_index(startCol)),
-        m_blockRows(convert_index(blockRows)),
-        m_blockCols(convert_index(blockCols)) {}
+      : m_matrix(xpr), m_startRow(startRow), m_startCol(startCol), m_blockRows(blockRows), m_blockCols(blockCols) {}
 
   inline Index rows() const { return m_blockRows.value(); }
   inline Index cols() const { return m_blockCols.value(); }
@@ -463,8 +457,16 @@ struct unary_evaluator<Block<ArgType, BlockRows, BlockCols, InnerPanel>, Iterato
     if (nnz < 0) {
       // Scale the non-zero estimate for the underlying expression linearly with block size.
       // Return zero if the underlying block is empty.
-      const Index nested_sz = m_block.nestedExpression().size();
-      return nested_sz == 0 ? 0 : m_argImpl.nonZerosEstimate() * m_block.size() / nested_sz;
+      // The scaling is done in double: rows() * cols() of a sparse expression need not fit in Index, nor does its
+      // product with the estimate.
+      const Index nested_rows = m_block.nestedExpression().rows();
+      const Index nested_cols = m_block.nestedExpression().cols();
+      if (nested_rows == 0 || nested_cols == 0) return 0;
+      const Index nested_nnz = m_argImpl.nonZerosEstimate();
+      const double scaled_nnz = double(nested_nnz) * double(m_block.rows()) * double(m_block.cols()) /
+                                (double(nested_rows) * double(nested_cols));
+      // nnz(block) <= nnz(nested), which also keeps the conversion back to Index in range.
+      return scaled_nnz < double(nested_nnz) ? Index(scaled_nnz) : nested_nnz;
     }
     return nnz;
   }
@@ -497,8 +499,8 @@ class unary_evaluator<Block<ArgType, BlockRows, BlockCols, InnerPanel>, Iterator
       EvalIterator::operator++();
   }
 
-  inline StorageIndex index() const {
-    return EvalIterator::index() - convert_index<StorageIndex>(XprIsRowMajor ? m_block.startCol() : m_block.startRow());
+  inline Index index() const {
+    return convert_index<Index>(EvalIterator::index()) - (XprIsRowMajor ? m_block.startCol() : m_block.startRow());
   }
   inline Index outer() const {
     return EvalIterator::outer() - (XprIsRowMajor ? m_block.startRow() : m_block.startCol());
@@ -566,9 +568,9 @@ class unary_evaluator<Block<ArgType, BlockRows, BlockCols, InnerPanel>, Iterator
     if (m_hasIt) internal::destroy_at(&m_storage.it);
   }
 
-  inline StorageIndex index() const {
-    return convert_index<StorageIndex>(m_outerPos -
-                                       (XprIsRowMajor ? m_eval.m_block.startCol() : m_eval.m_block.startRow()));
+  // A position across the outer vectors of ArgType, which StorageIndex does not bound.
+  inline Index index() const {
+    return m_outerPos - (XprIsRowMajor ? m_eval.m_block.startCol() : m_eval.m_block.startRow());
   }
   inline Index outer() const { return 0; }
   inline Index row() const { return XprIsRowMajor ? 0 : index(); }
