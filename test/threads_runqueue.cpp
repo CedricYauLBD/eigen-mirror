@@ -260,9 +260,67 @@ void test_pop_releases_element() {
   VERIFY(owner.use_count() == 1);
 }
 
+// A Work that, like CopyOnMoveWork, stays alive in the slot it is moved from, and whose destructor pushes a new element
+// onto the front of its queue, as the destructor of a closure that schedules a task from its worker thread does.
+struct PushOnDestroyWork;
+using PushOnDestroyQueue = RunQueue<PushOnDestroyWork, 4>;
+struct PushOnDestroyState {
+  PushOnDestroyQueue* queue = nullptr;
+  int pushes_left = 0;
+  int accepted = 0;
+};
+struct PushOnDestroyWork {
+  PushOnDestroyWork() = default;
+  explicit PushOnDestroyWork(PushOnDestroyState* s) : state(s) {}
+  PushOnDestroyWork(PushOnDestroyWork&& other) : state(other.state), marker(other.marker) {}
+  PushOnDestroyWork& operator=(PushOnDestroyWork&& other) {
+    release();
+    state = other.state;
+    marker = other.marker;
+    return *this;
+  }
+  ~PushOnDestroyWork() { release(); }
+  void release() {
+    PushOnDestroyState* s = state;
+    state = nullptr;
+    if (s == nullptr || s->pushes_left == 0) return;
+    --s->pushes_left;
+    PushOnDestroyWork pushed;
+    pushed.marker = true;
+    // A queue that does not accept the element returns it.
+    const PushOnDestroyWork rejected = s->queue->PushFront(std::move(pushed));
+    if (!rejected.marker) ++s->accepted;
+  }
+  PushOnDestroyState* state = nullptr;
+  bool marker = false;
+};
+
+// PopFront() destroys what the move left in the slot. That destructor can push onto the front of the same queue,
+// which must stay consistent: it holds the pushed element exactly if it accepted it.
+void test_pop_front_with_pushing_destructor() {
+  PushOnDestroyQueue q;
+  PushOnDestroyState state;
+  state.queue = &q;
+  q.PushFront(PushOnDestroyWork(&state));
+  VERIFY_IS_EQUAL(1u, q.Size());
+  // Only the copy left in the slot pushes, once.
+  state.pushes_left = 1;
+  PushOnDestroyWork popped = q.PopFront();
+  VERIFY_IS_EQUAL(0, state.pushes_left);
+  VERIFY(popped.state == &state);
+  VERIFY_IS_EQUAL(static_cast<unsigned>(state.accepted), q.Size());
+  for (int i = 0; i < state.accepted; ++i) VERIFY(q.PopFront().marker);
+  VERIFY(q.Empty());
+  // Every slot is free again.
+  for (int i = 0; i < 4; ++i) q.PushFront(PushOnDestroyWork());
+  VERIFY_IS_EQUAL(4u, q.Size());
+  q.Flush();
+}
+
 EIGEN_DECLARE_TEST(threads_runqueue) {
   CALL_SUBTEST_1(test_basic_runqueue());
   CALL_SUBTEST_1(test_pop_releases_element());
+  CALL_SUBTEST_1(test_pop_front_with_pushing_destructor());
   CALL_SUBTEST_2(test_empty_runqueue());
   CALL_SUBTEST_3(test_stress_runqueue());
 }
