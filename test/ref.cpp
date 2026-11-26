@@ -703,6 +703,26 @@ void test_cref_runtime_transpose() {
   VERIFY_IS_EQUAL(CRef(col_ref + col_ref), VectorType(from_col + from_col));
 }
 
+// An expression with one fixed and one dynamic extent can be a vector of either orientation at runtime. The fixed
+// extent selects the viable assignment at compile time.
+void test_cref_partially_dynamic_transpose() {
+  using FixedRows = Matrix<double, 3, Dynamic>;
+  using FixedCols = Matrix<double, Dynamic, 3>;
+  FixedRows col(3, 1);
+  FixedCols row(1, 3);
+  col << 1, 2, 3;
+  row << 1, 2, 3;
+  const Vector3d v(2, 4, 6);
+  VERIFY_IS_EQUAL(Ref<const VectorXd>(col + col), VectorXd(v));
+  VERIFY_IS_EQUAL(Ref<const VectorXd>(row + row), VectorXd(v));
+  VERIFY_IS_EQUAL(Ref<const RowVectorXd>(col + col), RowVectorXd(v.transpose()));
+  VERIFY_IS_EQUAL(Ref<const RowVectorXd>(row + row), RowVectorXd(v.transpose()));
+  VERIFY_IS_EQUAL(Ref<const Vector3d>(col + col), v);
+  VERIFY_IS_EQUAL(Ref<const Vector3d>(row + row), v);
+  VERIFY_IS_EQUAL(Ref<const RowVector3d>(col + col), RowVector3d(v.transpose()));
+  VERIFY_IS_EQUAL(Ref<const RowVector3d>(row + row), RowVector3d(v.transpose()));
+}
+
 EIGEN_DECLARE_TEST(ref) {
   for (int i = 0; i < g_repeat; i++) {
     CALL_SUBTEST_1(ref_vector(Matrix<float, 1, 1>()));
@@ -752,6 +772,7 @@ EIGEN_DECLARE_TEST(ref) {
   CALL_SUBTEST_10(test_ref_inner_stride_matrix<ColMajor>());
   CALL_SUBTEST_10(test_ref_inner_stride_matrix<RowMajor>());
   CALL_SUBTEST_10(test_ref_negative_fixed_strides());
+  CALL_SUBTEST_11(test_cref_partially_dynamic_transpose());
   CALL_SUBTEST_11(test_cref_runtime_transpose<VectorXd>());
   CALL_SUBTEST_11(test_cref_runtime_transpose<RowVectorXd>());
   CALL_SUBTEST_11(test_cref_runtime_transpose<Vector3d>());

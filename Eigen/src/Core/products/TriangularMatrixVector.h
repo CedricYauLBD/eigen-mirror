@@ -366,6 +366,9 @@ struct trmv_selector<Mode, RowMajor> {
   // object there.
   template <typename Lhs, typename Rhs, typename Dest, std::enable_if_t<!has_direct_access<Dest>::value, bool> = true>
   static void run(const Lhs& lhs, const Rhs& rhs, Dest& dest, const typename Dest::Scalar& alpha) {
+    // Settle a zero factor before the temporary is allocated.
+    if (is_identically_zero(alpha)) return;
+    if (triangular_product_zero_scale<Mode, true>(dest, lhs, rhs, alpha)) return;
     typename Dest::PlainObject actualDest(dest);
     run(lhs, rhs, actualDest, alpha);
     dest = actualDest;

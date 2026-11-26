@@ -396,30 +396,46 @@ class Ref<const TPlainObjectType, Options, StrideType>
   template <typename Expression>
   EIGEN_DEVICE_FUNC void construct(const Expression& expr, std::false_type) {
     // Base::construct() lets a compile-time vector reference a vector of the other orientation, so the copy has to
-    // accept one too. The assignment transposes only if the orientation of expr is known at compile time.
-    constexpr bool may_transpose_at_runtime =
-        TPlainObjectType::IsVectorAtCompileTime && int(TPlainObjectType::SizeAtCompileTime) != 1 &&
-        int(Expression::RowsAtCompileTime) == Dynamic && int(Expression::ColsAtCompileTime) == Dynamic;
-    assign_to_object(expr, internal::bool_constant<may_transpose_at_runtime>());
+    // accept one too. The assignment transposes only if the orientation of expr is known at compile time. When the
+    // fixed extents of expr rule out one orientation, only the viable assignment is instantiated; when both extents
+    // are dynamic, the orientation is chosen at runtime.
+    constexpr bool is_row = int(TPlainObjectType::RowsAtCompileTime) == 1;
+    constexpr int along = is_row ? int(Expression::RowsAtCompileTime) : int(Expression::ColsAtCompileTime);
+    constexpr int across = is_row ? int(Expression::ColsAtCompileTime) : int(Expression::RowsAtCompileTime);
+    constexpr bool is_vector_object =
+        TPlainObjectType::IsVectorAtCompileTime && int(TPlainObjectType::SizeAtCompileTime) != 1;
+    constexpr bool same_orientation_viable = along == 1 || along == Dynamic;
+    constexpr bool transposed_viable = across == 1 || across == Dynamic;
+    constexpr int mode = !is_vector_object                                 ? 0
+                         : (along == Dynamic && across == Dynamic)         ? 2
+                         : (!same_orientation_viable && transposed_viable) ? 1
+                                                                           : 0;
+    assign_to_object(expr, std::integral_constant<int, mode>());
     const bool success = Base::construct(m_object);
     EIGEN_ONLY_USED_FOR_DEBUG(success);
     eigen_assert(success);
   }
 
   template <typename Expression>
-  EIGEN_DEVICE_FUNC void assign_to_object(const Expression& expr, std::false_type) {
+  EIGEN_DEVICE_FUNC void assign_to_object(const Expression& expr, std::integral_constant<int, 0>) {
     internal::call_assignment_no_alias(m_object, expr, internal::assign_op<Scalar, Scalar>());
   }
 
   template <typename Expression>
-  EIGEN_DEVICE_FUNC void assign_to_object(const Expression& expr, std::true_type) {
+  EIGEN_DEVICE_FUNC void assign_to_object(const Expression& expr, std::integral_constant<int, 1>) {
+    Transpose<TPlainObjectType> transposed(m_object);
+    internal::call_assignment_no_alias(transposed, expr, internal::assign_op<Scalar, Scalar>());
+  }
+
+  template <typename Expression>
+  EIGEN_DEVICE_FUNC void assign_to_object(const Expression& expr, std::integral_constant<int, 2>) {
     const bool transpose = int(TPlainObjectType::RowsAtCompileTime) == 1 ? (expr.cols() == 1 && expr.rows() != 1)
                                                                          : (expr.rows() == 1 && expr.cols() != 1);
     if (transpose) {
       Transpose<TPlainObjectType> transposed(m_object);
       internal::call_assignment_no_alias(transposed, expr, internal::assign_op<Scalar, Scalar>());
     } else {
-      assign_to_object(expr, std::false_type());
+      assign_to_object(expr, std::integral_constant<int, 0>());
     }
   }
 

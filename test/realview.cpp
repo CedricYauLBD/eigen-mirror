@@ -8,6 +8,7 @@
 // with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
 // SPDX-License-Identifier: MPL-2.0
 
+#define EIGEN_RUNTIME_NO_MALLOC
 #include "main.h"
 
 // wrapper that disables array-oriented access to real and imaginary components
@@ -537,6 +538,26 @@ void test_strided_realview_product_destination(const ComplexScalar&) {
     zExpected.col(j).realView() += RealVector(tUnitLower * x);
     VERIFY_IS_APPROX(z, zExpected);
   }
+  // A zero factor is settled before the temporary is allocated. In a unit triangle it annihilates only the strictly
+  // triangular part, so the unit diagonal of an updated destination still contributes.
+  {
+    const Index n = 32;
+    const RowMajorRealMatrix big = RowMajorRealMatrix::Random(n, n);
+    const RealVector xBig = RealVector::Random(n);
+    RowMajorComplexMatrix zBig = RowMajorComplexMatrix::Random(n / 2, 2), zBigExpected = zBig;
+    internal::set_is_malloc_allowed(false);
+    zBig.col(1).realView().noalias() += big.template triangularView<Lower>() * (RealScalar(0) * xBig);
+    zBig.col(1).realView().noalias() += big.template triangularView<UnitLower>() * (RealScalar(0) * xBig);
+    zBig.col(1).realView().noalias() += (RealScalar(0) * big).template triangularView<Lower>() * xBig;
+    internal::set_is_malloc_allowed(true);
+    VERIFY_IS_EQUAL(zBig, zBigExpected);
+    internal::set_is_malloc_allowed(false);
+    zBig.col(1).realView().noalias() += (RealScalar(0) * big).template triangularView<UnitLower>() * xBig;
+    internal::set_is_malloc_allowed(true);
+    zBigExpected.col(1).realView() += xBig;
+    VERIFY_IS_APPROX(zBig, zBigExpected);
+  }
+
   // A destination with direct access keeps the direct path.
   RealVector y = RealVector::Zero(8);
   y.noalias() = t.template triangularView<Lower>() * x;
