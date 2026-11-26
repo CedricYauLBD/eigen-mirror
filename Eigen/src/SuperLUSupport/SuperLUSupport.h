@@ -60,6 +60,96 @@ DECL_GSSVX(d, double, double)
 DECL_GSSVX(z, double, std::complex<double>)
 #undef DECL_GSSVX
 
+#if defined(SUPERLU_MAJOR_VERSION) && (SUPERLU_MAJOR_VERSION >= 5)
+#define EIGEN_SUPERLU_HAS_FACTORIZATION_STEPS
+
+// The routines that gssvx calls to factorize a matrix, for internal::superlu_factorize().
+#define DECL_FACTORIZATION_STEPS(PREFIX, FLOATTYPE, KEYTYPE)                                                           \
+  extern "C" {                                                                                                         \
+  extern void PREFIX##gsequ(SuperMatrix *, FLOATTYPE *, FLOATTYPE *, FLOATTYPE *, FLOATTYPE *, FLOATTYPE *, int *);    \
+  extern void PREFIX##laqgs(SuperMatrix *, FLOATTYPE *, FLOATTYPE *, FLOATTYPE, FLOATTYPE, FLOATTYPE, char *);         \
+  extern void PREFIX##gstrf(superlu_options_t *, SuperMatrix *, int, int, int *, void *, int, int *, int *,            \
+                            SuperMatrix *, SuperMatrix *, GlobalLU_t *, SuperLUStat_t *, int *);                       \
+  extern FLOATTYPE PREFIX##langs(char *, SuperMatrix *);                                                               \
+  extern void PREFIX##gscon(char *, SuperMatrix *, SuperMatrix *, FLOATTYPE, FLOATTYPE *, SuperLUStat_t *, int *);     \
+  }                                                                                                                    \
+  inline void SuperLU_gsequ(SuperMatrix *A, FLOATTYPE *R, FLOATTYPE *C, FLOATTYPE *rowcnd, FLOATTYPE *colcnd,          \
+                            FLOATTYPE *amax, int *info, KEYTYPE) {                                                     \
+    PREFIX##gsequ(A, R, C, rowcnd, colcnd, amax, info);                                                                \
+  }                                                                                                                    \
+  inline void SuperLU_laqgs(SuperMatrix *A, FLOATTYPE *R, FLOATTYPE *C, FLOATTYPE rowcnd, FLOATTYPE colcnd,            \
+                            FLOATTYPE amax, char *equed, KEYTYPE) {                                                    \
+    PREFIX##laqgs(A, R, C, rowcnd, colcnd, amax, equed);                                                               \
+  }                                                                                                                    \
+  inline void SuperLU_gstrf(superlu_options_t *options, SuperMatrix *A, int relax, int panel_size, int *etree,         \
+                            int *perm_c, int *perm_r, SuperMatrix *L, SuperMatrix *U, SuperLUStat_t *stats, int *info, \
+                            KEYTYPE) {                                                                                 \
+    GlobalLU_t gLU;                                                                                                    \
+    PREFIX##gstrf(options, A, relax, panel_size, etree, nullptr, 0, perm_c, perm_r, L, U, &gLU, stats, info);          \
+  }                                                                                                                    \
+  inline FLOATTYPE SuperLU_langs(char *norm, SuperMatrix *A, KEYTYPE) { return PREFIX##langs(norm, A); }               \
+  inline void SuperLU_gscon(char *norm, SuperMatrix *L, SuperMatrix *U, FLOATTYPE anorm, FLOATTYPE *rcond,             \
+                            SuperLUStat_t *stats, int *info, KEYTYPE) {                                                \
+    PREFIX##gscon(norm, L, U, anorm, rcond, stats, info);                                                              \
+  }
+
+DECL_FACTORIZATION_STEPS(s, float, float)
+DECL_FACTORIZATION_STEPS(c, float, std::complex<float>)
+DECL_FACTORIZATION_STEPS(d, double, double)
+DECL_FACTORIZATION_STEPS(z, double, std::complex<double>)
+#undef DECL_FACTORIZATION_STEPS
+
+namespace internal {
+
+// Does what gssvx does for options->Fact != FACTORED and no right-hand side, with the same meaning of the arguments.
+// gssvx itself, through SuperLU 7.0.1 at least, returns without freeing the column-permuted matrix when the
+// factorization meets a zero pivot.
+template <typename Scalar>
+void superlu_factorize(superlu_options_t *options, SuperMatrix *A, int *perm_c, int *perm_r, int *etree, char *equed,
+                       typename NumTraits<Scalar>::Real *R, typename NumTraits<Scalar>::Real *C, SuperMatrix *L,
+                       SuperMatrix *U, SuperLUStat_t *stats, int *info) {
+  using RealScalar = typename NumTraits<Scalar>::Real;
+  *equed = 'N';
+  *info = 0;
+  if (A->nrow != A->ncol) {
+    *info = -2;
+    return;
+  }
+
+  // SuperLU factorizes column-major matrices: it takes a row-major A as the transpose of a column-major one.
+  SuperMatrix AA = *A;
+  bool transposed = options->Trans != NOTRANS;
+  if (A->Stype == SLU_NR) {
+    AA.Stype = SLU_NC;
+    transposed = !transposed;
+  }
+
+  if (options->Equil == YES) {
+    RealScalar rowcnd, colcnd, amax;
+    int equil_info = 0;
+    SuperLU_gsequ(&AA, R, C, &rowcnd, &colcnd, &amax, &equil_info, Scalar());
+    if (equil_info == 0) SuperLU_laqgs(&AA, R, C, rowcnd, colcnd, amax, equed, Scalar());
+  }
+
+  if (options->ColPerm != MY_PERMC && options->Fact == DOFACT) get_perm_c(options->ColPerm, &AA, perm_c);
+  SuperMatrix AC;
+  sp_preorder(options, &AA, perm_c, etree, &AC);
+  SuperLU_gstrf(options, &AC, sp_ienv(2), sp_ienv(1), etree, perm_c, perm_r, L, U, stats, info, Scalar());
+  Destroy_CompCol_Permuted(&AC);
+
+  if (*info == 0 && options->ConditionNumber == YES) {
+    char norm = transposed ? 'I' : '1';
+    RealScalar rcond = 0;
+    int rcond_info = 0;
+    SuperLU_gscon(&norm, L, U, SuperLU_langs(&norm, &AA, Scalar()), &rcond, stats, &rcond_info, Scalar());
+    // As gssvx does for a matrix that is singular to working precision.
+    if (rcond < NumTraits<RealScalar>::epsilon() / 2) *info = A->ncol + 1;
+  }
+}
+
+}  // namespace internal
+#endif
+
 #ifdef MILU_ALPHA
 #define EIGEN_SUPERLU_HAS_ILU
 #endif
@@ -573,13 +663,18 @@ void SuperLU<MatrixType>::factorize(const MatrixType &a) {
 
   m_sluOptions.ColPerm = COLAMD;
   int info = 0;
-  RealScalar recip_pivot_growth, rcond;
-  RealScalar ferr, berr;
 
   StatInit(&m_sluStat);
+#ifdef EIGEN_SUPERLU_HAS_FACTORIZATION_STEPS
+  internal::superlu_factorize<Scalar>(&m_sluOptions, &m_sluA, m_q.data(), m_p.data(), m_sluEtree.data(), &m_sluEqued,
+                                      m_sluRscale.data(), m_sluCscale.data(), &m_sluL, &m_sluU, &m_sluStat, &info);
+#else
+  RealScalar recip_pivot_growth, rcond;
+  RealScalar ferr, berr;
   SuperLU_gssvx(&m_sluOptions, &m_sluA, m_q.data(), m_p.data(), &m_sluEtree[0], &m_sluEqued, &m_sluRscale[0],
                 &m_sluCscale[0], &m_sluL, &m_sluU, nullptr, 0, &m_sluB, &m_sluX, &recip_pivot_growth, &rcond, &ferr,
                 &berr, &m_sluStat, &info, Scalar());
+#endif
   StatFree(&m_sluStat);
 
   m_extractedDataAreDirty = true;
