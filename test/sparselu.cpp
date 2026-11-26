@@ -270,7 +270,7 @@ void test_sparselu_determinants() {
 template <typename T>
 void test_sparselu_narrow_index() {
   using SpMat = SparseMatrix<T, ColMajor, signed char>;
-  using Solver = SparseLU<SpMat, NaturalOrdering<signed char> >;
+  using Solver = SparseLU<SpMat, NaturalOrdering<signed char>>;
   const Index highest = NumTraits<signed char>::highest();
   const auto diagonal = [](Index n) {
     SpMat A(n, n);
@@ -318,7 +318,7 @@ void test_sparselu_failed_lsub_expansion() {
   A.makeCompressed();
   const VectorXd b = VectorXd::Ones(n);
 
-  SparseLU<SparseMatrix<double>, NaturalOrdering<int> > lu;
+  SparseLU<SparseMatrix<double>, NaturalOrdering<int>> lu;
   // lsub starts with 5 (nnz + 1) entries and is expanded by a factor of at most 1.5. No other array of the
   // factorization asks for a size in that range before lsub is full.
   fail_above = 5 * (A.nonZeros() + 1);
