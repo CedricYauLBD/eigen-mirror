@@ -450,37 +450,49 @@ void permutation_inverse_product_temporaries() {
   VERIFY_IS_EQUAL(result.size(), 0);
 }
 
-// A size that does not fit StorageIndex is rejected before any index is stored.
+// A size n fits StorageIndex when n - 1 does, because only the indices 0 ... n - 1 are stored. Every owning
+// construction path and resize() apply the same bound.
 void permutation_size_exceeds_storage_index() {
   using PermutationType = PermutationMatrix<Dynamic, Dynamic, std::int8_t>;
   using TranspositionsType = Transpositions<Dynamic, Dynamic, std::int8_t>;
-  PermutationType perm(127);
+  PermutationType perm(128);
   perm.setIdentity();
-  perm.applyTranspositionOnTheRight(0, 126);
+  VERIFY_IS_EQUAL(perm.indices().coeff(127), std::int8_t(127));
+  perm.applyTranspositionOnTheRight(0, 127);
   VERIFY((perm * perm.inverse()).toDenseMatrix().isIdentity());
-  VERIFY_RAISES_ASSERT(PermutationType tooLarge(128));
-  VERIFY_RAISES_ASSERT(perm.resize(128));
+  VERIFY_RAISES_ASSERT(PermutationType tooLarge(129));
+  VERIFY_RAISES_ASSERT(perm.resize(129));
   VERIFY_RAISES_ASSERT(perm.setIdentity(300));
-  VERIFY_IS_EQUAL(perm.size(), 127);
+  VERIFY_IS_EQUAL(perm.size(), 128);
   PermutationMatrix<Dynamic> wide(300);
   wide.setIdentity();
   VERIFY_RAISES_ASSERT(PermutationType narrowed(wide.inverse()));
   PermutationMatrix<200, 200, std::int8_t> fixedSize;
   VERIFY_RAISES_ASSERT(fixedSize.setIdentity());
 
-  TranspositionsType tr(127);
+  // The indices constructor accepts the identity 0 ... 127 and rejects 129 entries, as the size constructor does.
+  Matrix<std::int8_t, Dynamic, 1> ids128 = perm.indices();
+  PermutationType fromIndices(ids128);
+  VERIFY_IS_EQUAL(fromIndices.size(), 128);
+  VERIFY_RAISES_ASSERT(PermutationType bad(Matrix<std::int8_t, Dynamic, 1>(129)));
+
+  TranspositionsType tr(128);
   tr.setIdentity();
-  VERIFY_RAISES_ASSERT(TranspositionsType tooLarge(128));
-  VERIFY_RAISES_ASSERT(tr.resize(128));
-  VERIFY_IS_EQUAL(tr.size(), 127);
+  VERIFY_IS_EQUAL(tr.coeff(127), std::int8_t(127));
+  VERIFY_RAISES_ASSERT(TranspositionsType tooLarge(129));
+  VERIFY_RAISES_ASSERT(tr.resize(129));
+  VERIFY_IS_EQUAL(tr.size(), 128);
+  TranspositionsType trFromIndices(tr.indices());
+  VERIFY_IS_EQUAL(trFromIndices.size(), 128);
+  VERIFY_RAISES_ASSERT(TranspositionsType bad(Matrix<std::int8_t, Dynamic, 1>(129)));
   Transpositions<Dynamic> wideTr(300);
   wideTr.setIdentity();
   VERIFY_RAISES_ASSERT(perm = wideTr);
-  VERIFY_IS_EQUAL(perm.size(), 127);
+  VERIFY_IS_EQUAL(perm.size(), 128);
 
   // The bound is that of StorageIndex, also where StorageIndex is unsigned or as wide as Index.
-  PermutationMatrix<Dynamic, Dynamic, std::uint8_t> unsignedPerm(255);
-  VERIFY_RAISES_ASSERT(unsignedPerm.resize(256));
+  PermutationMatrix<Dynamic, Dynamic, std::uint8_t> unsignedPerm(256);
+  VERIFY_RAISES_ASSERT(unsignedPerm.resize(257));
   PermutationMatrix<Dynamic, Dynamic, std::uint64_t> widePerm(300);
   widePerm.setIdentity();
   VERIFY_IS_EQUAL(widePerm.indices().coeff(299), std::uint64_t(299));

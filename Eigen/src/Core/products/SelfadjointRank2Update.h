@@ -241,9 +241,9 @@ EIGEN_DEVICE_FUNC EIGEN_DONT_INLINE SelfAdjointView<MatrixType, UpLo>& SelfAdjoi
   const Scalar* uPtr = UseUDirectly ? actualU.data() : uBuffer;
   EIGEN_IF_CONSTEXPR (!UseUDirectly) {
     EIGEN_IF_CONSTEXPR (NeedConjU) {
-      Map<typename ActualUType_::PlainObject>(uBuffer, size) = actualU.conjugate();
+      Map<typename ActualUType_::PlainObject>(uBuffer, actualU.rows(), actualU.cols()) = actualU.conjugate();
     } else {
-      Map<typename ActualUType_::PlainObject>(uBuffer, size) = actualU;
+      Map<typename ActualUType_::PlainObject>(uBuffer, actualU.rows(), actualU.cols()) = actualU;
     }
   }
 
@@ -254,9 +254,9 @@ EIGEN_DEVICE_FUNC EIGEN_DONT_INLINE SelfAdjointView<MatrixType, UpLo>& SelfAdjoi
   const Scalar* vPtr = UseVDirectly ? actualV.data() : vBuffer;
   EIGEN_IF_CONSTEXPR (!UseVDirectly) {
     EIGEN_IF_CONSTEXPR (NeedConjV) {
-      Map<typename ActualVType_::PlainObject>(vBuffer, size) = actualV.conjugate();
+      Map<typename ActualVType_::PlainObject>(vBuffer, actualV.rows(), actualV.cols()) = actualV.conjugate();
     } else {
-      Map<typename ActualVType_::PlainObject>(vBuffer, size) = actualV;
+      Map<typename ActualVType_::PlainObject>(vBuffer, actualV.rows(), actualV.cols()) = actualV;
     }
   }
 

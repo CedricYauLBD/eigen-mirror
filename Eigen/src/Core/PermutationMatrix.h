@@ -22,13 +22,16 @@ namespace internal {
 enum PermPermProduct_t { PermPermProduct };
 
 /** \internal
- * A permutation or a sequence of transpositions of the given size stores the indices 0 ... size - 1 as StorageIndex.
- * A size that does not fit StorageIndex throws std::bad_alloc in every build, as a dense size overflowing Index does.
+ * A permutation or a sequence of transpositions of size n stores the indices 0 ... n - 1 as StorageIndex, so it fits
+ * exactly when n - 1 does: n = 128 fits a signed char, n = 129 does not. The size itself is never stored.
+ * Every owning construction path and resize() apply this check; a size that fails it throws std::bad_alloc in every
+ * build, as a dense size overflowing Index does.
  */
 template <typename StorageIndex>
 EIGEN_DEVICE_FUNC EIGEN_ALWAYS_INLINE void check_permutation_size(Index size) {
   // Compared through a round trip: highest() of an unsigned 64-bit StorageIndex does not fit Index.
-  const bool fits = static_cast<Index>(static_cast<StorageIndex>(size)) == size;
+  const Index largest = size > 0 ? size - 1 : 0;
+  const bool fits = static_cast<Index>(static_cast<StorageIndex>(largest)) == largest;
   eigen_assert(fits && "size exceeds StorageIndex range, use a wider StorageIndex");
   if (!fits) throw_std_bad_alloc();
 }
@@ -173,7 +176,7 @@ class PermutationBase : public EigenBase<Derived> {
   /** \returns a reference to the stored array representing the permutation. */
   EIGEN_DEVICE_FUNC constexpr IndicesType& indices() { return derived().indices(); }
 
-  /** Resizes to given size, which must fit \c StorageIndex.
+  /** Resizes to given size, whose largest index size - 1 must fit \c StorageIndex.
    */
   EIGEN_DEVICE_FUNC void resize(Index newSize) {
     internal::check_permutation_size<StorageIndex>(newSize);
@@ -374,7 +377,8 @@ class PermutationMatrix
 
   EIGEN_DEVICE_FUNC PermutationMatrix() = default;
 
-  /** Constructs an uninitialized permutation matrix of given size, which must fit \c StorageIndex.
+  /** Constructs an uninitialized permutation matrix of given size, whose largest index size - 1 must fit \c
+   * StorageIndex.
    */
   EIGEN_DEVICE_FUNC explicit PermutationMatrix(Index size) : m_indices(size) {
     internal::check_permutation_size<StorageIndex>(size);
@@ -382,21 +386,26 @@ class PermutationMatrix
 
   /** Copy constructor. */
   template <typename OtherDerived>
-  EIGEN_DEVICE_FUNC PermutationMatrix(const PermutationBase<OtherDerived>& other) : m_indices(other.indices()) {}
+  EIGEN_DEVICE_FUNC PermutationMatrix(const PermutationBase<OtherDerived>& other) : m_indices(other.indices()) {
+    internal::check_permutation_size<StorageIndex>(m_indices.size());
+  }
 
   /** Generic constructor from expression of the indices. The indices
    * array has the meaning that the permutations sends each integer i to indices[i].
    *
    * \warning It is your responsibility to check that the indices array that you passes actually
    * describes a permutation, i.e., each value between 0 and n-1 occurs exactly once, where n is the
-   * array's size.
+   * array's size, which must fit \c StorageIndex as for the size constructor.
    */
   template <typename Other>
-  EIGEN_DEVICE_FUNC explicit PermutationMatrix(const MatrixBase<Other>& indices) : m_indices(indices) {}
+  EIGEN_DEVICE_FUNC explicit PermutationMatrix(const MatrixBase<Other>& indices) : m_indices(indices) {
+    internal::check_permutation_size<StorageIndex>(m_indices.size());
+  }
 
   /** Convert the Transpositions \a tr to a permutation matrix */
   template <typename Other>
   explicit PermutationMatrix(const TranspositionsBase<Other>& tr) : m_indices(tr.size()) {
+    internal::check_permutation_size<StorageIndex>(m_indices.size());
     *this = tr;
   }
 
@@ -429,6 +438,7 @@ class PermutationMatrix
   }
   template <typename Lhs, typename Rhs>
   PermutationMatrix(internal::PermPermProduct_t, const Lhs& lhs, const Rhs& rhs) : m_indices(lhs.indices().size()) {
+    internal::check_permutation_size<StorageIndex>(m_indices.size());
     Base::assignProduct(lhs, rhs);
   }
 #endif

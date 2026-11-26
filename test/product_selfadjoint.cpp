@@ -132,6 +132,23 @@ void product_selfadjoint(const MatrixType& m) {
   m2.template selfadjointView<Lower>().rankUpdate(v1, v2);
   VERIFY_IS_APPROX(m2, (m1 + v1 * v2.adjoint() + v2 * v1.adjoint()).template triangularView<Lower>().toDenseMatrix());
 
+  // rank2 update with operands that are vectors at runtime only: the constant is not popped as a scalar factor, and
+  // the buffer copies must be built from the operands' runtime rows and columns (C++14 instantiates them
+  // unconditionally)
+  {
+    using DynamicMatrix = Matrix<Scalar, Dynamic, Dynamic>;
+    const DynamicMatrix twos = DynamicMatrix::Constant(rows, 1, Scalar(2));
+    m2 = m1.template triangularView<Lower>();
+    m2.template selfadjointView<Lower>().rankUpdate(twos.cwiseProduct(v1), twos.cwiseProduct(v2));
+    VERIFY_IS_APPROX(
+        m2, (m1 + 4 * v1 * v2.adjoint() + 4 * v2 * v1.adjoint()).template triangularView<Lower>().toDenseMatrix());
+    m2 = m1.template triangularView<Upper>();
+    m2.template selfadjointView<Upper>().rankUpdate(twos.cwiseProduct(v1).conjugate(), twos.cwiseProduct(v2));
+    VERIFY_IS_APPROX(m2, (m1 + 4 * v1.conjugate() * v2.adjoint() + 4 * v2 * v1.transpose())
+                             .template triangularView<Upper>()
+                             .toDenseMatrix());
+  }
+
   m2 = m1.template triangularView<Upper>();
   m2.template selfadjointView<Upper>().rankUpdate(-v1, s2 * v2, s3);
   VERIFY_IS_APPROX(m2, (m1 + (s3 * (-v1) * (s2 * v2).adjoint() + numext::conj(s3) * (s2 * v2) * (-v1).adjoint()))
