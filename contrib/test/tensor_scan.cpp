@@ -8,10 +8,15 @@
 // with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
 // SPDX-License-Identifier: MPL-2.0
 
+#define EIGEN_TEST_ANNOYING_SCALAR_DONT_THROW
+
 #include "main.h"
 #include <limits>
 #include <numeric>
 #include <Eigen/Tensor>
+#include <contrib/Eigen/AutoDiff>
+
+#include "AnnoyingScalar.h"
 
 using Eigen::Tensor;
 
@@ -97,6 +102,52 @@ static void test_tensor_maps() {
   }
 }
 
+// A scan nested in another expression evaluates into a temporary result buffer. For scalars that require
+// initialization, that buffer must be constructed before the scan assigns into it, and destructed afterwards.
+template <int DataLayout>
+static void test_scalar_require_initialization() {
+  Tensor<float, 2, DataLayout> tensor(5, 7);
+  tensor.setRandom();
+
+  AnnoyingScalar::instances = 0;
+  {
+    const Tensor<AnnoyingScalar, 2, DataLayout> a_tensor = tensor.template cast<AnnoyingScalar>();
+    for (int axis = 0; axis < 2; ++axis) {
+      for (bool exclusive : {false, true}) {
+        Tensor<float, 2, DataLayout> expected = tensor.cumsum(axis, exclusive) + tensor;
+        Tensor<AnnoyingScalar, 2, DataLayout> result = a_tensor.cumsum(axis, exclusive) + a_tensor;
+        Tensor<float, 2, DataLayout> actual = result.template cast<float>();
+        for (Index i = 0; i < actual.size(); ++i) VERIFY_IS_APPROX(actual.data()[i], expected.data()[i]);
+
+        expected = tensor.cumprod(axis, exclusive) + tensor;
+        result = a_tensor.cumprod(axis, exclusive) + a_tensor;
+        actual = result.template cast<float>();
+        for (Index i = 0; i < actual.size(); ++i) VERIFY_IS_APPROX(actual.data()[i], expected.data()[i]);
+      }
+    }
+  }
+  VERIFY_IS_EQUAL(AnnoyingScalar::instances, 0);
+}
+
+template <int DataLayout>
+static void test_autodiff_scan() {
+  using AD = AutoDiffScalar<VectorXd>;
+  const int size = 6;
+  Tensor<AD, 1, DataLayout> x(size);
+  for (int i = 0; i < size; ++i) x(i) = AD(i + 1.0, size, i);
+
+  // sum_{j < i} x(j), with a derivative of 1 with respect to each x(j), j < i.
+  const Tensor<AD, 1, DataLayout> before = x.cumsum(0) - x;
+  double value = 0;
+  for (int i = 0; i < size; ++i) {
+    VectorXd derivatives = VectorXd::Zero(size);
+    derivatives.head(i).setOnes();
+    VERIFY_IS_EQUAL(before(i).value(), value);
+    VERIFY_IS_EQUAL(before(i).derivatives(), derivatives);
+    value += x(i).value();
+  }
+}
+
 EIGEN_DECLARE_TEST(tensor_scan) {
   CALL_SUBTEST((test_1d_scan<ColMajor, float, true>()));
   CALL_SUBTEST((test_1d_scan<ColMajor, float, false>()));
@@ -106,4 +157,8 @@ EIGEN_DECLARE_TEST(tensor_scan) {
   CALL_SUBTEST(test_4d_scan<RowMajor>());
   CALL_SUBTEST(test_tensor_maps<ColMajor>());
   CALL_SUBTEST(test_tensor_maps<RowMajor>());
+  CALL_SUBTEST(test_scalar_require_initialization<ColMajor>());
+  CALL_SUBTEST(test_scalar_require_initialization<RowMajor>());
+  CALL_SUBTEST(test_autodiff_scan<ColMajor>());
+  CALL_SUBTEST(test_autodiff_scan<RowMajor>());
 }

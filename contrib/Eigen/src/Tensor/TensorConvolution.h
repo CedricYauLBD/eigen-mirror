@@ -297,6 +297,9 @@ struct TensorEvaluator<const TensorConvolutionOp<Indices, InputArgType, KernelAr
                          static_cast<int>(TensorEvaluator<KernelArgType, Device>::Layout)),
                         YOU_MADE_A_PROGRAMMING_MISTAKE);
 
+    // A rank-0 input has no strides and no dimension to convolve.
+    EIGEN_IF_CONSTEXPR (NumDims == 0) return;
+
     const typename TensorEvaluator<InputArgType, Device>::Dimensions& input_dims = m_inputImpl.dimensions();
     const typename TensorEvaluator<KernelArgType, Device>::Dimensions& kernel_dims = m_kernelImpl.dimensions();
 
@@ -463,6 +466,11 @@ struct TensorEvaluator<const TensorConvolutionOp<Indices, InputArgType, KernelAr
   }
 
   EIGEN_DEVICE_FUNC void convolve(Index firstIndex, Index firstKernel, int DimIndex, CoeffReturnType& accum) const {
+    // A rank-0 kernel is a single coefficient: there is no kernel dimension to sum over.
+    EIGEN_IF_CONSTEXPR (NumKernelDims == 0) {
+      accum += m_inputImpl.coeff(firstIndex) * m_kernel[firstKernel];
+      return;
+    }
     for (int j = 0; j < m_kernelImpl.dimensions()[DimIndex]; ++j) {
       const Index input = firstIndex + j * m_indexStride[DimIndex];
       const Index kernel = firstKernel + j * m_kernelStride[DimIndex];
@@ -476,6 +484,11 @@ struct TensorEvaluator<const TensorConvolutionOp<Indices, InputArgType, KernelAr
 
   template <typename Packet>
   EIGEN_DEVICE_FUNC void convolvePacket(Index firstIndex, Index firstKernel, int DimIndex, Packet& accum) const {
+    EIGEN_IF_CONSTEXPR (NumKernelDims == 0) {
+      accum = internal::pmadd<Packet>(m_inputImpl.template packet<Unaligned>(firstIndex),
+                                      internal::pset1<Packet>(m_kernel[firstKernel]), accum);
+      return;
+    }
     for (int j = 0; j < m_kernelImpl.dimensions()[DimIndex]; ++j) {
       const Index input = firstIndex + j * m_indexStride[DimIndex];
       const Index kernel = firstKernel + j * m_kernelStride[DimIndex];

@@ -248,6 +248,42 @@ static void test_auto_resize() {
   }
 }
 
+// The assigned expression reads the tensor that the assignment resizes.
+template <int DataLayout>
+static void test_auto_resize_aliased() {
+  Tensor<int, 1, DataLayout> extras(6);
+  extras.setValues({5, 6, 7, 8, 9, 10});
+
+  Tensor<int, 1, DataLayout> vec(4);
+  vec.setValues({1, 2, 3, 4});
+  vec = vec.concatenate(extras, 0).eval();
+  VERIFY_IS_EQUAL(vec.dimension(0), 10);
+  for (int i = 0; i < 10; ++i) {
+    VERIFY_IS_EQUAL(vec(i), i + 1);
+  }
+
+  Eigen::array<Eigen::Index, 1> offsets{{6}};
+  Eigen::array<Eigen::Index, 1> extents{{3}};
+  vec = vec.slice(offsets, extents).eval();
+  VERIFY_IS_EQUAL(vec.dimension(0), 3);
+  for (int i = 0; i < 3; ++i) {
+    VERIFY_IS_EQUAL(vec(i), i + 7);
+  }
+
+  // The dimensions change, but not the number of coefficients.
+  Tensor<int, 2, DataLayout> mat(2, 3);
+  mat.setValues({{0, 1, 2}, {10, 11, 12}});
+  Eigen::array<int, 2> transposition{{1, 0}};
+  mat = mat.shuffle(transposition).eval();
+  VERIFY_IS_EQUAL(mat.dimension(0), 3);
+  VERIFY_IS_EQUAL(mat.dimension(1), 2);
+  for (int i = 0; i < 3; ++i) {
+    for (int j = 0; j < 2; ++j) {
+      VERIFY_IS_EQUAL(mat(i, j), 10 * j + i);
+    }
+  }
+}
+
 static void test_compound_assign() {
   Tensor<int, 1> start_tensor(10);
   Tensor<int, 1> offset_tensor(10);
@@ -360,6 +396,8 @@ EIGEN_DECLARE_TEST(tensor_assign) {
   CALL_SUBTEST(test_3d());
   CALL_SUBTEST(test_same_type());
   CALL_SUBTEST(test_auto_resize());
+  CALL_SUBTEST(test_auto_resize_aliased<ColMajor>());
+  CALL_SUBTEST(test_auto_resize_aliased<RowMajor>());
   CALL_SUBTEST(test_compound_assign());
   CALL_SUBTEST(test_std_initializers_tensor());
 }

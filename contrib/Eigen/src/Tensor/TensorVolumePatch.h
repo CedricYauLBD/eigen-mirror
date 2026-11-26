@@ -187,7 +187,7 @@ struct TensorEvaluator<const TensorVolumePatchOp<Planes, Rows, Cols, ArgType>, D
     // the contract the scalar executors already rely on for every evaluator --
     // so it requires no capability bit from the argument (same as
     // TensorReverse).
-    BlockAccess = true,
+    BlockAccess = internal::is_block_materializable<Scalar>::value,
     // The coeff/packet path pays ~10 divisions of index math per element; the
     // block path amortizes all of it over whole depth runs.
     PreferBlockAccess = true,

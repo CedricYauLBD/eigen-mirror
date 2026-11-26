@@ -78,7 +78,7 @@ struct TensorEvaluator<const TensorGeneratorOp<Generator, ArgType>, Device> {
   enum {
     IsAligned = false,
     PacketAccess = (PacketType<CoeffReturnType, Device>::size > 1),
-    BlockAccess = NumDims > 0,
+    BlockAccess = NumDims > 0 && internal::is_block_materializable<Scalar>::value,
     PreferBlockAccess = true,
     CoordAccess = false,  // to be implemented
     RawAccess = false

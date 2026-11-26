@@ -158,6 +158,47 @@ static void test_shuffling_cost_and_block_requirements() {
   VERIFY(threads_1024 > 1);
 }
 
+// Regression: TensorConcatenationOp weights the cost of each operand by its
+// share of the output, which was 0 / 0 when both operands are empty. The NaN
+// went unnoticed until an enclosing expression with a non-empty output, such
+// as a reduction over the concatenation axis, handed it to numThreads(), which
+// converted a NaN thread count to int.
+template <int DataLayout>
+static void test_empty_concatenation_cost() {
+  Tensor<float, 2, DataLayout> left(0, 64);
+  Tensor<float, 2, DataLayout> right(0, 64);
+  auto concatenation = left.concatenate(right, 0);
+  Eigen::array<int, 1> concatenation_axis = {0};
+  auto column_sums = concatenation.sum(concatenation_axis);
+
+  DefaultDevice device;
+  TensorEvaluator<const decltype(concatenation), DefaultDevice> eval(concatenation, device);
+  TensorEvaluator<const decltype(column_sums), DefaultDevice> sum_eval(column_sums, device);
+  sum_eval.evalSubExprsIfNeeded(nullptr);
+  VERIFY_IS_EQUAL(sum_eval.dimensions().TotalSize(), 64);
+
+  for (bool vectorized : {false, true}) {
+    const auto cost = eval.costPerCoeff(vectorized);
+    VERIFY((numext::isfinite)(cost.bytes_loaded()));
+    VERIFY((numext::isfinite)(cost.bytes_stored()));
+    VERIFY((numext::isfinite)(cost.compute_cycles()));
+
+    const auto sum_cost = sum_eval.costPerCoeff(vectorized);
+    VERIFY((numext::isfinite)(sum_cost.total_bytes()));
+    VERIFY((numext::isfinite)(sum_cost.compute_cycles()));
+    VERIFY_IS_EQUAL(Eigen::TensorCostModel<DefaultDevice>::numThreads(64.0, sum_cost, /*max_threads=*/8), 1);
+  }
+  sum_eval.cleanup();
+}
+
+// Regression: numThreads() must not convert a NaN thread count to int if an
+// evaluator ever reports a NaN cost.
+static void test_num_threads_nan_cost() {
+  const double nan = std::numeric_limits<double>::quiet_NaN();
+  const Eigen::TensorOpCost nan_cost(nan, nan, nan);
+  VERIFY_IS_EQUAL(Eigen::TensorCostModel<DefaultDevice>::numThreads(1e9, nan_cost, /*max_threads=*/8), 1);
+}
+
 EIGEN_DECLARE_TEST(tensor_cost_model) {
   CALL_SUBTEST(test_cost_model_constants_odr_use());
   CALL_SUBTEST(test_nullary_zero_bytes_loaded<float>());
@@ -167,4 +208,7 @@ EIGEN_DECLARE_TEST(tensor_cost_model) {
   CALL_SUBTEST(test_unary_binary_ternary_block_resource_cost<double>());
   CALL_SUBTEST(test_shuffling_cost_and_block_requirements<float>());
   CALL_SUBTEST(test_shuffling_cost_and_block_requirements<double>());
+  CALL_SUBTEST(test_empty_concatenation_cost<Eigen::ColMajor>());
+  CALL_SUBTEST(test_empty_concatenation_cost<Eigen::RowMajor>());
+  CALL_SUBTEST(test_num_threads_nan_cost());
 }

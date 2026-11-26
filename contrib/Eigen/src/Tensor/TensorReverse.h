@@ -86,7 +86,7 @@ struct TensorEvaluator<const TensorReverseOp<ReverseDimensions, ArgType>, Device
   enum {
     IsAligned = false,
     PacketAccess = TensorEvaluator<ArgType, Device>::PacketAccess,
-    BlockAccess = NumDims > 0,
+    BlockAccess = NumDims > 0 && internal::is_block_materializable<Scalar>::value,
     PreferBlockAccess = true,
     CoordAccess = false,  // to be implemented
     RawAccess = false

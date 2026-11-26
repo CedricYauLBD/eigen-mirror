@@ -170,7 +170,7 @@ struct TensorEvaluator<const TensorImagePatchOp<Rows, Cols, ArgType>, Device> {
     // the contract the scalar executors already rely on for every evaluator --
     // so it requires no capability bit from the argument (same as
     // TensorReverse).
-    BlockAccess = true,
+    BlockAccess = internal::is_block_materializable<Scalar>::value,
     PreferBlockAccess = true,
     CoordAccess = false,
     RawAccess = false

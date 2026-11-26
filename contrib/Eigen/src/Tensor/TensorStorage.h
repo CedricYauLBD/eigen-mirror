@@ -78,7 +78,8 @@ class TensorStorage<T, DSizes<IndexType, NumIndices_>, Options_> {
 
   template <typename... DenseIndex>
   EIGEN_DEVICE_FUNC TensorStorage(DenseIndex... indices) : m_dimensions(indices...) {
-    m_data = internal::conditional_aligned_new_auto<T, (Options_ & DontAlign) == 0>(internal::array_prod(m_dimensions));
+    m_data = internal::conditional_aligned_new_auto<T, (Options_ & DontAlign) == 0>(
+        internal::checked_array_prod(m_dimensions));
   }
 
   EIGEN_DEVICE_FUNC TensorStorage(const Self& other)
@@ -118,6 +119,9 @@ class TensorStorage<T, DSizes<IndexType, NumIndices_>, Options_> {
     const Index currentSz = internal::array_prod(m_dimensions);
     if (size != currentSz) {
       internal::conditional_aligned_delete_auto<T, (Options_ & DontAlign) == 0>(m_data, currentSz);
+      // Leave a valid empty object if the allocation below throws.
+      m_data = nullptr;
+      m_dimensions = Dimensions();
       if (size)
         m_data = internal::conditional_aligned_new_auto<T, (Options_ & DontAlign) == 0>(size);
       else EIGEN_IF_CONSTEXPR (NumIndices_ == 0) {

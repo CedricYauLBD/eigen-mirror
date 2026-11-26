@@ -85,7 +85,7 @@ struct TensorEvaluator<const TensorPaddingOp<PaddingDimensions, ArgType>, Device
   enum {
     IsAligned = true,
     PacketAccess = TensorEvaluator<ArgType, Device>::PacketAccess,
-    BlockAccess = TensorEvaluator<ArgType, Device>::RawAccess,
+    BlockAccess = TensorEvaluator<ArgType, Device>::RawAccess && internal::is_block_materializable<Scalar>::value,
     PreferBlockAccess = true,
     CoordAccess = true,
     RawAccess = false

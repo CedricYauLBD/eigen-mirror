@@ -101,7 +101,8 @@ struct TensorEvaluator<const TensorConcatenationOp<Axis, LeftArgType, RightArgTy
     // (TensorCwiseUnaryOp, TensorConversionOp) drop the forwarded destination
     // buffer before reaching us, so prepareStorage always sees either a
     // matching-Scalar buffer or no buffer at all.
-    BlockAccess = TensorEvaluator<LeftArgType, Device>::RawAccess && TensorEvaluator<RightArgType, Device>::RawAccess,
+    BlockAccess = TensorEvaluator<LeftArgType, Device>::RawAccess && TensorEvaluator<RightArgType, Device>::RawAccess &&
+                  internal::is_block_materializable<Scalar>::value,
     // Matches TensorShuffling / TensorBroadcasting / TensorPadding: bulk copy
     // wins over the per-element coeff/packet path (which pays div/mod per
     // access) at every size we benchmarked, so always prefer block.
@@ -524,6 +525,9 @@ struct TensorEvaluator<const TensorConcatenationOp<Axis, LeftArgType, RightArgTy
                                            TensorOpCost::DivCost<Index>() + TensorOpCost::ModCost<Index>());
     const double lhs_size = m_leftImpl.dimensions().TotalSize();
     const double rhs_size = m_rightImpl.dimensions().TotalSize();
+    // With both operands empty there is no coefficient to weight, and 0 / 0
+    // would make the cost NaN.
+    if (lhs_size + rhs_size == 0) return TensorOpCost(0, 0, compute_cost);
     return (lhs_size / (lhs_size + rhs_size)) * m_leftImpl.costPerCoeff(vectorized) +
            (rhs_size / (lhs_size + rhs_size)) * m_rightImpl.costPerCoeff(vectorized) + TensorOpCost(0, 0, compute_cost);
   }
@@ -557,7 +561,8 @@ struct TensorEvaluator<TensorConcatenationOp<Axis, LeftArgType, RightArgType>, D
         TensorEvaluator<LeftArgType, Device>::PacketAccess && TensorEvaluator<RightArgType, Device>::PacketAccess,
     // writeBlock() splits the block at the concat axis and copies each piece
     // straight into the operand's buffer, so both must expose raw storage.
-    BlockAccess = TensorEvaluator<LeftArgType, Device>::RawAccess && TensorEvaluator<RightArgType, Device>::RawAccess,
+    BlockAccess = TensorEvaluator<LeftArgType, Device>::RawAccess && TensorEvaluator<RightArgType, Device>::RawAccess &&
+                  internal::is_block_materializable<typename XprType::Scalar>::value,
     // The coeff/packet write path pays a div/mod cascade plus a per-dim mod
     // for every scalar; the block path is a pair of bulk copies. Mirrors the
     // rvalue evaluator.

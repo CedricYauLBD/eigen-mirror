@@ -98,7 +98,7 @@ struct TensorEvaluator<const TensorBroadcastingOp<Broadcast, ArgType>, Device> {
   enum {
     IsAligned = TensorEvaluator<ArgType, Device>::IsAligned,
     PacketAccess = TensorEvaluator<ArgType, Device>::PacketAccess,
-    BlockAccess = TensorEvaluator<ArgType, Device>::BlockAccess,
+    BlockAccess = TensorEvaluator<ArgType, Device>::BlockAccess && internal::is_block_materializable<Scalar>::value,
     PreferBlockAccess = true,
     RawAccess = false
   };

@@ -1132,9 +1132,11 @@ struct TensorEvaluator<const TensorSelectOp<IfArgType, ThenArgType, ElseArgType>
 
   template <int LoadMode, bool UseTernary = TernaryPacketAccess, std::enable_if_t<UseTernary, bool> = true>
   EIGEN_DEVICE_FUNC PacketReturnType packet(Index index) const {
+    // IsAligned only covers the then and else arguments, so LoadMode says nothing about the condition.
+    constexpr int CondLoadMode = TensorEvaluator<IfArgType, Device>::IsAligned ? LoadMode : Unaligned;
     return TernarySelectOp().template packetOp<PacketReturnType>(m_thenImpl.template packet<LoadMode>(index),
                                                                  m_elseImpl.template packet<LoadMode>(index),
-                                                                 m_condImpl.template packet<LoadMode>(index));
+                                                                 m_condImpl.template packet<CondLoadMode>(index));
   }
 
   EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE TensorOpCost costPerCoeff(bool vectorized) const {

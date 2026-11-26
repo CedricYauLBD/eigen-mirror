@@ -437,7 +437,22 @@ struct TensorEvaluator<const TensorScanOp<Op, ArgType>, Device> {
     const Index total_size = internal::array_prod(dimensions());
     m_output =
         static_cast<EvaluatorPointerType>(m_device.get((Scalar*)m_device.allocate_temp(total_size * sizeof(Scalar))));
-    launcher(*this, m_output);
+    // The launcher writes the temporary by assignment, so scalars that require initialization must be constructed
+    // first. cleanup() destructs them.
+    EIGEN_IF_CONSTEXPR (NumTraits<Scalar>::RequireInitialization) {
+      EIGEN_TRY { internal::default_construct_elements_of_array(m_output, total_size); }
+      EIGEN_CATCH(...) {
+        m_device.deallocate_temp(m_output);
+        m_output = nullptr;
+        EIGEN_THROW;
+      }
+    }
+    // The executor releases the temporaries of an evaluator only once this function has returned.
+    EIGEN_TRY { launcher(*this, m_output); }
+    EIGEN_CATCH(...) {
+      cleanup();
+      EIGEN_THROW;
+    }
     return true;
   }
 
@@ -466,6 +481,9 @@ struct TensorEvaluator<const TensorScanOp<Op, ArgType>, Device> {
 
   EIGEN_STRONG_INLINE void cleanup() {
     if (m_output) {
+      EIGEN_IF_CONSTEXPR (NumTraits<Scalar>::RequireInitialization) {
+        internal::destruct_elements_of_array(m_output, internal::array_prod(dimensions()));
+      }
       m_device.deallocate_temp(m_output);
       m_output = nullptr;
     }

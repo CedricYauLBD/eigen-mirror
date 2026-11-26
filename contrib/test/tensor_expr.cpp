@@ -364,6 +364,30 @@ static void test_select() {
       VERIFY_IS_EQUAL(iout(i), fcond(i) ? ia(i) : ib(i));
     }
   }
+
+  // Test select with an unaligned condition of the same scalar type as the aligned branches.
+  {
+    auto check_unaligned_condition = [](auto dummy) {
+      using T = decltype(dummy);
+      const int n = 67;
+      Tensor<T, 1> storage(n + 1), a(n), b(n), out(n);
+      for (int i = 0; i < n + 1; ++i) storage(i) = T((i % 3) == 0);
+      a.setConstant(T(1));
+      b.setConstant(T(0));
+      for (int offset : {0, 1}) {
+        TensorMap<Tensor<T, 1>> cond(storage.data() + offset, n);
+        TensorMap<Tensor<const T, 1>> const_cond(storage.data() + offset, n);
+        out = cond.select(a, b);
+        for (int i = 0; i < n; ++i) VERIFY_IS_EQUAL(out(i), cond(i));
+        out = const_cond.select(a, b);
+        for (int i = 0; i < n; ++i) VERIFY_IS_EQUAL(out(i), cond(i));
+      }
+    };
+    check_unaligned_condition(bool(0));
+    check_unaligned_condition(float(0));
+    check_unaligned_condition(int(0));
+    check_unaligned_condition(double(0));
+  }
 }
 
 // Nan propagation does currently not work like one would expect from std::max/std::min,

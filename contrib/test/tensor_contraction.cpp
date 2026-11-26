@@ -734,6 +734,54 @@ static void test_autodiff_contraction() {
   }
 }
 
+// loadPacketPartial(i, j, n, offset) loads the coefficients (i, j) .. (i + n - 1, j) into lanes [offset, offset + n)
+// and zeroes the other lanes. The AltiVec bfloat16 packers call it where the operand has fewer rows left than a packet
+// holds, so it must not read further rows: here they would lie in the next column or past the end of the tensor.
+template <typename Scalar, bool InnerDimContiguous>
+static void test_load_packet_partial() {
+  using TensorType = Tensor<Scalar, 2>;
+  using Evaluator = TensorEvaluator<const TensorType, DefaultDevice>;
+  using Packet = typename Evaluator::PacketReturnType;
+  using Strides = Eigen::array<Index, 1>;
+  constexpr int PacketSize = Evaluator::PacketSize;
+  using Mapper = internal::TensorContractionInputMapper<Scalar, Index, internal::Lhs, Evaluator, Strides, Strides,
+                                                        PacketSize, InnerDimContiguous, false, Unaligned>;
+
+  // The operand is a rows x depth matrix, stored as it is or, when the contracted dimension comes first, transposed.
+  const Index rows = PacketSize + 1;
+  const Index depth = 3;
+  TensorType tensor(InnerDimContiguous ? rows : depth, InnerDimContiguous ? depth : rows);
+  for (Index k = 0; k < tensor.size(); ++k) tensor.data()[k] = Scalar(static_cast<float>(k + 1));
+  const Strides row_stride = {{InnerDimContiguous ? Index(1) : depth}};
+  const Strides depth_stride = {{InnerDimContiguous ? rows : Index(1)}};
+  const Strides unit_stride = {{Index(1)}};
+  const DefaultDevice device;
+  const Mapper mapper(Evaluator(tensor, device), row_stride, unit_stride, depth_stride, unit_stride);
+
+  for (Index origin = 0; origin < 2; ++origin) {
+    const auto sub_mapper = mapper.getSubMapper(origin, origin);
+    const Index sub_rows = rows - origin;
+    for (Index j = 0; j < depth - origin; ++j) {
+      for (Index n = 0; n <= sub_rows && n <= PacketSize; ++n) {
+        const Index i = sub_rows - n;
+        for (Index offset = 0; offset + n <= PacketSize; ++offset) {
+          Scalar lanes[PacketSize];
+          internal::pstoreu(lanes, sub_mapper.template loadPacketPartial<Packet>(i, j, n, offset));
+          for (Index k = 0; k < PacketSize; ++k) {
+            Scalar expected(0.0f);
+            if (k >= offset && k < offset + n) {
+              const Index row = origin + i + k - offset;
+              const Index col = origin + j;
+              expected = InnerDimContiguous ? tensor(row, col) : tensor(col, row);
+            }
+            VERIFY_IS_EQUAL(lanes[k], expected);
+          }
+        }
+      }
+    }
+  }
+}
+
 EIGEN_DECLARE_TEST(tensor_contraction) {
   CALL_SUBTEST_1(test_evals<ColMajor>());
   CALL_SUBTEST_1(test_evals<RowMajor>());
@@ -772,6 +820,10 @@ EIGEN_DECLARE_TEST(tensor_contraction) {
   CALL_SUBTEST_7(test_small_blocking_factors<RowMajor>());
   CALL_SUBTEST_7(test_tensor_product<ColMajor>());
   CALL_SUBTEST_7(test_tensor_product<RowMajor>());
+  CALL_SUBTEST_7((test_load_packet_partial<float, true>()));
+  CALL_SUBTEST_7((test_load_packet_partial<float, false>()));
+  CALL_SUBTEST_7((test_load_packet_partial<bfloat16, true>()));
+  CALL_SUBTEST_7((test_load_packet_partial<bfloat16, false>()));
   CALL_SUBTEST_8(test_const_inputs<ColMajor>());
   CALL_SUBTEST_8(test_const_inputs<RowMajor>());
   CALL_SUBTEST_8(tensor_test::test_large_contraction_with_output_kernel<ColMajor>(AssignOnDefaultDevice()));

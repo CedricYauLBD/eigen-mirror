@@ -766,6 +766,84 @@ void test_multithreaded_reductions() {
   VERIFY_IS_APPROX(full_redux(), full_redux_tp());
 }
 
+// The identity, which a pool thread evaluates only once released. test_thread releases the pool threads when it
+// evaluates one, and throws for a negative value, so that its exception finds the pool's tasks unfinished.
+struct GatedIdentity {
+  static std::thread::id test_thread;
+  static std::atomic<bool> released;
+  static std::atomic<Index> pool_calls;
+  float operator()(float x) const {
+    if (std::this_thread::get_id() != test_thread) {
+      while (!released.load()) std::this_thread::yield();
+      ++pool_calls;
+    } else {
+      released = true;
+      if (x < 0.0f) EIGEN_THROW_X(std::runtime_error("GatedIdentity"));
+    }
+    return x;
+  }
+};
+std::thread::id GatedIdentity::test_thread;
+std::atomic<bool> GatedIdentity::released(false);
+std::atomic<Index> GatedIdentity::pool_calls(0);
+
+// A pool whose fail_at-th Schedule() releases the tasks scheduled before it and throws.
+struct FailingSchedulePool : Eigen::ThreadPoolInterface {
+  explicit FailingSchedulePool(int num_threads) : pool(num_threads) {}
+  void Schedule(std::function<void()> fn) override {
+    if (++calls == fail_at) {
+      GatedIdentity::released = true;
+      EIGEN_THROW_X(std::bad_alloc());
+    }
+    pool.Schedule(std::move(fn));
+  }
+  int NumThreads() const override { return pool.NumThreads(); }
+  int CurrentThreadId() const override { return pool.CurrentThreadId(); }
+
+  Eigen::ThreadPool pool;
+  int calls = 0;
+  int fail_at = 0;
+};
+
+// The shards of a full reduction use the frame that enqueued them and the operands. An exception on the calling
+// thread, from its own part or from enqueuing a later shard, must leave only after the enqueued shards are done.
+template <typename = void>
+void test_multithreaded_full_reduction_throws() {
+#ifdef EIGEN_EXCEPTIONS
+  constexpr int num_threads = 4;
+  constexpr Index shard_size = 1 << 18;
+  FailingSchedulePool pool(num_threads);
+  Eigen::ThreadPoolDevice device(&pool, num_threads);
+  GatedIdentity::test_thread = std::this_thread::get_id();
+
+  // One coefficient more than the shards take, which the calling thread reduces.
+  Tensor<float, 1> t(num_threads * shard_size + 1);
+  t.setConstant(1.0f);
+  Tensor<float, 0> sum;
+
+  // Returns whether the reduction threw, having verified that the enqueued shards were done when it returned.
+  const auto throws = [&](Index enqueued_shards) {
+    GatedIdentity::released = false;
+    GatedIdentity::pool_calls = 0;
+    pool.calls = 0;
+    bool threw = false;
+    try {
+      sum.device(device) = t.unaryExpr(GatedIdentity()).sum();
+    } catch (const std::exception&) {
+      threw = true;
+    }
+    VERIFY_IS_EQUAL(GatedIdentity::pool_calls.load(), enqueued_shards * shard_size);
+    return threw;
+  };
+
+  t(t.size() - 1) = -1.0f;
+  VERIFY(throws(num_threads));
+
+  t(t.size() - 1) = 1.0f;
+  for (pool.fail_at = 1; pool.fail_at <= num_threads; ++pool.fail_at) VERIFY(throws(pool.fail_at - 1));
+#endif
+}
+
 // reduce() squares each value, so partial results cannot be merged through it.
 struct SquaredSumReducer {
   void reduce(const double t, double* accum) const { *accum += t * t; }
@@ -1402,6 +1480,7 @@ EIGEN_DECLARE_TEST(tensor_thread_pool) {
 
   CALL_SUBTEST_11(test_multithreaded_reductions<ColMajor>());
   CALL_SUBTEST_11(test_multithreaded_reductions<RowMajor>());
+  CALL_SUBTEST_11(test_multithreaded_full_reduction_throws<>());
   CALL_SUBTEST_11(test_multithreaded_complex_reduction<>());
   CALL_SUBTEST_11(test_multithreaded_value_transforming_full_reduction<>());
   CALL_SUBTEST_11(test_multithreaded_argmax<>());

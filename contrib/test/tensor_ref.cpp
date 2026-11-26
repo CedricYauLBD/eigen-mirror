@@ -298,6 +298,45 @@ static void test_copy_of_empty_ref() {
   VERIFY_IS_EQUAL(copy(1, 2), input(1, 2));
 }
 
+// Assigning an expression that reads the ref must build the new evaluator before releasing the one it reads.
+static void test_assign_expr_of_self() {
+  Tensor<float, 1> input(6);
+  input.setRandom();
+
+  TensorRef<const Tensor<float, 1>> ref = input * 2.0f;
+  ref = ref * 3.0f;
+  for (int i = 0; i < 6; ++i) {
+    VERIFY_IS_EQUAL(ref(i), (input(i) * 2.0f) * 3.0f);
+  }
+}
+
+#ifdef EIGEN_EXCEPTIONS
+struct ThrowingOp {
+  float operator()(float) const { throw std::runtime_error("ThrowingOp"); }
+};
+#endif
+
+// If building the evaluator of the assigned expression throws, the ref must still hold its previous evaluator.
+static void test_assign_throwing_expr() {
+#ifdef EIGEN_EXCEPTIONS
+  Tensor<float, 1> input(6);
+  input.setRandom();
+
+  TensorRef<const Tensor<float, 1>> ref = input * 2.0f;
+  bool threw = false;
+  try {
+    ref = input.unaryExpr(ThrowingOp()).eval();
+  } catch (const std::runtime_error&) {
+    threw = true;
+  }
+  VERIFY(threw);
+  VERIFY_IS_EQUAL(ref.size(), 6);
+  for (int i = 0; i < 6; ++i) {
+    VERIFY_IS_EQUAL(ref(i), input(i) * 2.0f);
+  }
+#endif
+}
+
 EIGEN_DECLARE_TEST(tensor_ref) {
   CALL_SUBTEST(test_copy_of_empty_ref());
   CALL_SUBTEST(test_simple_lvalue_ref());
@@ -313,4 +352,6 @@ EIGEN_DECLARE_TEST(tensor_ref) {
   CALL_SUBTEST(test_unsigned_indices());
   CALL_SUBTEST(test_index_type());
   CALL_SUBTEST(test_narrowing_indices());
+  CALL_SUBTEST(test_assign_expr_of_self());
+  CALL_SUBTEST(test_assign_throwing_expr());
 }

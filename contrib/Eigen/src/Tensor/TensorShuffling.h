@@ -84,7 +84,7 @@ struct TensorEvaluator<const TensorShufflingOp<Shuffle, ArgType>, Device> {
   enum {
     IsAligned = false,
     PacketAccess = (PacketType<CoeffReturnType, Device>::size > 1),
-    BlockAccess = TensorEvaluator<ArgType, Device>::RawAccess,
+    BlockAccess = TensorEvaluator<ArgType, Device>::RawAccess && internal::is_block_materializable<Scalar>::value,
     PreferBlockAccess = true,
     CoordAccess = false,  // to be implemented
     RawAccess = false
@@ -386,7 +386,7 @@ struct TensorEvaluator<TensorShufflingOp<Shuffle, ArgType>, Device>
   enum {
     IsAligned = false,
     PacketAccess = (PacketType<CoeffReturnType, Device>::size > 1),
-    BlockAccess = TensorEvaluator<ArgType, Device>::RawAccess,
+    BlockAccess = TensorEvaluator<ArgType, Device>::RawAccess && internal::is_block_materializable<Scalar>::value,
     PreferBlockAccess = true,
     RawAccess = false
   };

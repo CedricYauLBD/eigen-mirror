@@ -409,12 +409,17 @@ class TensorContractionSubMapper {
     return m_base_mapper.template loadPacket<PacketT, Alignment>(i + m_vert_offset, j + m_horiz_offset);
   }
 
+  // Lanes [offset, offset + n) hold the coefficients (i, j) .. (i + n - 1, j) and the other lanes are zero, as for
+  // pload_partial. Rows from i + n on may lie past the end of the tensor, so no full packet is loaded.
   template <typename PacketT>
-  EIGEN_DEVICE_FUNC EIGEN_ALWAYS_INLINE PacketT loadPacketPartial(Index i, Index j, Index, Index = 0) const {
-    EIGEN_IF_CONSTEXPR (UseDirectOffsets) {
-      return m_base_mapper.template loadPacket<PacketT, Alignment>(i, j);
+  EIGEN_DEVICE_FUNC EIGEN_ALWAYS_INLINE PacketT loadPacketPartial(Index i, Index j, Index n, Index offset = 0) const {
+    constexpr Index requested_packet_size = unpacket_traits<PacketT>::size;
+    eigen_assert(n + offset <= requested_packet_size && "number of elements plus offset will read past end of packet");
+    EIGEN_ALIGN_TO_BOUNDARY(unpacket_traits<PacketT>::alignment) Scalar data[requested_packet_size] = {Scalar(0)};
+    for (Index k = 0; k < n; k++) {
+      data[offset + k] = operator()(i + k, j);
     }
-    return m_base_mapper.template loadPacket<PacketT, Alignment>(i + m_vert_offset, j + m_horiz_offset);
+    return pload<PacketT>(data);
   }
 
   template <typename PacketT, int AlignmentType>

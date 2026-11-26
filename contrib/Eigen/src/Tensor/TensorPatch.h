@@ -84,7 +84,7 @@ struct TensorEvaluator<const TensorPatchOp<PatchDim, ArgType>, Device> {
     // the contract the scalar executors already rely on for every evaluator --
     // so it requires no capability bit from the argument (same as
     // TensorReverse).
-    BlockAccess = NumDims > 1,
+    BlockAccess = NumDims > 1 && internal::is_block_materializable<Scalar>::value,
     // The coeff/packet path pays a div/mod cascade per element; the block
     // path copies whole in-bounds boxes patch by patch.
     PreferBlockAccess = true,

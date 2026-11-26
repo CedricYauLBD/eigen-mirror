@@ -117,6 +117,43 @@ void test_const_tensor_ostream() {
   VERIFY(os.str() == "1");
 }
 
+// DontAlignCols turns off the padding of the coefficients and the indentation of the lines.
+template <int Layout>
+void test_tensor_ostream_dont_align_cols() {
+  const Eigen::TensorIOFormat format(/*separator=*/{" ", "\n"}, /*prefix=*/{"", "["}, /*suffix=*/{"", "]"},
+                                     Eigen::StreamPrecision, Eigen::DontAlignCols, /*tenPrefix=*/"[",
+                                     /*tenSuffix=*/"]");
+
+  Eigen::Tensor<int, 1, Layout> t1 = {3};
+  t1.setValues({1, 20, 3});
+  std::ostringstream os;
+  os << t1.format(format);
+  VERIFY(os.str() == "[1 20 3]");
+
+  Eigen::Tensor<int, 2, Layout> t2 = {2, 3};
+  t2.setValues({{1, 20, 3}, {40, 5, 60}});
+  os.str("");
+  os.clear();
+  os << t2.format(format);
+  VERIFY(os.str() == "[[1 20 3]\n[40 5 60]]");
+
+  // More dimensions than prefixes.
+  Eigen::Tensor<int, 3, Layout> t3 = {2, 2, 2};
+  t3.setValues({{{1, 20}, {3, 4}}, {{5, 6}, {70, 8}}});
+  os.str("");
+  os.clear();
+  os << t3.format(format);
+  VERIFY(os.str() == "[[[1 20]\n[3 4]]\n\n[[5 6]\n[70 8]]]");
+
+  // The same layout with alignment.
+  const Eigen::TensorIOFormat aligned(/*separator=*/{" ", "\n"}, /*prefix=*/{"", "["}, /*suffix=*/{"", "]"},
+                                      Eigen::StreamPrecision, 0, /*tenPrefix=*/"[", /*tenSuffix=*/"]");
+  os.str("");
+  os.clear();
+  os << t2.format(aligned);
+  VERIFY(os.str() == "[[ 1 20  3]\n [40  5 60]]");
+}
+
 EIGEN_DECLARE_TEST(tensor_io) {
   CALL_SUBTEST((test_tensor_ostream<float, 0, Eigen::ColMajor>()));
   CALL_SUBTEST((test_tensor_ostream<float, 1, Eigen::ColMajor>()));
@@ -160,4 +197,8 @@ EIGEN_DECLARE_TEST(tensor_io) {
 
   // Test printing TensorMap with const elements.
   CALL_SUBTEST((test_const_tensor_ostream()));
+
+  // Test printing without column alignment.
+  CALL_SUBTEST((test_tensor_ostream_dont_align_cols<Eigen::ColMajor>()));
+  CALL_SUBTEST((test_tensor_ostream_dont_align_cols<Eigen::RowMajor>()));
 }

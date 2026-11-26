@@ -283,6 +283,23 @@ std::ostream& operator<<(std::ostream& os, const DSizes<IndexType, NumDims>& dim
 
 namespace internal {
 
+/** \internal The number of coefficients of a tensor with the given \a dimensions: their product. Unlike array_prod,
+ * throws std::bad_alloc if the product overflows \c Index, so that storage is never allocated for a wrapped size. Like
+ * the check in PlainObjectBase::resize, this is compiled out when EIGEN_NO_DEBUG is defined. */
+template <typename Index, std::size_t NumDims>
+EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE Index checked_array_prod(const array<Index, NumDims>& dimensions) {
+#ifndef EIGEN_NO_DEBUG
+  Index size = Index(1);
+  for (std::size_t i = 0; i < NumDims; ++i) {
+    check_rows_cols_for_overflow<Dynamic, Dynamic, Dynamic>::run(size, dimensions[i]);
+    size *= dimensions[i];
+  }
+  return size;
+#else
+  return array_prod(dimensions);
+#endif
+}
+
 template <typename DenseIndex, int NumDims>
 struct array_size<const DSizes<DenseIndex, NumDims>> {
   static constexpr ptrdiff_t value = NumDims;

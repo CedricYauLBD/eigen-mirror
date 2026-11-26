@@ -122,13 +122,31 @@ struct TensorEvaluator<const TensorCustomUnaryOp<CustomUnaryFunc, XprType>, Devi
     } else {
       m_result = static_cast<EvaluatorPointerType>(
           m_device.get((CoeffReturnType*)m_device.allocate_temp(dimensions().TotalSize() * sizeof(CoeffReturnType))));
-      evalTo(m_result);
+      // The functor writes the temporary by assignment, so scalars that require initialization must be constructed
+      // first. cleanup() destructs them.
+      EIGEN_IF_CONSTEXPR (NumTraits<CoeffReturnType>::RequireInitialization) {
+        EIGEN_TRY { internal::default_construct_elements_of_array(m_result, dimensions().TotalSize()); }
+        EIGEN_CATCH(...) {
+          m_device.deallocate_temp(m_result);
+          m_result = nullptr;
+          EIGEN_THROW;
+        }
+      }
+      // The executor releases the temporaries of an evaluator only once this function has returned.
+      EIGEN_TRY { evalTo(m_result); }
+      EIGEN_CATCH(...) {
+        cleanup();
+        EIGEN_THROW;
+      }
       return true;
     }
   }
 
   EIGEN_STRONG_INLINE void cleanup() {
     if (m_result) {
+      EIGEN_IF_CONSTEXPR (NumTraits<CoeffReturnType>::RequireInitialization) {
+        internal::destruct_elements_of_array(m_result, dimensions().TotalSize());
+      }
       m_device.deallocate_temp(m_result);
       m_result = nullptr;
     }
@@ -296,13 +314,31 @@ struct TensorEvaluator<const TensorCustomBinaryOp<CustomBinaryFunc, LhsXprType, 
     } else {
       m_result = static_cast<EvaluatorPointerType>(
           m_device.get((CoeffReturnType*)m_device.allocate_temp(dimensions().TotalSize() * sizeof(CoeffReturnType))));
-      evalTo(m_result);
+      // The functor writes the temporary by assignment, so scalars that require initialization must be constructed
+      // first. cleanup() destructs them.
+      EIGEN_IF_CONSTEXPR (NumTraits<CoeffReturnType>::RequireInitialization) {
+        EIGEN_TRY { internal::default_construct_elements_of_array(m_result, dimensions().TotalSize()); }
+        EIGEN_CATCH(...) {
+          m_device.deallocate_temp(m_result);
+          m_result = nullptr;
+          EIGEN_THROW;
+        }
+      }
+      // The executor releases the temporaries of an evaluator only once this function has returned.
+      EIGEN_TRY { evalTo(m_result); }
+      EIGEN_CATCH(...) {
+        cleanup();
+        EIGEN_THROW;
+      }
       return true;
     }
   }
 
   EIGEN_STRONG_INLINE void cleanup() {
     if (m_result != nullptr) {
+      EIGEN_IF_CONSTEXPR (NumTraits<CoeffReturnType>::RequireInitialization) {
+        internal::destruct_elements_of_array(m_result, dimensions().TotalSize());
+      }
       m_device.deallocate_temp(m_result);
       m_result = nullptr;
     }

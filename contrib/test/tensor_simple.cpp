@@ -323,6 +323,82 @@ static void test_resize() {
   VERIFY_IS_EQUAL(epsilon.size(), 3 * 5 * 7);
 }
 
+// A resize whose allocation fails must leave an empty tensor behind, not the old dimensions over a freed buffer.
+static void test_resize_bad_alloc() {
+#ifdef EIGEN_EXCEPTIONS
+  // With this index type the coefficient count below is representable, but its size in bytes is not.
+  using PtrdiffTensor = Tensor<float, 2, ColMajor, std::ptrdiff_t>;
+  const std::ptrdiff_t too_large = (std::numeric_limits<std::ptrdiff_t>::max)();
+
+  PtrdiffTensor tensor(3, 5);
+  tensor.setConstant(1.f);
+  bool threw = false;
+  try {
+    tensor.resize(too_large, 1);
+  } catch (const std::bad_alloc&) {
+    threw = true;
+  }
+  VERIFY(threw);
+  VERIFY_IS_EQUAL(tensor.dimension(0), std::ptrdiff_t(0));
+  VERIFY_IS_EQUAL(tensor.dimension(1), std::ptrdiff_t(0));
+  VERIFY_IS_EQUAL(tensor.size(), std::ptrdiff_t(0));
+  VERIFY(tensor.data() == nullptr);
+
+  // The tensor can be resized again, also to the size it had before the failure.
+  tensor.resize(5, 3);
+  tensor.setConstant(2.f);
+  VERIFY_IS_EQUAL(tensor.size(), std::ptrdiff_t(15));
+  VERIFY_IS_EQUAL(tensor(4, 2), 2.f);
+
+  // A failing assignment builds its value before it touches the destination, which keeps its contents.
+  PtrdiffTensor source(1, 1);
+  source.setConstant(3.f);
+  const Eigen::array<std::ptrdiff_t, 2> broadcasts{{too_large, 1}};
+  threw = false;
+  try {
+    tensor = source.broadcast(broadcasts);
+  } catch (const std::bad_alloc&) {
+    threw = true;
+  }
+  VERIFY(threw);
+  VERIFY_IS_EQUAL(tensor.size(), std::ptrdiff_t(15));
+  VERIFY_IS_EQUAL(tensor(4, 2), 2.f);
+#endif
+}
+
+// The sizing constructors must throw std::bad_alloc, as resize() does, for dimensions whose product overflows the index
+// type, rather than allocate the wrapped product.
+static void test_size_overflow() {
+#ifdef EIGEN_EXCEPTIONS
+  const auto throws_bad_alloc = [](const auto& make_tensor) {
+    try {
+      make_tensor();
+    } catch (const std::bad_alloc&) {
+      return true;
+    }
+    return false;
+  };
+  // 4 * wraps_to_4 == 4 modulo 2^(bits of Index): the wrapped product is a small, valid allocation size.
+  const Index wraps_to_4 = (Index(1) << (8 * sizeof(Index) - 2)) + 1;
+
+  VERIFY(throws_bad_alloc([&] { Tensor<float, 2> tensor(wraps_to_4, 4); }));
+  VERIFY(throws_bad_alloc([&] { Tensor<float, 2, RowMajor> tensor(4, wraps_to_4); }));
+  VERIFY(throws_bad_alloc([&] { Tensor<float, 2> tensor(array<Index, 2>{{wraps_to_4, 4}}); }));
+  VERIFY(throws_bad_alloc([&] { Tensor<float, 3> tensor(2, wraps_to_4, 2); }));
+  VERIFY(throws_bad_alloc([&] { Tensor<float, 3> tensor(array<Index, 3>{{2, wraps_to_4, 2}}); }));
+  VERIFY(throws_bad_alloc([] { Tensor<float, 2, ColMajor, int> tensor(65536, 65537); }));
+  VERIFY(throws_bad_alloc([&] {
+    Tensor<float, 2> tensor;
+    tensor.resize(wraps_to_4, 4);
+  }));
+
+  // The product is zero here: nothing overflows, and the constructor must keep accepting it.
+  Tensor<float, 2> empty(wraps_to_4, 0);
+  VERIFY_IS_EQUAL(empty.size(), 0);
+  VERIFY_IS_EQUAL(empty.dimension(0), wraps_to_4);
+#endif
+}
+
 // Regression test for issue #1616: unsigned index and dimension types must not
 // trigger narrowing errors in the variadic constructor, resize, and accessors.
 static void test_unsigned_indices() {
@@ -369,6 +445,8 @@ EIGEN_DECLARE_TEST(tensor_simple) {
   CALL_SUBTEST(test_3d());
   CALL_SUBTEST(test_simple_assign());
   CALL_SUBTEST(test_resize());
+  CALL_SUBTEST(test_resize_bad_alloc());
+  CALL_SUBTEST(test_size_overflow());
   CALL_SUBTEST(test_unsigned_indices());
   CALL_SUBTEST(test_narrowing_indices());
 }

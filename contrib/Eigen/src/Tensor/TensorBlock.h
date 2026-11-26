@@ -490,7 +490,7 @@ class TensorBlockScratchAllocator {
 
   ~TensorBlockScratchAllocator() {
     for (size_t i = 0; i < m_allocations.size(); ++i) {
-      m_device.deallocate(m_allocations[i].ptr);
+      if (m_allocations[i].ptr != nullptr) m_device.deallocate(m_allocations[i].ptr);
     }
   }
 
@@ -511,9 +511,14 @@ class TensorBlockScratchAllocator {
     // If current allocation can't fit requested size, we deallocate it, and
     // replace with a larger allocation.
     if (has_allocation && m_allocations[m_allocation_index].size < size) {
-      m_device.deallocate(m_allocations[m_allocation_index].ptr);
-      m_allocations[m_allocation_index].ptr = m_device.allocate(size);
-      m_allocations[m_allocation_index].size = size;
+      Allocation& allocation = m_allocations[m_allocation_index];
+      // The entry is emptied before the device is asked for the replacement: if that request throws, the destructor
+      // must not release the old buffer a second time.
+      if (allocation.ptr != nullptr) m_device.deallocate(allocation.ptr);
+      allocation.ptr = nullptr;
+      allocation.size = 0;
+      allocation.ptr = m_device.allocate(size);
+      allocation.size = size;
     }
 
     // Make a new allocation if we don't have an existing one.
@@ -732,6 +737,15 @@ struct XprScalar<void> {
 };
 
 // -------------------------------------------------------------------------- //
+// Blocks are materialized in raw memory (a scratch or temporary buffer): the
+// coefficients are assigned without having been constructed and are never
+// destroyed. An evaluator may therefore materialize blocks only of a Scalar
+// that needs no construction, and must not claim BlockAccess for any other.
+
+template <typename Scalar>
+struct is_block_materializable : bool_constant<!NumTraits<std::remove_const_t<Scalar>>::RequireInitialization> {};
+
+// -------------------------------------------------------------------------- //
 // TensorMaterializedBlock is a fully evaluated block of the original tensor,
 // and XprType is a view over its data, allowing non-unit outer strides. It is
 // used to materialize blocks of tensor expressions, that can't be efficiently
@@ -817,6 +831,9 @@ class TensorMaterializedBlock {
   template <typename TensorBlockScratch>
   EIGEN_STRONG_INLINE static Storage prepareStorage(TensorBlockDesc& desc, TensorBlockScratch& scratch,
                                                     bool allow_strided_storage = false) {
+    static_assert(is_block_materializable<Scalar>::value,
+                  "an evaluator whose Scalar requires initialization must not materialize blocks");
+
     // Try to reuse destination as an output block buffer.
     using DestinationBuffer = typename TensorBlockDesc::DestinationBuffer;
 

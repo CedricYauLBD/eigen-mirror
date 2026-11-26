@@ -60,17 +60,19 @@ namespace internal {
 template <typename FFT, typename XprType, int FFTResultType, int FFTDir>
 struct traits<TensorFFTOp<FFT, XprType, FFTResultType, FFTDir>> : public traits<XprType> {
   using XprTraits = traits<XprType>;
-  using Scalar = typename XprTraits::Scalar;
-  using RealScalar = typename NumTraits<Scalar>::Real;
-  using ComplexScalar = make_complex_t<Scalar>;
   using InputScalar = typename XprTraits::Scalar;
+  using RealScalar = typename NumTraits<InputScalar>::Real;
+  using ComplexScalar = make_complex_t<InputScalar>;
   using OutputScalar =
       std::conditional_t<FFTResultType == RealPart || FFTResultType == ImagPart, RealScalar, ComplexScalar>;
+  // Enclosing expressions size their copies of the result with Scalar, so it is the type of the coefficients. That
+  // is not InputScalar for a real input with BothParts, nor for a complex input with RealPart or ImagPart.
+  using Scalar = OutputScalar;
   using StorageKind = typename XprTraits::StorageKind;
   using Index = typename XprTraits::Index;
   static constexpr int NumDimensions = XprTraits::NumDimensions;
   static constexpr int Layout = XprTraits::Layout;
-  using PointerType = typename traits<XprType>::PointerType;
+  using PointerType = typename TypeConversion<Scalar, typename XprTraits::PointerType>::type;
 };
 
 template <typename FFT, typename XprType, int FFTResultType, int FFTDirection>
@@ -101,10 +103,9 @@ class TensorFFTOp : public TensorBase<TensorFFTOp<FFT, XprType, FFTResultType, F
  public:
   using Base = TensorBase<TensorFFTOp<FFT, XprType, FFTResultType, FFTDir>, ReadOnlyAccessors>;
   using Scalar = typename Eigen::internal::traits<TensorFFTOp>::Scalar;
-  using RealScalar = typename Eigen::NumTraits<Scalar>::Real;
-  using ComplexScalar = internal::make_complex_t<Scalar>;
-  using OutputScalar =
-      std::conditional_t<FFTResultType == RealPart || FFTResultType == ImagPart, RealScalar, ComplexScalar>;
+  using RealScalar = typename Eigen::internal::traits<TensorFFTOp>::RealScalar;
+  using ComplexScalar = typename Eigen::internal::traits<TensorFFTOp>::ComplexScalar;
+  using OutputScalar = typename Eigen::internal::traits<TensorFFTOp>::OutputScalar;
   using CoeffReturnType = OutputScalar;
   using Nested = typename Eigen::internal::ref_selector<TensorFFTOp>::type;
   using StorageKind = typename Eigen::internal::traits<TensorFFTOp>::StorageKind;
@@ -131,13 +132,12 @@ struct TensorEvaluator<const TensorFFTOp<FFT, ArgType, FFTResultType, FFTDir>, D
   static constexpr int NumDims = internal::array_size<typename TensorEvaluator<ArgType, Device>::Dimensions>::value;
   using Dimensions = DSizes<Index, NumDims>;
   using Scalar = typename XprType::Scalar;
-  using RealScalar = typename Eigen::NumTraits<Scalar>::Real;
-  using ComplexScalar = internal::make_complex_t<Scalar>;
   using InputDimensions = typename TensorEvaluator<ArgType, Device>::Dimensions;
   using XprTraits = internal::traits<XprType>;
-  using InputScalar = typename XprTraits::Scalar;
-  using OutputScalar =
-      std::conditional_t<FFTResultType == RealPart || FFTResultType == ImagPart, RealScalar, ComplexScalar>;
+  using RealScalar = typename XprTraits::RealScalar;
+  using ComplexScalar = typename XprTraits::ComplexScalar;
+  using InputScalar = typename XprTraits::InputScalar;
+  using OutputScalar = typename XprTraits::OutputScalar;
   using CoeffReturnType = OutputScalar;
   using PacketReturnType = typename PacketType<OutputScalar, Device>::type;
   static constexpr int PacketSize = internal::unpacket_traits<PacketReturnType>::size;
@@ -685,7 +685,8 @@ struct TensorEvaluator<const TensorFFTOp<FFT, ArgType, FFTResultType, FFTDir>, D
 
  protected:
   Index m_size;
-  const FFT EIGEN_DEVICE_REF m_fft;
+  // By value: argmax() and argmin() build this evaluator from a temporary expression and use it afterwards.
+  const FFT m_fft;
   Dimensions m_dimensions;
   array<Index, NumDims> m_strides;
   TensorEvaluator<ArgType, Device> m_impl;

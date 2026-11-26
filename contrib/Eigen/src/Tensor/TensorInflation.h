@@ -88,8 +88,8 @@ struct TensorEvaluator<const TensorInflationOp<Strides, ArgType>, Device> {
     // seed and index and keep it), and RawAccess means coeff() is a plain
     // buffer read. Requiring BlockAccess alone would needlessly exclude raw
     // arguments whose scalar is not arithmetic, such as complex tensors.
-    BlockAccess =
-        (TensorEvaluator<ArgType, Device>::BlockAccess || TensorEvaluator<ArgType, Device>::RawAccess) && NumDims > 0,
+    BlockAccess = (TensorEvaluator<ArgType, Device>::BlockAccess || TensorEvaluator<ArgType, Device>::RawAccess) &&
+                  NumDims > 0 && internal::is_block_materializable<Scalar>::value,
     // The coeff/packet path pays a div/mod walk plus a hole check per output
     // scalar; the block path is a zero-fill plus a sparse copy of the stride
     // lattice.
