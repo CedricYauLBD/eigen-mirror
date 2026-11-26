@@ -11,6 +11,7 @@
 
 #define EIGEN_USE_THREADS
 #include <cstdlib>
+#include <memory>
 #include "main.h"
 #include <Eigen/ThreadPool>
 
@@ -224,8 +225,44 @@ void test_stress_runqueue() {
   VERIFY(total.load() == 0);
 }
 
+// A Work whose move leaves the source owning a copy, as libc++'s std::function does for a small target.
+struct CopyOnMoveWork {
+  CopyOnMoveWork() = default;
+  explicit CopyOnMoveWork(const std::shared_ptr<int>& o) : owner(o) {}
+  CopyOnMoveWork(CopyOnMoveWork&& other) : owner(other.owner) {}
+  CopyOnMoveWork& operator=(CopyOnMoveWork&& other) {
+    owner = other.owner;
+    return *this;
+  }
+  std::shared_ptr<int> owner;
+};
+
+// A popped element must not stay alive in its slot of the queue: what it owns would be released only when the slot
+// is reused, and a thread pool task can wait for that release.
+void test_pop_releases_element() {
+  RunQueue<CopyOnMoveWork, 4> q;
+  const std::shared_ptr<int> owner = std::make_shared<int>(0);
+
+  q.PushFront(CopyOnMoveWork(owner));
+  VERIFY(q.PopFront().owner == owner);
+  VERIFY(owner.use_count() == 1);
+
+  q.PushBack(CopyOnMoveWork(owner));
+  VERIFY(q.PopBack().owner == owner);
+  VERIFY(owner.use_count() == 1);
+
+  for (int i = 0; i < 4; ++i) q.PushBack(CopyOnMoveWork(owner));
+  std::vector<CopyOnMoveWork> stolen;
+  VERIFY_IS_EQUAL(2u, q.PopBackHalf(&stolen));
+  stolen.clear();
+  VERIFY(owner.use_count() == 3);
+  q.Flush();
+  VERIFY(owner.use_count() == 1);
+}
+
 EIGEN_DECLARE_TEST(threads_runqueue) {
   CALL_SUBTEST_1(test_basic_runqueue());
+  CALL_SUBTEST_1(test_pop_releases_element());
   CALL_SUBTEST_2(test_empty_runqueue());
   CALL_SUBTEST_3(test_stress_runqueue());
 }

@@ -72,6 +72,9 @@ class RunQueue {
     uint8_t s = e->state.load(std::memory_order_relaxed);
     if (s != kReady || !e->state.compare_exchange_strong(s, kBusy, std::memory_order_acquire)) return Work();
     Work w = std::move(e->w);
+    // A moved-from Work can still own what it held: libc++ moves a std::function with a small target by copying the
+    // target. Reset it, so that the slot does not keep the closure alive until it is reused.
+    e->w = Work();
     e->state.store(kEmpty, std::memory_order_release);
     front = ((front - 1) & kMask2) | (front & ~kMask2);
     front_.store(front, std::memory_order_release);
@@ -102,6 +105,7 @@ class RunQueue {
     uint8_t s = e->state.load(std::memory_order_relaxed);
     if (s != kReady || !e->state.compare_exchange_strong(s, kBusy, std::memory_order_acquire)) return Work();
     Work w = std::move(e->w);
+    e->w = Work();  // See PopFront().
     e->state.store(kEmpty, std::memory_order_release);
     back_.store(back + 1 + (kSize << 1), std::memory_order_release);
     return w;
@@ -130,6 +134,7 @@ class RunQueue {
         eigen_plain_assert(s == kReady);
       }
       result->push_back(std::move(e->w));
+      e->w = Work();  // See PopFront().
       e->state.store(kEmpty, std::memory_order_release);
       n++;
     }
