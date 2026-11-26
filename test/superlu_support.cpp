@@ -45,6 +45,62 @@ void test_superlu_scaled_determinant() {
   VERIFY(numext::abs(lu.determinant() + 15.0) <= 4 * 18 * NumTraits<double>::epsilon() * 15.0);
 }
 
+// Each scalar type has its own SuperLU routines, and a row-major matrix is factorized as its transpose.
+template <typename Scalar, int Options>
+void test_superlu_factorization() {
+  using DenseMatrix = Matrix<Scalar, 3, 3>;
+  using DenseVector = Matrix<Scalar, 3, 1>;
+  DenseMatrix dense;
+  dense << 1, 2, 0, 0, 1, 1, 1, 3, 1;  // The third row is the sum of the other two.
+  SparseMatrix<Scalar, Options> A = dense.sparseView();
+  SuperLU<SparseMatrix<Scalar, Options> > lu(A);
+  // Under LeakSanitizer this also checks that a factorization that stops at a zero pivot frees what it allocated.
+  VERIFY_IS_EQUAL(lu.info(), NumericalIssue);
+
+  dense(2, 2) = 3;
+  A = dense.sparseView();
+  lu.compute(A);
+  VERIFY_IS_EQUAL(lu.info(), Success);
+  const DenseVector x = DenseVector::Random();
+  const DenseVector b = dense * x;
+  VERIFY_IS_APPROX(lu.solve(b).eval(), x);
+}
+
+#ifdef EIGEN_SUPERLU_HAS_FACTORIZATION_STEPS
+// SuperLU::factorize() always runs with ConditionNumber == NO, so this calls the factorization itself.
+int superlu_factorize_info(yes_no_t condition_number) {
+  SparseMatrix<double> A(2, 2);
+  A.insert(0, 0) = 1;
+  A.insert(0, 1) = 1;
+  A.insert(1, 1) = 1e-30;
+  A.makeCompressed();
+  SluMatrix sluA = internal::asSluMatrix(A);
+
+  superlu_options_t options;
+  set_default_options(&options);
+  options.Equil = NO;  // Scaling the second row would make A well conditioned.
+  options.ConditionNumber = condition_number;
+  int perm_c[2], perm_r[2], etree[2];
+  double R[2], C[2];
+  char equed;
+  SuperMatrix L, U;
+  SuperLUStat_t stats;
+  int info = -1;
+  StatInit(&stats);
+  internal::superlu_factorize<double>(&options, &sluA, perm_c, perm_r, etree, &equed, R, C, &L, &U, &stats, &info);
+  StatFree(&stats);
+  Destroy_SuperNode_Matrix(&L);
+  Destroy_CompCol_Matrix(&U);
+  return info;
+}
+
+void test_superlu_condition_number() {
+  VERIFY_IS_EQUAL(superlu_factorize_info(NO), 0);
+  // info == n + 1 reports a matrix that is singular to working precision.
+  VERIFY_IS_EQUAL(superlu_factorize_info(YES), 3);
+}
+#endif
+
 EIGEN_DECLARE_TEST(superlu_support) {
   SuperLU<SparseMatrix<double> > superlu_double_colmajor;
   SuperLU<SparseMatrix<std::complex<double> > > superlu_cplxdouble_colmajor;
@@ -54,4 +110,12 @@ EIGEN_DECLARE_TEST(superlu_support) {
   CALL_SUBTEST_2(check_sparse_square_determinant(superlu_cplxdouble_colmajor));
   CALL_SUBTEST_1(test_superlu_singular_determinant());
   CALL_SUBTEST_1(test_superlu_scaled_determinant());
+  CALL_SUBTEST_1((test_superlu_factorization<double, ColMajor>()));
+  CALL_SUBTEST_1((test_superlu_factorization<double, RowMajor>()));
+  CALL_SUBTEST_1((test_superlu_factorization<float, ColMajor>()));
+  CALL_SUBTEST_2((test_superlu_factorization<std::complex<double>, RowMajor>()));
+  CALL_SUBTEST_2((test_superlu_factorization<std::complex<float>, ColMajor>()));
+#ifdef EIGEN_SUPERLU_HAS_FACTORIZATION_STEPS
+  CALL_SUBTEST_1(test_superlu_condition_number());
+#endif
 }
