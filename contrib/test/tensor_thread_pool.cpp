@@ -844,6 +844,54 @@ void test_multithreaded_full_reduction_throws() {
 #endif
 }
 
+// A sum whose initialize() throws once, when armed. The sharded full reduction calls it first to set up its shards.
+struct ThrowingInitSumReducer {
+  static bool armed;
+  void reduce(const float t, float* accum) const { *accum += t; }
+  float initialize() const {
+    if (armed) {
+      armed = false;
+      EIGEN_THROW_X(std::runtime_error("ThrowingInitSumReducer"));
+    }
+    return 0;
+  }
+  float finalize(const float accum) const { return accum; }
+};
+bool ThrowingInitSumReducer::armed = false;
+
+namespace Eigen {
+namespace internal {
+// The sharded full reduction merges its shards through reduce(), which this sum permits.
+template <>
+struct reducer_can_reorder_accumulators<ThrowingInitSumReducer> : std::true_type {};
+}  // namespace internal
+}  // namespace Eigen
+
+// A full reduction that throws while it sets up its shards, before it has enqueued any, must not leave its barrier
+// waiting for notifications that will never arrive.
+template <typename = void>
+void test_multithreaded_full_reduction_throws_in_setup() {
+#ifdef EIGEN_EXCEPTIONS
+  PoolDevice pool(4);
+  Tensor<float, 1> t(1 << 20);
+  t.setConstant(1.0f);
+  Tensor<float, 0> result;
+  result.setConstant(-1.0f);
+
+  ThrowingInitSumReducer::armed = true;
+  bool threw = false;
+  try {
+    result.device(pool.device) = t.reduce(array<Index, 1>{{0}}, ThrowingInitSumReducer());
+  } catch (const std::runtime_error&) {
+    threw = true;
+  }
+  VERIFY(threw);
+
+  result.device(pool.device) = t.reduce(array<Index, 1>{{0}}, ThrowingInitSumReducer());
+  VERIFY_IS_EQUAL(result(), static_cast<float>(t.size()));
+#endif
+}
+
 // reduce() squares each value, so partial results cannot be merged through it.
 struct SquaredSumReducer {
   void reduce(const double t, double* accum) const { *accum += t * t; }
@@ -1481,6 +1529,7 @@ EIGEN_DECLARE_TEST(tensor_thread_pool) {
   CALL_SUBTEST_11(test_multithreaded_reductions<ColMajor>());
   CALL_SUBTEST_11(test_multithreaded_reductions<RowMajor>());
   CALL_SUBTEST_11(test_multithreaded_full_reduction_throws<>());
+  CALL_SUBTEST_11(test_multithreaded_full_reduction_throws_in_setup<>());
   CALL_SUBTEST_11(test_multithreaded_complex_reduction<>());
   CALL_SUBTEST_11(test_multithreaded_value_transforming_full_reduction<>());
   CALL_SUBTEST_11(test_multithreaded_argmax<>());

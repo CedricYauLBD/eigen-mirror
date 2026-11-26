@@ -124,7 +124,7 @@ struct TensorEvaluator<const TensorCustomUnaryOp<CustomUnaryFunc, XprType>, Devi
           m_device.get((CoeffReturnType*)m_device.allocate_temp(dimensions().TotalSize() * sizeof(CoeffReturnType))));
       // The functor writes the temporary by assignment, so scalars that require initialization must be constructed
       // first. cleanup() destructs them.
-      EIGEN_IF_CONSTEXPR (NumTraits<CoeffReturnType>::RequireInitialization) {
+      EIGEN_IF_CONSTEXPR (internal::temporaries_need_construction<CoeffReturnType, Device>::value) {
         EIGEN_TRY { internal::default_construct_elements_of_array(m_result, dimensions().TotalSize()); }
         EIGEN_CATCH(...) {
           m_device.deallocate_temp(m_result);
@@ -144,7 +144,7 @@ struct TensorEvaluator<const TensorCustomUnaryOp<CustomUnaryFunc, XprType>, Devi
 
   EIGEN_STRONG_INLINE void cleanup() {
     if (m_result) {
-      EIGEN_IF_CONSTEXPR (NumTraits<CoeffReturnType>::RequireInitialization) {
+      EIGEN_IF_CONSTEXPR (internal::temporaries_need_construction<CoeffReturnType, Device>::value) {
         internal::destruct_elements_of_array(m_result, dimensions().TotalSize());
       }
       m_device.deallocate_temp(m_result);
@@ -316,7 +316,7 @@ struct TensorEvaluator<const TensorCustomBinaryOp<CustomBinaryFunc, LhsXprType, 
           m_device.get((CoeffReturnType*)m_device.allocate_temp(dimensions().TotalSize() * sizeof(CoeffReturnType))));
       // The functor writes the temporary by assignment, so scalars that require initialization must be constructed
       // first. cleanup() destructs them.
-      EIGEN_IF_CONSTEXPR (NumTraits<CoeffReturnType>::RequireInitialization) {
+      EIGEN_IF_CONSTEXPR (internal::temporaries_need_construction<CoeffReturnType, Device>::value) {
         EIGEN_TRY { internal::default_construct_elements_of_array(m_result, dimensions().TotalSize()); }
         EIGEN_CATCH(...) {
           m_device.deallocate_temp(m_result);
@@ -336,7 +336,7 @@ struct TensorEvaluator<const TensorCustomBinaryOp<CustomBinaryFunc, LhsXprType, 
 
   EIGEN_STRONG_INLINE void cleanup() {
     if (m_result != nullptr) {
-      EIGEN_IF_CONSTEXPR (NumTraits<CoeffReturnType>::RequireInitialization) {
+      EIGEN_IF_CONSTEXPR (internal::temporaries_need_construction<CoeffReturnType, Device>::value) {
         internal::destruct_elements_of_array(m_result, dimensions().TotalSize());
       }
       m_device.deallocate_temp(m_result);

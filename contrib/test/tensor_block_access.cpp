@@ -454,6 +454,54 @@ struct RefusingDevice {
 };
 #endif
 
+#ifdef EIGEN_EXCEPTIONS
+// operator new refuses requests of g_refused_new_size bytes, to make a std::vector growth throw.
+static std::size_t g_refused_new_size = 0;
+void* operator new(std::size_t size) {
+  if (size == g_refused_new_size) throw std::bad_alloc();
+  void* ptr = std::malloc(size > 0 ? size : 1);
+  if (ptr == nullptr) throw std::bad_alloc();
+  return ptr;
+}
+void* operator new[](std::size_t size) { return operator new(size); }
+void operator delete(void* ptr) noexcept { std::free(ptr); }
+void operator delete[](void* ptr) noexcept { std::free(ptr); }
+void operator delete(void* ptr, std::size_t) noexcept { std::free(ptr); }
+void operator delete[](void* ptr, std::size_t) noexcept { std::free(ptr); }
+
+// A buffer that the scratch allocator cannot record, because its list of buffers cannot grow, is not leaked.
+static void test_scratch_allocator_failed_registration() {
+  struct Entry {
+    void* ptr;
+    size_t size;
+  };
+  RefusingDevice device;
+  {
+    internal::TensorBlockScratchAllocator<RefusingDevice> scratch(device);
+    // The first allocation reserves room for 8 entries; the 9th makes the list grow to 16.
+    for (int i = 0; i < 8; ++i) scratch.allocate(64);
+    VERIFY_IS_EQUAL(device.live.size(), size_t(8));
+
+    g_refused_new_size = 16 * sizeof(Entry);
+    bool threw = false;
+    try {
+      scratch.allocate(64);
+    } catch (const std::bad_alloc&) {
+      threw = true;
+    }
+    g_refused_new_size = 0;
+    VERIFY(threw);
+    VERIFY_IS_EQUAL(device.live.size(), size_t(8));
+
+    // The allocator stays usable once memory is available again.
+    scratch.reset();
+    for (int i = 0; i < 9; ++i) scratch.allocate(64);
+    VERIFY_IS_EQUAL(device.live.size(), size_t(9));
+  }
+  VERIFY(device.live.empty());
+}
+#endif
+
 // A scratch buffer that the device refuses to grow is not released twice.
 static void test_scratch_allocator_failed_growth() {
 #ifdef EIGEN_EXCEPTIONS
@@ -518,6 +566,9 @@ EIGEN_DECLARE_TEST(tensor_block_access) {
   TEST_LAYOUTS_WITH_ARG(test_empty_dims, TensorBlockShapeType::kUniformAllDims);
   TEST_LAYOUTS_WITH_ARG(test_empty_dims, TensorBlockShapeType::kSkewedInnerDims);
   CALL_SUBTEST(test_scratch_allocator_failed_growth());
+#ifdef EIGEN_EXCEPTIONS
+  CALL_SUBTEST(test_scratch_allocator_failed_registration());
+#endif
 }
 
 #undef TEST_LAYOUTS

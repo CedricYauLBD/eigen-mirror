@@ -148,6 +148,70 @@ static void test_autodiff_scan() {
   }
 }
 
+// A sum that throws from reduce() while armed.
+template <typename T>
+struct ThrowingSumReducer {
+  static bool armed;
+  void reduce(const T t, T* accum) const {
+    if (armed) EIGEN_THROW_X(std::runtime_error("ThrowingSumReducer"));
+    *accum += t;
+  }
+  T initialize() const { return T(0); }
+  T finalize(const T accum) const { return accum; }
+};
+template <typename T>
+bool ThrowingSumReducer<T>::armed = false;
+
+// The input of a scan can own a temporary (here, the buffer of an inner scan). When the scan throws while it is set up,
+// the executor has no evaluator to clean up yet, so the scan must release the temporary itself.
+template <int DataLayout>
+static void test_throwing_scan_releases_input() {
+#ifdef EIGEN_EXCEPTIONS
+  Tensor<float, 2, DataLayout> tensor(5, 7);
+  tensor.setRandom();
+  const Tensor<AnnoyingScalar, 2, DataLayout> a_tensor = tensor.template cast<AnnoyingScalar>();
+  AnnoyingScalar::instances = 0;
+  const int base = AnnoyingScalar::instances;
+  {
+    Tensor<AnnoyingScalar, 2, DataLayout> result(5, 7);
+    result.setZero();
+    const auto scan = [&](const Tensor<AnnoyingScalar, 2, DataLayout>& in) {
+      return in.cumsum(0).scan(1, ThrowingSumReducer<AnnoyingScalar>());
+    };
+    ThrowingSumReducer<AnnoyingScalar>::armed = true;
+    bool threw = false;
+    try {
+      result = scan(a_tensor);  // same shape: the scan writes into the destination directly
+    } catch (const std::runtime_error&) {
+      threw = true;
+    }
+    VERIFY(threw);
+    VERIFY_IS_EQUAL(AnnoyingScalar::instances, base + 35);  // result only
+
+    threw = false;
+    try {
+      Tensor<AnnoyingScalar, 2, DataLayout> other = scan(a_tensor);  // a temporary result
+    } catch (const std::runtime_error&) {
+      threw = true;
+    }
+    ThrowingSumReducer<AnnoyingScalar>::armed = false;
+    VERIFY(threw);
+    VERIFY_IS_EQUAL(AnnoyingScalar::instances, base + 35);
+  }
+  VERIFY_IS_EQUAL(AnnoyingScalar::instances, base);
+#endif
+}
+
+// Scalars that require initialization are constructed in temporaries from the host only for devices whose temporaries
+// are host memory. A GPU or SYCL device allocates them in device memory, which host code must not construct in.
+static void test_temporaries_are_host_memory() {
+  STATIC_CHECK((internal::temporaries_are_host_memory<DefaultDevice>::value));
+  STATIC_CHECK((internal::temporaries_are_host_memory<const DefaultDevice>::value));
+  STATIC_CHECK((!internal::temporaries_are_host_memory<GpuDevice>::value));
+  STATIC_CHECK((!internal::temporaries_are_host_memory<const GpuDevice>::value));
+  STATIC_CHECK((!internal::temporaries_are_host_memory<SyclDevice>::value));
+}
+
 EIGEN_DECLARE_TEST(tensor_scan) {
   CALL_SUBTEST((test_1d_scan<ColMajor, float, true>()));
   CALL_SUBTEST((test_1d_scan<ColMajor, float, false>()));
@@ -161,4 +225,7 @@ EIGEN_DECLARE_TEST(tensor_scan) {
   CALL_SUBTEST(test_scalar_require_initialization<RowMajor>());
   CALL_SUBTEST(test_autodiff_scan<ColMajor>());
   CALL_SUBTEST(test_autodiff_scan<RowMajor>());
+  CALL_SUBTEST(test_throwing_scan_releases_input<ColMajor>());
+  CALL_SUBTEST(test_throwing_scan_releases_input<RowMajor>());
+  CALL_SUBTEST(test_temporaries_are_host_memory());
 }

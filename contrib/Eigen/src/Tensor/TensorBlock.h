@@ -523,6 +523,9 @@ class TensorBlockScratchAllocator {
 
     // Make a new allocation if we don't have an existing one.
     if (!has_allocation) {
+      // Room for the entry is made before the device is asked for the buffer, so that push_back() below cannot throw
+      // with a buffer that nothing owns.
+      if (m_allocations.size() == m_allocations.capacity()) m_allocations.reserve(2 * m_allocations.capacity());
       Allocation allocation;
       allocation.ptr = m_device.allocate(size);
       allocation.size = size;

@@ -414,9 +414,11 @@ struct FullReducer<Self, Op, ThreadPoolDevice, Vectorizable> {
     const Index numblocks = blocksize > 0 ? num_coeffs / blocksize : 0;
     eigen_assert(num_coeffs >= numblocks * blocksize);
 
-    Barrier barrier(internal::convert_index<unsigned int>(numblocks));
+    // Everything that can throw before the first shard is enqueued comes before the barrier: its destructor requires
+    // that all notifications have arrived.
     MaxSizeVector<typename Self::CoeffReturnType> shards(numblocks, reducer.initialize());
     typename Self::CoeffReturnType finalShard;
+    Barrier barrier(internal::convert_index<unsigned int>(numblocks));
     // The enqueued shards reference this frame, the reducer and the caller's evaluator, so an exception from
     // enqueue() or from the calling thread's part must wait for them before it propagates.
     Index enqueued = 0;
