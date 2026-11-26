@@ -40,25 +40,22 @@ class ThreadPoolTempl : public Eigen::ThreadPoolInterface {
 
   ThreadPoolTempl(int num_threads, bool allow_spinning, Environment env = Environment())
       : env_(env),
-        num_threads_(num_threads),
+        num_threads_(CheckedNumThreads(num_threads)),
         allow_spinning_(allow_spinning),
         spin_count_(
             // TODO(dvyukov,rmlarsen): The time spent in NonEmptyQueueIndex() is proportional to num_threads_ and
             // we assume that new work is scheduled at a constant rate, so we divide `kSpinCount` by number of
             // threads and number of spinning threads. The constant was picked based on a fair dice roll, tune it.
-            allow_spinning && num_threads > 0 ? kSpinCount / kMaxSpinningThreads / num_threads : 0),
-        thread_data_(num_threads),
-        all_coprimes_(num_threads),
-        waiters_(num_threads),
+            allow_spinning && num_threads_ > 0 ? kSpinCount / kMaxSpinningThreads / num_threads_ : 0),
+        thread_data_(num_threads_),
+        all_coprimes_(num_threads_),
+        waiters_(num_threads_),
         global_steal_partition_(EncodePartition(0, num_threads_)),
         spinning_state_(0),
         blocked_(0),
         done_(false),
         cancelled_(false),
         ec_(waiters_) {
-    // ec_ cannot check this itself, because waiters_ was still empty when ec_ was constructed. Beyond kMaxWaiters,
-    // ec_ loses the wakeups of parked workers.
-    eigen_assert(num_threads_ <= EventCount::kMaxWaiters);
     waiters_.resize(num_threads_);
     // Calculate coprimes of all numbers [1, num_threads].
     // Coprimes are used for random walks over all threads in Steal
@@ -335,6 +332,14 @@ class ThreadPoolTempl : public Eigen::ThreadPoolInterface {
       return (num_no_notification << kNumNoNotifyShift) | num_spinning;
     }
   };
+
+  // ec_ cannot check this itself, because waiters_ was still empty when ec_ was constructed. Beyond kMaxWaiters, ec_
+  // loses the wakeups of parked workers. This runs while num_threads_ is initialized, so that the assertion precedes
+  // the allocation of the per-worker queues.
+  static int CheckedNumThreads(int num_threads) {
+    eigen_assert(num_threads <= EventCount::kMaxWaiters);
+    return num_threads;
+  }
 
   Environment env_;
   const int num_threads_;
