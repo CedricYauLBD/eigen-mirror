@@ -1482,6 +1482,29 @@ void sparse_reserve_overflow() {
     for (Index k = 0; k < 5; ++k) VERIFY_IS_EQUAL(m.coeff(k, k), double(k + 1));
     VERIFY_IS_EQUAL(m.coeff(0, 4), 6.0);
     VERIFY_IS_EQUAL(m.coeff(4, 0), 7.0);
+
+    // A size that does not fit in Index must not narrow to a small positive one: 2^32 + 1 is 1 in a 32-bit Index.
+    // The wide types below do not fit in any Index narrower than 64 bits, or in a narrower StorageIndex.
+    SpMat w(1, 1);
+    w.insert(0, 0) = 1.0;
+    if (compressed) w.makeCompressed();
+    const long long wideSigned = sizeof(Index) < 8 ? (1LL << 32) + 1 : NumTraits<long long>::highest();
+    const unsigned long long wideUnsigned = sizeof(Index) < 8 ? (1ULL << 32) + 1 : (1ULL << 63) + 1;
+    for (int kind = 0; kind < 2; ++kind) {
+      bool wideThrew = false;
+      try {
+        if (kind == 0)
+          w.reserve(std::vector<long long>(1, wideSigned));
+        else
+          w.reserve(std::vector<unsigned long long>(1, wideUnsigned));
+      } catch (const std::bad_alloc&) {
+        wideThrew = true;
+      }
+      VERIFY(wideThrew);
+      VERIFY_IS_EQUAL(w.isCompressed(), compressed == 1);
+      VERIFY_IS_EQUAL(w.nonZeros(), 1);
+      VERIFY_IS_EQUAL(w.coeff(0, 0), 1.0);
+    }
   }
 
   // The single-size overload adds to the stored entries as well.
