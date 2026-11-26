@@ -260,7 +260,7 @@ struct ScalarBinaryOpTraits<OverAlignedScalar, OverAlignedScalar> {
 // hold result scalars, so they must be aligned as the result itself is.
 void verify_threaded_scatter_overaligned() {
   using Scalar = OverAlignedScalar;
-  STATIC_CHECK((internal::functor_is_commutative<internal::scalar_product_op<Scalar> >::value));
+  STATIC_CHECK((internal::functor_is_commutative<internal::scalar_product_op<Scalar>>::value));
   const int prev_threads = Eigen::nbThreads();
   Eigen::setNbThreads(4);
 
