@@ -56,6 +56,9 @@ class ThreadPoolTempl : public Eigen::ThreadPoolInterface {
         done_(false),
         cancelled_(false),
         ec_(waiters_) {
+    // ec_ cannot check this itself, because waiters_ was still empty when ec_ was constructed. Beyond kMaxWaiters,
+    // ec_ loses the wakeups of parked workers.
+    eigen_assert(num_threads_ <= EventCount::kMaxWaiters);
     waiters_.resize(num_threads_);
     // Calculate coprimes of all numbers [1, num_threads].
     // Coprimes are used for random walks over all threads in Steal
@@ -473,6 +476,13 @@ class ThreadPoolTempl : public Eigen::ThreadPoolInterface {
         // Now other worker threads can start exiting, which is bad if the
         // work item submits other work. So we just check emptiness here,
         // which ensures that all worker threads exit at the same time.
+        blocked_--;
+        return true;
+      }
+      // A peer that also saw blocked_ == num_threads_ may have found the last task in its re-check, decremented
+      // blocked_ and popped it; that task can schedule more work. A worker counted in blocked_ neither holds nor runs
+      // a task, so empty queues with blocked_ still at num_threads_ mean that no task is queued or running.
+      if (blocked_ != static_cast<unsigned>(num_threads_)) {
         blocked_--;
         return true;
       }

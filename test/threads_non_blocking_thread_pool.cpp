@@ -143,6 +143,29 @@ static void test_parallelism(bool allow_spinning, int kThreads = 16) {
   }
 }
 
+// The destructor runs all scheduled work, including work that a running task schedules and waits for, so no worker
+// may exit while another one runs a task. The race in WaitForWork() that broke this is too narrow to hit without a
+// delay inside it, so this checks the contract rather than the interleaving.
+static void test_destroy_with_nested_work(bool allow_spinning) {
+  for (int iter = 0; iter < 100; ++iter) {
+    std::atomic<int> done(0);
+    {
+      ThreadPool tp(2, allow_spinning);
+      tp.Schedule([&]() {
+        // One worker waits here, the other one has to run the subtask.
+        std::atomic<bool> subtask_done(false);
+        tp.Schedule([&]() {
+          done++;
+          subtask_done = true;
+        });
+        VERIFY(spin_wait([&] { return subtask_done.load(); }));
+        done++;
+      });
+    }
+    VERIFY_IS_EQUAL(done.load(), 2);
+  }
+}
+
 static void test_cancel() {
   ThreadPool tp(2);
 
@@ -336,15 +359,31 @@ static void test_maybe_get_task_from_other_pool() {
   VERIFY_IS_EQUAL(taken.load(), 0);
 }
 
+// Creates no threads, so that a missing assertion does not start kMaxWaiters + 1 of them.
+struct NoThreadEnvironment : StlThreadEnvironment {
+  struct EnvThread {
+    void OnCancel() {}
+  };
+  EnvThread* CreateThread(const std::function<void()>&) { return new EnvThread; }
+};
+
+// The pool's EventCount cannot wake a parked worker whose index is kMaxWaiters or more.
+static void test_thread_count_limit() {
+  VERIFY_RAISES_ASSERT(ThreadPoolTempl<NoThreadEnvironment>(EventCount::kMaxWaiters + 1));
+}
+
 EIGEN_DECLARE_TEST(threads_non_blocking_thread_pool) {
   CALL_SUBTEST(test_parallelism<DelayingThreadEnvironment>(true, 4));
   CALL_SUBTEST(test_create_destroy_empty_pool());
   CALL_SUBTEST(test_parallelism(true));
   CALL_SUBTEST(test_parallelism(false));
+  CALL_SUBTEST(test_destroy_with_nested_work(true));
+  CALL_SUBTEST(test_destroy_with_nested_work(false));
   CALL_SUBTEST(test_cancel());
   CALL_SUBTEST(test_cancel_while_task_schedules());
   CALL_SUBTEST(test_cancel_destroys_queued_closures_before_join());
   CALL_SUBTEST(test_cancel_races_with_idle_workers());
   CALL_SUBTEST(test_pool_partitions());
   CALL_SUBTEST(test_maybe_get_task_from_other_pool());
+  CALL_SUBTEST(test_thread_count_limit());
 }

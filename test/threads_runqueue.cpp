@@ -109,6 +109,46 @@ void test_basic_runqueue() {
   VERIFY_IS_EQUAL(0u, q.Size());
 }
 
+// Counts moves, to detect when a std::vector holding it reallocates.
+struct CountedWork {
+  static int moves;
+  int value;
+  CountedWork(int v = 0) : value(v) {}
+  CountedWork(CountedWork&& other) noexcept : value(other.value) { moves++; }
+  CountedWork& operator=(CountedWork&& other) noexcept {
+    value = other.value;
+    moves++;
+    return *this;
+  }
+};
+int CountedWork::moves = 0;
+
+// PopBackHalf stores back_ only after taking its last element, so a std::bad_alloc from the result vector in between
+// would leave a hole in the queue. The vector must grow before the first element is taken: each element taken is
+// moved exactly once, and the elements already in the vector only if it grew.
+void test_pop_back_half_grows_result_first() {
+  RunQueue<CountedWork, 16> q;
+  std::vector<CountedWork> stolen;
+  for (int round = 0; round < 3; round++) {
+    for (int i = 1; i <= 16; i++) VERIFY_IS_EQUAL(0, q.PushFront(CountedWork(i)).value);
+    unsigned expected = 8;
+    while (!q.Empty()) {
+      const std::size_t size = stolen.size();
+      const std::size_t capacity = stolen.capacity();
+      CountedWork::moves = 0;
+      VERIFY_IS_EQUAL(expected, q.PopBackHalf(&stolen));
+      VERIFY_IS_EQUAL(size + expected, stolen.size());
+      VERIFY_IS_EQUAL(static_cast<std::size_t>(CountedWork::moves),
+                      expected + (stolen.capacity() == capacity ? 0 : size));
+      expected = (expected + 1) / 2;
+    }
+    VERIFY_IS_EQUAL(0u, q.Size());
+  }
+  int count[17] = {0};
+  for (const CountedWork& w : stolen) count[w.value]++;
+  for (int i = 1; i <= 16; i++) VERIFY_IS_EQUAL(3, count[i]);
+}
+
 // Empty tests that the queue is not claimed to be empty when is is in fact not.
 // Emptiness property is crucial part of thread pool blocking scheme,
 // so we go to great effort to ensure this property. We create a queue with
@@ -226,6 +266,7 @@ void test_stress_runqueue() {
 
 EIGEN_DECLARE_TEST(threads_runqueue) {
   CALL_SUBTEST_1(test_basic_runqueue());
+  CALL_SUBTEST_1(test_pop_back_half_grows_result_first());
   CALL_SUBTEST_2(test_empty_runqueue());
   CALL_SUBTEST_3(test_stress_runqueue());
 }

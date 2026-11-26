@@ -54,8 +54,9 @@ class EventCount {
  public:
   class Waiter;
 
+  // `waiters` may be resized after this, but must never hold more than kMaxWaiters elements.
   EventCount(MaxSizeVector<Waiter>& waiters) : state_(kStackMask), waiters_(waiters) {
-    eigen_plain_assert(waiters.size() < (1 << kWaiterBits) - 1);
+    eigen_plain_assert(waiters.size() <= static_cast<size_t>(kMaxWaiters));
   }
 
   EventCount(const EventCount&) = delete;
@@ -73,6 +74,8 @@ class EventCount {
     uint64_t state = state_.load(std::memory_order_relaxed);
     for (;;) {
       CheckState(state);
+      // One more waiter than kMaxWaiters would carry into the signal count.
+      eigen_plain_assert((state & kWaiterMask) != kWaiterMask);
       uint64_t newstate = state + kWaiterInc;
       CheckState(newstate);
       if (state_.compare_exchange_weak(state, newstate, std::memory_order_seq_cst)) return;
@@ -191,6 +194,10 @@ class EventCount {
   static const uint64_t kEpochInc = 1ull << kEpochShift;
 
  public:
+  // The largest number of waiters an EventCount can serve. The index kStackMask is not available to a waiter, and
+  // the pre-wait and signal counts, which can both reach the number of waiters, must fit in kWaiterBits.
+  static constexpr int kMaxWaiters = (1 << kWaiterBits) - 1;
+
   class Waiter {
     friend class EventCount;
 
@@ -213,7 +220,6 @@ class EventCount {
     const uint64_t waiters = (state & kWaiterMask) >> kWaiterShift;
     const uint64_t signals = (state & kSignalMask) >> kSignalShift;
     eigen_plain_assert(waiters >= signals);
-    eigen_plain_assert(waiters < (1 << kWaiterBits) - 1);
     eigen_plain_assert(!waiter || waiters > 0);
     (void)waiter;
     (void)waiters;

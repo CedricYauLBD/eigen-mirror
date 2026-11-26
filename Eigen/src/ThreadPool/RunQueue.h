@@ -116,6 +116,11 @@ class RunQueue {
     unsigned size = Size();
     unsigned mid = back;
     if (size > 1) mid = back + (size - 1) / 2;
+    // Grow result before claiming anything: back_ is stored only after the loop, so a push_back that throws would
+    // leave a claimed element kBusy, or kEmpty elements inside the queue. Grow at least geometrically to keep
+    // repeated appends amortized.
+    const std::size_t needed = result->size() + (mid - back) + 1;
+    if (result->capacity() < needed) result->reserve(numext::maxi(needed, 2 * result->capacity()));
     unsigned n = 0;
     unsigned start = 0;
     for (; static_cast<int>(mid - back) >= 0; mid--) {
