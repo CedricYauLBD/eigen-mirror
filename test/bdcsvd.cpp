@@ -260,7 +260,7 @@ void bdcsvd_allocation_size_overflow() {
   };
   const Index maxSize = NumTraits<Index>::highest();
   // The smallest n = diagSize + 1 whose workspace does not fit, and the largest n such that an n x n matrix fits.
-  const Index workspaceLimit = Index(std::sqrt(static_cast<double>(maxSize / 3))) + 1;
+  const Index workspaceLimit = Index(std::sqrt(static_cast<double>(maxSize) / 3)) + 1;
   const Index matrixLimit = Index(std::sqrt(static_cast<double>(maxSize)));
   VERIFY(workspaceLimit > maxSize / 3 / workspaceLimit && workspaceLimit - 1 <= maxSize / 3 / (workspaceLimit - 1));
   VERIFY(matrixLimit <= maxSize / matrixLimit && matrixLimit + 1 > maxSize / (matrixLimit + 1));
