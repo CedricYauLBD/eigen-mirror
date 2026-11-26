@@ -30,8 +30,8 @@ struct inner_product_assert {
 
 template <typename Func, typename Lhs, typename Rhs>
 struct inner_product_evaluator {
-  static constexpr int LhsFlags = evaluator<Lhs>::Flags;
-  static constexpr int RhsFlags = evaluator<Rhs>::Flags;
+  static constexpr int LhsFlags = vector_evaluator<Lhs>::Flags;
+  static constexpr int RhsFlags = vector_evaluator<Rhs>::Flags;
   static constexpr int SizeAtCompileTime = size_prefer_fixed(Lhs::SizeAtCompileTime, Rhs::SizeAtCompileTime);
   static constexpr int MaxSizeAtCompileTime =
       min_size_prefer_fixed(Lhs::MaxSizeAtCompileTime, Rhs::MaxSizeAtCompileTime);
@@ -74,8 +74,8 @@ struct inner_product_evaluator {
   }
 
   const Func m_func;
-  const evaluator<Lhs> m_lhs;
-  const evaluator<Rhs> m_rhs;
+  const vector_evaluator<Lhs> m_lhs;
+  const vector_evaluator<Rhs> m_rhs;
   const variable_if_dynamic<Index, SizeAtCompileTime> m_size;
 };
 

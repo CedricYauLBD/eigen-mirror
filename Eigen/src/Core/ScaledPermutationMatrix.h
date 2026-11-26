@@ -372,6 +372,7 @@ class ScaledPermutationMatrix
   using ScalesType = typename Traits::ScalesType;
   using IndicesType = typename PermutationType::IndicesType;
 #endif
+  EIGEN_MAKE_ALIGNED_OPERATOR_NEW_IF(bool(IndicesType::NeedsToAlign) || bool(ScalesType::NeedsToAlign))
 
   /** Default constructor; the matrix is uninitialized. */
   EIGEN_DEVICE_FUNC ScaledPermutationMatrix() = default;

@@ -176,8 +176,9 @@ struct symm_pack_rhs {
       }
     }
 
-    // copy the remaining columns one at a time (=> the same with nr==1)
-    for (Index j2 = packet_cols4; j2 < cols; ++j2) {
+    // copy the remaining columns one at a time (=> the same with nr==1). The first part has already packed the columns
+    // left of k2: with nr >= 4 they lie below packet_cols4 (k2 is on the panel grid), with nr < 4 packet_cols4 is 0.
+    for (Index j2 = numext::maxi(packet_cols4, k2); j2 < cols; ++j2) {
       // transpose
       Index half = numext::mini(end_k, j2);
       for (Index k = k2; k < half; k++) {
@@ -269,8 +270,9 @@ product_selfadjoint_matrix<Scalar, Index, LhsStorageOrder, true, ConjugateLhs, R
                 LhsStorageOrder == RowMajor ? ColMajor : RowMajor, true>
       pack_lhs_transposed;
 
-  for (Index k2 = 0; k2 < size; k2 += kc) {
-    const Index actual_kc = (std::min)(k2 + kc, size) - k2;
+  // Advance by the block just processed: k2 + kc and i2 + mc can overflow a 32-bit Index.
+  for (Index k2 = 0, actual_kc; k2 < size; k2 += actual_kc) {
+    actual_kc = (std::min)(kc, size - k2);
 
     // we have selected one row panel of rhs and one column panel of lhs
     // pack rhs's panel into a sequential chunk of memory
@@ -281,8 +283,8 @@ product_selfadjoint_matrix<Scalar, Index, LhsStorageOrder, true, ConjugateLhs, R
     //  1 - the transposed panel above the diagonal block => transposed packed copy
     //  2 - the diagonal block => special packed copy
     //  3 - the panel below the diagonal block => generic packed copy
-    for (Index i2 = 0; i2 < k2; i2 += mc) {
-      const Index actual_mc = (std::min)(i2 + mc, k2) - i2;
+    for (Index i2 = 0, actual_mc; i2 < k2; i2 += actual_mc) {
+      actual_mc = (std::min)(mc, k2 - i2);
       // transposed packed copy
       pack_lhs_transposed(blockA, lhs_transpose.getSubMapper(i2, k2), actual_kc, actual_mc);
 
@@ -290,15 +292,15 @@ product_selfadjoint_matrix<Scalar, Index, LhsStorageOrder, true, ConjugateLhs, R
     }
     // the block diagonal
     {
-      const Index actual_mc = (std::min)(k2 + kc, size) - k2;
+      const Index actual_mc = actual_kc;
       // symmetric packed copy
       pack_lhs(blockA, &lhs(k2, k2), lhsStride, actual_kc, actual_mc);
 
       gebp_kernel(res.getSubMapper(k2, 0), blockA, blockB, actual_mc, actual_kc, cols, alpha);
     }
 
-    for (Index i2 = k2 + kc; i2 < size; i2 += mc) {
-      const Index actual_mc = (std::min)(i2 + mc, size) - i2;
+    for (Index i2 = k2 + actual_kc, actual_mc; i2 < size; i2 += actual_mc) {
+      actual_mc = (std::min)(mc, size - i2);
       gemm_pack_lhs<Scalar, Index, LhsMapper, Traits::mr, Traits::LhsProgress, typename Traits::LhsPacket4Packing,
                     LhsStorageOrder, false>()(blockA, lhs.getSubMapper(i2, k2), actual_kc, actual_mc);
 
@@ -352,14 +354,15 @@ product_selfadjoint_matrix<Scalar, Index, LhsStorageOrder, false, ConjugateLhs, 
       pack_lhs;
   symm_pack_rhs<Scalar, Index, Traits::nr, RhsStorageOrder> pack_rhs;
 
-  for (Index k2 = 0; k2 < size; k2 += kc) {
-    const Index actual_kc = (std::min)(k2 + kc, size) - k2;
+  // Advance by the block just processed: k2 + kc and i2 + mc can overflow a 32-bit Index.
+  for (Index k2 = 0, actual_kc; k2 < size; k2 += actual_kc) {
+    actual_kc = (std::min)(kc, size - k2);
 
     pack_rhs(blockB, rhs_, rhsStride, actual_kc, cols, k2);
 
     // => GEPP
-    for (Index i2 = 0; i2 < rows; i2 += mc) {
-      const Index actual_mc = (std::min)(i2 + mc, rows) - i2;
+    for (Index i2 = 0, actual_mc; i2 < rows; i2 += actual_mc) {
+      actual_mc = (std::min)(mc, rows - i2);
       pack_lhs(blockA, lhs.getSubMapper(i2, k2), actual_kc, actual_mc);
 
       gebp_kernel(res.getSubMapper(i2, 0), blockA, blockB, actual_mc, actual_kc, cols, alpha);

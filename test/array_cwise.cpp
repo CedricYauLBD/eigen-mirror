@@ -1694,6 +1694,24 @@ void cast_truncation_test() {
   for (Index k = 0; k < Size; ++k) VERIFY_IS_EQUAL(dst(k), static_cast<int>(src(k)));
 }
 
+// A destination that is less aligned than its packets: the packet loop starts at its first aligned coefficient, which
+// is not a multiple of the packet size. There, the coefficients of a narrower source are aligned on fewer bytes than
+// those of the destination. square() reads the source packet twice, which keeps optimizers from folding its load.
+template <typename SrcType, typename DstType, int MapAlignment>
+void cast_underaligned_dst_test() {
+  constexpr Index Size = 67;
+  constexpr Index MaxOffset = 64 / Index(sizeof(DstType));
+  EIGEN_ALIGN_TO_BOUNDARY(64) SrcType srcData[Size];
+  EIGEN_ALIGN_TO_BOUNDARY(64) DstType dstData[MaxOffset + Size];
+  Map<Array<SrcType, Dynamic, 1>, MapAlignment> src(srcData, Size);
+  for (Index k = 0; k < Size; ++k) src(k) = SrcType(int(k % 32));
+  for (Index offset = 0; offset <= MaxOffset; offset += MapAlignment / Index(sizeof(DstType))) {
+    Map<Array<DstType, Dynamic, 1>, MapAlignment> dst(dstData + offset, Size);
+    dst = src.square().template cast<DstType>();
+    for (Index k = 0; k < Size; ++k) VERIFY_IS_EQUAL(dst(k), DstType(int((k % 32) * (k % 32))));
+  }
+}
+
 // cast_test compares approximately. A 64-bit integer must round to float once: 2^60 + 2^36 + 1 rounds up, but
 // rounding through double first lands on the midpoint 2^60 + 2^36, which ties down to 2^60. Clang before 21 converts
 // that way on AArch64 when it vectorizes a scalar loop: without explicit vectorization, for a type with no vectorized
@@ -2004,6 +2022,12 @@ EIGEN_DECLARE_TEST(array_cwise) {
     CALL_SUBTEST_28((cast_truncation_test<double, 8>()));
     CALL_SUBTEST_28((cast_truncation_test<double, 16>()));
     CALL_SUBTEST_28((cast_truncation_test<float, 16>()));
+    CALL_SUBTEST_28((cast_underaligned_dst_test<float, double, Aligned16>()));
+    CALL_SUBTEST_28((cast_underaligned_dst_test<float, double, Aligned32>()));
+    CALL_SUBTEST_28((cast_underaligned_dst_test<int32_t, double, Aligned16>()));
+    CALL_SUBTEST_28((cast_underaligned_dst_test<half, float, Aligned16>()));
+    CALL_SUBTEST_28((cast_underaligned_dst_test<half, float, Aligned32>()));
+    CALL_SUBTEST_28((cast_underaligned_dst_test<double, float, Aligned16>()));
     // QEMU, which runs the ppc64le tests, emulates xscvsxdsp and xscvuxdsp through double, so they round twice.
 #if !EIGEN_ARCH_PPC
     CALL_SUBTEST_28((int64_to_float_cast_test<int64_t, Dynamic>(17)));

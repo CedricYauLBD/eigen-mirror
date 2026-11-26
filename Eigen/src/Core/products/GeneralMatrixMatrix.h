@@ -116,11 +116,12 @@ struct gemm_pack_lhs_first_loop_policy {
     const bool pack_rhs_once = mc != rows && kc == depth && nc == cols;
 
     // For each horizontal panel of the rhs, and corresponding panel of the lhs...
-    for (Index i2 = 0; i2 < rows; i2 += mc) {
-      const Index actual_mc = (std::min)(i2 + mc, rows) - i2;
+    // Advance by the block just processed: i2 + mc, k2 + kc and j2 + nc can overflow a 32-bit Index.
+    for (Index i2 = 0, actual_mc; i2 < rows; i2 += actual_mc) {
+      actual_mc = (std::min)(mc, rows - i2);
 
-      for (Index k2 = 0; k2 < depth; k2 += kc) {
-        const Index actual_kc = (std::min)(k2 + kc, depth) - k2;
+      for (Index k2 = 0, actual_kc; k2 < depth; k2 += actual_kc) {
+        actual_kc = (std::min)(kc, depth - k2);
 
         // OK, here we have selected one horizontal panel of rhs and one vertical panel of lhs.
         // => Pack lhs's panel into a sequential chunk of memory (L2/L3 caching)
@@ -129,8 +130,8 @@ struct gemm_pack_lhs_first_loop_policy {
         pack_lhs(blockA, lhs.getSubMapper(i2, k2), actual_kc, actual_mc);
 
         // For each kc x nc block of the rhs's horizontal panel...
-        for (Index j2 = 0; j2 < cols; j2 += nc) {
-          const Index actual_nc = (std::min)(j2 + nc, cols) - j2;
+        for (Index j2 = 0, actual_nc; j2 < cols; j2 += actual_nc) {
+          actual_nc = (std::min)(nc, cols - j2);
 
           // We pack the rhs's block into a sequential chunk of memory (L2 caching)
           // Note that this block will be read a very high number of times, which is equal to the number of
@@ -269,17 +270,18 @@ struct gemm_pack_rhs_first_loop_policy {
     const bool pack_lhs_once = nc != cols && kc == depth && mc == rows;
     bool lhs_packed = false;
 
-    for (Index j2 = 0; j2 < cols; j2 += nc) {
-      const Index actual_nc = (std::min)(j2 + nc, cols) - j2;
+    // Advance by the block just processed: j2 + nc, k2 + kc and i2 + mc can overflow a 32-bit Index.
+    for (Index j2 = 0, actual_nc; j2 < cols; j2 += actual_nc) {
+      actual_nc = (std::min)(nc, cols - j2);
 
-      for (Index k2 = 0; k2 < depth; k2 += kc) {
-        const Index actual_kc = (std::min)(k2 + kc, depth) - k2;
+      for (Index k2 = 0, actual_kc; k2 < depth; k2 += actual_kc) {
+        actual_kc = (std::min)(kc, depth - k2);
 
         // Pack one nc-strip of RHS and reuse it across all row panels.
         pack_rhs(blockB, rhs.getSubMapper(k2, j2), actual_kc, actual_nc);
 
-        for (Index i2 = 0; i2 < rows; i2 += mc) {
-          const Index actual_mc = (std::min)(i2 + mc, rows) - i2;
+        for (Index i2 = 0, actual_mc; i2 < rows; i2 += actual_mc) {
+          actual_mc = (std::min)(mc, rows - i2);
 #ifdef EIGEN_VECTORIZE_SME
           if (sme_run_direct_lhs(bool_constant<sme_direct_lhs_mapper<LhsMapper>::value>(), gebp,
                                  res.getSubMapper(i2, j2), lhs, i2, k2, blockB, actual_mc, actual_kc, actual_nc, alpha,
@@ -469,8 +471,8 @@ struct general_matrix_matrix_product<Index, LhsScalar, LhsStorageOrder, Conjugat
       ei_declare_aligned_stack_constructed_variable(RhsScalar, blockB, sizeB, 0);
 
       // For each horizontal panel of the rhs, and corresponding vertical panel of the lhs...
-      for (Index k = 0; k < depth; k += kc) {
-        const Index actual_kc = (std::min)(k + kc, depth) - k;  // => rows of B', and cols of the A'
+      for (Index k = 0, actual_kc; k < depth; k += actual_kc) {
+        actual_kc = (std::min)(kc, depth - k);  // => rows of B', and cols of the A'
 
         // In order to reduce the chance that a thread has to wait for the other,
         // let's start by packing B'.
@@ -513,8 +515,8 @@ struct general_matrix_matrix_product<Index, LhsScalar, LhsStorageOrder, Conjugat
         }
 
         // Then keep going as usual with the remaining B'
-        for (Index j = nc; j < cols; j += nc) {
-          const Index actual_nc = (std::min)(j + nc, cols) - j;
+        for (Index j = nc, actual_nc; j < cols; j += actual_nc) {
+          actual_nc = (std::min)(nc, cols - j);
 
           // pack B_k,j to B'
           pack_rhs(blockB, rhs.getSubMapper(k, j), actual_kc, actual_nc);
@@ -609,8 +611,21 @@ struct gemm_functor {
   bool m_overwrite;
 };
 
+// Whether gemm_blocking_space holds the two packing blocks itself, that is, in the stack frame of the product that
+// declares it: every bound is finite, and the MaxRows * MaxDepth and MaxCols * MaxDepth coefficients of the blocks each
+// fit in EIGEN_STACK_ALLOCATION_LIMIT. DenseStorage enforces that limit only on objects that own their coefficients, so
+// the bounds of a Map, Ref or Block can be arbitrarily large. As there, a limit of 0 disables the check.
+template <typename LhsScalar, typename RhsScalar, int MaxRows, int MaxCols, int MaxDepth>
+struct gemm_blocking_is_inline
+    : bool_constant<MaxRows != Dynamic && MaxCols != Dynamic && MaxDepth != Dynamic &&
+                    (EIGEN_STACK_ALLOCATION_LIMIT == 0 || (std::uint64_t(MaxRows) * std::uint64_t(MaxDepth) <=
+                                                               EIGEN_STACK_ALLOCATION_LIMIT / sizeof(LhsScalar) &&
+                                                           std::uint64_t(MaxCols) * std::uint64_t(MaxDepth) <=
+                                                               EIGEN_STACK_ALLOCATION_LIMIT / sizeof(RhsScalar)))> {};
+
 template <int StorageOrder, typename LhsScalar, typename RhsScalar, int MaxRows, int MaxCols, int MaxDepth,
-          int KcFactor = 1, bool FiniteAtCompileTime = MaxRows != Dynamic && MaxCols != Dynamic && MaxDepth != Dynamic>
+          int KcFactor = 1,
+          bool InlineBlocks = gemm_blocking_is_inline<LhsScalar, RhsScalar, MaxRows, MaxCols, MaxDepth>::value>
 class gemm_blocking_space;
 
 template <typename LhsScalar_, typename RhsScalar_>
@@ -640,7 +655,7 @@ class level3_blocking {
 template <int StorageOrder, typename LhsScalar_, typename RhsScalar_, int MaxRows, int MaxCols, int MaxDepth,
           int KcFactor>
 class gemm_blocking_space<StorageOrder, LhsScalar_, RhsScalar_, MaxRows, MaxCols, MaxDepth, KcFactor,
-                          true /* == FiniteAtCompileTime */>
+                          true /* == InlineBlocks */>
     : public level3_blocking<std::conditional_t<StorageOrder == RowMajor, RhsScalar_, LhsScalar_>,
                              std::conditional_t<StorageOrder == RowMajor, LhsScalar_, RhsScalar_>> {
   enum {
@@ -727,6 +742,9 @@ class gemm_blocking_space<StorageOrder, LhsScalar_, RhsScalar_, MaxRows, MaxCols
     eigen_internal_assert(this->m_blockA == 0 && this->m_blockB == 0);
     Index m = this->m_mc;
     computeProductBlockingSizes<LhsScalar, RhsScalar, KcFactor>(this->m_kc, m, this->m_nc, num_threads);
+    // The threads share one packed lhs block of rows x kc, whose rows cannot be blocked: bound kc so that
+    // rows * kc fits Index.
+    if (this->m_mc > 0) this->m_kc = numext::mini<Index>(this->m_kc, NumTraits<Index>::highest() / this->m_mc);
     m_sizeA = this->m_mc * this->m_kc;
     m_sizeB = this->m_kc * this->m_nc;
   }

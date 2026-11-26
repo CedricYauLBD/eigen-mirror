@@ -396,6 +396,36 @@ void bug_1622() {
   VERIFY_IS_APPROX(K1, K2);
 }
 
+// The columns of an lhs may overlap, as for the sliding windows of a signal (a Map with outer stride 1), and then
+// rows * depth need not fit Index. With the depth or the columns blocked the rows were not, and the size rows * kc of
+// the packed lhs wrapped.
+template <typename Scalar, typename IndexType>
+void check_packed_lhs_is_countable() {
+  const IndexType highest = NumTraits<IndexType>::highest();
+  // Deep enough for the depth to be blocked, with the columns whole and blocked.
+  for (IndexType cols : {2, 4000}) {
+    IndexType kc = 1 << 16, mc = highest / 2, nc = cols;
+    internal::computeProductBlockingSizes<Scalar, Scalar, IndexType>(kc, mc, nc);
+    VERIFY(kc > 0 && mc > 0 && mc <= highest / kc);
+  }
+}
+
+template <int>
+void product_overlapping_columns() {
+  // A 32-bit index, as on a 32-bit target, and the configured one.
+  check_packed_lhs_is_countable<float, int>();
+  check_packed_lhs_is_countable<std::complex<double>, int>();
+  check_packed_lhs_is_countable<float, Index>();
+
+  using Blocking = internal::gemm_blocking_space<ColMajor, float, float, Dynamic, Dynamic, Dynamic>;
+  const Index rows = NumTraits<Index>::highest() / 2, cols = 2, depth = 1 << 16;
+  Blocking blocking(rows, cols, depth, 1, true);
+  VERIFY(blocking.mc() <= NumTraits<Index>::highest() / blocking.kc());
+  // The threads of a parallel product share one packed lhs of all the rows, which cannot be blocked: the depth is.
+  blocking.initParallel(rows, cols, depth, 2);
+  VERIFY(blocking.kc() > 0 && blocking.mc() <= NumTraits<Index>::highest() / blocking.kc());
+}
+
 EIGEN_DECLARE_TEST(product_large) {
 #if (defined(EIGEN_VECTORIZE_ALTIVEC) || defined(EIGEN_VECTORIZE_VSX)) && defined(__unix__)
   CALL_SUBTEST_11(gemv_bfloat16_strided_tail<0>());
@@ -433,6 +463,7 @@ EIGEN_DECLARE_TEST(product_large) {
   }
 
   CALL_SUBTEST_6(product_large_regressions<0>());
+  CALL_SUBTEST_6(product_overlapping_columns<0>());
   CALL_SUBTEST_6(bug_gemv_rowmajor_large_stride<0>());
   CALL_SUBTEST_6(gemv_small_cols_systematic<0>());
   CALL_SUBTEST_6(gemv_rowmajor_large_stride_varied_rows<0>());

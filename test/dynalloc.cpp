@@ -18,6 +18,8 @@
 
 using Vector16f = Matrix<float, 16, 1>;
 using Vector8f = Matrix<float, 8, 1>;
+using BoundedVector4f = Matrix<float, Dynamic, 1, 0, 4, 1>;
+using BoundedVector4d = Matrix<double, Dynamic, 1, 0, 4, 1>;
 
 void check_handmade_aligned_malloc() {
   // Hand-make alignment needs at least sizeof(void*) to store the offset.
@@ -99,6 +101,18 @@ void check_dynaligned() {
     VERIFY(std::uintptr_t(obj) % ALIGNMENT == 0);
     delete obj;
   }
+}
+
+// `new` must return storage that is aligned for a class holding a fixed-size or bounded object, also before C++17.
+template <typename T, typename... Args>
+void check_new_alignment(const Args &...args) {
+  // The objects are alive together, so that an allocator aligning to 16 bytes cannot pass by chance.
+  T *objects[8];
+  for (T *&obj : objects) {
+    obj = new T(args...);
+    VERIFY(std::uintptr_t(obj) % alignof(T) == 0);
+  }
+  for (T *obj : objects) delete obj;
 }
 
 template <typename T>
@@ -232,7 +246,23 @@ EIGEN_DECLARE_TEST(dynalloc) {
     CALL_SUBTEST(check_custom_new_delete<Vector2f>());
     CALL_SUBTEST(check_custom_new_delete<Matrix4f>());
     CALL_SUBTEST(check_custom_new_delete<MatrixXi>());
+    CALL_SUBTEST(check_custom_new_delete<BoundedVector4f>());
+    CALL_SUBTEST((check_custom_new_delete<DiagonalMatrix<double, 4>>()));
+    CALL_SUBTEST(check_custom_new_delete<PermutationMatrix<8>>());
+    CALL_SUBTEST(check_custom_new_delete<Transpositions<8>>());
+    CALL_SUBTEST((check_custom_new_delete<ScaledPermutationMatrix<double, 4>>()));
+    CALL_SUBTEST(check_custom_new_delete<SkewSymmetricMatrix3<double>>());
   }
+
+  // A bounded object holds the same aligned array as the fixed-size object of its maximal size.
+  STATIC_CHECK(int(BoundedVector4f::NeedsToAlign) == int(Vector4f::NeedsToAlign));
+  CALL_SUBTEST(check_new_alignment<BoundedVector4d>());
+  CALL_SUBTEST((check_new_alignment<DiagonalMatrix<double, 4>>()));
+  CALL_SUBTEST((check_new_alignment<DiagonalMatrix<double, Dynamic, 4>>()));
+  CALL_SUBTEST(check_new_alignment<PermutationMatrix<8>>());
+  CALL_SUBTEST(check_new_alignment<Transpositions<8>>());
+  CALL_SUBTEST((check_new_alignment<ScaledPermutationMatrix<double, 4>>()));
+  CALL_SUBTEST(check_new_alignment<SkewSymmetricMatrix3<double>>());
 
 // check static allocation, who knows ?
 #if EIGEN_MAX_STATIC_ALIGN_BYTES

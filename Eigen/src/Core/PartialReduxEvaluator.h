@@ -133,19 +133,21 @@ struct packetwise_segment_redux_impl {
                                           Index count) {
     if (size == 0) return packetwise_redux_empty_value<PacketType>(func);
 
+    // eval holds lanes [begin, begin + count) only: lane 0 of the packets is at its inner index -begin.
+    const Index pos = -begin;
     const Index size4 = 1 + numext::round_down(size - 1, 4);
-    PacketType p = eval.template packetSegmentByOuterInner<Unaligned, PacketType>(0, 0, begin, count);
+    PacketType p = eval.template packetSegmentByOuterInner<Unaligned, PacketType>(0, pos, begin, count);
     // Grouping exposes independent packet ops and shortens the dependency chain.
     for (Index i = 1; i < size4; i += 4)
       p = func.packetOp(
           p,
           func.packetOp(
-              func.packetOp(eval.template packetSegmentByOuterInner<Unaligned, PacketType>(i + 0, 0, begin, count),
-                            eval.template packetSegmentByOuterInner<Unaligned, PacketType>(i + 1, 0, begin, count)),
-              func.packetOp(eval.template packetSegmentByOuterInner<Unaligned, PacketType>(i + 2, 0, begin, count),
-                            eval.template packetSegmentByOuterInner<Unaligned, PacketType>(i + 3, 0, begin, count))));
+              func.packetOp(eval.template packetSegmentByOuterInner<Unaligned, PacketType>(i + 0, pos, begin, count),
+                            eval.template packetSegmentByOuterInner<Unaligned, PacketType>(i + 1, pos, begin, count)),
+              func.packetOp(eval.template packetSegmentByOuterInner<Unaligned, PacketType>(i + 2, pos, begin, count),
+                            eval.template packetSegmentByOuterInner<Unaligned, PacketType>(i + 3, pos, begin, count))));
     for (Index i = size4; i < size; ++i)
-      p = func.packetOp(p, eval.template packetSegmentByOuterInner<Unaligned, PacketType>(i, 0, begin, count));
+      p = func.packetOp(p, eval.template packetSegmentByOuterInner<Unaligned, PacketType>(i, pos, begin, count));
     return p;
   }
 };
@@ -244,10 +246,12 @@ struct evaluator<PartialReduxExpr<ArgType, MemberOp, Direction> >
     using BinaryOp = typename MemberOp::BinaryOp;
     using Impl = internal::packetwise_segment_redux_impl<BinaryOp, PanelEvaluator>;
 
-    Index startRow = Direction == Vertical ? 0 : idx;
-    Index startCol = Direction == Vertical ? idx : 0;
-    Index numRows = Direction == Vertical ? m_arg.rows() : begin + count;
-    Index numCols = Direction == Vertical ? begin + count : m_arg.cols();
+    // The panel is the requested lanes only. The packet based at idx need not lie inside m_arg: Reverse requests its
+    // tail as the last count lanes of a packet whose base idx is negative.
+    Index startRow = Direction == Vertical ? 0 : idx + begin;
+    Index startCol = Direction == Vertical ? idx + begin : 0;
+    Index numRows = Direction == Vertical ? m_arg.rows() : count;
+    Index numCols = Direction == Vertical ? count : m_arg.cols();
 
     PanelType panel(m_arg, startRow, startCol, numRows, numCols);
     PanelEvaluator panel_eval(panel);

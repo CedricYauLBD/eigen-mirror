@@ -155,6 +155,69 @@ void packing_products() {
   }
 }
 
+// A Map, Ref or Block can have compile-time bounds that DenseStorage rejects for an object owning its coefficients.
+// The packing blocks of its level-3 products then exceed EIGEN_STACK_ALLOCATION_LIMIT and must not be members of the
+// blocking object, which is a local variable of the product.
+template <typename Scalar, int Order>
+void bounded_map_products() {
+#if EIGEN_STACK_ALLOCATION_LIMIT > 0
+  constexpr int MaxSize = 1024;
+  STATIC_CHECK((internal::gemm_blocking_is_inline<Scalar, Scalar, 4, 4, 4>::value));
+  STATIC_CHECK((!internal::gemm_blocking_is_inline<Scalar, Scalar, MaxSize, MaxSize, MaxSize>::value));
+  STATIC_CHECK((!internal::gemm_blocking_is_inline<Scalar, Scalar, MaxSize, 4, MaxSize>::value));
+  STATIC_CHECK((!internal::gemm_blocking_is_inline<Scalar, Scalar, 4, MaxSize, MaxSize>::value));
+  using Blocking = internal::gemm_blocking_space<Order, Scalar, Scalar, MaxSize, MaxSize, MaxSize>;
+  STATIC_CHECK(sizeof(Blocking) < sizeof(Scalar) * MaxSize * MaxSize);
+
+  using Bounded = Matrix<Scalar, Dynamic, Dynamic, Order, MaxSize, MaxSize>;
+  using Plain = Matrix<Scalar, Dynamic, Dynamic, Order>;
+  using Real = typename NumTraits<Scalar>::Real;
+  // At the default limit, the kernels take the blocks of the first size from the stack and of the second from the heap.
+  for (Index n : {Index(33), Index(145)}) {
+    Plain a = Plain::Random(n, n);
+    // Real, as a self-adjoint operand requires, and dominant, for the triangular solve.
+    a.diagonal().setConstant(Scalar(Real(n)));
+    const Plain b = Plain::Random(n, n);
+    const Plain lower = a.template triangularView<Lower>();
+    const Plain upper = a.template triangularView<Upper>();
+    const Plain selfadjoint = a.template selfadjointView<Lower>();
+    Plain c(n, n), reference(n, n);
+    Map<const Bounded> ma(a.data(), n, n), mb(b.data(), n, n);
+    Map<Bounded> mc(c.data(), n, n);
+
+    mc.noalias() = ma * mb;
+    reference = a.lazyProduct(b);
+    VERIFY_IS_APPROX(c, reference);
+    mc.noalias() = ma.template selfadjointView<Lower>() * mb;
+    reference = selfadjoint.lazyProduct(b);
+    VERIFY_IS_APPROX(c, reference);
+    mc.noalias() = mb * ma.template selfadjointView<Lower>();
+    reference = b.lazyProduct(selfadjoint);
+    VERIFY_IS_APPROX(c, reference);
+    mc.noalias() = ma.template triangularView<Lower>() * mb;
+    reference = lower.lazyProduct(b);
+    VERIFY_IS_APPROX(c, reference);
+    mc.noalias() = mb * ma.template triangularView<Upper>();
+    reference = b.lazyProduct(upper);
+    VERIFY_IS_APPROX(c, reference);
+    mc = mb;
+    ma.template triangularView<Lower>().solveInPlace(mc);
+    reference = lower.lazyProduct(c);
+    VERIFY_IS_APPROX(reference, b);
+    mc.setZero();
+    mc.template selfadjointView<Lower>().rankUpdate(ma);
+    reference = a.lazyProduct(a.adjoint());
+    reference.template triangularView<StrictlyUpper>().setZero();
+    VERIFY_IS_APPROX(c, reference);
+    mc.setZero();
+    mc.template triangularView<Upper>() += a * mb;
+    reference = a.lazyProduct(b);
+    reference.template triangularView<StrictlyLower>().setZero();
+    VERIFY_IS_APPROX(c, reference);
+  }
+#endif
+}
+
 EIGEN_DECLARE_TEST(gemm_packing) {
   CALL_SUBTEST((packing_storage<float, double>()));
   CALL_SUBTEST((packing_storage<double, std::complex<double>>()));
@@ -165,4 +228,6 @@ EIGEN_DECLARE_TEST(gemm_packing) {
   CALL_SUBTEST((packing_products<double, RowMajor>()));
   CALL_SUBTEST((packing_products<std::complex<double>, ColMajor>()));
   CALL_SUBTEST((packing_products<std::complex<double>, RowMajor>()));
+  CALL_SUBTEST((bounded_map_products<double, ColMajor>()));
+  CALL_SUBTEST((bounded_map_products<std::complex<float>, RowMajor>()));
 }

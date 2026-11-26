@@ -1577,6 +1577,81 @@ void ordered_gemv_stack_buffer_in_loop() {
   for (Index i = 0; i < size; ++i) VERIFY(result(i) == expected);
 }
 
+// A Constant() written as the left operand of cwiseProduct() gives the product its compile-time sizes and its storage
+// order. Where the other operand has a different layout, the kernels must not read it in place of the product.
+template <int ConstantOrder, int OperandOrder>
+void constant_factor_storage_order() {
+  using ConstantType = Matrix<double, Dynamic, Dynamic, ConstantOrder>;
+  using Operand = Matrix<double, Dynamic, Dynamic, OperandOrder>;
+  using internal::blas_traits;
+  constexpr bool SameOrder = ConstantOrder == OperandOrder;
+  const double s = internal::random<double>(1, 2);
+  const Index shorter = internal::random<Index>(2, 20), longer = shorter + internal::random<Index>(1, 20);
+  // Read in the wrong storage order, a wide or a tall operand is overrun and a square one is transposed.
+  for (int shape = 0; shape < 3; ++shape) {
+    const Index rows = shape == 0 ? shorter : longer, cols = shape == 1 ? shorter : longer;
+    const Operand x = Operand::Random(rows, cols);
+    const MatrixXd scaled = s * x, squared = MatrixXd::Constant(rows, cols, s * s);
+    const VectorXd v = VectorXd::Random(cols), u = VectorXd::Random(rows);
+    const MatrixXd a = MatrixXd::Random(rows, rows), b = MatrixXd::Random(cols, cols);
+
+    const auto product = ConstantType::Constant(rows, cols, s).cwiseProduct(x);
+    STATIC_CHECK((bool(blas_traits<decltype(product)>::HasScalarFactor) == SameOrder));
+    VERIFY_IS_APPROX((product * v).eval(), scaled * v);
+    VERIFY_IS_APPROX((u.transpose() * product).eval(), u.transpose() * scaled);
+    VERIFY_IS_APPROX((a.selfadjointView<Lower>() * product).eval(), a.selfadjointView<Lower>() * scaled);
+    VERIFY_IS_APPROX((product * b.selfadjointView<Upper>()).eval(), scaled * b.selfadjointView<Upper>());
+    if (rows == cols) {
+      VERIFY_IS_APPROX((product.template triangularView<Upper>() * v).eval(), scaled.triangularView<Upper>() * v);
+      VERIFY_IS_APPROX((u.transpose() * product.template triangularView<UnitLower>()).eval(),
+                       u.transpose() * scaled.triangularView<UnitLower>());
+    }
+
+    const auto constants = ConstantType::Constant(rows, cols, s).cwiseProduct(Operand::Constant(rows, cols, s));
+    STATIC_CHECK((bool(blas_traits<decltype(constants)>::HasScalarFactor) == SameOrder));
+    VERIFY_IS_APPROX((a.selfadjointView<Lower>() * constants).eval(), a.selfadjointView<Lower>() * squared);
+    VERIFY_IS_APPROX((constants * b.selfadjointView<Upper>()).eval(), squared * b.selfadjointView<Upper>());
+  }
+}
+
+template <int>
+void constant_factor_shape() {
+  using RowMajorMatrix = Matrix<double, Dynamic, Dynamic, RowMajor>;
+  using internal::blas_traits;
+  // From 10 rows on, a triangular product with a run-time column is no longer coefficient-based.
+  const Index n = internal::random<Index>(10, 40), m = internal::random<Index>(2, 10);
+  const double s = internal::random<double>(1, 2);
+  const RowMajorMatrix image = RowMajorMatrix::Random(n, m);
+  const MatrixXd t = MatrixXd::Random(n, n), lower = t.triangularView<Lower>(), symmetric = t.selfadjointView<Lower>();
+  const VectorXd x = image.col(m - 1), scaled = s * x;
+
+  // A constant with the layout of the other operand is popped; operator* builds such a constant.
+  STATIC_CHECK((blas_traits<decltype(s * image)>::HasScalarFactor));
+  STATIC_CHECK((blas_traits<decltype(s * image.transpose())>::HasScalarFactor));
+  STATIC_CHECK((blas_traits<decltype(s * image.col(m - 1))>::HasScalarFactor));
+  STATIC_CHECK((blas_traits<decltype(VectorXd::Constant(n, s).cwiseProduct(x))>::HasScalarFactor));
+
+  // A compile-time column with a one-column block, whose entries are an outer stride apart.
+  const auto column = VectorXd::Constant(n, s).cwiseProduct(image.rightCols(1));
+  STATIC_CHECK((!blas_traits<decltype(column)>::HasScalarFactor));
+  VERIFY_IS_APPROX((t * column).eval(), t * scaled);
+  VERIFY_IS_APPROX((t.triangularView<Lower>() * column).eval(), lower * scaled);
+
+  // A run-time column with a compile-time column, whose entries are an inner stride apart.
+  const auto strided = MatrixXd::Constant(n, 1, s).cwiseProduct(image.col(m - 1));
+  STATIC_CHECK((!blas_traits<decltype(strided)>::HasScalarFactor));
+  VERIFY_IS_APPROX((t.triangularView<Lower>() * strided).eval(), lower * scaled);
+  VERIFY_IS_APPROX((t.selfadjointView<Lower>() * strided).eval(), symmetric * scaled);
+
+  // The ordered GEMV pops a leading constant itself: a compile-time row with a run-time row.
+  using Scalar = unannotated_product::Scalar;
+  using MatrixType = Matrix<Scalar, Dynamic, Dynamic>;
+  using RowVector = Matrix<Scalar, 1, Dynamic>;
+  const MatrixType matrix = MatrixType::Constant(n, m, Scalar(3)), row = MatrixType::Constant(1, n, Scalar(5));
+  const RowVector ordered = RowVector::Constant(n, Scalar(2)).cwiseProduct(row) * matrix;
+  for (Index i = 0; i < m; ++i) VERIFY(ordered(i) == Scalar(30 * double(n)));
+}
+
 EIGEN_DECLARE_TEST(product_extra) {
   CALL_SUBTEST_20(scaled_real_structured_complex_vector());
   CALL_SUBTEST_20((quaternion_transposed_product<noncommutative_scalar::Quaternion, ColMajor>()));
@@ -1655,6 +1730,11 @@ EIGEN_DECLARE_TEST(product_extra) {
   CALL_SUBTEST_5(bug_817<0>());
   CALL_SUBTEST_5(bug_1308<0>());
   CALL_SUBTEST_5(array_destination_products<0>());
+  CALL_SUBTEST_5((constant_factor_storage_order<ColMajor, RowMajor>()));
+  CALL_SUBTEST_5((constant_factor_storage_order<RowMajor, ColMajor>()));
+  CALL_SUBTEST_5((constant_factor_storage_order<ColMajor, ColMajor>()));
+  CALL_SUBTEST_5((constant_factor_storage_order<RowMajor, RowMajor>()));
+  CALL_SUBTEST_5(constant_factor_shape<0>());
   CALL_SUBTEST_6(unaligned_objects<0>());
   CALL_SUBTEST_7(compute_block_size<float>());
   CALL_SUBTEST_7(compute_block_size<double>());

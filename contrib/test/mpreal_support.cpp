@@ -63,6 +63,20 @@ EIGEN_DECLARE_TEST(mpreal_support) {
             .isApprox(eig.eigenvectors() * eig.eigenvalues().asDiagonal(), NumTraits<mpreal>::dummy_precision() * 1e3));
   }
 
+  // gebp_traits<mpreal> has nr == 1: with several depth blocks, the selfadjoint rhs packer must still pack every
+  // column exactly once per block.
+  {
+    const Index n = 300;
+    Index kc = n, mc = 2, nc = n;
+    Eigen::internal::computeProductBlockingSizes<mpreal, mpreal>(kc, mc, nc);
+    VERIFY(kc < n);
+    MatrixXmp A = MatrixXmp::Random(2, n);
+    MatrixXmp S = MatrixXmp::Random(n, n);
+    S = (S + S.transpose()).eval();
+    VERIFY_IS_APPROX((A * S.selfadjointView<Lower>()).eval(), A * S);
+    VERIFY_IS_APPROX((A * S.selfadjointView<Upper>()).eval(), A * S);
+  }
+
   {
     MatrixXmp A(8, 3);
     A.setRandom();

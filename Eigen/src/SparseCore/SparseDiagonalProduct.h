@@ -243,7 +243,7 @@ struct sparse_diagonal_product_evaluator<SparseXprType, DiagonalCoeffType, SDP_A
 
  protected:
   evaluator<SparseXprType> m_sparseXprImpl;
-  evaluator<DiagonalCoeffType> m_diagCoeffImpl;
+  vector_evaluator<DiagonalCoeffType> m_diagCoeffImpl;
 };
 
 template <typename SparseXprType, typename DiagCoeffType, bool DiagonalOnLeft>

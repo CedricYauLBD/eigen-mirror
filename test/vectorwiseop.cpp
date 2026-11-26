@@ -687,6 +687,28 @@ void vectorwiseop_unaligned_panel() {
   }
 }
 
+// Reverse requests the tail of its argument as the last lanes of a packet that starts before the argument's first
+// coefficient; the panel reduced for it used to start at that negative index.
+template <typename Scalar>
+void vectorwiseop_reversed_tail() {
+  using ColMajorMatrix = Matrix<Scalar, Dynamic, Dynamic>;
+  using RowMajorMatrix = Matrix<Scalar, Dynamic, Dynamic, RowMajor>;
+  for (Index size = 1; size <= 40; ++size) {
+    const ColMajorMatrix mc = ColMajorMatrix::Random(size, 7);
+    const RowMajorMatrix mr = mc.transpose();
+    const Matrix<Scalar, Dynamic, 1> rowSums = mc.rowwise().sum().eval();
+    const Matrix<Scalar, Dynamic, 1> rowMaxs = mc.rowwise().maxCoeff().eval();
+    Matrix<Scalar, Dynamic, 1> column = mc.rowwise().sum().reverse();
+    VERIFY_IS_APPROX(column, rowSums.reverse());
+    column = mc.rowwise().maxCoeff().reverse();
+    VERIFY_IS_APPROX(column, rowMaxs.reverse());
+    Matrix<Scalar, 1, Dynamic> row = mr.colwise().sum().reverse();
+    VERIFY_IS_APPROX(row, rowSums.reverse().transpose());
+    row = mr.colwise().maxCoeff().reverse();
+    VERIFY_IS_APPROX(row, rowMaxs.reverse().transpose());
+  }
+}
+
 EIGEN_DECLARE_TEST(vectorwiseop) {
   CALL_SUBTEST_11(vectorwiseop_operand_order());
   CALL_SUBTEST_11(vectorwiseop_minmax_nan<PropagateNaN>());
@@ -715,6 +737,8 @@ EIGEN_DECLARE_TEST(vectorwiseop) {
   CALL_SUBTEST_10(vectorwiseop_bool_minmax());
   CALL_SUBTEST_10(vectorwiseop_unaligned_panel<float>());
   CALL_SUBTEST_10(vectorwiseop_unaligned_panel<double>());
+  CALL_SUBTEST_10(vectorwiseop_reversed_tail<float>());
+  CALL_SUBTEST_10(vectorwiseop_reversed_tail<double>());
   CALL_SUBTEST_11(vectorwiseop_array_extensions(Array<float, 3, 4>()));
   CALL_SUBTEST_11(vectorwiseop_array_extensions(ArrayXXd(3, 4)));
   CALL_SUBTEST_12(vectorwiseop_matrix_extensions(Matrix<float, 4, 5>()));

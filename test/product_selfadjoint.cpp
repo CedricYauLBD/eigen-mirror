@@ -175,6 +175,20 @@ void product_selfadjoint(const MatrixType& m) {
   // matrix-vector
   m2 = m1.template triangularView<Lower>();
   VERIFY_IS_APPROX(m1 * m4, m2.template selfadjointView<Lower>() * m4);
+
+  // matrix-vector with a destination that is a vector at runtime only (see bug 1166)
+  {
+    using ColMajorDest = Matrix<Scalar, Dynamic, Dynamic, ColMajor>;
+    using RowMajorDest = Matrix<Scalar, Dynamic, Dynamic, RowMajor>;
+    ColMajorDest dest1 = ColMajorDest::Random(4, rows), ref1 = dest1;
+    RowMajorDest dest2 = RowMajorDest::Random(rows, 4), ref2 = dest2;
+    dest2.middleCols(1, 1).noalias() = m2.template selfadjointView<Lower>() * v1;
+    ref2.col(1) = m1 * v1;
+    VERIFY_IS_APPROX(dest2, ref2);
+    dest1.middleRows(1, 1).noalias() += r1 * m2.template selfadjointView<Lower>();
+    ref1.row(1) += r1 * m1;
+    VERIFY_IS_APPROX(dest1, ref1);
+  }
 }
 
 // Test selfadjoint products at blocking boundary sizes.

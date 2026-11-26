@@ -98,6 +98,19 @@ void check_initialize_by_nan() {
 #if defined(EIGEN_TEST_PART_5)
   MatrixXd m(2, 3);
   VERIFY(m.array().isNaN().all());
+
+  // The sizing constructors of fixed-size objects do not change the number of coefficients, but still initialize them.
+  // The objects are constructed over zeros, which is what a coefficient that is left uninitialized would keep.
+  EIGEN_ALIGN_MAX double buffer[16] = {};
+  VERIFY((::new (static_cast<void*>(buffer)) Matrix4d(4, 4))->array().isNaN().all());
+  std::fill(buffer, buffer + 16, 0.);
+  VERIFY((::new (static_cast<void*>(buffer)) Vector4d(4))->array().isNaN().all());
+  std::fill(buffer, buffer + 16, 0.);
+  VERIFY((::new (static_cast<void*>(buffer)) Array<double, 2, 3>(2, 3))->isNaN().all());
+  // For 1x1, 2x1 and 1x2 objects the arguments are the coefficients, not the sizes.
+  Vector2d coeffs(2, 1);
+  VERIFY(coeffs.x() == 2 && coeffs.y() == 1);
+
   m.setZero(2, 2);
   m.conservativeResize(2, 3);
   VERIFY(m.leftCols(2).isZero(0) && m.col(2).array().isNaN().all());

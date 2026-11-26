@@ -8,8 +8,15 @@
 // with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
 // SPDX-License-Identifier: MPL-2.0
 
+// Part 5 takes dimensions up to the largest Index, which only a 32-bit one lets it reach.
+#ifdef EIGEN_TEST_PART_5
+#undef EIGEN_DEFAULT_DENSE_INDEX_TYPE
+#define EIGEN_DEFAULT_DENSE_INDEX_TYPE int
+#endif
+
 #include "main.h"
 #include "product_test_helpers.h"
+#include "guard_page_buffer.h"
 
 // Sets the coefficients that the triangular view of the given Mode does not own, including implicit diagonals, to NaN.
 template <int Mode, typename MatrixType>
@@ -294,6 +301,49 @@ void trmm_wide_depth_blocks() {
       }
 }
 
+#if defined(__linux__)
+// Blocking loops over a dimension n that is within one block of the largest Index: the start of the last block plus
+// the block size does not fit Index.
+template <typename Scalar>
+void trmm_blocks_up_to_largest_index() {
+  struct Blocking : internal::level3_blocking<Scalar, Scalar> {
+    Blocking(Index mc, Index kc) {
+      this->m_mc = mc;
+      this->m_nc = 1;
+      this->m_kc = kc;
+    }
+  };
+  using LeftLower = internal::product_triangular_matrix_matrix<Scalar, Index, Lower, true, ColMajor, false, ColMajor,
+                                                               false, ColMajor, 1>;
+  using LeftUpper = internal::product_triangular_matrix_matrix<Scalar, Index, Upper, true, ColMajor, false, ColMajor,
+                                                               false, ColMajor, 1>;
+  using RightLower = internal::product_triangular_matrix_matrix<Scalar, Index, Lower, false, ColMajor, false, ColMajor,
+                                                                false, ColMajor, 1>;
+  // Only a 32-bit Index on a 64-bit target leaves the address space room for n coefficients.
+  if (sizeof(void*) <= sizeof(Index)) return;
+  // n + 1 + 1 fits Index, as the public products require; blocks of 2^20 leave a partial one at the end.
+  const Index n = NumTraits<Index>::highest() - 2, block = Index(1) << 20;
+  const Scalar one(1);
+  Scalar res(0);
+
+  // Row blocks read a column of n coefficients: an n x 1 lower trapezoid times 1 x 0, and n x 1 times a 1 x 0 lower
+  // trapezoid, which have no result to allocate. The column ends at a guard page, where a block that runs past it
+  // faults. Linux backs pages that are only read with its zero page: they take address space, but no memory.
+  const test::GuardPageBuffer buffer(std::size_t(n) * sizeof(Scalar));
+  const Scalar* column = buffer.place_at_end<Scalar>(std::size_t(n));
+  Blocking rowBlocks(block, 1);
+  LeftLower::run(n, 0, 1, column, n, &one, 1, &res, 1, n, one, rowBlocks);
+  RightLower::run(n, 0, 1, column, n, &one, 1, &res, 1, n, one, rowBlocks);
+
+  // Depth blocks of a product without rows or columns access no coefficient: a 0 x n upper trapezoid times n x 0, and
+  // 0 x n times an n x 0 lower trapezoid.
+  Blocking depthBlocks(1, block);
+  LeftUpper::run(0, 0, n, &one, 1, &one, n, &res, 1, 1, one, depthBlocks);
+  RightLower::run(0, 0, n, &one, 1, &one, n, &res, 1, 1, one, depthBlocks);
+  VERIFY_IS_EQUAL(res, Scalar(0));
+}
+#endif
+
 #define CALL_ALL_ORDERS(NB, SCALAR, MODE)                                             \
   EIGEN_CAT(CALL_SUBTEST_, NB)((trmm<SCALAR, MODE, ColMajor, ColMajor, ColMajor>())); \
   EIGEN_CAT(CALL_SUBTEST_, NB)((trmm<SCALAR, MODE, ColMajor, ColMajor, RowMajor>())); \
@@ -338,6 +388,9 @@ EIGEN_DECLARE_TEST(product_trmm) {
   CALL_SUBTEST_22((trmm_wide_depth_blocks<double, UnitLower, ColMajor>()));
   CALL_SUBTEST_31((trmm_wide_depth_blocks<float, StrictlyLower, ColMajor>()));
   CALL_SUBTEST_32((trmm_wide_depth_blocks<double, StrictlyUpper, RowMajor>()));
+#if defined(__linux__)
+  CALL_SUBTEST_5(trmm_blocks_up_to_largest_index<signed char>());
+#endif
   // 1x1 and blocking-boundary sizes for the view-times-view products.
   CALL_SUBTEST_11((trmm<float, Lower, ColMajor, ColMajor, ColMajor>(1, 1, 1)));
   CALL_SUBTEST_11((trmm<float, Lower, ColMajor, ColMajor, ColMajor>(6, 6, 6)));

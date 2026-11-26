@@ -351,6 +351,51 @@ void inner_product_runtime_stride() {
   }
 }
 
+// A compile-time vector can lack LinearAccessBit. The kernel must then index it through (row, col), and may take
+// packets from it only if they run along the vector.
+template <bool PacketsAlongVector, typename Xpr, typename Rhs>
+void check_inner_product_without_linear_access(const MatrixBase<Xpr>& xpr, const MatrixBase<Rhs>& rhs) {
+  using Scalar = typename Xpr::Scalar;
+  using Op = internal::scalar_inner_product_op<Scalar, Scalar, true>;
+  using Kernel = internal::inner_product_evaluator<Op, Xpr, Rhs>;
+  constexpr int CommonFlags = int(internal::evaluator<Xpr>::Flags) & int(internal::evaluator<Rhs>::Flags);
+  STATIC_CHECK(Xpr::IsVectorAtCompileTime && !(internal::evaluator<Xpr>::Flags & LinearAccessBit));
+  STATIC_CHECK(Kernel::Vectorize == (PacketsAlongVector && Op::PacketAccess && bool(CommonFlags & PacketAccessBit)));
+  // Assignment does not go through index-based access here.
+  const Matrix<Scalar, Xpr::RowsAtCompileTime, Xpr::ColsAtCompileTime> ref = xpr;
+  VERIFY_IS_APPROX(xpr.dot(rhs), ref.dot(rhs));
+  VERIFY_IS_APPROX(rhs.dot(xpr), rhs.dot(ref));
+  VERIFY_IS_APPROX(xpr.dot(xpr), ref.dot(ref));
+}
+
+template <typename Scalar>
+void inner_product_without_linear_access() {
+  using ColMat = Matrix<Scalar, Dynamic, Dynamic, ColMajor>;
+  using RowMat = Matrix<Scalar, Dynamic, Dynamic, RowMajor>;
+  using Vec = Matrix<Scalar, Dynamic, 1>;
+  using RowVec = Matrix<Scalar, 1, Dynamic>;
+  const Index packetSize = internal::packet_traits<Scalar>::size;
+  for (Index n : {Index(1), Index(2), Index(3), packetSize + 1, 4 * packetSize, 9 * packetSize + 1}) {
+    const ColMat cm = ColMat::Random(n, n);
+    const RowMat rm = RowMat::Random(n, n);
+    const Vec v = Vec::Random(n), w = Vec::Random(n), w2 = Vec::Random(2 * n);
+    const RowVec x = RowVec::Random(n);
+    const Index i = internal::random<Index>(0, n - 1);
+    // One-row and one-column blocks of runtime shape, across and along the storage order of their matrix.
+    check_inner_product_without_linear_access<false>(x - cm.block(i, 0, 1, n), w);
+    check_inner_product_without_linear_access<true>(x - rm.block(i, 0, 1, n), w);
+    check_inner_product_without_linear_access<true>(v - cm.block(0, i, n, 1), w);
+    check_inner_product_without_linear_access<false>(v - rm.block(0, i, n, 1), w);
+    check_inner_product_without_linear_access<true>((v - cm.block(0, i, n, 1)).transpose(), w);
+    // Without direct access, an index applied to the other dimension leaves the nested matrix.
+    check_inner_product_without_linear_access<false>(x - (cm + cm.transpose()).block(i, 0, 1, n), w);
+    // A row vector with a column-major evaluator: its packets run down the single row.
+    check_inner_product_without_linear_access<false>(hcat(cm.block(i, 0, 1, n), x), w2);
+    VERIFY_IS_APPROX(((x - cm.block(i, 0, 1, n)) * w).value(), ((x - cm.row(i)) * w).value());
+    VERIFY_IS_APPROX(((x - rm.block(i, 0, 1, n)) * w).value(), ((x - rm.row(i)) * w).value());
+  }
+}
+
 template <typename Scalar>
 void inner_product_exact_values() {
   using Vec = Matrix<Scalar, Dynamic, 1>;
@@ -660,6 +705,10 @@ EIGEN_DECLARE_TEST(adjoint) {
     CALL_SUBTEST_19(inner_product_adjoint_rewrap<std::complex<float>>());
     CALL_SUBTEST_19(inner_product_adjoint_rewrap<std::complex<double>>());
   }
+
+  CALL_SUBTEST_19(inner_product_without_linear_access<float>());
+  CALL_SUBTEST_19(inner_product_without_linear_access<double>());
+  CALL_SUBTEST_19(inner_product_without_linear_access<std::complex<double>>());
 
   CALL_SUBTEST_20(inner_product_runtime_stride<float>());
   CALL_SUBTEST_21(inner_product_runtime_stride<double>());

@@ -22,6 +22,18 @@ namespace internal {
 enum PermPermProduct_t { PermPermProduct };
 
 /** \internal
+ * A permutation or a sequence of transpositions of the given size stores the indices 0 ... size - 1 as StorageIndex.
+ * A size that does not fit StorageIndex throws std::bad_alloc in every build, as a dense size overflowing Index does.
+ */
+template <typename StorageIndex>
+EIGEN_DEVICE_FUNC EIGEN_ALWAYS_INLINE void check_permutation_size(Index size) {
+  // Compared through a round trip: highest() of an unsigned 64-bit StorageIndex does not fit Index.
+  const bool fits = static_cast<Index>(static_cast<StorageIndex>(size)) == size;
+  eigen_assert(fits && "size exceeds StorageIndex range, use a wider StorageIndex");
+  if (!fits) throw_std_bad_alloc();
+}
+
+/** \internal
  * Nullary functor reading a permutation as a dense matrix of Scalar: P has its ones at (indices(k), k),
  * and its inverse (Transposed) at (k, indices(k)). It backs the lazy sums of a dense or diagonal matrix
  * with a permutation, whose scalar type the permutation borrows.
@@ -161,12 +173,16 @@ class PermutationBase : public EigenBase<Derived> {
   /** \returns a reference to the stored array representing the permutation. */
   EIGEN_DEVICE_FUNC constexpr IndicesType& indices() { return derived().indices(); }
 
-  /** Resizes to given size.
+  /** Resizes to given size, which must fit \c StorageIndex.
    */
-  EIGEN_DEVICE_FUNC void resize(Index newSize) { indices().resize(newSize); }
+  EIGEN_DEVICE_FUNC void resize(Index newSize) {
+    internal::check_permutation_size<StorageIndex>(newSize);
+    indices().resize(newSize);
+  }
 
   /** Sets *this to be the identity permutation matrix */
   EIGEN_DEVICE_FUNC void setIdentity() {
+    internal::check_permutation_size<StorageIndex>(size());
     for (Index i = 0; i < size(); ++i) indices().coeffRef(i) = internal::convert_index<StorageIndex>(i);
   }
 
@@ -354,13 +370,14 @@ class PermutationMatrix
   using IndicesType = typename Traits::IndicesType;
   using StorageIndex = typename Traits::StorageIndex;
 #endif
+  EIGEN_MAKE_ALIGNED_OPERATOR_NEW_IF(bool(IndicesType::NeedsToAlign))
 
   EIGEN_DEVICE_FUNC PermutationMatrix() = default;
 
-  /** Constructs an uninitialized permutation matrix of given size.
+  /** Constructs an uninitialized permutation matrix of given size, which must fit \c StorageIndex.
    */
   EIGEN_DEVICE_FUNC explicit PermutationMatrix(Index size) : m_indices(size) {
-    internal::convert_index<StorageIndex>(size);  // asserts that size fits StorageIndex
+    internal::check_permutation_size<StorageIndex>(size);
   }
 
   /** Copy constructor. */
@@ -407,7 +424,7 @@ class PermutationMatrix
   template <typename Other>
   EIGEN_DEVICE_FUNC PermutationMatrix(const InverseImpl<Other, PermutationStorage>& other)
       : m_indices(other.derived().nestedExpression().size()) {
-    internal::convert_index<StorageIndex>(m_indices.size());  // asserts that size fits StorageIndex
+    internal::check_permutation_size<StorageIndex>(m_indices.size());
     Base::assignTranspose(other.derived().nestedExpression());
   }
   template <typename Lhs, typename Rhs>

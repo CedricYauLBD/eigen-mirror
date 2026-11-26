@@ -450,6 +450,42 @@ void permutation_inverse_product_temporaries() {
   VERIFY_IS_EQUAL(result.size(), 0);
 }
 
+// A size that does not fit StorageIndex is rejected before any index is stored.
+void permutation_size_exceeds_storage_index() {
+  using PermutationType = PermutationMatrix<Dynamic, Dynamic, std::int8_t>;
+  using TranspositionsType = Transpositions<Dynamic, Dynamic, std::int8_t>;
+  PermutationType perm(127);
+  perm.setIdentity();
+  perm.applyTranspositionOnTheRight(0, 126);
+  VERIFY((perm * perm.inverse()).toDenseMatrix().isIdentity());
+  VERIFY_RAISES_ASSERT(PermutationType tooLarge(128));
+  VERIFY_RAISES_ASSERT(perm.resize(128));
+  VERIFY_RAISES_ASSERT(perm.setIdentity(300));
+  VERIFY_IS_EQUAL(perm.size(), 127);
+  PermutationMatrix<Dynamic> wide(300);
+  wide.setIdentity();
+  VERIFY_RAISES_ASSERT(PermutationType narrowed(wide.inverse()));
+  PermutationMatrix<200, 200, std::int8_t> fixedSize;
+  VERIFY_RAISES_ASSERT(fixedSize.setIdentity());
+
+  TranspositionsType tr(127);
+  tr.setIdentity();
+  VERIFY_RAISES_ASSERT(TranspositionsType tooLarge(128));
+  VERIFY_RAISES_ASSERT(tr.resize(128));
+  VERIFY_IS_EQUAL(tr.size(), 127);
+  Transpositions<Dynamic> wideTr(300);
+  wideTr.setIdentity();
+  VERIFY_RAISES_ASSERT(perm = wideTr);
+  VERIFY_IS_EQUAL(perm.size(), 127);
+
+  // The bound is that of StorageIndex, also where StorageIndex is unsigned or as wide as Index.
+  PermutationMatrix<Dynamic, Dynamic, std::uint8_t> unsignedPerm(255);
+  VERIFY_RAISES_ASSERT(unsignedPerm.resize(256));
+  PermutationMatrix<Dynamic, Dynamic, std::uint64_t> widePerm(300);
+  widePerm.setIdentity();
+  VERIFY_IS_EQUAL(widePerm.indices().coeff(299), std::uint64_t(299));
+}
+
 EIGEN_DECLARE_TEST(permutationmatrices) {
   for (int i = 0; i < g_repeat; i++) {
     CALL_SUBTEST_1(permutationmatrices(Matrix<float, 1, 1>()));
@@ -463,6 +499,7 @@ EIGEN_DECLARE_TEST(permutationmatrices) {
         MatrixXcf(internal::random<int>(1, EIGEN_TEST_MAX_SIZE), internal::random<int>(1, EIGEN_TEST_MAX_SIZE))));
   }
   CALL_SUBTEST_8(permutation_inverse_product_temporaries());
+  CALL_SUBTEST_8(permutation_size_exceeds_storage_index());
   CALL_SUBTEST_8((permutation_inverse_product<PermutationMatrix<4>>(4)));
   CALL_SUBTEST_8((permutation_inverse_product<PermutationMatrix<Dynamic, 17>>(17)));
   for (Index size : {0, 1, 2, 7, 8, 9, 15, 16, 17}) {

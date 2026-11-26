@@ -528,7 +528,7 @@ struct gemv_leading_constant : std::false_type {};
 template <typename Plain, typename Nested, typename Rhs, typename Scalar>
 struct gemv_leading_constant<
     CwiseBinaryOp<scalar_product_op<Scalar>, const CwiseNullaryOp<scalar_constant_op<Scalar>, Plain>, Nested>, Rhs,
-    Scalar> : std::is_same<typename Rhs::Scalar, Scalar> {
+    Scalar> : bool_constant<std::is_same<typename Rhs::Scalar, Scalar>::value && has_layout_of<Plain, Nested>::value> {
   using Inner = remove_all_t<Nested>;
 };
 
@@ -1946,7 +1946,7 @@ struct diagonal_product_evaluator_base : evaluator_base<Derived> {
                     int(evaluator<DiagonalType>::CoeffReadCost),
 
     MatrixFlags = evaluator<MatrixType>::Flags,
-    DiagFlags = evaluator<DiagonalType>::Flags,
+    DiagFlags = vector_evaluator<DiagonalType>::Flags,
 
     StorageOrder_ = (Derived::MaxRowsAtCompileTime == 1 && Derived::MaxColsAtCompileTime != 1)   ? RowMajor
                     : (Derived::MaxColsAtCompileTime == 1 && Derived::MaxRowsAtCompileTime != 1) ? ColMajor
@@ -1965,8 +1965,10 @@ struct diagonal_product_evaluator_base : evaluator_base<Derived> {
                     (ScalarAccessOnDiag_ || (bool(int(DiagFlags) & PacketAccessBit))),
     LinearAccessMask_ =
         (MatrixType::RowsAtCompileTime == 1 || MatrixType::ColsAtCompileTime == 1) ? LinearAccessBit : 0,
-    Flags = ((HereditaryBits | LinearAccessMask_) & static_cast<unsigned int>(MatrixFlags)) |
-            (Vectorizable_ ? PacketAccessBit : 0),
+    // The packets run along StorageOrder_, the order the product expression reports. It is not the order of the matrix
+    // when a diagonal of maximum size 1 makes the product a vector.
+    Flags = ((HereditaryBits | LinearAccessMask_) & ~RowMajorBit & static_cast<unsigned int>(MatrixFlags)) |
+            (int(StorageOrder_) == RowMajor ? RowMajorBit : 0) | (Vectorizable_ ? PacketAccessBit : 0),
     Alignment = evaluator<MatrixType>::Alignment,
 
     AsScalarProduct =
@@ -2032,7 +2034,7 @@ struct diagonal_product_evaluator_base : evaluator_base<Derived> {
                           m_diagImpl.template packetSegment<DiagonalPacketLoadMode, PacketType>(id, begin, count));
   }
 
-  evaluator<DiagonalType> m_diagImpl;
+  vector_evaluator<DiagonalType> m_diagImpl;
   evaluator<MatrixType> m_matImpl;
 };
 
@@ -2171,7 +2173,10 @@ struct triangular_diagonal_product_lazy_evaluator_base : evaluator_base<ProductX
   enum {
     CoeffReadCost = int(NumTraits<Scalar>::MulCost) + int(evaluator<MatrixType>::CoeffReadCost) +
                     int(evaluator<DiagonalType>::CoeffReadCost),
-    Flags = HereditaryBits & static_cast<unsigned int>(evaluator<MatrixType>::Flags),
+    // The storage order is the one the product expression reports. It is not the order of the matrix when a diagonal
+    // of maximum size 1 makes the product a vector.
+    Flags = (HereditaryBits & ~RowMajorBit & static_cast<unsigned int>(evaluator<MatrixType>::Flags)) |
+            (int(traits<ProductXpr>::Flags) & RowMajorBit),
     Alignment = 0
   };
 
@@ -2192,7 +2197,7 @@ struct triangular_diagonal_product_lazy_evaluator_base : evaluator_base<ProductX
   }
 
  protected:
-  evaluator<DiagonalType> m_diagImpl;
+  vector_evaluator<DiagonalType> m_diagImpl;
   evaluator<MatrixType> m_matImpl;
 };
 
@@ -2237,7 +2242,10 @@ struct selfadjoint_diagonal_product_lazy_evaluator_base : evaluator_base<Product
   enum {
     CoeffReadCost = int(NumTraits<Scalar>::MulCost) + int(evaluator<MatrixType>::CoeffReadCost) +
                     int(evaluator<DiagonalType>::CoeffReadCost),
-    Flags = HereditaryBits & static_cast<unsigned int>(evaluator<MatrixType>::Flags),
+    // The storage order is the one the product expression reports. It is not the order of the matrix when a diagonal
+    // of maximum size 1 makes the product a vector.
+    Flags = (HereditaryBits & ~RowMajorBit & static_cast<unsigned int>(evaluator<MatrixType>::Flags)) |
+            (int(traits<ProductXpr>::Flags) & RowMajorBit),
     Alignment = 0
   };
 
@@ -2254,7 +2262,7 @@ struct selfadjoint_diagonal_product_lazy_evaluator_base : evaluator_base<Product
   }
 
  protected:
-  evaluator<DiagonalType> m_diagImpl;
+  vector_evaluator<DiagonalType> m_diagImpl;
   evaluator<MatrixType> m_matImpl;
 };
 

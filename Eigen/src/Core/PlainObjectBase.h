@@ -166,7 +166,9 @@ class PlainObjectBase : public internal::dense_xpr_base<Derived>::type {
   DenseStorage<Scalar, Base::MaxSizeAtCompileTime, Base::RowsAtCompileTime, Base::ColsAtCompileTime, Options> m_storage;
 
  public:
-  enum { NeedsToAlign = (SizeAtCompileTime != Dynamic) && (internal::traits<Derived>::Alignment > 0) };
+  // A bounded dynamic-size object stores its coefficients in the same aligned array as a fixed-size one. Kept an enum:
+  // user code names this member, and a static constexpr one needs a definition wherever it is odr-used in C++14.
+  enum { NeedsToAlign = (MaxSizeAtCompileTime != Dynamic) && (internal::traits<Derived>::Alignment > 0) };
   EIGEN_MAKE_ALIGNED_OPERATOR_NEW_IF(NeedsToAlign)
 
   EIGEN_STATIC_ASSERT(internal::check_implication(MaxRowsAtCompileTime == 1 && MaxColsAtCompileTime != 1,
@@ -799,6 +801,10 @@ class PlainObjectBase : public internal::dense_xpr_base<Derived>::type {
     EIGEN_STATIC_ASSERT(internal::is_valid_index_type<T0>::value && internal::is_valid_index_type<T1>::value,
                         T0 AND T1 MUST BE INTEGER TYPES)
     resize(rows, cols);
+#ifdef EIGEN_INITIALIZE_COEFFS
+    // resize() only initializes the coefficients if their number changes, which it never does for a fixed size.
+    EIGEN_IF_CONSTEXPR (SizeAtCompileTime != Dynamic) EIGEN_INITIALIZE_COEFFS_IF_THAT_OPTION_IS_ENABLED
+#endif
   }
 
   template <typename T0, typename T1, std::enable_if_t<Base::SizeAtCompileTime == 2, T0>* = nullptr>
@@ -828,6 +834,10 @@ class PlainObjectBase : public internal::dense_xpr_base<Derived>::type {
   EIGEN_DEVICE_FUNC constexpr EIGEN_STRONG_INLINE void _init1(Index size) {
     EIGEN_STATIC_ASSERT(internal::is_valid_index_type<T>::value, FLOATING_POINT_ARGUMENT_PASSED__INTEGER_WAS_EXPECTED)
     resize(size);
+#ifdef EIGEN_INITIALIZE_COEFFS
+    // resize() only initializes the coefficients if their number changes, which it never does for a fixed size.
+    EIGEN_IF_CONSTEXPR (SizeAtCompileTime != Dynamic) EIGEN_INITIALIZE_COEFFS_IF_THAT_OPTION_IS_ENABLED
+#endif
   }
 
   // We have a 1x1 matrix/array => the argument is interpreted as the value of the unique coefficient (case where scalar
@@ -1000,6 +1010,10 @@ struct conservative_resize_like_impl {
       {
         const Index new_rows = other.rows() - _this.rows();
         const Index new_cols = other.cols() - _this.cols();
+#ifndef EIGEN_NO_DEBUG
+        internal::check_rows_cols_for_overflow<Derived::MaxSizeAtCompileTime, Derived::MaxRowsAtCompileTime,
+                                               Derived::MaxColsAtCompileTime>::run(other.rows(), other.cols());
+#endif
         _this.derived().m_storage.conservativeResize(other.size(), other.rows(), other.cols());
         if (new_rows > 0)
           _this.bottomRightCorner(new_rows, other.cols()) = other.bottomRows(new_rows);

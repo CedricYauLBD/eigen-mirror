@@ -609,13 +609,15 @@ EIGEN_DONT_INLINE void triangular_solve_matrix<Scalar, Index, OnTheLeft, Mode, C
   }
   subcols = numext::maxi<Index>(numext::round_down(subcols, colStep), colStep);
 
-  for (Index j0 = 0; j0 < otherSize; j0 += nc) {
-    const Index cols = (numext::mini)(otherSize - j0, nc);
+  // Advance by the block just processed: j0 + nc, k2 + kc and i2 + mc can overflow a 32-bit Index.
+  for (Index j0 = 0, cols; j0 < otherSize; j0 += cols) {
+    cols = (numext::mini)(otherSize - j0, nc);
     Scalar* _panel = _other + j0 * otherStride;
     OtherMapper other(_panel, otherStride, otherIncr);
 
-    for (Index k2 = IsLower ? 0 : size; IsLower ? k2 < size : k2 > 0; IsLower ? k2 += kc : k2 -= kc) {
-      const Index actual_kc = (numext::mini)(IsLower ? size - k2 : k2, kc);
+    for (Index k2 = IsLower ? 0 : size, actual_kc; IsLower ? k2 < size : k2 > 0;
+         IsLower ? k2 += actual_kc : k2 -= actual_kc) {
+      actual_kc = (numext::mini)(IsLower ? size - k2 : k2, kc);
 
       // We have selected and packed a big horizontal panel R1 of rhs. Let B be the packed copy of this panel,
       // and R2 the remaining part of rhs. The corresponding vertical panel of lhs is split into
@@ -679,10 +681,10 @@ EIGEN_DONT_INLINE void triangular_solve_matrix<Scalar, Index, OnTheLeft, Mode, C
 
       // R2 -= A21 * B => GEPP
       {
-        Index start = IsLower ? k2 + kc : 0;
+        Index start = IsLower ? k2 + actual_kc : 0;
         Index end = IsLower ? size : k2 - kc;
-        for (Index i2 = start; i2 < end; i2 += mc) {
-          const Index actual_mc = (numext::mini)(mc, end - i2);
+        for (Index i2 = start, actual_mc; i2 < end; i2 += actual_mc) {
+          actual_mc = (numext::mini)(mc, end - i2);
           if (actual_mc > 0) {
             pack_lhs(blockA, tri.getSubMapper(i2, IsLower ? k2 : k2 - kc), actual_kc, actual_mc);
 
@@ -770,8 +772,10 @@ EIGEN_DONT_INLINE void triangular_solve_matrix<Scalar, Index, OnTheRight, Mode, 
                 false, true>
       pack_lhs_panel;
 
-  for (Index k2 = IsLower ? size : 0; IsLower ? k2 > 0 : k2 < size; IsLower ? k2 -= kc : k2 += kc) {
-    const Index actual_kc = (numext::mini)(IsLower ? k2 : size - k2, kc);
+  // Advance by the block just processed: k2 + kc and i2 + mc can overflow a 32-bit Index.
+  for (Index k2 = IsLower ? size : 0, actual_kc; IsLower ? k2 > 0 : k2 < size;
+       IsLower ? k2 -= actual_kc : k2 += actual_kc) {
+    actual_kc = (numext::mini)(IsLower ? k2 : size - k2, kc);
     Index actual_k2 = IsLower ? k2 - actual_kc : k2;
 
     Index startPanel = IsLower ? 0 : k2 + actual_kc;
@@ -795,8 +799,8 @@ EIGEN_DONT_INLINE void triangular_solve_matrix<Scalar, Index, OnTheRight, Mode, 
       }
     }
 
-    for (Index i2 = 0; i2 < rows; i2 += mc) {
-      const Index actual_mc = (numext::mini)(mc, rows - i2);
+    for (Index i2 = 0, actual_mc; i2 < rows; i2 += actual_mc) {
+      actual_mc = (numext::mini)(mc, rows - i2);
 
       // triangular solver kernel
       {

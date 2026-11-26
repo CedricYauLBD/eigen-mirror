@@ -309,6 +309,15 @@ void sparse_product() {
     VERIFY_IS_APPROX(v2 = m2 * v1.asDiagonal() * v1, refM2 * v1.asDiagonal() * v1);
     VERIFY_IS_APPROX(v3 = v2.asDiagonal() * m2 * v1, v2.asDiagonal() * refM2 * v1);
 
+    // A diagonal without LinearAccessBit: a row vector minus a one-row block of runtime shape.
+    const Matrix<Scalar, Dynamic, Dynamic, ColMajor> b1 = DenseMatrix::Random(2, cols);
+    const Matrix<Scalar, Dynamic, Dynamic, ColMajor> b2 = DenseMatrix::Random(2, rows);
+    const RowDenseVector r1 = RowDenseVector::Random(cols), r2 = RowDenseVector::Random(rows);
+    VERIFY_IS_APPROX(m3 = m2 * (r1 - b1.block(1, 0, 1, cols)).asDiagonal(),
+                     refM3 = refM2 * (r1 - b1.row(1)).asDiagonal());
+    VERIFY_IS_APPROX(m3 = (r2 - b2.block(1, 0, 1, rows)).asDiagonal() * m2,
+                     refM3 = (r2 - b2.row(1)).asDiagonal() * refM2);
+
     // evaluate to a dense matrix to check the .row() and .col() iterator functions
     VERIFY_IS_APPROX(d3 = m2 * d1, refM3 = refM2 * d1);
     VERIFY_IS_APPROX(d3 = m2.transpose() * d2, refM3 = refM2.transpose() * d2);
