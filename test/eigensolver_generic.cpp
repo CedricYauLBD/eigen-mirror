@@ -372,6 +372,17 @@ void eigenvalues_of_failed_decomposition() {
   EigenSolver<MatrixXd> eig(MatrixXd::Identity(4, 4), false);
   VERIFY_IS_EQUAL(eig.compute(big, false).info(), NumericalIssue);
   const VectorXcd eivals = eig.eigenvalues();
+  // With eigenvectors requested, the accessors refuse, and a build without assertions must not return the Schur basis
+  // through them: look at the matrix they would return.
+  struct SchurBasis : EigenSolver<MatrixXd> {
+    using EigenSolver<MatrixXd>::EigenSolver;
+    const MatrixXd& basis() const { return m_realSchur.matrixU(); }
+  };
+  SchurBasis failed(big, true);
+  VERIFY_IS_EQUAL(failed.info(), NumericalIssue);
+  VERIFY_RAISES_ASSERT(failed.eigenvectors());
+  VERIFY_RAISES_ASSERT(failed.pseudoEigenvectors());
+  VERIFY(failed.basis().isZero(0));
   // n * eps * ||big||_2 = 8 * eps * c bounds the backward error of the Schur form.
   const double kTol = 8 * NumTraits<double>::epsilon() * c;
   const Index overflowed = eivals(0).real() == inf ? 0 : 1;

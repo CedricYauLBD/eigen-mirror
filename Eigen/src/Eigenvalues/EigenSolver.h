@@ -444,6 +444,8 @@ EigenSolver<MatrixType>& EigenSolver<MatrixType>::computeFromSchur(bool computeE
       }
     }
     if (!allFinite) {
+      // The Schur basis is not a set of eigenvectors: leave no matrix that looks like a result.
+      if (computeEigenvectors) m_realSchur.m_matU.setZero(n, n);
       m_isInitialized = true;
       m_eigenvectorsOk = false;
       m_info = NumericalIssue;

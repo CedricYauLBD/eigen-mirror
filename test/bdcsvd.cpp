@@ -274,6 +274,33 @@ void bdcsvd_allocation_size_overflow() {
   for (Index diagSize : {matrixLimit + 1, maxSize}) VERIFY(refuses(diagSize, false, false));
 #endif
 }
+
+// The public entry points size the full U and V before the divide-and-conquer workspace, so a request whose square
+// output does not fit Index must be refused before any buffer is allocated, even when the input and the bidiagonal fit.
+template <typename = void>
+void bdcsvd_output_size_overflow() {
+#ifdef EIGEN_EXCEPTIONS
+  const Index maxSize = NumTraits<Index>::highest();
+  // The smallest n whose n x n matrix does not fit.
+  const Index n = Index(std::sqrt(static_cast<double>(maxSize))) + 1;
+  VERIFY(n > maxSize / n && n - 1 <= maxSize / (n - 1));
+  // Only the dimension that is n has a square output that does not fit.
+  for (bool tall : {true, false}) {
+    const Index rows = tall ? n : 1, cols = tall ? 1 : n;
+    const unsigned int options = tall ? ComputeFullU : ComputeFullV;
+    // The check precedes every allocation, so it throws here whatever the memory of this machine.
+    bool threw = false;
+    internal::set_is_malloc_allowed(false);
+    try {
+      BDCSVD<MatrixXd> svd(rows, cols, options);
+    } catch (const std::bad_alloc&) {
+      threw = true;
+    }
+    internal::set_is_malloc_allowed(true);
+    VERIFY(threw);
+  }
+#endif
+}
 #endif
 
 #if defined(EIGEN_TEST_PART_62) || defined(EIGEN_TEST_PART_ALL)
@@ -983,4 +1010,5 @@ EIGEN_DECLARE_TEST(bdcsvd) {
   CALL_SUBTEST_65((svd_allocation_failure<MatrixXd, ComputeFullU | ComputeFullV>(40, 20, 60, 30)));
   CALL_SUBTEST_65((svd_allocation_failure<MatrixXd, ComputeFullU>(20, 20, 20, 40)));
   CALL_SUBTEST_65((bdcsvd_allocation_size_overflow<>()));
+  CALL_SUBTEST_65((bdcsvd_output_size_overflow<>()));
 }
