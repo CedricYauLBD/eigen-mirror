@@ -517,9 +517,10 @@ void selfadjointeigensolver_tridiagonal_scale_sweep() {
   using VectorType = Matrix<RealScalar, Dynamic, 1>;
   const Index n = 30;
   const RealScalar eps = NumTraits<RealScalar>::epsilon();
-  const int minExp = std::numeric_limits<RealScalar>::min_exponent - 1 + std::numeric_limits<RealScalar>::digits / 2;
   const int maxExp = std::numeric_limits<RealScalar>::max_exponent - 8;
   const int step = std::numeric_limits<RealScalar>::digits / 4;
+  const int minExp = scale_sweep_min_exponent<RealScalar>(
+      std::numeric_limits<RealScalar>::min_exponent - 1 + std::numeric_limits<RealScalar>::digits / 2, step);
   for (int e = minExp; e <= maxExp; e += step) {
     const RealScalar scale = std::ldexp(RealScalar(1), e);
     VectorType unitDiag = VectorType::Random(n);
@@ -714,9 +715,10 @@ void matrix_operator_norm_scale_sweep() {
   const RealScalar eps = NumTraits<RealScalar>::epsilon();
   const RealScalar nan = std::numeric_limits<RealScalar>::quiet_NaN();
   const RealScalar inf = std::numeric_limits<RealScalar>::infinity();
-  const int minExp = std::numeric_limits<RealScalar>::min_exponent - 1 + std::numeric_limits<RealScalar>::digits / 2;
   const int maxExp = std::numeric_limits<RealScalar>::max_exponent - 6;
   const int step = std::numeric_limits<RealScalar>::digits / 4;
+  const int minExp = scale_sweep_min_exponent<RealScalar>(
+      std::numeric_limits<RealScalar>::min_exponent - 1 + std::numeric_limits<RealScalar>::digits / 2, step);
 
   // A0 = U diag(sigma) W^* with unitary U, W, so that ||A0||_2 = sigma_max.
   MatrixType h1 = MatrixType::Random(n, n), h2 = MatrixType::Random(n, n);

@@ -59,16 +59,10 @@ void hessenberg_scale_sweep() {
   using MatrixType = Matrix<Scalar, Dynamic, Dynamic>;
   const Index n = 6;
   const RealScalar eps = NumTraits<RealScalar>::epsilon();
-  int minExp = std::numeric_limits<RealScalar>::min_exponent - 1 + std::numeric_limits<RealScalar>::digits / 2;
   const int maxExp = std::numeric_limits<RealScalar>::max_exponent - 6;
   const int step = std::numeric_limits<RealScalar>::digits / 4;
-  // A packet unit that flushes subnormals (ARMv7 NEON) loses up to min() in every operation whose operand or result is
-  // below it, an error of min() / 2^e relative to A. That is within eps only for 2^e >= min() / eps, so the sweep
-  // starts at the first scale of the grid above that there.
-  const int flushFloor = std::numeric_limits<RealScalar>::min_exponent - 2 + std::numeric_limits<RealScalar>::digits;
-  if (packet_path_flushes_subnormals<RealScalar>()) {
-    while (minExp < flushFloor) minExp += step;
-  }
+  const int minExp = scale_sweep_min_exponent<RealScalar>(
+      std::numeric_limits<RealScalar>::min_exponent - 1 + std::numeric_limits<RealScalar>::digits / 2, step);
   for (int e = minExp; e <= maxExp; e += step) {
     const RealScalar scale = std::ldexp(RealScalar(1), e);
     MatrixType unit = MatrixType::Random(n, n);
