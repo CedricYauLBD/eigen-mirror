@@ -1578,6 +1578,26 @@ void test_selfadjoint_view_product_nesting() {
   VERIFY_IS_APPROX(sparseRes.toDense(), refS * refLo);
 }
 
+// The scratch buffer of the multithreaded sparse * dense product is aligned to alignof of an over-aligned scalar,
+// beyond Eigen's configured alignment, in every language mode.
+struct alignas(128) OverAlignedScalar {
+  double v;
+};
+
+template <typename = void>
+void test_sparse_scratch_allocator_alignment() {
+  using Alloc = internal::sparse_scratch_allocator<OverAlignedScalar>;
+  for (int i = 0; i < 50; ++i) {
+    // Small allocations in between move the heap's position, so that an under-aligning allocator is caught.
+    std::unique_ptr<char[]> filler(new char[24 + i]);
+    std::vector<OverAlignedScalar, Alloc> buf;
+    buf.assign(1 + i % 7, OverAlignedScalar());
+    VERIFY_IS_EQUAL(reinterpret_cast<std::uintptr_t>(buf.data()) % alignof(OverAlignedScalar), std::uintptr_t(0));
+    buf.resize(512);
+    VERIFY_IS_EQUAL(reinterpret_cast<std::uintptr_t>(buf.data()) % alignof(OverAlignedScalar), std::uintptr_t(0));
+  }
+}
+
 EIGEN_DECLARE_TEST(sparse_product) {
   sparse_structured_view_product_sfinae<SparseMatrix<double, ColMajor>>();
   sparse_structured_view_product_sfinae<SparseMatrix<double, RowMajor>>();
@@ -1659,6 +1679,7 @@ EIGEN_DECLARE_TEST(sparse_product) {
     CALL_SUBTEST_6((test_ambivector_resize_bounds<>()));
     CALL_SUBTEST_6((test_ambivector_front_insertion_growth<>()));
     CALL_SUBTEST_6((test_pruned_product_unsorted_lhs<>()));
+    CALL_SUBTEST_6((test_sparse_scratch_allocator_alignment<>()));
 #if defined(EIGEN_EXCEPTIONS)
     CALL_SUBTEST_6((test_ambivector_failed_insertion<>()));
     CALL_SUBTEST_6((test_ambivector_failed_reallocation<>()));

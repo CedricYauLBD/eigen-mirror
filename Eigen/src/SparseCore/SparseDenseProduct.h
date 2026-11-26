@@ -18,6 +18,32 @@ namespace Eigen {
 
 namespace internal {
 
+// Allocator for the per-thread scratch of the OpenMP sparse * dense product: storage aligned to alignof(T), which
+// can exceed Eigen's configured alignment (an alignas() scalar). std::allocator provides that only where C++17
+// aligned allocation is available, and aligned_allocator only provides Eigen's configured alignment.
+template <typename T>
+struct sparse_scratch_allocator {
+  using value_type = T;
+  sparse_scratch_allocator() = default;
+  template <typename U>
+  sparse_scratch_allocator(const sparse_scratch_allocator<U>&) {}
+  T* allocate(std::size_t n) {
+    check_size_for_overflow<T>(n);
+    void* p = handmade_aligned_malloc(n * sizeof(T), numext::maxi<std::size_t>(alignof(T), sizeof(void*)));
+    if (p == nullptr && n != 0) throw_std_bad_alloc();
+    return static_cast<T*>(p);
+  }
+  void deallocate(T* p, std::size_t) { handmade_aligned_free(p); }
+  template <typename U>
+  bool operator==(const sparse_scratch_allocator<U>&) const {
+    return true;
+  }
+  template <typename U>
+  bool operator!=(const sparse_scratch_allocator<U>&) const {
+    return false;
+  }
+};
+
 template <typename Lhs, typename Rhs, typename Dest, typename Alpha>
 void ordered_sparse_dense_add(Dest& dst, const Lhs& lhs, const Rhs& rhs, const Alpha& alpha, true_type) {
   if (numext::is_exactly_zero(alpha)) return;
@@ -255,9 +281,9 @@ struct sparse_time_dense_product_impl<SparseLhsType, DenseRhsType, DenseResType,
           // is required: two unrelated host threads concurrently calling
           // y = A*x would otherwise race on this static buffer (and a reallocating
           // grow on one would dangle the other's scratch_ptr).
-          // aligned_allocator: before C++17 std::allocator ignores the alignment of an
-          // over-aligned ResScalar (e.g. AutoDiffScalar<Vector4d> with AVX).
-          thread_local static std::vector<ResScalar, aligned_allocator<ResScalar>> scratch_buf;
+          // sparse_scratch_allocator: aligned to alignof(ResScalar) in every language mode (e.g.
+          // AutoDiffScalar<Vector4d> with AVX is over-aligned).
+          thread_local static std::vector<ResScalar, sparse_scratch_allocator<ResScalar>> scratch_buf;
           const std::size_t need = static_cast<std::size_t>(threads) * static_cast<std::size_t>(m);
           if (scratch_buf.size() < need) scratch_buf.assign(need, ResScalar(0));
           ResScalar* scratch_ptr = scratch_buf.data();

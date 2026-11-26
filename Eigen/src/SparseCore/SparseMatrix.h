@@ -123,6 +123,24 @@ inline Index sparse_max_stored_entries() {
   return static_cast<Index>(numext::mini<WideIndex>(NumTraits<StorageIndex>::highest(), NumTraits<Index>::highest()));
 }
 
+// A reservation size from the user's container as an Index. A negative integer gives -1, since the callers treat every
+// negative size alike; a size above Index's range throws, where narrowing it first could give a small positive value.
+template <typename Size>
+inline Index sparse_reserve_size(const Size& size, std::true_type /*is integer*/) {
+  if (size < Size(0)) return Index(-1);
+  if (static_cast<unsigned long long>(size) > static_cast<unsigned long long>(NumTraits<Index>::highest()))
+    throw_std_bad_alloc();
+  return static_cast<Index>(size);
+}
+template <typename Size>
+inline Index sparse_reserve_size(const Size& size, std::false_type) {
+  return convert_index<Index>(size);
+}
+template <typename Size>
+inline Index sparse_reserve_size(const Size& size) {
+  return sparse_reserve_size(size, bool_constant<NumTraits<Size>::IsInteger>());
+}
+
 }  // end namespace internal
 
 template <typename Scalar_, int Options_, typename StorageIndex_>
@@ -364,7 +382,7 @@ class SparseMatrix : public SparseCompressedBase<SparseMatrix<Scalar_, Options_,
       Index totalReserveSize = 0;
       for (Index j = 0; j < m_outerSize; ++j) {
         // Negative: passed as such, or an unsigned size beyond the range of Index.
-        Index reserveSize = internal::convert_index<Index>(reserveSizes[j]);
+        Index reserveSize = internal::sparse_reserve_size(reserveSizes[j]);
         if (reserveSize < 0 || reserveSize > maxReserveSize - totalReserveSize) internal::throw_std_bad_alloc();
         totalReserveSize += reserveSize;
       }
@@ -381,7 +399,7 @@ class SparseMatrix : public SparseCompressedBase<SparseMatrix<Scalar_, Options_,
       Index count = 0;
       for (Index j = 0; j < m_outerSize; ++j) {
         newOuterIndex[j] = internal::convert_index<StorageIndex>(count);
-        Index reserveSize = internal::convert_index<Index>(reserveSizes[j]);
+        Index reserveSize = internal::sparse_reserve_size(reserveSizes[j]);
         count += reserveSize + internal::convert_index<Index>(m_outerIndex[j + 1] - m_outerIndex[j]);
       }
 
@@ -410,6 +428,8 @@ class SparseMatrix : public SparseCompressedBase<SparseMatrix<Scalar_, Options_,
 
       m_data.resize(internal::convert_index<Index>(m_outerIndex[m_outerSize]));
     } else {
+      // A size beyond the range of Index throws here, before anything is allocated.
+      for (Index j = 0; j < m_outerSize; ++j) internal::sparse_reserve_size(reserveSizes[j]);
       StorageIndex* newOuterIndex = internal::conditional_aligned_new_auto<StorageIndex, true>(m_outerSize + 1);
 
       Index count = 0;
@@ -417,7 +437,7 @@ class SparseMatrix : public SparseCompressedBase<SparseMatrix<Scalar_, Options_,
         newOuterIndex[j] = internal::convert_index<StorageIndex>(count);
         Index alreadyReserved =
             internal::convert_index<Index>(m_outerIndex[j + 1] - m_outerIndex[j] - m_innerNonZeros[j]);
-        Index reserveSize = internal::convert_index<Index>(reserveSizes[j]);
+        Index reserveSize = internal::sparse_reserve_size(reserveSizes[j]);
         Index toReserve = numext::maxi(reserveSize, alreadyReserved);
         Index innerNNZ = internal::convert_index<Index>(m_innerNonZeros[j]);
         if (toReserve > maxSize - count - innerNNZ) {
