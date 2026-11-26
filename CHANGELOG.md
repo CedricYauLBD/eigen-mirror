@@ -66,6 +66,7 @@ Deprecations:
 
 Other changes:
 - `?syr2k` and `?her2k` in Eigen's BLAS library compute only the referenced triangle, without n-by-n temporaries, about twice as fast; unit-stride `?rot`, `csrot` and `zdrot` are vectorized [!3505]
+- The `superlu_support` test passes under LeakSanitizer: it suppresses a leak inside SuperLU's `gssvx` for a matrix with a zero pivot [#3413, !3645]
 - CI tests Eigen's BLAS library against netlib's: the reference test drivers, refreshed to Reference-LAPACK 3.12.1, and `blas_reference` (`EIGEN_TEST_BLAS_REFERENCE`), which compares every routine with netlib's reference BLAS. `ctest -L blas` runs the BLAS tests [!3505]
 - The top-level `unsupported/` directory was renamed to `contrib/`. Existing
   user code with `#include <unsupported/Eigen/...>` continues to compile
