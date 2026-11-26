@@ -163,7 +163,9 @@ class NumericalDiff : public Functor_ {
     val1.resize(Functor::values());
     val2.resize(Functor::values());
     // A qualified call, which ignores overrides of operator() in classes derived from NumericalDiff.
-    const auto evaluate = [this](InputType& point, ValueType& values) { return Functor::operator()(point, values); };
+    const auto evaluate = [this](InputType& point, ValueType& values) -> decltype(auto) {
+      return Functor::operator()(point, values);
+    };
 
     // initialization
     switch (mode) {

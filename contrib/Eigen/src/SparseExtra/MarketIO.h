@@ -55,18 +55,20 @@ inline void GetMarketLine(const char* line, StorageIndex& i, StorageIndex& j, st
   value = std::complex<Scalar>(valR, valI);
 }
 
+// Return whether the line held the coefficient; val is unspecified otherwise.
 template <typename RealScalar>
-inline void GetDenseElt(const std::string& line, RealScalar& val) {
+inline bool GetDenseElt(const std::string& line, RealScalar& val) {
   std::istringstream newline(line);
-  newline >> val;
+  return bool(newline >> val);
 }
 
 template <typename RealScalar>
-inline void GetDenseElt(const std::string& line, std::complex<RealScalar>& val) {
+inline bool GetDenseElt(const std::string& line, std::complex<RealScalar>& val) {
   RealScalar valR, valI;
   std::istringstream newline(line);
-  newline >> valR >> valI;
+  if (!(newline >> valR >> valI)) return false;
   val = std::complex<RealScalar>(valR, valI);
+  return true;
 }
 
 // Whether resize() can give DenseType other dimensions. A plain Matrix or Array reallocates, and Transpose and the
@@ -284,7 +286,11 @@ bool loadMarketDense(DenseType& mat, const std::string& filename) {
   Index col = 0;
   Scalar value;
   while (std::getline(in, line) && (row < rows) && (col < cols)) {
-    internal::GetDenseElt(line, value);
+    if (!internal::GetDenseElt(line, value)) {
+      std::cerr << "Malformed element in file " << filename << "\n";
+      in.close();
+      return false;
+    }
     values.push_back(value);
     row++;
     if (row == rows) {

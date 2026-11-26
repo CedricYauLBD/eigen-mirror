@@ -640,6 +640,16 @@ inline void test_return_by_value_nfft() {
   VectorXd power = fft.fwd(impulse, 16).cwiseAbs2();
   VERIFY_IS_APPROX(power, VectorXd::Ones(16));
 
+  // The forward transform of real samples has complex bins, also inside an expression.
+  const VectorXd real_samples = VectorXd::Random(8);
+  VectorXcd real_bins;
+  fft.fwd(real_bins, real_samples);
+  VectorXd real_power = fft.fwd(real_samples).cwiseAbs2();
+  VERIFY_IS_EQUAL(real_power.size(), real_bins.size());
+  VERIFY_IS_APPROX(real_power, real_bins.cwiseAbs2());
+  VectorXcd scaled = 2.0 * fft.fwd(real_samples);
+  VERIFY_IS_APPROX(scaled, 2.0 * real_bins);
+
   // A source with a single coefficient is a row.
   FFT<float> fftf;
   const Single one = Single::Random();
@@ -659,6 +669,8 @@ inline void test_return_by_value_nfft() {
   VERIFY_IS_EQUAL(fft.fwd(samples, 8).cols(), Index(1));
   const Matrix<std::complex<double>, 5, 1> bins = fft.fwd(samples, 8);
   VERIFY_IS_APPROX(bins, expected);
+  VectorXd half_power = fft.fwd(samples, 8).cwiseAbs2();
+  VERIFY_IS_APPROX(half_power, expected.cwiseAbs2());
 }
 
 // Regression for issue #1537: reusing the same FFT object across real-input

@@ -19,6 +19,14 @@
 namespace Eigen {
 
 namespace internal {
+
+// Whether the workspaces of ncv Lanczos vectors for an n x n problem are representable: ARPACK passes
+// lworkl = ncv^2 + 8 ncv as an int, and the n x ncv matrix v has n * ncv coefficients, counted in Index. Dense
+// resizing checks that product only in debug builds. Requires ncv >= 1.
+inline bool arpack_workspace_fits(Index n, int ncv) {
+  return ncv <= NumTraits<int>::highest() / (ncv + 8) && n <= NumTraits<Index>::highest() / ncv;
+}
+
 template <typename Scalar, typename RealScalar>
 struct arpack_wrapper;
 template <typename MatrixSolver, typename MatrixType, typename Scalar, bool BisSPD>
@@ -411,8 +419,8 @@ ArpackGeneralizedSelfAdjointEigenSolver<MatrixType, MatrixSolver, BisSPD>::compu
   //
   int ncv = std::min(std::max(2 * nev, 20), n);
 
-  // The length of workl, ncv^2 + 8 ncv, is passed as an int too
-  if (ncv > NumTraits<int>::highest() / (ncv + 8)) return *this;
+  // ARPACK's lworkl = ncv^2 + 8 ncv is an int, and the n x ncv matrix v must have an Index number of coefficients
+  if (!internal::arpack_workspace_fits(n, ncv)) return *this;
 
   // Allocate space for ARPACK to store the residual
   //

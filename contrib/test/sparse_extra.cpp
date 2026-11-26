@@ -261,6 +261,27 @@ void check_marketio_dense_views() {
 }
 
 // A size line that the file does not back with coefficients is a parsing error, whatever it would take to allocate.
+void check_marketio_dense_malformed() {
+  std::string filename = GetTestTempFilename("dense_extra_malformed.mtx");
+  {
+    std::ofstream out(filename.c_str());
+    out << "%%MatrixMarket matrix array real general\n2 1\n4\nnot-a-number\n";
+  }
+  const VectorXd untouched = VectorXd::Constant(3, 7.0);
+  VectorXd v = untouched;
+  VERIFY(!loadMarketDense(v, filename));
+  VERIFY_IS_EQUAL(v, untouched);
+
+  {
+    std::ofstream out(filename.c_str());
+    out << "%%MatrixMarket matrix array complex general\n2 1\n4 1\n3 x\n";
+  }
+  const VectorXcd untouched_complex = VectorXcd::Constant(3, std::complex<double>(7.0, 1.0));
+  VectorXcd c = untouched_complex;
+  VERIFY(!loadMarketDense(c, filename));
+  VERIFY_IS_EQUAL(c, untouched_complex);
+}
+
 void check_marketio_dense_truncated() {
   std::string filename = GetTestTempFilename("dense_extra_truncated.mtx");
   const MatrixXd untouched = MatrixXd::Constant(2, 2, 7.0);
@@ -448,17 +469,21 @@ void check_arpack_workspaces() {
   eigs.compute(SparseMatrixType(50, 50), 50, "LM", EigenvaluesOnly);
   VERIFY_IS_EQUAL(arpack_calls, 0);
 
-  // v has n * ncv = 2147484 * 2000 = 2^32 + 704 elements. The request is representable but seldom satisfiable; ASan
-  // aborts on such requests instead of failing them.
-#if defined(EIGEN_EXCEPTIONS) && !defined(__SANITIZE_ADDRESS__) && !__has_feature(address_sanitizer)
-  bool threw = false;
-  try {
+  // v has n * ncv coefficients, counted in Index. The boundary is checked on the size calculation, which does not
+  // allocate.
+  const Index max_index = NumTraits<Index>::highest();
+  VERIFY(internal::arpack_workspace_fits(max_index / 2000, 2000));
+  VERIFY(!internal::arpack_workspace_fits(max_index / 2000 + 1, 2000));
+  VERIFY(internal::arpack_workspace_fits(1000, 20));
+  VERIFY(!internal::arpack_workspace_fits(1000, 60000));
+
+  // With a 32-bit Index the guard is reached through compute(), before anything is allocated: 2147484 * 2000
+  // exceeds 2^31 - 1. With a 64-bit Index the same request would need 34 GB, so it is not made.
+  if (sizeof(Index) == 4) {
+    arpack_calls = 0;
     eigs.compute(SparseMatrixType(2147484, 2147484), 1000, "LM", EigenvaluesOnly);
-  } catch (const std::bad_alloc&) {
-    threw = true;
+    VERIFY_IS_EQUAL(arpack_calls, 0);
   }
-  VERIFY(threw || arpack_calls == 1);
-#endif
 }
 
 EIGEN_DECLARE_TEST(sparse_extra) {
@@ -512,6 +537,7 @@ EIGEN_DECLARE_TEST(sparse_extra) {
     TEST_SET_BUT_UNUSED_VARIABLE(s);
   }
   CALL_SUBTEST_4(check_marketio_dense_truncated());
+  CALL_SUBTEST_4(check_marketio_dense_malformed());
 
 #ifndef _WIN32
   CALL_SUBTEST_4(check_marketiterator_vector_sizes());

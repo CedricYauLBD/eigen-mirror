@@ -166,11 +166,13 @@ namespace internal {
 // Plain type and shape of the value a proxy evaluates to. The length of a transform is set by nfft at
 // run time and need not be the length of the source, so the type keeps the source's kind (matrix or
 // array), orientation and storage order, but not its fixed or bounded length. rows() and cols() are
-// the shape fft_resize_as_vector gives a destination of that type.
-template <typename T_SrcMat>
+// the shape fft_resize_as_vector gives a destination of that type. The forward transform has complex
+// bins even for real samples.
+template <typename T_SrcMat, bool Forward>
 struct fft_proxy_result {
   using SrcPlain = typename T_SrcMat::PlainObject;
-  using Scalar = typename SrcPlain::Scalar;
+  using Scalar = std::conditional_t<Forward, std::complex<typename NumTraits<typename SrcPlain::Scalar>::Real>,
+                                    typename SrcPlain::Scalar>;
 
   static constexpr bool IsRow = int(SrcPlain::RowsAtCompileTime) == 1;
   static constexpr bool IsCol = !IsRow && int(SrcPlain::ColsAtCompileTime) == 1;
@@ -192,11 +194,11 @@ struct fft_proxy_result {
 
 template <typename T_SrcMat, typename T_FftIfc>
 struct traits<fft_fwd_proxy<T_SrcMat, T_FftIfc> > {
-  using ReturnType = typename fft_proxy_result<T_SrcMat>::type;
+  using ReturnType = typename fft_proxy_result<T_SrcMat, true>::type;
 };
 template <typename T_SrcMat, typename T_FftIfc>
 struct traits<fft_inv_proxy<T_SrcMat, T_FftIfc> > {
-  using ReturnType = typename fft_proxy_result<T_SrcMat>::type;
+  using ReturnType = typename fft_proxy_result<T_SrcMat, false>::type;
 };
 }  // namespace internal
 
@@ -209,8 +211,8 @@ struct fft_fwd_proxy : public ReturnByValue<fft_fwd_proxy<T_SrcMat, T_FftIfc> > 
   template <typename T_DestMat>
   void evalTo(T_DestMat& dst) const;
 
-  Index rows() const { return internal::fft_proxy_result<T_SrcMat>::rows(m_src, dst_size()); }
-  Index cols() const { return internal::fft_proxy_result<T_SrcMat>::cols(m_src, dst_size()); }
+  Index rows() const { return internal::fft_proxy_result<T_SrcMat, true>::rows(m_src, dst_size()); }
+  Index cols() const { return internal::fft_proxy_result<T_SrcMat, true>::cols(m_src, dst_size()); }
 
  protected:
   // Number of coefficients FFT::fwd(dst, src, nfft) gives dst.
@@ -234,8 +236,8 @@ struct fft_inv_proxy : public ReturnByValue<fft_inv_proxy<T_SrcMat, T_FftIfc> > 
   template <typename T_DestMat>
   void evalTo(T_DestMat& dst) const;
 
-  Index rows() const { return internal::fft_proxy_result<T_SrcMat>::rows(m_src, dst_size()); }
-  Index cols() const { return internal::fft_proxy_result<T_SrcMat>::cols(m_src, dst_size()); }
+  Index rows() const { return internal::fft_proxy_result<T_SrcMat, false>::rows(m_src, dst_size()); }
+  Index cols() const { return internal::fft_proxy_result<T_SrcMat, false>::cols(m_src, dst_size()); }
 
  protected:
   // Number of coefficients FFT::inv(dst, src, nfft) gives dst. The one exception needs the type of

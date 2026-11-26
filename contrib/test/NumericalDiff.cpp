@@ -305,6 +305,26 @@ void test_functor_status() {
   VERIFY_IS_APPROX(jac, expected);
 }
 
+// A functor may return a reference, such as the stream it logs to. The status of such a result is ignored, and it must
+// not be copied.
+struct reference_returning_functor : Functor<double> {
+  reference_returning_functor() : Functor<double>(1, 3) {}
+  std::ostream &operator()(const VectorXd &x, VectorXd &fvec) const {
+    fvec.setConstant(4.0 * x[0]);
+    return std::cerr;
+  }
+};
+
+template <NumericalDiffMode Mode>
+void test_reference_result() {
+  VectorXd x(1);
+  x << 0.5;
+  MatrixXd jac(3, 1);
+  NumericalDiff<reference_returning_functor, Mode> diff;
+  VERIFY_IS_EQUAL(diff.df(x, jac), 2);
+  VERIFY_IS_APPROX(jac, MatrixXd::Constant(3, 1, 4.0));
+}
+
 EIGEN_DECLARE_TEST(NumericalDiff) {
   CALL_SUBTEST(test_forward());
   CALL_SUBTEST(test_central());
@@ -320,4 +340,6 @@ EIGEN_DECLARE_TEST(NumericalDiff) {
   CALL_SUBTEST(test_step_alignment<Central>(1e-10));
   CALL_SUBTEST(test_functor_status<Forward>());
   CALL_SUBTEST(test_functor_status<Central>());
+  CALL_SUBTEST(test_reference_result<Forward>());
+  CALL_SUBTEST(test_reference_result<Central>());
 }
