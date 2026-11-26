@@ -38,6 +38,7 @@ Bug fixes:
 - `Transform::inverse(Projective)` returned an uninitialized result for every mode other than `Projective` [!2814]
 - `DGMRES::iterations()` returned `maxIterations()` after every solve, including converged ones [!2814]
 - `BDCSVD` with QR-only `Options`, such as `DisableQRDecomposition`, dropped runtime unitary requests for inputs below the switch size, so `matrixU()` asserted, or returned an empty `U` and `V` under `NDEBUG` [!3212]
+- `ThreadPool`: a worker could exit during shutdown while another worker had just taken the last task, so a task that waited for work it scheduled left the destructor waiting forever; a pool with more than 16383 threads hung, and now asserts in its constructor; and `RunQueue::PopBackHalf()` could pop an element twice after an allocation failure [#3316, #3393, #3407, !3642]
 - `JacobiSVD` with `FullPivHouseholderQRPreconditioner` accepted `ComputeThinV` and returned a non-orthogonal `V` for wide inputs; it now fails to compile, or asserts when requested at runtime [!3212]
 - `HouseholderQR` (and the decompositions and `SplineFitting` built on it) and `JacobiSVD` did not compile with `AutoDiffScalar` [#3192, !3265]
 - Constructing or assigning an `Affine` or `Isometry` `Transform` from a (Dim+1)x(Dim+1) matrix copied its last row verbatim; the last row is now set to `[0 ... 0 1]`, as for Dim x Dim and Dim x (Dim+1) inputs [#2715, !3412]
