@@ -261,6 +261,57 @@ void test_colamd_size_overflow() {
 #endif
 }
 
+// The row-major source has wider indices than the ordering. Its column offsets are summed in the ordering's narrow
+// index type; 257 * 257 entries wrapped to 513, and the pattern was then scattered into a buffer of that size. (COLAMD
+// is not instantiated for 16-bit indices, so AMD, which uses the same materialization, covers this.)
+// The expanded pattern of a triangle can also exceed the range although the triangle itself fits: 250 * 251 / 2
+// entries become 250 * 250 = 62500, which does not fit in 16 bits.
+void test_pattern_offsets_overflow() {
+#ifdef EIGEN_EXCEPTIONS
+  using Narrow = short;
+  const Index rows = 257, cols = 257;
+  VERIFY(rows * cols > 2 * Index(NumTraits<Narrow>::highest()) + 1);
+  SparseMatrix<double, RowMajor, int> A(rows, cols);
+  A.reserve(VectorXi::Constant(rows, cols));
+  for (Index i = 0; i < rows; ++i)
+    for (Index j = 0; j < cols; ++j) A.insert(i, j) = 1.0;
+  PermutationMatrix<Dynamic, Dynamic, Narrow> perm;
+  AMDOrdering<Narrow> amd;
+  bool thrown = false;
+  try {
+    amd(A, perm);
+  } catch (const std::bad_alloc&) {
+    thrown = true;
+  }
+  VERIFY(thrown);
+
+  const Index n = 250;
+  SparseMatrix<double, ColMajor, Narrow> L(n, n);
+  L.reserve(VectorXi::LinSpaced(n, n, 1));
+  for (Index j = 0; j < n; ++j)
+    for (Index i = j; i < n; ++i) L.insert(i, j) = 1.0;
+  VERIFY(L.nonZeros() <= Index(NumTraits<Narrow>::highest()));
+  VERIFY(n * n > Index(NumTraits<Narrow>::highest()));
+  thrown = false;
+  try {
+    amd(L.template selfadjointView<Lower>(), perm);
+  } catch (const std::bad_alloc&) {
+    thrown = true;
+  }
+  VERIFY(thrown);
+#endif
+}
+
+// With a 32-bit Index and 64-bit ordering indices the workspace length fits the ordering's index type but is
+// narrowed by the Index length of the allocation. The matrix has few entries, so it is cheap to build.
+void test_colamd_workspace_exceeds_index() {
+#ifdef EIGEN_EXCEPTIONS
+  if (sizeof(std::int64_t) <= sizeof(Index)) return;
+  const Index rows = NumTraits<Index>::highest() / 2;  // 4 * rows + 46 exceeds the range of Index.
+  VERIFY((colamd_throws_bad_alloc<int, std::int64_t>(rows)));
+#endif
+}
+
 void test_amd_index_range() {
   // AMD stores as StorageIndex the nodes 0..n and the positions in the pattern of A + A^T, which it grows to
   // t = nnz + nnz / 5 + 2 * n entries. It computed t, and the size 8 * (n + 1) of its workspace, in StorageIndex
@@ -303,6 +354,8 @@ EIGEN_DECLARE_TEST(sparse_ordering) {
     CALL_SUBTEST_4(test_colamd_mixed_index_types());
   }
   CALL_SUBTEST_4(test_colamd_row_major_narrow_index());
+  CALL_SUBTEST_4(test_pattern_offsets_overflow());
+  CALL_SUBTEST_4(test_colamd_workspace_exceeds_index());
   CALL_SUBTEST_5(test_amd_hash_overflow());
   CALL_SUBTEST_5(test_amd_index_range());
   CALL_SUBTEST_6((test_colamd_size_overflow<int, int>()));

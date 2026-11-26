@@ -320,6 +320,7 @@ class SparseLU : public SparseSolverBase<SparseLU<MatrixType_, OrderingType_>>,
    *          \c NumericalIssue if the LU factorization reports a problem, zero diagonal for instance
    *          \c InvalidInput if the input matrix is invalid
    *
+   * After analyzePattern() info() may be queried; it reports \c NumericalIssue until factorize() has run.
    * \c Success is reported only for a factorize() that ran to completion: not after analyzePattern() alone, and not
    * when analyzePattern() or factorize() was left through an exception such as \c std::bad_alloc.
    *
@@ -529,6 +530,8 @@ void SparseLU<MatrixType, OrderingType>::analyzePattern(const MatrixType& mat) {
   m_analysisIsOk = false;
   m_factorizationIsOk = false;
   m_info = NumericalIssue;
+  // info() may be queried from here on and reports NumericalIssue until factorize() completes.
+  m_isInitialized = true;
 
   // Firstly, copy the whole input matrix.
   m_mat = mat;

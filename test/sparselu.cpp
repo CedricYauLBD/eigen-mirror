@@ -334,7 +334,20 @@ void test_sparselu_failed_lsub_expansion() {
 #endif
 }
 
+// info() can be queried after analyzePattern() alone, and reports that no factorization exists yet.
+template <typename T>
+void test_sparselu_info_after_analyze() {
+  SparseMatrix<T> id(2, 2);
+  id.setIdentity();
+  SparseLU<SparseMatrix<T>> solver;
+  solver.analyzePattern(id);
+  VERIFY_IS_EQUAL(solver.info(), NumericalIssue);
+  solver.factorize(id);
+  VERIFY_IS_EQUAL(solver.info(), Success);
+}
+
 EIGEN_DECLARE_TEST(sparselu) {
+  CALL_SUBTEST_10(test_sparselu_info_after_analyze<double>());
   CALL_SUBTEST_1(test_sparselu_T<float>());
   CALL_SUBTEST_2(test_sparselu_T<double>());
   CALL_SUBTEST_3(test_sparselu_T<std::complex<float> >());

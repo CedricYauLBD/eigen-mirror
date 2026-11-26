@@ -125,6 +125,9 @@ class COLAMDOrdering {
 
     const StorageIndex Alen = internal::Colamd::recommended(nnz, m, n);
     if (Alen < 0) internal::throw_std_bad_alloc();
+    // StorageIndex can be wider than Index, and the workspace below is allocated with an Index length.
+    using WideIndex = std::common_type_t<Index, StorageIndex>;
+    if (WideIndex(Alen) > WideIndex(NumTraits<Index>::highest())) internal::throw_std_bad_alloc();
     double knobs[internal::Colamd::NKnobs];
     StorageIndex stats[internal::Colamd::NStats];
     internal::Colamd::set_defaults(knobs);
