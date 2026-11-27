@@ -512,6 +512,10 @@ void test_kron_rank_ratio_threshold() {
   Mat Z = Mat::Zero(2, 2);
   KroneckerOperator<Mat, Mat> Kz(Z, B.topLeftCorner(2, 2).eval());
   VERIFY_IS_EQUAL(Kz.rank(), 0);
+  // A non-finite factor takes precedence: its singular values are NaN, and every product with one is counted.
+  Mat Bnan = B.topLeftCorner(2, 2);
+  Bnan(0, 1) = std::numeric_limits<double>::quiet_NaN();
+  VERIFY_IS_EQUAL((KroneckerOperator<Mat, Mat>(Z, Bnan).rank()), 4);
   Vec bz = Vec::Random(4);
   VERIFY_IS_EQUAL(Kz.leastSquaresSolve(bz).norm(), 0.0);
 }

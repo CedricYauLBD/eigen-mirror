@@ -758,10 +758,10 @@ struct kron_factor_spectrum {
   static Result nanResult(Index rows, Index cols) {
     return Result::Constant(rows, cols, typename Result::Scalar(NumTraits<RealScalar>::quiet_NaN()));
   }
-  // The two statuses with which BDCSVD writes its singular values and vectors.
+  // NoConvergence is not enough: the LAPACKE wrappers leave the singular vectors unwritten then.
   template <typename Svd>
   static bool hasResult(const Svd& svd) {
-    return svd.info() == Success || svd.info() == NoConvergence;
+    return svd.info() == Success;
   }
   static ComplexVector eigenvalues(const Factor& f) {
     ComplexEigenSolver<ComplexMatrix> es(complexFactor(f), /*computeEigenvectors=*/false);
@@ -1161,6 +1161,7 @@ class KroneckerOperator : public EigenBase<KroneckerOperator<LhsMatrix, RhsMatri
     using DenseSpectrum = internal::kron_factor_spectrum<DenseMatrix>;
     const RealVector sa = DenseSpectrum::singularValues(LhsOps::denseFactor(m_A));
     const RealVector sb = DenseSpectrum::singularValues(RhsOps::denseFactor(m_B));
+    if ((numext::isnan)(sa[0]) || (numext::isnan)(sb[0])) return sa.size() * sb.size();
     // An exactly zero factor zeroes the whole operator (and would make the
     // ratios below 0/0).
     if (sa[0] == RealScalar(0) || sb[0] == RealScalar(0)) return 0;
