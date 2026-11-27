@@ -18,9 +18,9 @@ namespace Eigen {
 
 namespace internal {
 
-// Allocator for the per-thread scratch of the OpenMP sparse * dense product: storage aligned to alignof(T), which
-// can exceed Eigen's configured alignment (an alignas() scalar). std::allocator provides that only where C++17
-// aligned allocation is available, and aligned_allocator only provides Eigen's configured alignment.
+// Allocator for the per-thread scratch of the OpenMP sparse * dense product: scratch_malloc<T> aligns to Eigen's
+// scratch alignment and to alignof(T), which can exceed it (an alignas() scalar). std::allocator provides that only
+// where C++17 aligned allocation is available, and aligned_allocator only provides Eigen's configured alignment.
 template <typename T>
 struct sparse_scratch_allocator {
   using value_type = T;
@@ -28,12 +28,11 @@ struct sparse_scratch_allocator {
   template <typename U>
   sparse_scratch_allocator(const sparse_scratch_allocator<U>&) {}
   T* allocate(std::size_t n) {
+    if (n == 0) return nullptr;
     check_size_for_overflow<T>(n);
-    void* p = handmade_aligned_malloc(n * sizeof(T), numext::maxi<std::size_t>(alignof(T), sizeof(void*)));
-    if (p == nullptr && n != 0) throw_std_bad_alloc();
-    return static_cast<T*>(p);
+    return scratch_malloc<T>(n * sizeof(T));
   }
-  void deallocate(T* p, std::size_t) { handmade_aligned_free(p); }
+  void deallocate(T* p, std::size_t) { scratch_free<T>(p); }
   template <typename U>
   bool operator==(const sparse_scratch_allocator<U>&) const {
     return true;
@@ -301,11 +300,18 @@ struct sparse_time_dense_product_impl<SparseLhsType, DenseRhsType, DenseResType,
           // T * log n.
           const StorageIndex* const part_last = outer + n + 1;
           const StorageIndex* part_lo = outer;
-          // target = (t * nnz) / threads, split so that `t * nnz`, which can
-          // overflow Index, is never formed: t * nnz_rem < threads^2.
+          // target = (t * nnz) / threads, stepped incrementally so that neither `t * nnz` nor
+          // `t * nnz_rem` is formed: rem = (t * nnz_rem) mod threads.
           const Index nnz_quot = mat.nonZeros() / threads, nnz_rem = mat.nonZeros() % threads;
+          Index target = 0, rem = 0;
           for (Index t = 1; t < threads; ++t) {
-            const Index target = t * nnz_quot + (t * nnz_rem) / threads;
+            target += nnz_quot;
+            if (rem >= threads - nnz_rem) {
+              rem -= threads - nnz_rem;
+              ++target;
+            } else {
+              rem += nnz_rem;
+            }
             part_lo = std::lower_bound(part_lo, part_last, StorageIndex(target));
             part[t] = part_lo - outer;
           }
@@ -345,7 +351,10 @@ struct sparse_time_dense_product_impl<SparseLhsType, DenseRhsType, DenseResType,
             for (Index i0 = 0; i0 < m; i0 += kReduceBlock) {
               const Index i1 = numext::mini(i0 + kReduceBlock, m);
               const Index len = i1 - i0;
-              EIGEN_ALIGN_MAX ResScalar acc[kReduceBlock];
+              // alignas may not weaken the alignment of an over-aligned scalar.
+              alignas(alignof(ResScalar) > EIGEN_MAX_STATIC_ALIGN_BYTES ? alignof(ResScalar)
+                                                                        : EIGEN_MAX_STATIC_ALIGN_BYTES)
+                  ResScalar acc[kReduceBlock];
               for (Index ii = 0; ii < len; ++ii) acc[ii] = ResScalar(0);
               for (Index t = 0; t < threads; ++t) {
                 ResScalar* row = scratch_ptr + t * m + i0;

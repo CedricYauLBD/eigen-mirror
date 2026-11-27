@@ -733,6 +733,8 @@ void test_block_sparse_isapprox_custom_complex() {
 template <int Options>
 void test_block_sparse_resize_bad_alloc() {
 #ifdef EIGEN_EXCEPTIONS
+  // The guard is on bytes against std::ptrdiff_t: a narrower Index cannot form a size it refuses.
+  if (sizeof(Index) < sizeof(std::ptrdiff_t)) return;
   using BSM = BlockSparseMatrix<double, Options, 2, 2>;
   const Index huge = NumTraits<Index>::highest() / Index(sizeof(typename BSM::StorageIndex));
   BSM A(3, 3);

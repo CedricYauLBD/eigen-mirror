@@ -125,20 +125,34 @@ inline Index sparse_max_stored_entries() {
 
 // A reservation size from the user's container as an Index. A negative integer gives -1, since the callers treat every
 // negative size alike; a size above Index's range throws, where narrowing it first could give a small positive value.
+// The upper check is made only for a source type that can exceed Index, which also avoids a comparison that is always
+// false for an unsigned type (-Wtype-limits, C4296).
 template <typename Size>
-inline Index sparse_reserve_size(const Size& size, std::true_type /*is integer*/) {
-  if (size < Size(0)) return Index(-1);
-  if (static_cast<unsigned long long>(size) > static_cast<unsigned long long>(NumTraits<Index>::highest()))
-    throw_std_bad_alloc();
+inline Index sparse_reserve_size_upper(const Size& size, std::true_type /*can exceed Index*/) {
+  if (size > static_cast<Size>(NumTraits<Index>::highest())) throw_std_bad_alloc();
   return static_cast<Index>(size);
 }
 template <typename Size>
-inline Index sparse_reserve_size(const Size& size, std::false_type) {
+inline Index sparse_reserve_size_upper(const Size& size, std::false_type /*fits in Index*/) {
+  return static_cast<Index>(size);
+}
+template <typename Size>
+inline Index sparse_reserve_size(const Size& size, std::true_type /*is integer*/, std::true_type /*is signed*/) {
+  if (size < Size(0)) return Index(-1);
+  return sparse_reserve_size_upper(size, bool_constant<(sizeof(Size) > sizeof(Index))>());
+}
+template <typename Size>
+inline Index sparse_reserve_size(const Size& size, std::true_type /*is integer*/, std::false_type /*is signed*/) {
+  return sparse_reserve_size_upper(size, bool_constant<(sizeof(Size) >= sizeof(Index))>());
+}
+template <typename Size, typename IsSigned>
+inline Index sparse_reserve_size(const Size& size, std::false_type /*is integer*/, IsSigned) {
   return convert_index<Index>(size);
 }
 template <typename Size>
 inline Index sparse_reserve_size(const Size& size) {
-  return sparse_reserve_size(size, bool_constant<NumTraits<Size>::IsInteger>());
+  return sparse_reserve_size(size, bool_constant<NumTraits<Size>::IsInteger>(),
+                             bool_constant<NumTraits<Size>::IsSigned>());
 }
 
 }  // end namespace internal
@@ -390,6 +404,9 @@ class SparseMatrix : public SparseCompressedBase<SparseMatrix<Scalar_, Options_,
       // if reserveSizes is empty, don't do anything!
       if (totalReserveSize == 0) return;
 
+      // Reserve first: if it throws, the matrix is still compressed and unchanged.
+      m_data.reserve(totalReserveSize);
+
       // turn the matrix into non-compressed mode
       m_innerNonZeros = internal::conditional_aligned_new_auto<StorageIndex, true>(m_outerSize);
 
@@ -403,7 +420,6 @@ class SparseMatrix : public SparseCompressedBase<SparseMatrix<Scalar_, Options_,
         count += reserveSize + internal::convert_index<Index>(m_outerIndex[j + 1] - m_outerIndex[j]);
       }
 
-      m_data.reserve(totalReserveSize);
       StorageIndex previousOuterIndex = m_outerIndex[m_outerSize];
       for (Index j = m_outerSize - 1; j >= 0; --j) {
         StorageIndex innerNNZ = previousOuterIndex - m_outerIndex[j];
@@ -448,7 +464,11 @@ class SparseMatrix : public SparseCompressedBase<SparseMatrix<Scalar_, Options_,
       }
       newOuterIndex[m_outerSize] = internal::convert_index<StorageIndex>(count);
 
-      m_data.resize(count);
+      EIGEN_TRY { m_data.resize(count); }
+      EIGEN_CATCH(...) {
+        internal::conditional_aligned_delete_auto<StorageIndex, true>(newOuterIndex, m_outerSize + 1);
+        EIGEN_THROW;
+      }
       for (Index j = m_outerSize - 1; j >= 0; --j) {
         StorageIndex innerNNZ = m_innerNonZeros[j];
         StorageIndex begin = m_outerIndex[j];

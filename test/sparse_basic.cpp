@@ -1943,6 +1943,38 @@ void sparse_shift_copy_only() {
 
 #ifndef EIGEN_SPARSE_TEST_INCLUDED_FROM_SPARSE_EXTRA
 
+// An entry count that Index and StorageIndex hold can still need more than PTRDIFF_MAX bytes, which the storage refuses
+// with std::bad_alloc. The matrix must be left as it was, compressed or not, and usable.
+template <int Options>
+void sparse_reserve_bad_alloc() {
+#ifdef EIGEN_EXCEPTIONS
+  if (sizeof(Index) < 8) return;
+  using SpMat = SparseMatrix<std::complex<double>, Options, long long>;
+  const Index tooMany = Index(1) << 59;  // 16 bytes each: 2^63 bytes.
+  for (int compressed = 0; compressed < 2; ++compressed) {
+    SpMat m(3, 3);
+    m.insert(1, 1) = 2.0;
+    if (compressed) m.makeCompressed();
+    bool threw = false;
+    try {
+      m.reserve(Matrix<Index, Dynamic, 1>::Constant(3, tooMany / 3 + 1));
+    } catch (const std::bad_alloc&) {
+      threw = true;
+    }
+    VERIFY(threw);
+    VERIFY_IS_EQUAL(m.isCompressed(), compressed == 1);
+    VERIFY_IS_EQUAL(m.nonZeros(), 1);
+    VERIFY_IS_EQUAL(m.coeff(1, 1), std::complex<double>(2.0));
+    m.reserve(Matrix<Index, Dynamic, 1>::Constant(3, 2));
+    m.coeffRef(0, 0) = 1.0;
+    m.coeffRef(2, 2) = 3.0;
+    VERIFY_IS_EQUAL(m.nonZeros(), 3);
+    VERIFY_IS_EQUAL(m.coeff(0, 0), std::complex<double>(1.0));
+    VERIFY_IS_EQUAL(m.coeff(2, 2), std::complex<double>(3.0));
+  }
+#endif
+}
+
 EIGEN_DECLARE_TEST(sparse_basic) {
   g_dense_op_sparse_count = 0;  // Suppresses compiler warning.
   for (int i = 0; i < g_repeat; i++) {
@@ -1981,6 +2013,8 @@ EIGEN_DECLARE_TEST(sparse_basic) {
   CALL_SUBTEST_2((sparse_reserve_overflow<RowMajor, Index>()));
   CALL_SUBTEST_2((sparse_reserve_overflow<ColMajor, short>()));
   CALL_SUBTEST_2((sparse_reserve_overflow<RowMajor, short>()));
+  CALL_SUBTEST_2((sparse_reserve_bad_alloc<ColMajor>()));
+  CALL_SUBTEST_2((sparse_reserve_bad_alloc<RowMajor>()));
   CALL_SUBTEST_2((sparse_insert_narrow_index<ColMajor>()));
   CALL_SUBTEST_2((sparse_insert_narrow_index<RowMajor>()));
   CALL_SUBTEST_2((sparse_insert_full_index_range<ColMajor>()));
