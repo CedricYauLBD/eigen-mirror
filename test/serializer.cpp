@@ -308,9 +308,13 @@ void test_malformed_sparse_matrix() {
   verify_rejected(m, [](Header& h, uint8_t*) { h.cols = -1; });
   // No array backs the inner size, so only rows * cols bounds it: a product that wraps would be the size of a small
   // dense matrix. The StorageIndex bounds the stored indices only, so the largest shape that does not wrap is accepted.
-  if (sizeof(Index) == 8) {
-    const Index max_inner = NumTraits<Index>::highest() / outer_size;
-    verify_rejected(m, [max_inner](Header& h, uint8_t*) { (kRowMajor ? h.cols : h.rows) = max_inner + 1; });
+  // With a 32-bit Index no shape reaches the 64-bit bound, so the largest inner size is accepted.
+  {
+    Index max_inner = NumTraits<Index>::highest();
+    if (sizeof(Index) == 8) {
+      max_inner /= outer_size;
+      verify_rejected(m, [max_inner](Header& h, uint8_t*) { (kRowMajor ? h.cols : h.rows) = max_inner + 1; });
+    }
     Serializer<T> tall_serializer;
     std::vector<uint8_t> tall_buffer(tall_serializer.size(m));
     uint8_t* tall_begin = tall_buffer.data();
@@ -412,6 +416,7 @@ void test_malformed_sparse_vector() {
   verify_rejected(v, [](Header& h, uint8_t*) { h.size = -1; });
   verify_rejected(v, [](Header& h, uint8_t*) { h.num_non_zeros = -1; });
   verify_rejected(v, [](Header& h, uint8_t*) { h.num_non_zeros = Index(1) << 30; });
+  verify_rejected(v, [](Header& h, uint8_t*) { h.num_non_zeros = 5; });
   verify_rejected(v, [](Header&, uint8_t* p) { set_index(p, 1, 4); });
   verify_rejected(v, [](Header&, uint8_t* p) { set_index(p, 0, -1); });
 }
@@ -580,6 +585,31 @@ void test_dense_header_index_overflow() {
 }
 #endif
 
+#if defined(EIGEN_TEST_PART_2) && defined(__unix__) && defined(MAP_NORESERVE) && SIZE_MAX > 0xFFFFFFFFu
+// An outer size equal to the largest Index fits a buffer of 8 GiB, but resize() and the outer index copy form
+// outerSize + 1 in the Index, where it overflows. The mapping only reserves address space.
+template <int Options>
+void test_sparse_outer_size_overflow() {
+  STATIC_CHECK(sizeof(Index) == 4);
+  using T = SparseMatrix<char, Options, int>;
+  using Header = Serializer<T>::Header;
+  const std::size_t bytes = sizeof(Header) + (std::size_t(1) << 33);
+  void* map = mmap(nullptr, bytes, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
+  VERIFY(map != MAP_FAILED);
+  Header header;
+  std::memset(static_cast<void*>(&header), 0, sizeof(header));
+  header.rows = T::IsRowMajor ? NumTraits<Index>::highest() : 1;
+  header.cols = T::IsRowMajor ? 1 : NumTraits<Index>::highest();
+  header.outer_size = NumTraits<Index>::highest();
+  header.compressed = true;
+  std::memcpy(map, &header, sizeof(header));
+  const uint8_t* begin = static_cast<const uint8_t*>(map);
+  T value;
+  VERIFY(Serializer<T>().deserialize(begin, begin + bytes, value) == nullptr);
+  VERIFY_IS_EQUAL(munmap(map, bytes), 0);
+}
+#endif
+
 // Fills the scalars with a byte pattern and then assigns each of them: what an assignment does not write, such as the
 // padding of an x87 long double, keeps the pattern.
 template <typename Scalar>
@@ -711,7 +741,11 @@ EIGEN_DECLARE_TEST(serializer) {
 
   CALL_SUBTEST_2(test_malformed_dense_headers());
   CALL_SUBTEST_2(test_dense_view_destinations());
+  CALL_SUBTEST_2(test_malformed_sparse_matrix<ColMajor>());
+  CALL_SUBTEST_2(test_malformed_sparse_matrix<RowMajor>());
 #if defined(EIGEN_TEST_PART_2) && defined(__unix__) && defined(MAP_NORESERVE) && SIZE_MAX > 0xFFFFFFFFu
   CALL_SUBTEST_2(test_dense_header_index_overflow());
+  CALL_SUBTEST_2(test_sparse_outer_size_overflow<ColMajor>());
+  CALL_SUBTEST_2(test_sparse_outer_size_overflow<RowMajor>());
 #endif
 }

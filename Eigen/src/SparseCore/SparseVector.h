@@ -520,6 +520,7 @@ class Serializer<SparseVector<Scalar, Options, StorageIndex>, void> {
     // The header is untrusted: check the sizes before allocating, and every inner index after copying.
     if (EIGEN_PREDICT_FALSE(header.size < 0 || header.num_non_zeros < 0 ||
                             header.num_non_zeros > NumTraits<StorageIndex>::highest() ||
+                            header.num_non_zeros > header.size ||
                             static_cast<numext::uint64_t>(header.num_non_zeros) >
                                 static_cast<numext::uint64_t>(end - src) / (sizeof(StorageIndex) + sizeof(Scalar))))
       return nullptr;
@@ -546,19 +547,24 @@ class Serializer<SparseVector<Scalar, Options, StorageIndex>, void> {
     }
     src += data_bytes;
 
+    bool ordered = true;
     for (Index k = 0; k < header.num_non_zeros; ++k) {
-      if (EIGEN_PREDICT_FALSE(value.innerIndexPtr()[k] < 0 || value.innerIndexPtr()[k] >= header.size)) {
+      const StorageIndex idx = value.innerIndexPtr()[k];
+      if (EIGEN_PREDICT_FALSE(idx < 0 || idx >= header.size)) {
         value.resize(0);
         return nullptr;
       }
+      if (k > 0 && idx <= value.innerIndexPtr()[k - 1]) ordered = false;
     }
     // As for SparseMatrix: the rest of the API relies on sorted inner indices without duplicates. Sort an unsorted
     // vector; a repeated inner index is a parsing error.
-    if (value.innerIndicesAreSorted() != value.outerSize()) value.sortInnerIndices();
-    for (Index k = 1; k < header.num_non_zeros; ++k) {
-      if (EIGEN_PREDICT_FALSE(value.innerIndexPtr()[k] == value.innerIndexPtr()[k - 1])) {
-        value.resize(0);
-        return nullptr;
+    if (EIGEN_PREDICT_FALSE(!ordered)) {
+      if (value.innerIndicesAreSorted() != value.outerSize()) value.sortInnerIndices();
+      for (Index k = 1; k < header.num_non_zeros; ++k) {
+        if (EIGEN_PREDICT_FALSE(value.innerIndexPtr()[k] == value.innerIndexPtr()[k - 1])) {
+          value.resize(0);
+          return nullptr;
+        }
       }
     }
     return src;

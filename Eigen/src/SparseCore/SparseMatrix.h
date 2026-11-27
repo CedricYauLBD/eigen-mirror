@@ -2003,7 +2003,8 @@ class Serializer<SparseMatrix<Scalar, Options, StorageIndex>, void> {
     numext::uint64_t remaining = static_cast<numext::uint64_t>(end - src);
     if (EIGEN_PREDICT_FALSE(
             compressed_byte > 1 || header.rows < 0 || header.cols < 0 ||
-            header.outer_size != (SparseMat::IsRowMajor ? header.rows : header.cols) || header.inner_buffer_size < 0 ||
+            header.outer_size != (SparseMat::IsRowMajor ? header.rows : header.cols) ||
+            header.outer_size == NumTraits<Index>::highest() || header.inner_buffer_size < 0 ||
             header.inner_buffer_size > NumTraits<StorageIndex>::highest() ||
             !take(remaining, compressed ? 0 : header.outer_size, sizeof(StorageIndex)) ||
             !take(remaining, static_cast<numext::uint64_t>(header.outer_size) + 1, sizeof(StorageIndex)) ||
@@ -2061,15 +2062,15 @@ class Serializer<SparseMatrix<Scalar, Options, StorageIndex>, void> {
     }
     src += data_bytes;
 
-    if (EIGEN_PREDICT_FALSE(!valid_entries(value))) {
+    Index first_unordered;
+    if (EIGEN_PREDICT_FALSE(!valid_entries(value, first_unordered))) {
       value.resize(0, 0);
       return nullptr;
     }
     // Blocks, conservativeResize(), the orderings and others rely on inner vectors that are sorted and free of
     // duplicates. An unsorted matrix can be serialized (SparseQR::matrixR() is one), so sort it; a repeated inner index
     // is a parsing error.
-    if (value.innerIndicesAreSorted() != value.outerSize()) value.sortInnerIndices();
-    if (EIGEN_PREDICT_FALSE(has_duplicates(value))) {
+    if (EIGEN_PREDICT_FALSE(first_unordered != value.outerSize() && !sort_and_check_unique(value, first_unordered))) {
       value.resize(0, 0);
       return nullptr;
     }
@@ -2088,12 +2089,14 @@ class Serializer<SparseMatrix<Scalar, Options, StorageIndex>, void> {
   // value buffer, nnz[j] = outer[j + 1] - outer[j] when compressed; each must lie in the buffer, have an inner index
   // in [0, innerSize()) and hold a value that can be read. Unused entries of an uncompressed matrix are not read: the
   // sender never wrote them, so their bytes are arbitrary in a valid buffer too.
-  EIGEN_DEVICE_FUNC static bool valid_entries(const SparseMat& value) {
+  // Sets first_unordered to the first outer vector whose inner indices do not strictly increase, or outerSize().
+  EIGEN_DEVICE_FUNC static bool valid_entries(const SparseMat& value, Index& first_unordered) {
     const StorageIndex* outer = value.outerIndexPtr();
     const StorageIndex* inner_non_zeros = value.innerNonZeroPtr();
     const StorageIndex* inner = value.innerIndexPtr();
     const uint8_t* values = reinterpret_cast<const uint8_t*>(value.valuePtr());
     const Index buffer_size = value.data().size();
+    first_unordered = value.outerSize();
     if (outer[0] != 0 || outer[value.outerSize()] != buffer_size) return false;
     for (Index j = 0; j < value.outerSize(); ++j) {
       if (outer[j + 1] < outer[j] || outer[j + 1] > buffer_size) return false;
@@ -2102,27 +2105,31 @@ class Serializer<SparseMatrix<Scalar, Options, StorageIndex>, void> {
         if (inner_non_zeros[j] < 0 || inner_non_zeros[j] > outer[j + 1] - outer[j]) return false;
         stop = outer[j] + inner_non_zeros[j];
       }
+      bool ordered = true;
       for (Index k = outer[j]; k < stop; ++k) {
         if (inner[k] < 0 || inner[k] >= value.innerSize()) return false;
+        if (k > outer[j] && inner[k] <= inner[k - 1]) ordered = false;
       }
+      if (!ordered && first_unordered == value.outerSize()) first_unordered = j;
       if (!internal::valid_serialized_values<Scalar>(values + outer[j] * sizeof(Scalar), stop - outer[j])) return false;
     }
     return true;
   }
 
-  // Whether an inner vector stores an inner index twice. The indices must be valid and sorted.
-  EIGEN_DEVICE_FUNC static bool has_duplicates(const SparseMat& value) {
-    const StorageIndex* outer = value.outerIndexPtr();
-    const StorageIndex* inner_non_zeros = value.innerNonZeroPtr();
-    const StorageIndex* inner = value.innerIndexPtr();
-    for (Index j = 0; j < value.outerSize(); ++j) {
-      const Index start = outer[j];
-      const Index stop = inner_non_zeros == nullptr ? Index(outer[j + 1]) : start + inner_non_zeros[j];
-      for (Index k = start + 1; k < stop; ++k) {
-        if (inner[k] == inner[k - 1]) return true;
+  // Sorts the outer vectors from `first` on that are not sorted; false if one stores an inner index twice. The indices
+  // must be valid.
+  EIGEN_DEVICE_FUNC static bool sort_and_check_unique(SparseMat& value, Index first) {
+    for (Index j = first; j < value.outerSize(); ++j) {
+      if (value.innerIndicesAreSorted(j, j + 1) != j + 1) value.sortInnerIndices(j, j + 1);
+      const StorageIndex* inner = value.innerIndexPtr();
+      const Index start = value.outerIndexPtr()[j];
+      const Index stop =
+          value.isCompressed() ? Index(value.outerIndexPtr()[j + 1]) : start + value.innerNonZeroPtr()[j];
+      for (Index k = start; k < stop; ++k) {
+        if (k > start && inner[k] == inner[k - 1]) return false;
       }
     }
-    return false;
+    return true;
   }
 };
 

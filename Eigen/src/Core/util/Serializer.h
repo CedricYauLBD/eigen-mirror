@@ -35,16 +35,21 @@ namespace internal {
 // not cleared.
 template <typename Scalar>
 EIGEN_DEVICE_FUNC void clear_serialized_padding(uint8_t* dest, size_t bytes) {
+#if EIGEN_ARCH_i386_OR_x86_64 && !defined(EIGEN_GPU_COMPILE_PHASE) && !defined(__SYCL_DEVICE_ONLY__)
   constexpr size_t value_bytes = 10;
   constexpr bool has_padding =
       (std::is_same<Scalar, long double>::value || std::is_same<Scalar, std::complex<long double>>::value) &&
-      EIGEN_ARCH_i386_OR_x86_64 && std::numeric_limits<long double>::digits == 64 && sizeof(long double) > value_bytes;
+      std::numeric_limits<long double>::digits == 64 && sizeof(long double) > value_bytes;
   constexpr size_t padding_bytes = has_padding ? sizeof(long double) - value_bytes : 0;
   EIGEN_IF_CONSTEXPR (has_padding) {
     EIGEN_USING_STD(memset)
     for (size_t i = 0; i + sizeof(long double) <= bytes; i += sizeof(long double))
       memset(dest + i + value_bytes, 0, padding_bytes);
   }
+#else
+  EIGEN_UNUSED_VARIABLE(dest);
+  EIGEN_UNUSED_VARIABLE(bytes);
+#endif
 }
 
 // deserialize() copies untrusted bytes into objects of type T, and reading a bool that holds a byte other than 0 or 1
