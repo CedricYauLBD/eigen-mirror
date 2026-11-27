@@ -259,7 +259,7 @@ struct general_product_to_triangular_selector<MatrixType, ProductType, UpLo, tru
         Scalar, actualLhsPtr, actualLhs.size(),
         (UseLhsDirectly ? const_cast<Scalar*>(actualLhs.data()) : static_lhs.data()));
     EIGEN_IF_CONSTEXPR (!UseLhsDirectly) {
-      Map<typename ActualLhs_::PlainObject>(actualLhsPtr, actualLhs.size()) = actualLhs;
+      Map<typename ActualLhs_::PlainObject>(actualLhsPtr, actualLhs.rows(), actualLhs.cols()) = actualLhs;
     }
 
     internal::gemv_static_vector_if<Scalar, Rhs::SizeAtCompileTime, Rhs::MaxSizeAtCompileTime, !UseRhsDirectly>
@@ -268,7 +268,7 @@ struct general_product_to_triangular_selector<MatrixType, ProductType, UpLo, tru
         Scalar, actualRhsPtr, actualRhs.size(),
         (UseRhsDirectly ? const_cast<Scalar*>(actualRhs.data()) : static_rhs.data()));
     EIGEN_IF_CONSTEXPR (!UseRhsDirectly) {
-      Map<typename ActualRhs_::PlainObject>(actualRhsPtr, actualRhs.size()) = actualRhs;
+      Map<typename ActualRhs_::PlainObject>(actualRhsPtr, actualRhs.rows(), actualRhs.cols()) = actualRhs;
     }
 
     // A strictly triangular part is the triangle of the trailing (size-1) block one step off the diagonal.
