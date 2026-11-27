@@ -190,7 +190,7 @@ static void test_throwing_scan_releases_input() {
 
     threw = false;
     try {
-      Tensor<AnnoyingScalar, 2, DataLayout> other = scan(a_tensor);  // a temporary result
+      result = scan(a_tensor) + a_tensor;  // the scan is a subexpression, so it allocates a temporary output
     } catch (const std::runtime_error&) {
       threw = true;
     }

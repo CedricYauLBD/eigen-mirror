@@ -298,61 +298,61 @@ struct TensorEvaluator<const TensorConvolutionOp<Indices, InputArgType, KernelAr
                         YOU_MADE_A_PROGRAMMING_MISTAKE);
 
     // A rank-0 input has no strides and no dimension to convolve.
-    EIGEN_IF_CONSTEXPR (NumDims == 0) return;
+    EIGEN_IF_CONSTEXPR (NumDims != 0) {
+      const typename TensorEvaluator<InputArgType, Device>::Dimensions& input_dims = m_inputImpl.dimensions();
+      const typename TensorEvaluator<KernelArgType, Device>::Dimensions& kernel_dims = m_kernelImpl.dimensions();
 
-    const typename TensorEvaluator<InputArgType, Device>::Dimensions& input_dims = m_inputImpl.dimensions();
-    const typename TensorEvaluator<KernelArgType, Device>::Dimensions& kernel_dims = m_kernelImpl.dimensions();
-
-    EIGEN_IF_CONSTEXPR (static_cast<int>(Layout) == static_cast<int>(ColMajor)) {
-      m_inputStride[0] = 1;
-      for (int i = 1; i < NumDims; ++i) {
-        m_inputStride[i] = m_inputStride[i - 1] * input_dims[i - 1];
-      }
-    } else {
-      m_inputStride[NumDims - 1] = 1;
-      for (int i = NumDims - 2; i >= 0; --i) {
-        m_inputStride[i] = m_inputStride[i + 1] * input_dims[i + 1];
-      }
-    }
-
-    m_dimensions = m_inputImpl.dimensions();
-    EIGEN_IF_CONSTEXPR (static_cast<int>(Layout) == static_cast<int>(ColMajor)) {
-      for (int i = 0; i < NumKernelDims; ++i) {
-        const Index index = op.indices()[i];
-        const Index input_dim = input_dims[index];
-        const Index kernel_dim = kernel_dims[i];
-        const Index result_dim = input_dim - kernel_dim + 1;
-        m_dimensions[index] = result_dim;
-        if (i > 0) {
-          m_kernelStride[i] = m_kernelStride[i - 1] * kernel_dims[i - 1];
-        } else {
-          m_kernelStride[0] = 1;
+      EIGEN_IF_CONSTEXPR (static_cast<int>(Layout) == static_cast<int>(ColMajor)) {
+        m_inputStride[0] = 1;
+        for (int i = 1; i < NumDims; ++i) {
+          m_inputStride[i] = m_inputStride[i - 1] * input_dims[i - 1];
         }
-        m_indexStride[i] = m_inputStride[index];
-      }
-
-      m_outputStride[0] = 1;
-      for (int i = 1; i < NumDims; ++i) {
-        m_outputStride[i] = m_outputStride[i - 1] * m_dimensions[i - 1];
-      }
-    } else {
-      for (int i = NumKernelDims - 1; i >= 0; --i) {
-        const Index index = op.indices()[i];
-        const Index input_dim = input_dims[index];
-        const Index kernel_dim = kernel_dims[i];
-        const Index result_dim = input_dim - kernel_dim + 1;
-        m_dimensions[index] = result_dim;
-        if (i < NumKernelDims - 1) {
-          m_kernelStride[i] = m_kernelStride[i + 1] * kernel_dims[i + 1];
-        } else {
-          m_kernelStride[NumKernelDims - 1] = 1;
+      } else {
+        m_inputStride[NumDims - 1] = 1;
+        for (int i = NumDims - 2; i >= 0; --i) {
+          m_inputStride[i] = m_inputStride[i + 1] * input_dims[i + 1];
         }
-        m_indexStride[i] = m_inputStride[index];
       }
 
-      m_outputStride[NumDims - 1] = 1;
-      for (int i = NumDims - 2; i >= 0; --i) {
-        m_outputStride[i] = m_outputStride[i + 1] * m_dimensions[i + 1];
+      m_dimensions = m_inputImpl.dimensions();
+      EIGEN_IF_CONSTEXPR (static_cast<int>(Layout) == static_cast<int>(ColMajor)) {
+        for (int i = 0; i < NumKernelDims; ++i) {
+          const Index index = op.indices()[i];
+          const Index input_dim = input_dims[index];
+          const Index kernel_dim = kernel_dims[i];
+          const Index result_dim = input_dim - kernel_dim + 1;
+          m_dimensions[index] = result_dim;
+          if (i > 0) {
+            m_kernelStride[i] = m_kernelStride[i - 1] * kernel_dims[i - 1];
+          } else {
+            m_kernelStride[0] = 1;
+          }
+          m_indexStride[i] = m_inputStride[index];
+        }
+
+        m_outputStride[0] = 1;
+        for (int i = 1; i < NumDims; ++i) {
+          m_outputStride[i] = m_outputStride[i - 1] * m_dimensions[i - 1];
+        }
+      } else {
+        for (int i = NumKernelDims - 1; i >= 0; --i) {
+          const Index index = op.indices()[i];
+          const Index input_dim = input_dims[index];
+          const Index kernel_dim = kernel_dims[i];
+          const Index result_dim = input_dim - kernel_dim + 1;
+          m_dimensions[index] = result_dim;
+          if (i < NumKernelDims - 1) {
+            m_kernelStride[i] = m_kernelStride[i + 1] * kernel_dims[i + 1];
+          } else {
+            m_kernelStride[NumKernelDims - 1] = 1;
+          }
+          m_indexStride[i] = m_inputStride[index];
+        }
+
+        m_outputStride[NumDims - 1] = 1;
+        for (int i = NumDims - 2; i >= 0; --i) {
+          m_outputStride[i] = m_outputStride[i + 1] * m_dimensions[i + 1];
+        }
       }
     }
   }
@@ -469,15 +469,15 @@ struct TensorEvaluator<const TensorConvolutionOp<Indices, InputArgType, KernelAr
     // A rank-0 kernel is a single coefficient: there is no kernel dimension to sum over.
     EIGEN_IF_CONSTEXPR (NumKernelDims == 0) {
       accum += m_inputImpl.coeff(firstIndex) * m_kernel[firstKernel];
-      return;
-    }
-    for (int j = 0; j < m_kernelImpl.dimensions()[DimIndex]; ++j) {
-      const Index input = firstIndex + j * m_indexStride[DimIndex];
-      const Index kernel = firstKernel + j * m_kernelStride[DimIndex];
-      if (DimIndex > 0) {
-        convolve(input, kernel, DimIndex - 1, accum);
-      } else {
-        accum += m_inputImpl.coeff(input) * m_kernel[kernel];
+    } else {
+      for (int j = 0; j < m_kernelImpl.dimensions()[DimIndex]; ++j) {
+        const Index input = firstIndex + j * m_indexStride[DimIndex];
+        const Index kernel = firstKernel + j * m_kernelStride[DimIndex];
+        if (DimIndex > 0) {
+          convolve(input, kernel, DimIndex - 1, accum);
+        } else {
+          accum += m_inputImpl.coeff(input) * m_kernel[kernel];
+        }
       }
     }
   }
@@ -487,16 +487,16 @@ struct TensorEvaluator<const TensorConvolutionOp<Indices, InputArgType, KernelAr
     EIGEN_IF_CONSTEXPR (NumKernelDims == 0) {
       accum = internal::pmadd<Packet>(m_inputImpl.template packet<Unaligned>(firstIndex),
                                       internal::pset1<Packet>(m_kernel[firstKernel]), accum);
-      return;
-    }
-    for (int j = 0; j < m_kernelImpl.dimensions()[DimIndex]; ++j) {
-      const Index input = firstIndex + j * m_indexStride[DimIndex];
-      const Index kernel = firstKernel + j * m_kernelStride[DimIndex];
-      if (DimIndex > 0) {
-        convolvePacket(input, kernel, DimIndex - 1, accum);
-      } else {
-        accum = internal::pmadd<Packet>(m_inputImpl.template packet<Unaligned>(input),
-                                        internal::pset1<Packet>(m_kernel[kernel]), accum);
+    } else {
+      for (int j = 0; j < m_kernelImpl.dimensions()[DimIndex]; ++j) {
+        const Index input = firstIndex + j * m_indexStride[DimIndex];
+        const Index kernel = firstKernel + j * m_kernelStride[DimIndex];
+        if (DimIndex > 0) {
+          convolvePacket(input, kernel, DimIndex - 1, accum);
+        } else {
+          accum = internal::pmadd<Packet>(m_inputImpl.template packet<Unaligned>(input),
+                                          internal::pset1<Packet>(m_kernel[kernel]), accum);
+        }
       }
     }
   }

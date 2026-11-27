@@ -415,7 +415,10 @@ class TensorContractionSubMapper {
   EIGEN_DEVICE_FUNC EIGEN_ALWAYS_INLINE PacketT loadPacketPartial(Index i, Index j, Index n, Index offset = 0) const {
     constexpr Index requested_packet_size = unpacket_traits<PacketT>::size;
     eigen_assert(n + offset <= requested_packet_size && "number of elements plus offset will read past end of packet");
-    EIGEN_ALIGN_TO_BOUNDARY(unpacket_traits<PacketT>::alignment) Scalar data[requested_packet_size] = {Scalar(0)};
+    EIGEN_ALIGN_TO_BOUNDARY(unpacket_traits<PacketT>::alignment) Scalar data[requested_packet_size];
+    for (Index k = 0; k < requested_packet_size; k++) {
+      data[k] = Scalar(0);
+    }
     for (Index k = 0; k < n; k++) {
       data[offset + k] = operator()(i + k, j);
     }

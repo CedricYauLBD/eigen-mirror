@@ -370,6 +370,10 @@ static void test_resize_bad_alloc() {
 // type, rather than allocate the wrapped product.
 static void test_size_overflow() {
 #ifdef EIGEN_EXCEPTIONS
+  // 4 * wraps_to_4 == 4 modulo 2^(bits of Index): the wrapped product is a small, valid allocation size.
+  const Index wraps_to_4 = (Index(1) << (8 * sizeof(Index) - 2)) + 1;
+
+#ifndef EIGEN_NO_DEBUG  // the overflow check is compiled out under EIGEN_NO_DEBUG
   const auto throws_bad_alloc = [](const auto& make_tensor) {
     try {
       make_tensor();
@@ -378,8 +382,6 @@ static void test_size_overflow() {
     }
     return false;
   };
-  // 4 * wraps_to_4 == 4 modulo 2^(bits of Index): the wrapped product is a small, valid allocation size.
-  const Index wraps_to_4 = (Index(1) << (8 * sizeof(Index) - 2)) + 1;
 
   VERIFY(throws_bad_alloc([&] { Tensor<float, 2> tensor(wraps_to_4, 4); }));
   VERIFY(throws_bad_alloc([&] { Tensor<float, 2, RowMajor> tensor(4, wraps_to_4); }));
@@ -391,6 +393,7 @@ static void test_size_overflow() {
     Tensor<float, 2> tensor;
     tensor.resize(wraps_to_4, 4);
   }));
+#endif
 
   // The product is zero here: nothing overflows, and the constructor must keep accepting it.
   Tensor<float, 2> empty(wraps_to_4, 0);

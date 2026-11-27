@@ -483,7 +483,7 @@ class TensorBlockMapper {
 // first block evaluation is completed, we should be able to reuse all the
 // temporary buffers for the next block evaluation.
 
-template <typename Device>
+template <typename Device, template <typename> class Allocator = std::allocator>
 class TensorBlockScratchAllocator {
  public:
   explicit TensorBlockScratchAllocator(const Device& device) : m_device(device), m_allocation_index(0) {}
@@ -549,7 +549,7 @@ class TensorBlockScratchAllocator {
   const Device& m_device;
   int m_allocation_index;
   // TODO(ezhulenev): This should be an inlined vector.
-  std::vector<Allocation> m_allocations;
+  std::vector<Allocation, Allocator<Allocation>> m_allocations;
 };
 
 // -------------------------------------------------------------------------- //

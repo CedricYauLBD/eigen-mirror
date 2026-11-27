@@ -24,7 +24,7 @@ namespace internal {
 template <typename Evaluator>
 struct TensorEvaluatorCleanupGuard {
   Evaluator& evaluator;
-  EIGEN_DEVICE_FUNC ~TensorEvaluatorCleanupGuard() { evaluator.cleanup(); }
+  ~TensorEvaluatorCleanupGuard() { evaluator.cleanup(); }
 };
 
 /**
