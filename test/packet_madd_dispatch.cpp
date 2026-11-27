@@ -11,7 +11,13 @@ struct Packet {
   friend Packet operator+(Packet a, Packet b) { return {a.value + b.value}; }
   friend Packet operator-(Packet a, Packet b) { return {a.value - b.value}; }
   friend Packet operator*(Packet a, Packet b) { return {a.value * b.value}; }
-  friend Packet operator-(Packet a) { return {-a.value}; }
+  // The barrier keeps the generic pnmsub, -a * b + -c, from folding into -c - a * b, which rounds a * b before
+  // negating it: GCC 10 and 11 emit vnmla for it on 32-bit Arm, even with -frounding-math.
+  friend Packet operator-(Packet a) {
+    float negated = -a.value;
+    EIGEN_OPTIMIZATION_BARRIER(negated);
+    return {negated};
+  }
 };
 
 // The generic dispatch must not accidentally select an unrelated ADL overload.
