@@ -120,13 +120,19 @@ class RunQueue {
     EIGEN_MUTEX_LOCK lock(mutex_);
     unsigned back = back_.load(std::memory_order_relaxed);
     unsigned size = Size();
+    if (size == 0) return 0;
     unsigned mid = back;
     if (size > 1) mid = back + (size - 1) / 2;
     // Grow result before claiming anything: back_ is stored only after the loop, so a push_back that throws would
     // leave a claimed element kBusy, or kEmpty elements inside the queue. Grow at least geometrically to keep
     // repeated appends amortized.
     const std::size_t needed = result->size() + (mid - back) + 1;
-    if (result->capacity() < needed) result->reserve(numext::maxi(needed, 2 * result->capacity()));
+    const std::size_t capacity = result->capacity();
+    if (capacity < needed) {
+      const std::size_t max_size = result->max_size();
+      const std::size_t grown = capacity <= max_size / 2 ? 2 * capacity : max_size;
+      result->reserve(numext::maxi(needed, grown));
+    }
     unsigned n = 0;
     unsigned start = 0;
     for (; static_cast<int>(mid - back) >= 0; mid--) {

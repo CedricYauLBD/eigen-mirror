@@ -337,7 +337,7 @@ class ThreadPoolTempl : public Eigen::ThreadPoolInterface {
   // loses the wakeups of parked workers. This runs while num_threads_ is initialized, so that the assertion precedes
   // the allocation of the per-worker queues.
   static int CheckedNumThreads(int num_threads) {
-    eigen_assert(num_threads <= EventCount::kMaxWaiters);
+    eigen_assert(num_threads >= 0 && num_threads <= EventCount::kMaxWaiters);
     return num_threads;
   }
 

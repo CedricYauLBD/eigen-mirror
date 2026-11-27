@@ -86,7 +86,9 @@ class EventCount {
   void CommitWait(Waiter* w) {
     eigen_plain_assert((w->epoch & ~kEpochMask) == 0);
     w->state = Waiter::kNotSignaled;
-    const uint64_t me = (w - &waiters_[0]) | w->epoch;
+    const size_t index = w - waiters_.data();
+    eigen_plain_assert(index < waiters_.size() && index < static_cast<size_t>(kMaxWaiters));
+    const uint64_t me = index | w->epoch;
     uint64_t state = state_.load(std::memory_order_seq_cst);
     for (;;) {
       CheckState(state, true);
