@@ -325,6 +325,36 @@ void test_reference_result() {
   VERIFY_IS_APPROX(jac, MatrixXd::Constant(3, 1, 4.0));
 }
 
+// Only a signed integer result is a status. A scalar result, such as an objective value, is not converted to int
+// (undefined for non-finite or huge values) and is not a request to stop when negative; a wide status is clamped.
+struct double_returning_functor : Functor<double> {
+  double_returning_functor() : Functor<double>(1, 1) {}
+  double operator()(const VectorXd &x, VectorXd &fvec) const {
+    fvec[0] = x[0];
+    return -1e300;
+  }
+};
+
+struct wide_status_functor : Functor<double> {
+  wide_status_functor() : Functor<double>(1, 1) {}
+  long long operator()(const VectorXd &, VectorXd &fvec) const {
+    fvec[0] = 0.0;
+    return std::numeric_limits<long long>::lowest();
+  }
+};
+
+template <NumericalDiffMode Mode>
+void test_status_type() {
+  VectorXd x(1);
+  x << 0.5;
+  MatrixXd jac(1, 1);
+  NumericalDiff<double_returning_functor, Mode> scalar_result;
+  VERIFY_IS_EQUAL(scalar_result.df(x, jac), 2);
+  VERIFY_IS_APPROX(jac(0, 0), 1.0);
+  NumericalDiff<wide_status_functor, Mode> wide;
+  VERIFY_IS_EQUAL(wide.df(x, jac), std::numeric_limits<int>::lowest());
+}
+
 EIGEN_DECLARE_TEST(NumericalDiff) {
   CALL_SUBTEST(test_forward());
   CALL_SUBTEST(test_central());
@@ -342,4 +372,6 @@ EIGEN_DECLARE_TEST(NumericalDiff) {
   CALL_SUBTEST(test_functor_status<Central>());
   CALL_SUBTEST(test_reference_result<Forward>());
   CALL_SUBTEST(test_reference_result<Central>());
+  CALL_SUBTEST(test_status_type<Forward>());
+  CALL_SUBTEST(test_status_type<Central>());
 }

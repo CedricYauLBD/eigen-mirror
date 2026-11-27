@@ -24,10 +24,13 @@ enum NumericalDiffMode { Forward, Central };
 namespace internal {
 
 // Returns the status of functor(x, values). As in the nonlinear solvers, a negative status asks the caller to stop,
-// and values need not have been written. A functor that returns no status, such as void, cannot ask.
+// and values need not have been written. Only a signed integer return value is a status; any other return type, such as
+// void or double, cannot ask.
 template <typename Functor, typename InputType, typename ValueType>
 int numerical_diff_evaluate(const Functor& functor, InputType& x, ValueType& values, true_type) {
-  return static_cast<int>(functor(x, values));
+  const auto status = functor(x, values);
+  if (status >= 0) return 0;
+  return static_cast<int>(numext::maxi<long long>(status, NumTraits<int>::lowest()));
 }
 
 template <typename Functor, typename InputType, typename ValueType>
@@ -38,7 +41,9 @@ int numerical_diff_evaluate(const Functor& functor, InputType& x, ValueType& val
 
 template <typename Functor, typename InputType, typename ValueType>
 int numerical_diff_evaluate(const Functor& functor, InputType& x, ValueType& values) {
-  return numerical_diff_evaluate(functor, x, values, is_convertible<decltype(functor(x, values)), int>());
+  using Ret = remove_cvref_t<decltype(functor(x, values))>;
+  return numerical_diff_evaluate(functor, x, values,
+                                 bool_constant < std::is_integral<Ret>::value && std::is_signed<Ret>::value > ());
 }
 
 }  // namespace internal
