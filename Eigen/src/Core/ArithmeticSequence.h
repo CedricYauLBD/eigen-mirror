@@ -31,9 +31,16 @@ constexpr Index seq_size(Index diff, Index incr) {
   return ((diff < 0) == (incr < 0)) ? diff / incr + 1 : (diff + incr) / incr;
 }
 
-// Compile-time size. If Diff + Incr overflows, this overload is discarded and the size is computed at runtime.
-template <int Diff, int Incr>
-constexpr FixedInt<(Diff + Incr) / Incr> seq_size(FixedInt<Diff>, FixedInt<Incr>) {
+// Whether seq_size(Index(diff), Index(incr)) is well-defined and representable in int.
+constexpr bool seq_size_fits_int(int diff, int incr) {
+  return incr != 0 && !(incr == 1 && diff == (std::numeric_limits<int>::max)()) &&
+         !(incr == -1 && diff <= -(std::numeric_limits<int>::max)());
+}
+
+// Compile-time size when representable in int; otherwise the runtime overload is used. This is decided explicitly
+// because a signed overflow in a template argument is not a substitution failure on every compiler (MSVC wraps).
+template <int Diff, int Incr, std::enable_if_t<seq_size_fits_int(Diff, Incr), int> = 0>
+constexpr FixedInt<static_cast<int>(seq_size(Index(Diff), Index(Incr)))> seq_size(FixedInt<Diff>, FixedInt<Incr>) {
   return {};
 }
 

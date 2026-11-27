@@ -18,6 +18,7 @@ using Eigen::placeholders::last;
 using Eigen::placeholders::lastN;
 using Eigen::placeholders::lastp1;
 #include <array>
+#include <climits>
 
 using IndexPair = std::pair<Index, Index>;
 
@@ -1035,6 +1036,11 @@ void check_seq_size_overflow() {
   VERIFY_IS_EQUAL(seq(3, 0, lowest + 1).size(), Index(1));
   VERIFY_IS_EQUAL(seq(3, 0, lowest).size(), Index(1));
   VERIFY_IS_EQUAL(seq(fix<0>, fix<3>, highest - 1).size(), Index(1));
+  // Fixed operands whose Diff + Incr does not fit in int.
+  VERIFY_IS_EQUAL(seq(fix<0>, fix<3>, fix<INT_MAX>).size(), Index(1));
+  VERIFY_IS_EQUAL(seq(fix<3>, fix<0>, fix<INT_MIN + 1>).size(), Index(1));
+  VERIFY_IS_EQUAL(seq(fix<0>, fix<INT_MAX>, fix<INT_MAX>).size(), Index(2));
+  VERIFY(is_same_seq_type(seq(fix<0>, fix<3>, fix<INT_MAX>), seqN(fix<0>, fix<1>, fix<INT_MAX>)));
 
   VERIFY_IS_EQUAL(v(seq(0, 3, highest - 1)).size(), Index(1));
   VERIFY_IS_EQUAL(v(seq(0, last, highest - 1)).size(), Index(1));
