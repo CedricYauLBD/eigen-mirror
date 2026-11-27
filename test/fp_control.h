@@ -335,18 +335,6 @@ bool packet_path_flushes_subnormals() {
   return numext::is_exactly_zero(half_tiny);
 }
 
-// Whether the packet path reads a subnormal operand as zero: denorm_min * 2^digits is the normal 2^min_exponent
-// unless it does. x86 FTZ alone flushes results only and leaves this product alone.
-template <typename RealScalar>
-bool packet_path_flushes_subnormal_inputs() {
-  using Packet = typename internal::packet_traits<RealScalar>::type;
-  volatile RealScalar vdenorm = std::numeric_limits<RealScalar>::denorm_min();
-  const RealScalar denorm = vdenorm;
-  const RealScalar scale = std::ldexp(RealScalar(1), std::numeric_limits<RealScalar>::digits);
-  return numext::is_exactly_zero(
-      internal::pfirst(packet_product_runtime(internal::pset1<Packet>(denorm), internal::pset1<Packet>(scale))));
-}
-
 // First exponent of the scale sweep 2^minExp, 2^(minExp + step), ... that the packet path can resolve. A packet unit
 // that flushes subnormals loses up to min() in every operation whose operand or result is below it, an error of
 // min() / 2^e relative to data of magnitude 2^e. That is within eps only for 2^e >= min() / eps, so the sweep starts at

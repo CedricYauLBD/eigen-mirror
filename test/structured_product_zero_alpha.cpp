@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: MPL-2.0
 
 #include "main.h"
-#include "fp_control.h"
 #include <Eigen/Core>
 
 template <typename Expression>
@@ -112,15 +111,12 @@ void selfadjoint_zero_alpha(Index n, const Scalar& nonfinite) {
     VERIFY_IS_EQUAL(strided(0, 0), Scalar(3));
     strided.template triangularView<UpLo>() = (small * large) * (small * large).adjoint();
     VERIFY_IS_EQUAL(strided(0, 0), Scalar(1));
-    // A packet unit that flushes subnormal inputs reads the denormal factor as zero.
-    if (!packet_path_flushes_subnormal_inputs<RealScalar>()) {
-      const Scalar denormal((std::numeric_limits<RealScalar>::denorm_min)());
-      const auto nested = Scalar(0.25) * (large * denormal);
-      const Scalar value = Scalar(0.25) * (large(0) * denormal);
-      storage.setZero();
-      strided.template selfadjointView<UpLo>().rankUpdate(nested);
-      VERIFY_IS_EQUAL(strided(0, 0), value * numext::conj(value));
-    }
+    const Scalar denormal((std::numeric_limits<RealScalar>::denorm_min)());
+    const auto nested = Scalar(0.25) * (large * denormal);
+    const Scalar value = Scalar(0.25) * (large(0) * denormal);
+    storage.setZero();
+    strided.template selfadjointView<UpLo>().rankUpdate(nested);
+    VERIFY_IS_EQUAL(strided(0, 0), value * numext::conj(value));
   }
 }
 
