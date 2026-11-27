@@ -728,6 +728,8 @@ class gemm_blocking_space<StorageOrder, LhsScalar_, RhsScalar_, MaxRows, MaxCols
     {
       Index n = this->m_nc;
       computeProductBlockingSizes<LhsScalar, RhsScalar, KcFactor>(this->m_kc, this->m_mc, n, num_threads);
+      // The columns are not blocked here, so bound kc such that kc * nc fits Index.
+      if (this->m_nc > 0) this->m_kc = numext::mini<Index>(this->m_kc, NumTraits<Index>::highest() / this->m_nc);
     }
 
     m_sizeA = this->m_mc * this->m_kc;

@@ -632,8 +632,8 @@ EIGEN_DONT_INLINE void triangular_solve_matrix<Scalar, Index, OnTheLeft, Mode, C
       // The idea is to split A11 into multiple small vertical panels.
       // Each panel can be split into a small triangular part T1k which is processed without optimization,
       // and the remaining small part T2k which is processed using gebp with appropriate block strides
-      for (Index j2 = 0; j2 < cols; j2 += subcols) {
-        Index actual_cols = (numext::mini)(cols - j2, subcols);
+      for (Index j2 = 0, actual_cols; j2 < cols; j2 += actual_cols) {
+        actual_cols = (numext::mini)(cols - j2, subcols);
         // for each small vertical panels [T1k^T, T2k^T]^T of lhs
         for (Index k1 = 0; k1 < actual_kc; k1 += panelWidth) {
           Index actualPanelWidth = numext::mini<Index>(actual_kc - k1, panelWidth);
