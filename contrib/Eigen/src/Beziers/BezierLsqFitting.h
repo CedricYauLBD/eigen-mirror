@@ -69,7 +69,9 @@ struct BezierLsqFitting {
    * \param pts The data points, one per column. There must be at least degree+1 of them.
    * \param degree The degree of the fitted curve.
    * \param[in,out] params Initial parameters on input (one per point), optimized parameters on output.
-   *                The first and last ones are left unchanged.
+   *                The first and last ones are left unchanged and must differ when degree >= 1. If the parameters
+   *                take fewer than degree+1 distinct values, the interior ones are first reinitialized to chord
+   *                lengths mapped onto [params(0), params(n-1)], or to uniform values if those repeat too.
    * \param maxIterations The maximal number of Gauss-Newton iterations.
    * \param tolerance Iterations stop once the relative decrease of the squared residual, or the step, falls below it.
    */
@@ -95,7 +97,24 @@ struct BezierLsqFitting {
   template <typename PointArrayType>
   static void ResidualAndJacobian(const PointArrayType& pts, Index degree, const ParameterVectorType& params,
                                   VectorType& residual, MatrixType& jacobian);
+
+ private:
+  // Returns whether params takes at least count distinct values, in O(n * count).
+  static bool HasDistinctParameters(const ParameterVectorType& params, Index count);
 };
+
+template <typename BezierType>
+bool BezierLsqFitting<BezierType>::HasDistinctParameters(const ParameterVectorType& params, Index count) {
+  if (count <= 1) return params.size() >= count;
+  VectorType found(count);
+  Index numFound = 0;
+  for (Index i = 0; i < params.size(); ++i) {
+    if ((found.head(numFound).array() == params(i)).any()) continue;
+    found(numFound++) = params(i);
+    if (numFound == count) return true;
+  }
+  return false;
+}
 
 template <typename BezierType>
 template <typename PointArrayType>
@@ -144,7 +163,16 @@ BezierType BezierLsqFitting<BezierType>::Fit(const PointArrayType& pts, Index de
   eigen_assert(params.size() == n);
   eigen_assert(n >= degree + 1 && "Fitting a Bezier curve of degree p requires at least p+1 points");
 
-  // With n == degree+1 the curve interpolates the points for any parameters: nothing to optimize.
+  // rank A(t) = min(degree+1, #distinct t), since A = V(t) M with V Vandermonde and M invertible.
+  if (degree >= 1 && !HasDistinctParameters(params, degree + 1)) {
+    eigen_assert(params(0) != params(n - 1) && "The end parameters are kept fixed, so they must differ");
+    ParameterVectorType init;
+    BezierFitting<BezierType>::ChordLengths(pts, init);
+    if (!HasDistinctParameters(init, degree + 1)) init = ParameterVectorType::LinSpaced(n, Scalar(0), Scalar(1));
+    params.segment(1, n - 2) = params(0) + (params(n - 1) - params(0)) * init.segment(1, n - 2);
+  }
+
+  // With n == degree+1 distinct parameters the curve interpolates the points: nothing to optimize.
   const Index numFree = n - 2;
   if (numFree > 0 && n > degree + 1) {
     const Scalar lo = numext::mini(params(0), params(n - 1));

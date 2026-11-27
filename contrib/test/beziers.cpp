@@ -478,6 +478,61 @@ void check_lsq_fitting() {
   VERIFY((params == before).all());
 }
 
+// Fewer than degree+1 distinct parameters make A(t) rank deficient; Fit must reinitialize them.
+template <typename BezierType>
+void check_lsq_repeated_parameters() {
+  using Scalar = typename BezierType::Scalar;
+  using ParameterVectorType = typename BezierType::ParameterVectorType;
+  using PointArrayType = Array<Scalar, BezierType::Dimension, Dynamic>;
+  using LsqFitting = BezierLsqFitting<BezierType>;
+  const Scalar tol = test_precision<Scalar>();
+  const auto num_distinct = [](ParameterVectorType t) {
+    std::sort(t.data(), t.data() + t.size());
+    return Index(std::unique(t.data(), t.data() + t.size()) - t.data());
+  };
+  const auto interpolates = [tol](const BezierType& bezier, const ParameterVectorType& t, const PointArrayType& pts) {
+    for (Index i = 0; i < pts.cols(); ++i)
+      if (!((bezier(t(i)) - pts.col(i)).matrix().norm() <= tol)) return false;
+    return true;
+  };
+
+  // n == degree+1 with a repeated parameter: the given parameters cannot interpolate.
+  PointArrayType pts = PointArrayType::Zero(BezierType::Dimension, 3);
+  pts.row(0) << Scalar(0), Scalar(1), Scalar(2);
+  pts.row(1) << Scalar(0), Scalar(1), Scalar(0);
+  ParameterVectorType params(3);
+  params << Scalar(0), Scalar(0), Scalar(1);
+  VERIFY(LsqFitting::SquaredResidual(pts, 2, params) > Scalar(0.5));
+  BezierType bezier = LsqFitting::Fit(pts, 2, params);
+  VERIFY_IS_EQUAL(params(0), Scalar(0));
+  VERIFY_IS_EQUAL(params(2), Scalar(1));
+  VERIFY_IS_EQUAL(num_distinct(params), 3);
+  VERIFY(LsqFitting::SquaredResidual(pts, 2, params) <= tol * pts.matrix().squaredNorm());
+  VERIFY(interpolates(bezier, params, pts));
+
+  // Coinciding consecutive points give repeated chord-length parameters in the default overload.
+  pts.col(1) = pts.col(0);
+  BezierFitting<BezierType>::ChordLengths(pts, params);
+  VERIFY_IS_EQUAL(num_distinct(params), 2);
+  bezier = LsqFitting::Fit(pts, 2);
+  params << Scalar(0), Scalar(0.5), Scalar(1);  // the uniform fallback
+  VERIFY(interpolates(bezier, params, pts));
+
+  // n > degree+1, starting from a single interior value: the residual must still decrease.
+  const Index n = 6;
+  PointArrayType samples = PointArrayType::Zero(BezierType::Dimension, n);
+  samples.row(0) = ParameterVectorType::LinSpaced(n, Scalar(0), Scalar(2)).transpose();
+  samples.row(1) = samples.row(0) * (Scalar(2) - samples.row(0));
+  ParameterVectorType repeated = ParameterVectorType::Zero(n);
+  repeated(n - 1) = Scalar(1);
+  const Scalar initial = LsqFitting::SquaredResidual(samples, 2, repeated);
+  bezier = LsqFitting::Fit(samples, 2, repeated);
+  VERIFY(bezier.ctrls().allFinite());
+  VERIFY_IS_EQUAL(repeated(0), Scalar(0));
+  VERIFY_IS_EQUAL(repeated(n - 1), Scalar(1));
+  VERIFY(LsqFitting::SquaredResidual(samples, 2, repeated) < initial);
+}
+
 // Noisy real-life data (a closed curve): the residual must decrease and the parameters stay in [0,1].
 void check_lsq_fitting_data2d() {
   using ParameterVectorType = Bezier2d::ParameterVectorType;
@@ -525,6 +580,7 @@ void beziers_all() {
   CALL_SUBTEST(check_fitting<BezierType>());
   CALL_SUBTEST(check_lsq_jacobian<BezierType>());
   CALL_SUBTEST(check_lsq_fitting<BezierType>());
+  CALL_SUBTEST(check_lsq_repeated_parameters<BezierType>());
 }
 
 EIGEN_DECLARE_TEST(beziers) {
@@ -543,5 +599,6 @@ EIGEN_DECLARE_TEST(beziers) {
     CALL_SUBTEST(check_chord_lengths<Bezier2f>());
     CALL_SUBTEST(check_fitting<Bezier3f>());
     CALL_SUBTEST(check_lsq_fitting<Bezier2f>());
+    CALL_SUBTEST(check_lsq_repeated_parameters<Bezier2f>());
   }
 }
