@@ -145,6 +145,9 @@ cholmod_dense viewAsCholmod(MatrixBase<Derived>& mat) {
   res.nzmax = res.nrow * res.ncol;
   res.d = Derived::IsVectorAtCompileTime ? mat.derived().size() : mat.derived().outerStride();
   res.x = (void*)(mat.derived().data());
+  // An empty matrix has no data pointer, but CHOLMOD rejects a null one. Nothing is read through it.
+  static Scalar emptyData[2];
+  if (res.x == nullptr) res.x = emptyData;
   res.z = 0;
 
   internal::cholmod_configure_matrix<Scalar>::run(res);

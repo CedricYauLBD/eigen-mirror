@@ -125,7 +125,8 @@ void test_superlu_empty() {
   VERIFY_IS_EQUAL(X0.cols(), Index(2));
 }
 
-// Each scalar type has its own SuperLU routines, and a row-major matrix is factorized as its transpose.
+// Each scalar type has its own SuperLU routines. SuperLUBase copies its input into a column-major matrix, so the
+// row-major cases only check the conversion.
 template <typename Scalar, int Options>
 void test_superlu_factorization() {
   using DenseMatrix = Matrix<Scalar, 3, 3>;
@@ -148,11 +149,19 @@ void test_superlu_factorization() {
 
 #ifdef EIGEN_SUPERLU_HAS_FACTORIZATION_STEPS
 // SuperLU::factorize() always runs with ConditionNumber == NO, so this calls the factorization itself.
+template <int Options>
 int superlu_factorize_info(yes_no_t condition_number) {
-  SparseMatrix<double> A(2, 2);
-  A.insert(0, 0) = 1;
-  A.insert(0, 1) = 1;
-  A.insert(1, 1) = 1e-30;
+  // The row-major matrix is the transpose of the column-major one, so both are singular to working precision.
+  SparseMatrix<double, Options> A(2, 2);
+  if (Options == ColMajor) {
+    A.insert(0, 0) = 1;
+    A.insert(0, 1) = 1;
+    A.insert(1, 1) = 1e-30;
+  } else {
+    A.insert(0, 0) = 1;
+    A.insert(1, 0) = 1;
+    A.insert(1, 1) = 1e-30;
+  }
   A.makeCompressed();
   SluMatrix sluA = internal::asSluMatrix(A);
 
@@ -175,9 +184,11 @@ int superlu_factorize_info(yes_no_t condition_number) {
 }
 
 void test_superlu_condition_number() {
-  VERIFY_IS_EQUAL(superlu_factorize_info(NO), 0);
-  // info == n + 1 reports a matrix that is singular to working precision.
-  VERIFY_IS_EQUAL(superlu_factorize_info(YES), 3);
+  // info == n + 1 reports a matrix that is singular to working precision. A row-major matrix reaches the SLU_NR branch.
+  VERIFY_IS_EQUAL(superlu_factorize_info<ColMajor>(NO), 0);
+  VERIFY_IS_EQUAL(superlu_factorize_info<ColMajor>(YES), 3);
+  VERIFY_IS_EQUAL(superlu_factorize_info<RowMajor>(NO), 0);
+  VERIFY_IS_EQUAL(superlu_factorize_info<RowMajor>(YES), 3);
 }
 #endif
 

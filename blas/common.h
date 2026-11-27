@@ -11,9 +11,12 @@
 #ifndef EIGEN_BLAS_COMMON_H
 #define EIGEN_BLAS_COMMON_H
 
-// Sizes, increments and leading dimensions are passed on as Eigen::Index, which also holds the element offsets. Index
-// is internal to these Fortran-interface libraries, so they keep the default even where the C++ code narrows it.
+// Sizes, increments and leading dimensions are passed on as Eigen::Index, which also holds the element offsets. Shared
+// libraries hide internal Eigen symbols and can keep the default even when C++ callers narrow it; static archives
+// share COMDAT symbols with callers and must keep the caller's EIGEN_DEFAULT_DENSE_INDEX_TYPE.
+#if defined(EIGEN_BLAS_BUILD_DLL) || defined(EIGEN_LAPACK_BUILD_DLL)
 #undef EIGEN_DEFAULT_DENSE_INDEX_TYPE
+#endif
 
 #include "../Eigen/Core"
 #include "../Eigen/Jacobi"

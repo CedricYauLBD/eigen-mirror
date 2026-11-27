@@ -45,6 +45,14 @@ void check_cholmod_matrix_without_entries(Solver& solver) {
   VERIFY_IS_EQUAL(spX.cols(), 2);
   VERIFY_IS_EQUAL(spX.nonZeros(), 0);
 
+  // A dense right-hand side without columns has no data pointer.
+  solver.compute(A);
+  VERIFY_IS_EQUAL(solver.info(), Success);
+  Matrix<Scalar, Dynamic, Dynamic> denseX = solver.solve(Matrix<Scalar, Dynamic, Dynamic>(3, 0));
+  VERIFY_IS_EQUAL(solver.info(), Success);
+  VERIFY_IS_EQUAL(denseX.rows(), 3);
+  VERIFY_IS_EQUAL(denseX.cols(), 0);
+
   Mat empty(0, 0);
   solver.compute(empty);
   VERIFY_IS_EQUAL(solver.info(), Success);

@@ -9,9 +9,11 @@ eigen_blas_static) and 64-bit integer (ILP64: eigen_blas_ilp64,
 eigen_blas_ilp64_static) libraries by default (controlled by
 EIGEN_BUILD_BLAS_ILP64).
 
-The libraries always use the default Eigen::Index internally: a build that
-sets EIGEN_DEFAULT_DENSE_INDEX_TYPE for its C++ code does not narrow the
-sizes, increments and leading dimensions that the routines accept.
+The shared libraries always use the default Eigen::Index internally: a build
+that narrows EIGEN_DEFAULT_DENSE_INDEX_TYPE for its C++ code does not narrow
+the sizes, increments and leading dimensions they accept. Static archives
+must use the same Eigen::Index as their C++ callers to avoid ODR mismatches,
+so static ILP64 archives require a 64-bit Eigen::Index.
 
 Tests: 'make buildtests_blas' builds them and 'ctest -L blas' runs them. With
 a Fortran compiler, these include netlib's reference BLAS test drivers. With
