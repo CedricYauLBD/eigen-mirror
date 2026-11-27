@@ -1459,17 +1459,26 @@ struct diagonal_product_segment_impl;
 
 template <>
 struct diagonal_product_segment_impl<OnTheLeft> {
+  // The segment as a column, which the segments of dst and coeffs are: the diagonal can be a row vector.
+  template <typename DiagonalType, std::enable_if_t<DiagonalType::ColsAtCompileTime == 1, int> = 0>
+  static EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE auto column(const DiagonalType& diagonal, Index begin, Index size) {
+    return diagonal.segment(begin, size);
+  }
+  template <typename DiagonalType, std::enable_if_t<DiagonalType::ColsAtCompileTime != 1, int> = 0>
+  static EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE auto column(const DiagonalType& diagonal, Index begin, Index size) {
+    return diagonal.segment(begin, size).transpose();
+  }
   template <typename DstSegment, typename Coeffs, typename DiagonalType, typename Alpha>
   static EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE void run(DstSegment& dst, const Coeffs& coeffs,
                                                         const DiagonalType& diagonal, Index begin, Index /*col*/,
                                                         const Alpha& alpha) {
-    dst += alpha * diagonal.segment(begin, dst.size()).cwiseProduct(coeffs);
+    dst += alpha * column(diagonal, begin, dst.size()).cwiseProduct(coeffs);
   }
   template <typename DstSegment, typename Coeffs, typename DiagonalType>
   static EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE void runOverwrite(DstSegment& dst, const Coeffs& coeffs,
                                                                  const DiagonalType& diagonal, Index begin,
                                                                  Index /*col*/) {
-    dst = diagonal.segment(begin, dst.size()).cwiseProduct(coeffs);
+    dst = column(diagonal, begin, dst.size()).cwiseProduct(coeffs);
   }
 };
 

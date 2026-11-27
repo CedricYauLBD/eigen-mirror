@@ -834,19 +834,19 @@ void unaligned_diagonal_products() {
   }
 }
 
-// The diagonal of a triangular product is a column vector on its left and a row vector on its right.
+// Triangular and self-adjoint products take a diagonal of either orientation on either side.
 template <int Mode, typename Xpr, typename RefXpr, typename ColMat>
-void check_triangular_diagonal_without_linear_access(const Xpr& diag, const RefXpr& ref, const ColMat& cm,
-                                                     std::true_type) {
-  VERIFY_IS_APPROX(ColMat(diag.asDiagonal() * cm.template triangularView<Mode>()),
-                   ColMat(ref.asDiagonal() * cm.template triangularView<Mode>()));
-}
-
-template <int Mode, typename Xpr, typename RefXpr, typename ColMat>
-void check_triangular_diagonal_without_linear_access(const Xpr& diag, const RefXpr& ref, const ColMat& cm,
-                                                     std::false_type) {
-  VERIFY_IS_APPROX(ColMat(cm.template triangularView<Mode>() * diag.asDiagonal()),
-                   ColMat(cm.template triangularView<Mode>() * ref.asDiagonal()));
+void check_triangular_diagonal_without_linear_access(const Xpr& diag, const RefXpr& ref, const ColMat& cm) {
+  const ColMat tri = cm.template triangularView<Mode>();
+  VERIFY_IS_APPROX(ColMat(diag.asDiagonal() * cm.template triangularView<Mode>()), ColMat(ref.asDiagonal() * tri));
+  VERIFY_IS_APPROX(ColMat(cm.template triangularView<Mode>() * diag.asDiagonal()), ColMat(tri * ref.asDiagonal()));
+  VERIFY_IS_APPROX(ColMat(ref.asDiagonal() * cm.template triangularView<Mode>()), ColMat(ref.asDiagonal() * tri));
+  VERIFY_IS_APPROX(ColMat(cm.template triangularView<Mode>() * ref.asDiagonal()), ColMat(tri * ref.asDiagonal()));
+  const ColMat sym = cm.template selfadjointView<Mode&(Upper | Lower)>();
+  VERIFY_IS_APPROX(ColMat(diag.asDiagonal() * cm.template selfadjointView<Mode&(Upper | Lower)>()),
+                   ColMat(ref.asDiagonal() * sym));
+  VERIFY_IS_APPROX(ColMat(cm.template selfadjointView<Mode&(Upper | Lower)>() * diag.asDiagonal()),
+                   ColMat(sym * ref.asDiagonal()));
 }
 
 // A compile-time vector can lack LinearAccessBit; diagonal products must then index it through (row, col).
@@ -874,11 +874,10 @@ void check_diagonal_without_linear_access(const MatrixBase<Xpr>& diag, const Col
   const Index i = internal::random<Index>(0, diag.size() - 1);
   VERIFY_IS_APPROX(diag.asDiagonal().coeff(i, i), ref.asDiagonal().diagonal().coeff(i));
   // Triangular products, which also read the unit diagonal of a unit triangular matrix.
-  using DiagonalOnLeft = internal::bool_constant<Xpr::ColsAtCompileTime == 1>;
-  check_triangular_diagonal_without_linear_access<Lower>(diag, ref, cm, DiagonalOnLeft());
-  check_triangular_diagonal_without_linear_access<UnitLower>(diag, ref, cm, DiagonalOnLeft());
-  check_triangular_diagonal_without_linear_access<StrictlyUpper>(diag, ref, cm, DiagonalOnLeft());
-  check_triangular_diagonal_without_linear_access<UnitUpper>(diag, ref, cm, DiagonalOnLeft());
+  check_triangular_diagonal_without_linear_access<Lower>(diag, ref, cm);
+  check_triangular_diagonal_without_linear_access<UnitLower>(diag, ref, cm);
+  check_triangular_diagonal_without_linear_access<StrictlyUpper>(diag, ref, cm);
+  check_triangular_diagonal_without_linear_access<UnitUpper>(diag, ref, cm);
 }
 
 template <typename Scalar>
