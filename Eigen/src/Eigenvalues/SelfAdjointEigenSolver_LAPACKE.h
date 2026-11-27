@@ -72,8 +72,8 @@ namespace Eigen {
     info = LAPACKE_##LAPACKE_NAME(LAPACK_COL_MAJOR, jobz, uplo, n, (LAPACKE_TYPE*)m_eivec.data(), lda,               \
                                   (LAPACKE_RTYPE*)m_eivalues.data());                                                \
     m_info = (info == 0) ? Success : NoConvergence;                                                                  \
-    /* LAPACKE rejects a NaN input, or fails to allocate, before it writes any eigenvalue. */                        \
-    if (info < 0) m_eivalues.setConstant(NumTraits<RealScalar>::quiet_NaN());                                        \
+    /* No eigenvalue is known after a rejected call or failed convergence. */                                        \
+    if (info != 0) m_eivalues.setConstant(NumTraits<RealScalar>::quiet_NaN());                                       \
     m_isInitialized = true;                                                                                          \
     m_eigenvectorsOk = computeEigenvectors && info == 0;                                                             \
     return *this;                                                                                                    \

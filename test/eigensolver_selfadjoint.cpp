@@ -1072,6 +1072,7 @@ void selfadjointeigensolver_nonfinite() {
     m << inf;
     SelfAdjointEigenSolver<Matrix<double, 1, 1>> eig(m);
     VERIFY_IS_EQUAL(eig.info(), NoConvergence);
+    VERIFY(eig.eigenvalues().array().isNaN().all());
   }
   // 1x1 NaN.
   {
@@ -1079,6 +1080,7 @@ void selfadjointeigensolver_nonfinite() {
     m << nan;
     SelfAdjointEigenSolver<Matrix<double, 1, 1>> eig(m);
     VERIFY_IS_EQUAL(eig.info(), NoConvergence);
+    VERIFY(eig.eigenvalues().array().isNaN().all());
   }
   // 1x1 -Inf.
   {
@@ -1086,6 +1088,7 @@ void selfadjointeigensolver_nonfinite() {
     m << -inf;
     SelfAdjointEigenSolver<Matrix<double, 1, 1>> eig(m);
     VERIFY_IS_EQUAL(eig.info(), NoConvergence);
+    VERIFY(eig.eigenvalues().array().isNaN().all());
   }
   // 3x3 with Inf.
   {
@@ -1093,6 +1096,7 @@ void selfadjointeigensolver_nonfinite() {
     m(1, 1) = inf;
     SelfAdjointEigenSolver<Matrix3d> eig(m);
     VERIFY_IS_EQUAL(eig.info(), NoConvergence);
+    VERIFY(eig.eigenvalues().array().isNaN().all());
   }
   // 3x3 with NaN.
   {
@@ -1100,6 +1104,7 @@ void selfadjointeigensolver_nonfinite() {
     m(0, 1) = m(1, 0) = nan;
     SelfAdjointEigenSolver<Matrix3d> eig(m);
     VERIFY_IS_EQUAL(eig.info(), NoConvergence);
+    VERIFY(eig.eigenvalues().array().isNaN().all());
   }
   // Dynamic size with Inf.
   {
@@ -1107,6 +1112,16 @@ void selfadjointeigensolver_nonfinite() {
     m(3, 3) = inf;
     SelfAdjointEigenSolver<MatrixXd> eig(m);
     VERIFY_IS_EQUAL(eig.info(), NoConvergence);
+    VERIFY(eig.eigenvalues().array().isNaN().all());
+  }
+  // computeFromTridiagonal with a non-finite entry.
+  {
+    VectorXd d = VectorXd::Ones(3), e = VectorXd::Ones(2);
+    e(1) = nan;
+    SelfAdjointEigenSolver<MatrixXd> eig;
+    eig.computeFromTridiagonal(d, e, ComputeEigenvectors);
+    VERIFY_IS_EQUAL(eig.info(), NoConvergence);
+    VERIFY(eig.eigenvalues().array().isNaN().all());
   }
 }
 

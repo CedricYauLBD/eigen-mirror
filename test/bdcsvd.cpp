@@ -285,20 +285,20 @@ void bdcsvd_output_size_overflow() {
   const Index n = Index(std::sqrt(static_cast<double>(maxSize))) + 1;
   VERIFY(n > maxSize / n && n - 1 <= maxSize / (n - 1));
   // Only the dimension that is n has a square output that does not fit.
-  for (bool tall : {true, false}) {
-    const Index rows = tall ? n : 1, cols = tall ? 1 : n;
-    const unsigned int options = tall ? ComputeFullU : ComputeFullV;
+  const auto refuses = [](auto construct) {
     // The check precedes every allocation, so it throws here whatever the memory of this machine.
     bool threw = false;
     internal::set_is_malloc_allowed(false);
     try {
-      BDCSVD<MatrixXd> svd(rows, cols, options);
+      construct();
     } catch (const std::bad_alloc&) {
       threw = true;
     }
     internal::set_is_malloc_allowed(true);
-    VERIFY(threw);
-  }
+    return threw;
+  };
+  VERIFY(refuses([&] { BDCSVD<MatrixXd, ComputeFullU> svd(n, 1); }));
+  VERIFY(refuses([&] { BDCSVD<MatrixXd, ComputeFullV> svd(1, n); }));
 #endif
 }
 #endif
