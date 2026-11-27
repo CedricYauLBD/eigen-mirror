@@ -11,6 +11,7 @@
 #ifndef EIGEN_BEZIER_FWD_H
 #define EIGEN_BEZIER_FWD_H
 
+// IWYU pragma: private
 #include "./InternalHeaderCheck.h"
 
 namespace Eigen {

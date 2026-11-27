@@ -486,9 +486,7 @@ void check_lsq_fitting_data2d() {
 template <typename BezierType>
 void check_aligned_new() {
   const std::uintptr_t alignment = internal::traits<typename BezierType::ControlPointVectorType>::Alignment;
-  const auto is_aligned = [alignment](const void* p) {
-    return alignment == 0 || std::uintptr_t(p) % alignment == 0;
-  };
+  const auto is_aligned = [alignment](const void* p) { return alignment == 0 || std::uintptr_t(p) % alignment == 0; };
   const int N = 10;
   for (int i = 0; i < 32; ++i) {
     BezierType* single = new BezierType;

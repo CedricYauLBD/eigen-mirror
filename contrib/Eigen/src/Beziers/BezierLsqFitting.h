@@ -11,6 +11,7 @@
 #ifndef EIGEN_BEZIER_LSQ_FITTING_H
 #define EIGEN_BEZIER_LSQ_FITTING_H
 
+// IWYU pragma: private
 #include "./InternalHeaderCheck.h"
 
 #include "BezierFitting.h"

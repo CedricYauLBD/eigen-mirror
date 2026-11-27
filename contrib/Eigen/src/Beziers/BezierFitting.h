@@ -13,6 +13,7 @@
 
 #include <numeric>
 
+// IWYU pragma: private
 #include "./InternalHeaderCheck.h"
 
 #include "BezierFwd.h"

@@ -11,6 +11,7 @@
 #ifndef EIGEN_BEZIER_H
 #define EIGEN_BEZIER_H
 
+// IWYU pragma: private
 #include "./InternalHeaderCheck.h"
 
 #include "BezierFwd.h"
