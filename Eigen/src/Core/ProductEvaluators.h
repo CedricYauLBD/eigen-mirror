@@ -1479,13 +1479,13 @@ struct diagonal_product_segment_impl<OnTheRight> {
   static EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE void run(DstSegment& dst, const Coeffs& coeffs,
                                                         const DiagonalType& diagonal, Index /*begin*/, Index col,
                                                         const Alpha& alpha) {
-    dst += alpha * (coeffs * diagonal.coeff(col));
+    dst += alpha * (coeffs * vector_evaluator<DiagonalType>(diagonal).coeff(col));
   }
   template <typename DstSegment, typename Coeffs, typename DiagonalType>
   static EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE void runOverwrite(DstSegment& dst, const Coeffs& coeffs,
                                                                  const DiagonalType& diagonal, Index /*begin*/,
                                                                  Index col) {
-    dst = coeffs * diagonal.coeff(col);
+    dst = coeffs * vector_evaluator<DiagonalType>(diagonal).coeff(col);
   }
 };
 
@@ -1530,9 +1530,9 @@ struct triangular_diagonal_product_impl {
   static EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE void addUnitCoeff(Dest& dst, const DiagonalType& diagonal, Index index,
                                                                  const Alpha& alpha) {
     EIGEN_IF_CONSTEXPR (ProductOrder == OnTheLeft) {
-      dst.coeffRef(index, index) += alpha * (diagonal.coeff(index) * MatrixScalar(1));
+      dst.coeffRef(index, index) += alpha * (vector_evaluator<DiagonalType>(diagonal).coeff(index) * MatrixScalar(1));
     } else {
-      dst.coeffRef(index, index) += alpha * (MatrixScalar(1) * diagonal.coeff(index));
+      dst.coeffRef(index, index) += alpha * (MatrixScalar(1) * vector_evaluator<DiagonalType>(diagonal).coeff(index));
     }
   }
 };

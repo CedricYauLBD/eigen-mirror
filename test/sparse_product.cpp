@@ -401,6 +401,24 @@ void sparse_product() {
     VERIFY_IS_APPROX(mSres = scale.asDiagonal() * mS.template selfadjointView<Upper | Lower>(),
                      refX = scale.asDiagonal() * refS);
 
+    // A diagonal without LinearAccessBit, next to a self-adjoint view and a sparse vector.
+    {
+      const Matrix<Scalar, Dynamic, Dynamic, ColMajor> blocks = DenseMatrix::Random(rows, rows);
+      const auto colDiag = (scale - blocks.block(0, 1 % rows, rows, 1)).asDiagonal();
+      const auto rowDiag = (scale.transpose() - blocks.block(1 % rows, 0, 1, rows)).asDiagonal();
+      const DenseMatrix refColDiag = DenseVector(scale - blocks.col(1 % rows)).asDiagonal().toDenseMatrix();
+      const DenseMatrix refRowDiag =
+          RowDenseVector(scale.transpose() - blocks.row(1 % rows)).asDiagonal().toDenseMatrix();
+      VERIFY_IS_APPROX(mSres = mLo.template selfadjointView<Lower>() * rowDiag, refX = refS * refRowDiag);
+      VERIFY_IS_APPROX(mSres = colDiag * mUp.template selfadjointView<Upper>(), refX = refColDiag * refS);
+      const ColSpVector spCol = mS.col(0);
+      const RowSpVector spRow = mS.row(0);
+      SparseMatrix<Scalar, RowMajor, StorageIndex> rowRes(1, rows);
+      SparseMatrix<Scalar, ColMajor, StorageIndex> colRes(rows, 1);
+      VERIFY_IS_APPROX(rowRes = spRow * rowDiag, refX = refS.row(0) * refRowDiag);
+      VERIFY_IS_APPROX(colRes = colDiag * spCol, refX = refColDiag * refS.col(0));
+    }
+
     // sparse triangularView with dense matrices
     VERIFY_IS_APPROX(x = mA.template triangularView<Upper>() * b, refX = refA.template triangularView<Upper>() * b);
     VERIFY_IS_APPROX(x = mA.template triangularView<Lower>() * b, refX = refA.template triangularView<Lower>() * b);

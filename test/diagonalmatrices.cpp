@@ -834,6 +834,21 @@ void unaligned_diagonal_products() {
   }
 }
 
+// The diagonal of a triangular product is a column vector on its left and a row vector on its right.
+template <int Mode, typename Xpr, typename RefXpr, typename ColMat>
+void check_triangular_diagonal_without_linear_access(const Xpr& diag, const RefXpr& ref, const ColMat& cm,
+                                                     std::true_type) {
+  VERIFY_IS_APPROX(ColMat(diag.asDiagonal() * cm.template triangularView<Mode>()),
+                   ColMat(ref.asDiagonal() * cm.template triangularView<Mode>()));
+}
+
+template <int Mode, typename Xpr, typename RefXpr, typename ColMat>
+void check_triangular_diagonal_without_linear_access(const Xpr& diag, const RefXpr& ref, const ColMat& cm,
+                                                     std::false_type) {
+  VERIFY_IS_APPROX(ColMat(cm.template triangularView<Mode>() * diag.asDiagonal()),
+                   ColMat(cm.template triangularView<Mode>() * ref.asDiagonal()));
+}
+
 // A compile-time vector can lack LinearAccessBit; diagonal products must then index it through (row, col).
 template <typename Xpr, typename ColMat, typename RowMat>
 void check_diagonal_without_linear_access(const MatrixBase<Xpr>& diag, const ColMat& cm, const RowMat& rm) {
@@ -853,6 +868,17 @@ void check_diagonal_without_linear_access(const MatrixBase<Xpr>& diag, const Col
   VERIFY_IS_APPROX(RowVec(rv * diag.asDiagonal()), RowVec(rv * ref.asDiagonal()));
   VERIFY_IS_APPROX(ColMat(cm + diag.asDiagonal()), ColMat(cm + ref.asDiagonal()));
   VERIFY_IS_APPROX(RowMat(diag.asDiagonal() - rm), RowMat(ref.asDiagonal() - rm));
+  // The coefficients of the diagonal matrix itself.
+  using Dense = Matrix<Scalar, Dynamic, Dynamic>;
+  VERIFY_IS_APPROX(Dense(diag.asDiagonal()), Dense(ref.asDiagonal()));
+  const Index i = internal::random<Index>(0, diag.size() - 1);
+  VERIFY_IS_APPROX(diag.asDiagonal().coeff(i, i), ref.asDiagonal().diagonal().coeff(i));
+  // Triangular products, which also read the unit diagonal of a unit triangular matrix.
+  using DiagonalOnLeft = internal::bool_constant<Xpr::ColsAtCompileTime == 1>;
+  check_triangular_diagonal_without_linear_access<Lower>(diag, ref, cm, DiagonalOnLeft());
+  check_triangular_diagonal_without_linear_access<UnitLower>(diag, ref, cm, DiagonalOnLeft());
+  check_triangular_diagonal_without_linear_access<StrictlyUpper>(diag, ref, cm, DiagonalOnLeft());
+  check_triangular_diagonal_without_linear_access<UnitUpper>(diag, ref, cm, DiagonalOnLeft());
 }
 
 template <typename Scalar>
