@@ -309,6 +309,21 @@ void check_chord_lengths() {
   BezierFitting<BezierType>::ChordLengths(same, params);
   VERIFY_IS_APPROX(params.matrix(), ParameterVectorType::LinSpaced(n, Scalar(0), Scalar(1)).matrix());
 
+  // Chord-length parameters are scale invariant, also where squaring the coordinate differences overflows or
+  // underflows.
+  using std::sqrt;
+  const Scalar scales[] = {Scalar(1), Scalar(16) * sqrt(NumTraits<Scalar>::highest()),
+                           sqrt(std::numeric_limits<Scalar>::denorm_min()) / Scalar(4)};
+  PointArrayType collinear = PointArrayType::Zero(BezierType::Dimension, 3);
+  collinear(0, 1) = Scalar(1);
+  collinear(0, 2) = Scalar(3);
+  for (const Scalar scale : scales) {
+    BezierFitting<BezierType>::ChordLengths((scale * collinear).eval(), params);
+    VERIFY_IS_EQUAL(params(0), Scalar(0));
+    VERIFY_IS_APPROX(params(1), Scalar(1) / Scalar(3));
+    VERIFY_IS_EQUAL(params(2), Scalar(1));
+  }
+
   // A single point is the minimum for a degree-0 fit.
   const PointArrayType single = pts.col(0);
   BezierFitting<BezierType>::ChordLengths(single, params);

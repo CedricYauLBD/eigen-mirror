@@ -87,15 +87,16 @@ void BezierFitting<BezierType>::ChordLengths(const PointArrayType& pts, Paramete
 
   params.resize(n);
   params(0) = Scalar(0);
-  params.tail(n - 1) = (pts.array().rightCols(n - 1) - pts.array().leftCols(n - 1)).matrix().colwise().norm();
-  std::partial_sum(params.data(), params.data() + n, params.data());
-
-  const Scalar total = params(n - 1);
-  if (total > Scalar(0)) {
-    params /= total;
-  } else {
+  // stableNorm avoids overflow/underflow of the squared differences; 
+  params.tail(n - 1) = (pts.array().rightCols(n - 1) - pts.array().leftCols(n - 1)).matrix().colwise().stableNorm();
+  const Scalar longest = params.tail(n - 1).maxCoeff();
+  if (!(longest > Scalar(0))) {
     params = ParameterVectorType::LinSpaced(n, Scalar(0), Scalar(1));
+    return;
   }
+  params.tail(n - 1) /= longest;
+  std::partial_sum(params.data(), params.data() + n, params.data());
+  params /= params(n - 1);
   params(n - 1) = Scalar(1);
 }
 
