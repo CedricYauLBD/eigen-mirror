@@ -183,8 +183,9 @@ Index SparseLUImpl<Scalar, StorageIndex>::memInit(Index m, Index n, Index annz, 
       glu.nzlumax /= 2;
       glu.nzumax /= 2;
       glu.nzlmax /= 2;
-      // Never 0, which means success: the buffers are not allocated
-      if (glu.nzlumax < annz) return (std::max)(Index(1), glu.nzlumax);
+      // Never 0, which means success: the buffers are not allocated. A buffer halved to zero would "allocate" empty and
+      // the loop would never end.
+      if (glu.nzlumax < annz || glu.nzlumax == 0 || glu.nzlmax == 0) return (std::max)(Index(1), glu.nzlumax);
     }
   } while (!glu.lusup.size() || !glu.ucol.size() || !glu.lsub.size() || !glu.usub.size());
 

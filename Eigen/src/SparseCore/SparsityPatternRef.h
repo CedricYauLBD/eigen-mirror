@@ -83,6 +83,18 @@ SparsityPatternRef<StorageIndex> make_col_major_pattern_ref(const SparseMatrix<S
 }
 
 /** \internal
+ * The largest column offset or entry count that a pattern buffer indexed by StorageIndex and sized by Index can hold:
+ * the smaller of the ranges of the two types, which differ when StorageIndex is wider than Index (32-bit Index).
+ * Callers test a sum as \c count > limit - offset before adding, so the sum itself never overflows.
+ */
+template <typename StorageIndex>
+StorageIndex pattern_offset_limit() {
+  using WideIndex = std::common_type_t<Index, StorageIndex>;
+  return static_cast<StorageIndex>(
+      numext::mini<WideIndex>(WideIndex(NumTraits<StorageIndex>::highest()), WideIndex(NumTraits<Index>::highest())));
+}
+
+/** \internal
  * Generic fallback for any other sparse expression (row-major, products,
  * permutations, etc.). The pattern is materialized into \c outer_buf and
  * \c inner_buf via a value-free counting transpose driven by the expression
@@ -107,18 +119,18 @@ SparsityPatternRef<StorageIndex> make_col_major_pattern_ref(const SparseMatrixBa
   // The column count, the row count and every offset must fit in StorageIndex, which can be narrower than the source's
   // index type. Check them before narrowing: the offsets are summed in Index and tested as they grow.
   check_sparse_solver_size_for_overflow<StorageIndex>(amat.rows(), n_cols);
+  const StorageIndex max_offset = pattern_offset_limit<StorageIndex>();
   outer_buf.setZero(n_cols + 1);
   for (Index i = 0; i < n_outer; ++i)
     for (typename internal::evaluator<Derived>::InnerIterator it(amat_eval, i); it; ++it) {
-      if (outer_buf(it.col() + 1) == NumTraits<StorageIndex>::highest()) throw_std_bad_alloc();
+      if (outer_buf(it.col() + 1) == max_offset) throw_std_bad_alloc();
       ++outer_buf(it.col() + 1);
     }
-  using WideIndex = std::common_type_t<Index, StorageIndex>;
-  WideIndex offset = 0;
+  StorageIndex offset = 0;
   for (Index j = 0; j < n_cols; ++j) {
+    if (outer_buf(j + 1) > max_offset - offset) throw_std_bad_alloc();
     offset += outer_buf(j + 1);
-    if (offset > NumTraits<StorageIndex>::highest()) throw_std_bad_alloc();
-    outer_buf(j + 1) = static_cast<StorageIndex>(offset);
+    outer_buf(j + 1) = offset;
   }
   inner_buf.resize(outer_buf(n_cols));
   Matrix<StorageIndex, Dynamic, 1> head = outer_buf.head(n_cols);
@@ -255,6 +267,8 @@ void materialize_at_plus_a_pattern(const SparsityPatternRef<StorageIndex>& A,
                                    SparseMatrix<signed char, ColMajor, StorageIndex>& out) {
   const Index n = A.outerSize;
   eigen_assert(n == A.innerSize && "materialize_at_plus_a_pattern: A must be square");
+  // A zero-copy view of a column-major matrix is not range-checked by its builder; the pass below narrows indices.
+  check_sparse_solver_size_for_overflow<StorageIndex>(n, n);
 
   // 1. Build A^T's column starts (= A's row counts) via counting sort.
   Matrix<StorageIndex, Dynamic, 1> AT_p(n + 1);
@@ -285,6 +299,7 @@ void materialize_at_plus_a_pattern(const SparsityPatternRef<StorageIndex>& A,
   out.resize(n, n);
   StorageIndex* out_p = out.outerIndexPtr();
   out_p[0] = 0;
+  const StorageIndex max_offset = pattern_offset_limit<StorageIndex>();
   for (Index j = 0; j < n; ++j) {
     const StorageIndex* a_col = A.inner + A.outer[j];
     const Index a_nz = A.nonZeros(j);
@@ -304,7 +319,9 @@ void materialize_at_plus_a_pattern(const SparsityPatternRef<StorageIndex>& A,
       ++count;
     }
     count += (a_nz - ia) + (at_nz - it);
-    out_p[j + 1] = out_p[j] + convert_index<StorageIndex>(count);
+    // The merged pattern can have more entries than A, so test the sum before it is formed.
+    if (count > Index(max_offset - out_p[j])) throw_std_bad_alloc();
+    out_p[j + 1] = out_p[j] + static_cast<StorageIndex>(count);
   }
 
   const StorageIndex total = out_p[n];
@@ -363,6 +380,7 @@ void materialize_selfadjoint_pattern(const SparsityPatternRef<StorageIndex>& A,
   const Index n = A.outerSize;
   eigen_assert(n == A.innerSize && "materialize_selfadjoint_pattern: A must be square");
   constexpr bool IsLower = (UpLo == static_cast<unsigned>(Lower));
+  check_sparse_solver_size_for_overflow<StorageIndex>(n, n);
 
   // 1. Count the entries of each output column. For UpLo == Lower we keep
   //    entries with row >= col; for Upper, row <= col. A kept entry (r, j)
@@ -372,7 +390,7 @@ void materialize_selfadjoint_pattern(const SparsityPatternRef<StorageIndex>& A,
   //    of StorageIndex before it is stored, and nothing is allocated for the inner indices until the total is known.
   out.resize(n, n);
   StorageIndex* out_p = out.outerIndexPtr();
-  const StorageIndex highest = NumTraits<StorageIndex>::highest();
+  const StorageIndex max_offset = pattern_offset_limit<StorageIndex>();
   for (Index j = 0; j < n; ++j) {
     const Index nz = A.nonZeros(j);
     const StorageIndex* col = A.inner + A.outer[j];
@@ -380,20 +398,19 @@ void materialize_selfadjoint_pattern(const SparsityPatternRef<StorageIndex>& A,
       const StorageIndex r = col[k];
       const bool keep = IsLower ? (Index(r) >= j) : (Index(r) <= j);
       if (!keep) continue;
-      if (out_p[j + 1] == highest) throw_std_bad_alloc();
+      if (out_p[j + 1] == max_offset) throw_std_bad_alloc();
       ++out_p[j + 1];
       if (Index(r) != j) {
-        if (out_p[r + 1] == highest) throw_std_bad_alloc();
+        if (out_p[r + 1] == max_offset) throw_std_bad_alloc();
         ++out_p[r + 1];
       }
     }
   }
-  using WideIndex = std::common_type_t<Index, StorageIndex>;
-  WideIndex offset = 0;
+  StorageIndex offset = 0;
   for (Index j = 0; j < n; ++j) {
+    if (out_p[j + 1] > max_offset - offset) throw_std_bad_alloc();
     offset += out_p[j + 1];
-    if (offset > highest) throw_std_bad_alloc();
-    out_p[j + 1] = static_cast<StorageIndex>(offset);
+    out_p[j + 1] = offset;
   }
 
   const StorageIndex total = out_p[n];

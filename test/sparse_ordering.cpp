@@ -299,6 +299,15 @@ void test_pattern_offsets_overflow() {
     thrown = true;
   }
   VERIFY(thrown);
+
+  // A + A^T of the same matrix, through the zero-copy path.
+  thrown = false;
+  try {
+    amd(L, perm);
+  } catch (const std::bad_alloc&) {
+    thrown = true;
+  }
+  VERIFY(thrown);
 #endif
 }
 
