@@ -238,6 +238,69 @@ void bdcsvd_switch_size() {
   bidiag_svd.compute(diag, superdiag);
   svd_check_full(bidiag, bidiag_svd);
 }
+
+// The divide-and-conquer buffers have sizes that are products of diagSize. The largest, the 3 * (diagSize + 1)^2
+// workspace, outgrows Index while every matrix of the decomposition still fits, and a wrapped product must not become
+// its size: such a diagSize is refused before anything is allocated. half keeps the byte size of the matrices
+// representable for a 64-bit Index too, so that only the check of the products can refuse them.
+template <typename = void>
+void bdcsvd_allocation_size_overflow() {
+#ifdef EIGEN_EXCEPTIONS
+  const auto refuses = [](Index diagSize, bool compU, bool compV) {
+    internal::bdcsvd_impl<half> impl;
+    bool threw = false;
+    internal::set_is_malloc_allowed(false);
+    try {
+      impl.allocate(diagSize, compU, compV);
+    } catch (const std::bad_alloc&) {
+      threw = true;
+    }
+    internal::set_is_malloc_allowed(true);
+    return threw;
+  };
+  const Index maxSize = NumTraits<Index>::highest();
+  // The smallest n = diagSize + 1 whose workspace does not fit, and the largest n such that an n x n matrix fits.
+  const Index workspaceLimit = Index(std::sqrt(static_cast<double>(maxSize) / 3)) + 1;
+  const Index matrixLimit = Index(std::sqrt(static_cast<double>(maxSize)));
+  VERIFY(workspaceLimit > maxSize / 3 / workspaceLimit && workspaceLimit - 1 <= maxSize / 3 / (workspaceLimit - 1));
+  VERIFY(matrixLimit <= maxSize / matrixLimit && matrixLimit + 1 > maxSize / (matrixLimit + 1));
+  // With a 32-bit Index the first workspace size wraps to a negative number and the second to a positive one.
+  for (Index diagSize : {workspaceLimit - 1, matrixLimit - 1, maxSize}) {
+    VERIFY(refuses(diagSize, true, false));
+    VERIFY(refuses(diagSize, false, true));
+    VERIFY(refuses(diagSize, true, true));
+  }
+  // Without vectors there is no such workspace, and the (diagSize + 1) x diagSize bidiagonal is the largest buffer.
+  for (Index diagSize : {matrixLimit + 1, maxSize}) VERIFY(refuses(diagSize, false, false));
+#endif
+}
+
+// The public entry points size the full U and V before the divide-and-conquer workspace, so a request whose square
+// output does not fit Index must be refused before any buffer is allocated, even when the input and the bidiagonal fit.
+template <typename = void>
+void bdcsvd_output_size_overflow() {
+#ifdef EIGEN_EXCEPTIONS
+  const Index maxSize = NumTraits<Index>::highest();
+  // The smallest n whose n x n matrix does not fit.
+  const Index n = Index(std::sqrt(static_cast<double>(maxSize))) + 1;
+  VERIFY(n > maxSize / n && n - 1 <= maxSize / (n - 1));
+  // Only the dimension that is n has a square output that does not fit.
+  const auto refuses = [](auto construct) {
+    // The check precedes every allocation, so it throws here whatever the memory of this machine.
+    bool threw = false;
+    internal::set_is_malloc_allowed(false);
+    try {
+      construct();
+    } catch (const std::bad_alloc&) {
+      threw = true;
+    }
+    internal::set_is_malloc_allowed(true);
+    return threw;
+  };
+  VERIFY(refuses([&] { BDCSVD<MatrixXd, ComputeFullU> svd(n, 1); }));
+  VERIFY(refuses([&] { BDCSVD<MatrixXd, ComputeFullV> svd(1, n); }));
+#endif
+}
 #endif
 
 #if defined(EIGEN_TEST_PART_62) || defined(EIGEN_TEST_PART_ALL)
@@ -942,4 +1005,10 @@ EIGEN_DECLARE_TEST(bdcsvd) {
     CALL_SUBTEST_85(bdcsvd_deflated_values_stay_as_computed<float>());
     CALL_SUBTEST_85(bdcsvd_deflated_values_stay_as_computed<double>());
   }
+  // 40 x 20 -> 60 x 30 fails in SVDBase::allocate(). 20 x 20 -> 20 x 40 without V keeps the size of every SVDBase
+  // member, so it fails in BDCSVD::allocate().
+  CALL_SUBTEST_65((svd_allocation_failure<MatrixXd, ComputeFullU | ComputeFullV>(40, 20, 60, 30)));
+  CALL_SUBTEST_65((svd_allocation_failure<MatrixXd, ComputeFullU>(20, 20, 20, 40)));
+  CALL_SUBTEST_65((bdcsvd_allocation_size_overflow<>()));
+  CALL_SUBTEST_65((bdcsvd_output_size_overflow<>()));
 }

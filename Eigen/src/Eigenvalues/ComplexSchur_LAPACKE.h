@@ -80,6 +80,9 @@ namespace Eigen {
     w.resize(n, 1);                                                                                                \
     info = LAPACKE_##LAPACKE_PREFIX##gees(matrix_order, jobvs, sort, select, n, (LAPACKE_TYPE*)m_matT.data(), lda, \
                                           &sdim, (LAPACKE_TYPE*)w.data(), (LAPACKE_TYPE*)m_matU.data(), ldvs);     \
+    /* High-level LAPACKE may reject NaN inputs before calling LAPACK. With a negative info, m_matT still holds    \
+     * the input and m_matU is unwritten, so defer to Eigen's native path. */                                      \
+    if (info < 0) return computeInPlace(computeU);                                                                 \
     if (info == 0)                                                                                                 \
       m_info = Success;                                                                                            \
     else                                                                                                           \

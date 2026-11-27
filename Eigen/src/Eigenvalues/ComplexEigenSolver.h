@@ -151,8 +151,9 @@ class ComplexEigenSolver {
    * \pre Either the constructor
    * ComplexEigenSolver(const MatrixType& matrix, bool) or the member
    * function compute(const MatrixType& matrix, bool) has been called before
-   * to compute the eigendecomposition of a matrix, and
-   * \p computeEigenvectors was set to true (the default).
+   * to compute the eigendecomposition of a matrix,
+   * \p computeEigenvectors was set to true (the default), and info()
+   * is \c Success.
    *
    * This function returns a matrix whose columns are the eigenvectors. Column
    * \f$ k \f$ is an eigenvector corresponding to eigenvalue number \f$ k
@@ -277,10 +278,17 @@ ComplexEigenSolver<MatrixType>& ComplexEigenSolver<MatrixType>::computeFromSchur
     if (computeEigenvectors)
       doComputeEigenvectors(numext::mini(m_schur.matrixT().stableNorm(), NumTraits<RealScalar>::highest()));
     sortEigenvalues(computeEigenvectors);
+  } else {
+    // No eigenvalue is known: NaN, not what the vector held before.
+    const RealScalar nan = NumTraits<RealScalar>::quiet_NaN();
+    const Index n = m_schur.matrixT().cols();
+    m_eivalues.setConstant(n, ComplexScalar(nan, nan));
+    // Nor is any eigenvector: zeros of the size of the input, for builds without assertions.
+    if (computeEigenvectors) m_eivec.setZero(n, n);
   }
 
   m_isInitialized = true;
-  m_eigenvectorsOk = computeEigenvectors;
+  m_eigenvectorsOk = computeEigenvectors && m_schur.info() == Success;
   return *this;
 }
 

@@ -251,6 +251,9 @@ struct unitOrthogonal_selector<Derived, 2> {
 template <typename Derived>
 EIGEN_DEVICE_FUNC typename MatrixBase<Derived>::PlainObject MatrixBase<Derived>::unitOrthogonal() const {
   EIGEN_STATIC_ASSERT_VECTOR_ONLY(Derived)
+  EIGEN_STATIC_ASSERT(Derived::SizeAtCompileTime == Dynamic || Derived::SizeAtCompileTime >= 2,
+                      THIS_METHOD_IS_ONLY_FOR_VECTORS_OF_A_SPECIFIC_SIZE)
+  eigen_assert(size() >= 2 && "the vector must have at least 2 coefficients");
   return internal::unitOrthogonal_selector<Derived>::run(derived());
 }
 

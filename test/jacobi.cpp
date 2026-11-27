@@ -77,6 +77,90 @@ void jacobi(const MatrixType& m = MatrixType()) {
   }
 }
 
+// Rotates fixed-size vectors that are aligned but shorter than the stride that separates them: the columns of a map
+// with a padded outer stride, the rows of its row-major counterpart, and two aligned vector maps. The coefficients
+// between the end of a vector and the start of the next one do not belong to it and must be left alone.
+template <typename Scalar, int Size>
+void jacobi_padded_stride() {
+  // A multiple of every packet size, so that the vectors are aligned whatever Size is.
+  constexpr int Stride = ((Size + 15) / 16) * 16;
+  using Storage = Matrix<Scalar, Dynamic, Dynamic, ColMajor>;
+  using ColMajorMap = Map<Matrix<Scalar, Size, 4, ColMajor>, AlignedMax, OuterStride<Stride>>;
+  using RowMajorMap = Map<Matrix<Scalar, 4, Size, RowMajor>, AlignedMax, OuterStride<Stride>>;
+  using VectorMap = Map<Matrix<Scalar, Size, 1>, AlignedMax>;
+
+  const Storage original = Storage::Random(Stride, 4);
+  const Matrix<Scalar, 2, 1> v = Matrix<Scalar, 2, 1>::Random().normalized();
+  const Scalar c = v.x(), s = v.y();
+  const JacobiRotation<Scalar> rot(c, s);
+  const Index p = 1, q = 2;
+
+  Storage expected = original;
+  expected.col(p).head(Size) = c * original.col(p).head(Size) - s * original.col(q).head(Size);
+  expected.col(q).head(Size) =
+      numext::conj(s) * original.col(p).head(Size) + numext::conj(c) * original.col(q).head(Size);
+
+  Storage storage = original;
+  ColMajorMap columns(storage.data());
+  columns.applyOnTheRight(p, q, rot);
+  VERIFY_IS_APPROX(storage, expected);
+  VERIFY_IS_CWISE_EQUAL(storage.bottomRows(Stride - Size), original.bottomRows(Stride - Size));
+
+  storage = original;
+  VectorMap x(storage.col(p).data()), y(storage.col(q).data());
+  internal::apply_rotation_in_the_plane(x, y, rot.transpose());
+  VERIFY_IS_APPROX(storage, expected);
+  VERIFY_IS_CWISE_EQUAL(storage.bottomRows(Stride - Size), original.bottomRows(Stride - Size));
+
+  // Row i of the row-major map is the head of column i of the storage.
+  expected = original;
+  expected.col(p).head(Size) = c * original.col(p).head(Size) + numext::conj(s) * original.col(q).head(Size);
+  expected.col(q).head(Size) = -s * original.col(p).head(Size) + numext::conj(c) * original.col(q).head(Size);
+
+  storage = original;
+  RowMajorMap rows(storage.data());
+  rows.applyOnTheLeft(p, q, rot);
+  VERIFY_IS_APPROX(storage, expected);
+  VERIFY_IS_CWISE_EQUAL(storage.bottomRows(Stride - Size), original.bottomRows(Stride - Size));
+}
+
+// Rotating empty rows, columns or vectors is a no-op. Their data pointer is null, even for an empty block of a matrix
+// that owns storage, so the sanitizer builds fail here if the rotation forms a reference through it.
+template <typename MatrixType, typename JacobiScalar>
+void jacobi_empty() {
+  using Scalar = typename MatrixType::Scalar;
+  const JacobiRotation<JacobiScalar> rot(JacobiScalar(0.6), JacobiScalar(0.8));
+  const JacobiRotation<JacobiScalar> identity(JacobiScalar(1), JacobiScalar(0));
+
+  MatrixType noCols(4, 0), noRows(0, 4);
+  noCols.applyOnTheLeft(0, 1, rot);
+  noCols.applyOnTheLeft(2, 3, identity);
+  noRows.applyOnTheRight(0, 1, rot);
+  noRows.applyOnTheRight(2, 3, identity);
+  VERIFY_IS_EQUAL(noCols.rows(), Index(4));
+  VERIFY_IS_EQUAL(noCols.cols(), Index(0));
+  VERIFY_IS_EQUAL(noRows.rows(), Index(0));
+  VERIFY_IS_EQUAL(noRows.cols(), Index(4));
+  VERIFY_RAISES_ASSERT(noCols.applyOnTheLeft(0, 4, rot));
+  VERIFY_RAISES_ASSERT(noRows.applyOnTheRight(0, 4, rot));
+
+  Matrix<Scalar, 4, 0> fixedNoCols;
+  Matrix<Scalar, 0, 4> fixedNoRows;
+  fixedNoCols.applyOnTheLeft(0, 1, rot);
+  fixedNoRows.applyOnTheRight(0, 1, rot);
+
+  const MatrixType a = MatrixType::Random(4, 4);
+  MatrixType b = a;
+  b.leftCols(0).applyOnTheLeft(0, 1, rot);
+  b.topRows(0).applyOnTheRight(0, 1, rot);
+  Matrix<Scalar, Dynamic, 1> x(0), y(0);
+  internal::apply_rotation_in_the_plane(x, y, rot);
+  auto emptyHead = b.col(0).head(0);
+  auto emptyTail = b.col(1).tail(0);
+  internal::apply_rotation_in_the_plane(emptyHead, emptyTail, rot);
+  VERIFY_IS_EQUAL(b, a);
+}
+
 // Verify that JacobiRotation::makeGivens(p, q, &r) produces a rotation that
 // zeros out q, even when (p, q) straddle the over-/underflow thresholds
 // where the direct formula r = p * sqrt(1 + (q/p)^2) would over- or
@@ -509,11 +593,23 @@ EIGEN_DECLARE_TEST(jacobi) {
     CALL_SUBTEST_3((jacobi<Matrix<std::complex<float>, 4, 4, RowMajor>, float>()));
     CALL_SUBTEST_3((jacobi<Matrix<std::complex<float>, 4, 4, RowMajor>, std::complex<float> >()));
 
+    // Sizes that are not a multiple of the packet size, and 8 to take the packet path (SSE, AVX) next to padding.
+    CALL_SUBTEST_1((jacobi_padded_stride<float, 6>()));
+    CALL_SUBTEST_1((jacobi_padded_stride<float, 8>()));
+    CALL_SUBTEST_1((jacobi_padded_stride<float, 13>()));
+    CALL_SUBTEST_1((jacobi_padded_stride<double, 3>()));
+    CALL_SUBTEST_1((jacobi_padded_stride<double, 5>()));
+    CALL_SUBTEST_1((jacobi_padded_stride<std::complex<float>, 3>()));
+    CALL_SUBTEST_1((jacobi_padded_stride<std::complex<double>, 5>()));
+
     int r = internal::random<int>(2, internal::random<int>(1, EIGEN_TEST_MAX_SIZE) / 2),
         c = internal::random<int>(2, internal::random<int>(1, EIGEN_TEST_MAX_SIZE) / 2);
     CALL_SUBTEST_4((jacobi<MatrixXf, float>(MatrixXf(r, c))));
+    CALL_SUBTEST_4((jacobi_empty<MatrixXf, float>()));
     CALL_SUBTEST_5((jacobi<MatrixXcd, double>(MatrixXcd(r, c))));
     CALL_SUBTEST_5((jacobi<MatrixXcd, std::complex<double> >(MatrixXcd(r, c))));
+    CALL_SUBTEST_5((jacobi_empty<MatrixXcd, double>()));
+    CALL_SUBTEST_5((jacobi_empty<MatrixXcd, std::complex<double>>()));
     // complex<float> is really important to test as it is the only way to cover conjugation issues in certain unaligned
     // paths
     CALL_SUBTEST_6((jacobi<MatrixXcf, float>(MatrixXcf(r, c))));

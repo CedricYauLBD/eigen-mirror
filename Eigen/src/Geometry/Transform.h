@@ -221,8 +221,9 @@ struct transform_make_affine;
 template <typename Scalar_, int Dim_, int Mode_, int Options_>
 class Transform {
  public:
-  EIGEN_MAKE_ALIGNED_OPERATOR_NEW_IF_VECTORIZABLE_FIXED_SIZE(Scalar_,
-                                                             Dim_ == Dynamic ? Dynamic : (Dim_ + 1) * (Dim_ + 1))
+  // The size is that of MatrixType, which has no last row in AffineCompact mode.
+  EIGEN_MAKE_ALIGNED_OPERATOR_NEW_IF_VECTORIZABLE_FIXED_SIZE(
+      Scalar_, Dim_ == Dynamic ? Dynamic : (int(Mode_) == int(AffineCompact) ? Dim_ : Dim_ + 1) * (Dim_ + 1))
   enum {
     Mode = Mode_,
     Options = Options_,

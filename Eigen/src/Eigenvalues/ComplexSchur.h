@@ -572,8 +572,8 @@ void ComplexSchur<MatrixType>::reduceToTriangularForm(bool computeU) {
       --iu;
     }
 
-    // if iu is zero then we are done; the whole matrix is triangularized
-    if (iu == 0) break;
+    // if iu is zero then we are done; the whole matrix is triangularized. An empty matrix starts with iu == -1.
+    if (iu <= 0) break;
 
     // if we spent too many iterations, we give up
     iter++;

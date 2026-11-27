@@ -299,6 +299,19 @@ void schur_workspace_ref() {
   }
 }
 
+// An empty Hessenberg matrix comes with an empty workspace, which has no first coefficient to take the address of.
+template <typename MatrixType>
+void schur_empty_hessenberg() {
+  const MatrixType empty(0, 0);
+  RealSchur<MatrixType> solver;
+  for (Index maxIters : {Index(-1), Index(0), Index(1)}) {
+    solver.setMaxIterations(maxIters).computeFromHessenberg(empty, empty, true);
+    VERIFY_IS_EQUAL(solver.info(), Success);
+    VERIFY_IS_EQUAL(solver.matrixT().size(), 0);
+    VERIFY_IS_EQUAL(solver.matrixU().size(), 0);
+  }
+}
+
 EIGEN_DECLARE_TEST(schur_real) {
   // RealSchur keeps these blocks (|c| > eps*(|a|+|d|)), but tr^2 and 4*det round to the same value.
   Matrix2f small_imaginary_float;
@@ -322,6 +335,8 @@ EIGEN_DECLARE_TEST(schur_real) {
   CALL_SUBTEST_6((real_schur_power_of_two_scaling<>()));
   CALL_SUBTEST_6(real_schur_subnormal_restoration<Matrix2f>());
   CALL_SUBTEST_6(real_schur_subnormal_restoration<Matrix2d>());
+  CALL_SUBTEST_6(schur_empty_hessenberg<MatrixXf>());
+  CALL_SUBTEST_6(schur_empty_hessenberg<MatrixXd>());
   CALL_SUBTEST_7((schur_workspace_stride<float, ColMajor>()));
   CALL_SUBTEST_8((schur_workspace_stride<double, ColMajor>()));
   CALL_SUBTEST_9((schur_workspace_stride<float, RowMajor>()));

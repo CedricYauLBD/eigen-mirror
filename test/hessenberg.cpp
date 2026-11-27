@@ -117,6 +117,17 @@ void hessenberg_blockdiagonal() {
   }
 }
 
+// A 1 x 1 matrix has no Householder coefficient: compute() kept those of the size hint or of an earlier matrix.
+void hessenberg_1x1() {
+  const MatrixXd A = MatrixXd::Constant(1, 1, 3.0);
+  HessenbergDecomposition<MatrixXd> hess;
+  VERIFY_IS_EQUAL(hess.compute(A).householderCoefficients().size(), 0);
+  VERIFY_IS_EQUAL(hess.compute(MatrixXd::Identity(4, 4)).householderCoefficients().size(), 3);
+  VERIFY_IS_EQUAL(hess.compute(A).householderCoefficients().size(), 0);
+  VERIFY_IS_EQUAL(MatrixXd(hess.matrixQ()), MatrixXd::Identity(1, 1));
+  VERIFY_IS_EQUAL(MatrixXd(hess.matrixH()), A);
+}
+
 EIGEN_DECLARE_TEST(hessenberg) {
   CALL_SUBTEST_1((hessenberg<std::complex<double>, 1>()));
   CALL_SUBTEST_2((hessenberg<std::complex<double>, 2>()));
@@ -135,4 +146,5 @@ EIGEN_DECLARE_TEST(hessenberg) {
   CALL_SUBTEST_7(hessenberg_blockdiagonal<double>());
   CALL_SUBTEST_8(hessenberg_blockdiagonal<std::complex<float>>());
   CALL_SUBTEST_8(hessenberg_blockdiagonal<std::complex<double>>());
+  CALL_SUBTEST_6(hessenberg_1x1());
 }

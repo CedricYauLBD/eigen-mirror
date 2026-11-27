@@ -502,8 +502,9 @@ EIGEN_DEVICE_FUNC SelfAdjointEigenSolver<MatrixType>& SelfAdjointEigenSolver<Mat
     if (n == 1) m_eivalues.coeffRef(0, 0) = numext::real(m_eivec.coeff(0, 0));
     if (computeEigenvectors) m_eivec.setOnes();
     m_info = m_eivalues.allFinite() ? Success : NoConvergence;
+    if (m_info != Success) m_eivalues.setConstant(NumTraits<RealScalar>::quiet_NaN());
     m_isInitialized = true;
-    m_eigenvectorsOk = computeEigenvectors;
+    m_eigenvectorsOk = computeEigenvectors && m_info == Success;
     return *this;
   }
 
@@ -524,7 +525,8 @@ EIGEN_DEVICE_FUNC SelfAdjointEigenSolver<MatrixType>& SelfAdjointEigenSolver<Mat
   // and call computeFromTridiagonal().
   const RealScalar maxCoeff = internal::safe_scaling<RealScalar>::max_abs_component(mat);
   if (!(numext::isfinite)(maxCoeff)) {
-    // Input contains Inf or NaN.
+    // Input contains Inf or NaN: no eigenvalue is known.
+    m_eivalues.setConstant(NumTraits<RealScalar>::quiet_NaN());
     m_info = NoConvergence;
     m_isInitialized = true;
     m_eigenvectorsOk = false;
@@ -544,9 +546,10 @@ EIGEN_DEVICE_FUNC SelfAdjointEigenSolver<MatrixType>& SelfAdjointEigenSolver<Mat
 
   // Scale back the eigenvalues.
   internal::safe_scaling<RealScalar>::unscale_in_place(m_eivalues, maxCoeff, factors);
+  if (m_info != Success) m_eivalues.setConstant(NumTraits<RealScalar>::quiet_NaN());
 
   m_isInitialized = true;
-  m_eigenvectorsOk = computeEigenvectors;
+  m_eigenvectorsOk = computeEigenvectors && m_info == Success;
   return *this;
 }
 
@@ -564,6 +567,7 @@ SelfAdjointEigenSolver<MatrixType>& SelfAdjointEigenSolver<MatrixType>::computeF
     if (m_eivalues.size() > 0) scale = m_eivalues.cwiseAbs().maxCoeff();
     if (m_subdiag.size() > 0) scale = numext::maxi(scale, m_subdiag.cwiseAbs().maxCoeff());
     if (!(numext::isfinite)(scale)) {
+      m_eivalues.setConstant(NumTraits<RealScalar>::quiet_NaN());
       m_info = NoConvergence;
       m_isInitialized = true;
       m_eigenvectorsOk = false;
@@ -578,9 +582,10 @@ SelfAdjointEigenSolver<MatrixType>& SelfAdjointEigenSolver<MatrixType>::computeF
   // precision when the tridiagonal entries span a wide range of magnitudes.
   m_info =
       internal::computeFromTridiagonal_impl<true>(m_eivalues, m_subdiag, m_maxIterations, computeEigenvectors, m_eivec);
+  if (m_info != Success) m_eivalues.setConstant(NumTraits<RealScalar>::quiet_NaN());
 
   m_isInitialized = true;
-  m_eigenvectorsOk = computeEigenvectors;
+  m_eigenvectorsOk = computeEigenvectors && m_info == Success;
   return *this;
 }
 

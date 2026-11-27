@@ -408,6 +408,53 @@ void inplace_inner_stride(Index size) {
   }
 }
 
+// Runs decompose on a Ref with an inner stride of 1, 2 and -1 that holds input, and checks that it leaves every
+// coefficient outside the Ref alone.
+template <typename MatrixType, typename Func>
+void inplace_strided_ref_check(const MatrixType& input, const Func& decompose) {
+  using Scalar = typename MatrixType::Scalar;
+  using StorageType = Matrix<Scalar, Dynamic, 1>;
+  using StrideType = Stride<Dynamic, Dynamic>;
+  const Index n = input.rows();
+  for (Index inner : {Index(1), Index(2), Index(-1)}) {
+    // Guards on both sides of the coefficients from the first to the last of the map.
+    const Index guard = 4 * n, outer = numext::abs(inner) * n;
+    const StorageType saved = StorageType::Random(outer * n + 2 * guard);
+    StorageType storage = saved;
+    const Index origin = guard + (inner < 0 ? n - 1 : 0);
+    Map<MatrixType, 0, StrideType> map(storage.data() + origin, n, n, StrideType(outer, inner));
+    map = input;
+    Ref<MatrixType, 0, StrideType> matrix(map);
+    decompose(matrix);
+    Array<bool, Dynamic, 1> owned = Array<bool, Dynamic, 1>::Constant(storage.size(), false);
+    for (Index j = 0; j < n; ++j)
+      for (Index i = 0; i < n; ++i) owned(origin + j * outer + i * inner) = true;
+    VERIFY((owned || storage.array() == saved.array()).all());
+  }
+}
+
+// A size above the threshold of the blocked tridiagonalization, which hands the storage to a product kernel.
+template <typename MatrixType>
+void inplace_selfadjoint_inner_stride() {
+  using RealScalar = typename MatrixType::RealScalar;
+  using StridedRef = Ref<MatrixType, 0, Stride<Dynamic, Dynamic>>;
+  const Index n = 100;
+  const RealScalar tolerance = RealScalar(128 * n) * NumTraits<RealScalar>::epsilon();
+  const MatrixType A0 = random_selfadjoint<MatrixType>(n);
+  inplace_strided_ref_check(A0, [&](StridedRef& matrix) {
+    SelfAdjointEigenSolver<StridedRef> es(matrix);
+    VERIFY_IS_EQUAL(es.info(), Success);
+    const MatrixType V = es.eigenvectors();
+    VERIFY((A0 * V - V * es.eigenvalues().asDiagonal()).norm() <= tolerance * A0.norm());
+    VERIFY(V.isUnitary(tolerance));
+  });
+  inplace_strided_ref_check(A0, [&](StridedRef& matrix) {
+    Tridiagonalization<StridedRef> tri(matrix);
+    const MatrixType Q = tri.matrixQ(), T = tri.matrixT();
+    verify_inplace_similarity(A0, Q, T);
+  });
+}
+
 struct InplaceLowerOnly {
   double operator()(Index row, Index col) const {
     VERIFY(row >= col);
@@ -432,6 +479,9 @@ EIGEN_DECLARE_TEST(inplace_decomposition) {
   CALL_SUBTEST_19((inplace_special_values<MatrixXd>(2)));
   CALL_SUBTEST_19((inplace_special_values<MatrixXd>(1)));
   CALL_SUBTEST_11(inplace_plain_lower_triangle<>());
+  CALL_SUBTEST_11((inplace_selfadjoint_inner_stride<MatrixXd>()));
+  CALL_SUBTEST_11((inplace_selfadjoint_inner_stride<Matrix<double, Dynamic, Dynamic, RowMajor>>()));
+  CALL_SUBTEST_16((inplace_selfadjoint_inner_stride<MatrixXcd>()));
   CALL_SUBTEST_12((inplace_eigensolver<MatrixXd, EigenSolver>(128)));
   CALL_SUBTEST_12((inplace_eigensolver<MatrixXd, EigenSolver>(129)));
   CALL_SUBTEST_14((inplace_qz_inner_stride<double, RealQZ, ColMajor>()));

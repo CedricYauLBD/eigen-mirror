@@ -118,7 +118,7 @@ class Tridiagonalization {
    * \sa compute() for an example.
    */
   explicit Tridiagonalization(Index size = Size == Dynamic ? 2 : Size)
-      : m_matrix(size, size), m_hCoeffs(size > 1 ? size - 1 : 1), m_isInitialized(false) {}
+      : m_matrix(size, size), m_hCoeffs(hCoeffsSize(size)), m_isInitialized(false) {}
 
   /** \brief Constructor; computes tridiagonal decomposition of given matrix.
    *
@@ -132,7 +132,7 @@ class Tridiagonalization {
    */
   template <typename InputType>
   explicit Tridiagonalization(const EigenBase<InputType>& matrix)
-      : m_matrix(matrix.derived()), m_hCoeffs(matrix.cols() > 1 ? matrix.cols() - 1 : 1), m_isInitialized(false) {
+      : m_matrix(matrix.derived()), m_hCoeffs(hCoeffsSize(matrix.cols())), m_isInitialized(false) {
     internal::tridiagonalization_inplace(m_matrix, m_hCoeffs);
     m_isInitialized = true;
   }
@@ -147,7 +147,7 @@ class Tridiagonalization {
    */
   template <typename InputType>
   explicit Tridiagonalization(EigenBase<InputType>& matrix)
-      : m_matrix(matrix.derived()), m_hCoeffs(matrix.cols() > 1 ? matrix.cols() - 1 : 1), m_isInitialized(false) {
+      : m_matrix(matrix.derived()), m_hCoeffs(hCoeffsSize(matrix.cols())), m_isInitialized(false) {
     internal::tridiagonalization_inplace(m_matrix, m_hCoeffs);
     m_isInitialized = true;
   }
@@ -172,7 +172,7 @@ class Tridiagonalization {
   template <typename InputType>
   Tridiagonalization& compute(const EigenBase<InputType>& matrix) {
     m_matrix = matrix.derived();
-    m_hCoeffs.resize(matrix.rows() - 1, 1);
+    m_hCoeffs.resize(hCoeffsSize(matrix.rows()), 1);
     internal::tridiagonalization_inplace(m_matrix, m_hCoeffs);
     m_isInitialized = true;
     return *this;
@@ -305,6 +305,10 @@ class Tridiagonalization {
   SubDiagonalReturnType subDiagonal() const;
 
  protected:
+  // A size x size matrix has size - 1 Householder coefficients, so a 1 x 1 matrix has none. Only a fixed-size
+  // CoeffVectorType, which cannot be empty, keeps one entry for it.
+  static Index hCoeffsSize(Index size) { return size > 1 ? size - 1 : (SizeMinusOne == Dynamic ? 0 : 1); }
+
   MatrixType m_matrix;
   CoeffVectorType m_hCoeffs;
   bool m_isInitialized;
@@ -528,7 +532,8 @@ EIGEN_DEVICE_FUNC void tridiagonalization_inplace(MatrixType& matA, CoeffVectorT
 
 #if !defined(EIGEN_GPU_COMPILE_PHASE)
   EIGEN_IF_CONSTEXPR (MatrixType::RowsAtCompileTime == Dynamic || MatrixType::ColsAtCompileTime == Dynamic) {
-    if (matA.rows() >= 96) {
+    // The blocked algorithm hands the storage of matA to a kernel that addresses it with a unit inner stride.
+    if (matA.rows() >= 96 && matA.innerStride() == 1) {
       tridiagonalization_inplace_blocked(matA, hCoeffs);
       return;
     }

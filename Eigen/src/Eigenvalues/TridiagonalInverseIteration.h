@@ -883,10 +883,13 @@ void tridiagonal_rayleigh_ritz_refine(const DiagType& diag, const SubdiagType& s
           ((TVc - Vc * eivals.segment(s, c).asDiagonal()) * inv_onenrm).colwise().norm().maxCoeff();
       if (cluster_resid > refine_threshold) {
         B.noalias() = Vc.transpose() * TVc;
-        Bsym = B + B.transpose();  // enforce exact symmetry (distinct target avoids an aliasing temp)
-        Bsym *= RealScalar(0.5);
+        // Enforce exact symmetry (distinct target avoids an aliasing temp). Each term is halved before the sum: the
+        // entries of B reach the cluster's eigenvalues, and B + B.transpose() overflows beyond highest / 2.
+        Bsym = RealScalar(0.5) * B + RealScalar(0.5) * B.transpose();
         block_solver.compute(Bsym, ComputeEigenvectors);
-        eivecs.middleCols(s, c).noalias() = Vc * block_solver.eigenvectors();
+        // Rotate only when the helper succeeded (B itself overflows only for ||T|| within rounding of highest).
+        // Otherwise the inverse-iteration vectors stay as they are, an orthonormal basis of the cluster's subspace.
+        if (block_solver.info() == Success) eivecs.middleCols(s, c).noalias() = Vc * block_solver.eigenvectors();
       }
     }
     s = t + 1;

@@ -139,6 +139,9 @@ EIGEN_DEVICE_FUNC void MatrixBase<Derived>::makeHouseholderInPlace(Scalar& tau, 
  * \param tau the scaling factor of the Householder transformation
  * \param beta the result of H * \c *this
  *
+ * \c essential has size() - 1 coefficients on every path: a plain vector is resized to that, and any other
+ * expression must already have that size.
+ *
  * The conventions are those of LAPACK's xLARFG, whose \c tau is the conjugate of this one:
  * when a reflector is formed, beta = -copysign(||*this||, real(c0)) for standard binary floating-point scalars
  * (including half and bfloat16) and takes the sign from real(c0) < 0 for other scalars, with c0 = coeff(0); otherwise,
@@ -155,6 +158,10 @@ EIGEN_DEVICE_FUNC void MatrixBase<Derived>::makeHouseholder(EssentialPart& essen
                                                             RealScalar& beta) const {
   EIGEN_STATIC_ASSERT_VECTOR_ONLY(EssentialPart)
   const VectorBlock<const Derived, EssentialPart::SizeAtCompileTime> tail(derived(), 1, size() - 1);
+  // Some paths below only zero essential or write it coefficient by coefficient, one of them with a nonzero tau, so
+  // size it here. Transpose has no resize(Index).
+  const bool essentialIsColumn = EssentialPart::ColsAtCompileTime == 1;
+  essential.resize(essentialIsColumn ? tail.size() : 1, essentialIsColumn ? 1 : tail.size());
 
   const RealScalar tailSqNorm = size() == 1 ? RealScalar(0) : tail.unwind().squaredNorm();
   Scalar c0 = coeff(0);

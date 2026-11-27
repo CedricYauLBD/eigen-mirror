@@ -31,6 +31,10 @@ int selfadjoint_calls = 0;
 int potrf_calls = 0;
 int getrf_calls = 0;
 int geqp3_calls = 0;
+int qr_calls = 0;
+// What the Schur probes return: a positive code reports that the QR algorithm failed, a negative one that LAPACKE
+// rejected the call and ran nothing.
+lapack_int gees_result = 1;
 const double* factor_data = nullptr;
 lapack_int factor_lda = 0;
 }  // namespace
@@ -39,12 +43,12 @@ lapack_int factor_lda = 0;
 extern "C" lapack_int LAPACKE_dgees(int, char, char, LAPACK_D_SELECT2, lapack_int, double*, lapack_int, lapack_int*,
                                     double*, double*, double*, lapack_int) {
   ++real_schur_calls;
-  return 1;
+  return gees_result;
 }
 extern "C" lapack_int LAPACKE_zgees(int, char, char, LAPACK_Z_SELECT1, lapack_int, lapack_complex_double*, lapack_int,
                                     lapack_int*, lapack_complex_double*, lapack_complex_double*, lapack_int) {
   ++complex_schur_calls;
-  return 1;
+  return gees_result;
 }
 extern "C" lapack_int LAPACKE_dsyev(int, char, char, lapack_int, double*, lapack_int, double*) {
   ++selfadjoint_calls;
@@ -72,6 +76,30 @@ extern "C" lapack_int LAPACKE_dgeqp3(int, lapack_int, lapack_int, double*, lapac
   ++geqp3_calls;
   return -4;
 }
+
+// QR probes report success, as LAPACK does for a matrix without columns. The geqrf binding takes the address of every
+// scalar type's routine, so an unoptimized build needs all of them. TYPE forms declarations, not expressions.
+// NOLINTBEGIN(bugprone-macro-parentheses)
+#define EIGEN_QR_PROBES(PREFIX, TYPE)                                                                    \
+  extern "C" lapack_int LAPACKE_##PREFIX##geqrf(int, lapack_int, lapack_int, TYPE*, lapack_int, TYPE*) { \
+    ++qr_calls;                                                                                          \
+    return 0;                                                                                            \
+  }
+#define EIGEN_PIVOTED_QR_PROBES(PREFIX, TYPE)                                                                         \
+  extern "C" lapack_int LAPACKE_##PREFIX##geqp3(int, lapack_int, lapack_int, TYPE*, lapack_int, lapack_int*, TYPE*) { \
+    ++qr_calls;                                                                                                       \
+    return 0;                                                                                                         \
+  }
+// NOLINTEND(bugprone-macro-parentheses)
+EIGEN_QR_PROBES(s, float)
+EIGEN_QR_PROBES(d, double)
+EIGEN_QR_PROBES(c, lapack_complex_float)
+EIGEN_QR_PROBES(z, lapack_complex_double)
+EIGEN_PIVOTED_QR_PROBES(s, float)
+EIGEN_PIVOTED_QR_PROBES(c, lapack_complex_float)
+EIGEN_PIVOTED_QR_PROBES(z, lapack_complex_double)
+#undef EIGEN_QR_PROBES
+#undef EIGEN_PIVOTED_QR_PROBES
 
 void colpiv_qr_lapacke_rejected_input() {
   const MatrixXd A = MatrixXd::Random(6, 4);
@@ -166,12 +194,90 @@ void empty_lapacke_input() {
   VERIFY_IS_EQUAL(selfadjoint_calls, selfadjointBefore);
 }
 
+// A negative code leaves T and U unwritten, so the decomposition must come from Eigen's own algorithm.
+template <int Options>
+void schur_lapacke_rejected_input() {
+  using RealMatrix = Matrix<double, Dynamic, Dynamic, Options>;
+  using ComplexMatrix = Matrix<std::complex<double>, Dynamic, Dynamic, Options>;
+  RealMatrix real(3, 3);
+  real << 1, 2, 3, 4, 5, 6, 7, 8, 10;
+  ComplexMatrix complex = real.template cast<std::complex<double>>();
+  const int realBefore = real_schur_calls, complexBefore = complex_schur_calls;
+
+  // LAPACKE could not allocate its workspace.
+  gees_result = LAPACK_WORK_MEMORY_ERROR;
+  const RealSchur<RealMatrix> realSchur(real);
+  const ComplexSchur<ComplexMatrix> complexSchur(complex);
+  gees_result = 1;
+  VERIFY_IS_EQUAL(realSchur.info(), Success);
+  VERIFY_IS_APPROX(realSchur.matrixU() * realSchur.matrixT() * realSchur.matrixU().transpose(), real);
+  VERIFY_IS_EQUAL(complexSchur.info(), Success);
+  VERIFY_IS_APPROX(complexSchur.matrixU() * complexSchur.matrixT() * complexSchur.matrixU().adjoint(), complex);
+
+  // LAPACKE found a NaN in its sixth argument, the matrix. Without LAPACKE, RealSchur does not compute U for such a
+  // matrix and ComplexSchur propagates the NaN to T and U.
+  real(2, 0) = std::numeric_limits<double>::quiet_NaN();
+  complex(2, 0) = real(2, 0);
+  gees_result = -6;
+  const RealSchur<RealMatrix> realSchurOfNaN(real);
+  const ComplexSchur<ComplexMatrix> complexSchurOfNaN(complex);
+  gees_result = 1;
+  VERIFY_IS_EQUAL(realSchurOfNaN.info(), NoConvergence);
+  VERIFY_RAISES_ASSERT(realSchurOfNaN.matrixU());
+  VERIFY_IS_EQUAL(complexSchurOfNaN.info(), NoConvergence);
+  VERIFY(complexSchurOfNaN.matrixT().diagonal().array().isNaN().all());
+  VERIFY(complexSchurOfNaN.matrixU().array().isNaN().all());
+
+  VERIFY_IS_EQUAL(real_schur_calls, realBefore + 2);
+  VERIFY_IS_EQUAL(complex_schur_calls, complexBefore + 2);
+}
+
+// LAPACK rejects the zero leading dimension of an empty input, and given a valid one it returns success with no pivot
+// written. The QR bindings must not call it, and must return the native path's rank-0 decomposition.
+template <typename MatrixType>
+void check_qr_lapacke_empty(Index rows, Index cols) {
+  using VectorType = Matrix<typename MatrixType::Scalar, Dynamic, 1>;
+  const MatrixType m(rows, cols);
+  const int callsBefore = qr_calls, geqp3Before = geqp3_calls;
+  HouseholderQR<MatrixType> qr(m);
+  VERIFY_IS_EQUAL(qr.hCoeffs().size(), Index(0));
+  ColPivHouseholderQR<MatrixType> cpqr(m);
+  VERIFY_IS_EQUAL(cpqr.info(), Success);
+  VERIFY_IS_EQUAL(cpqr.rank(), Index(0));
+  VERIFY_IS_EQUAL(cpqr.hCoeffs().size(), Index(0));
+  VERIFY_IS_EQUAL(MatrixType(cpqr.colsPermutation()), MatrixType::Identity(cols, cols));
+  VERIFY_IS_EQUAL(cpqr.solve(VectorType::Ones(rows)).eval(), VectorType::Zero(cols));
+  CompleteOrthogonalDecomposition<MatrixType> cod(m);
+  VERIFY_IS_EQUAL(cod.info(), Success);
+  VERIFY_IS_EQUAL(cod.rank(), Index(0));
+  VERIFY_IS_EQUAL(qr_calls, callsBefore);
+  VERIFY_IS_EQUAL(geqp3_calls, geqp3Before);
+}
+
+template <typename Scalar>
+void qr_lapacke_empty() {
+  using ColMatrix = Matrix<Scalar, Dynamic, Dynamic>;
+  using RowMatrix = Matrix<Scalar, Dynamic, Dynamic, RowMajor>;
+  check_qr_lapacke_empty<ColMatrix>(0, 0);
+  check_qr_lapacke_empty<ColMatrix>(0, 3);
+  check_qr_lapacke_empty<ColMatrix>(3, 0);
+  check_qr_lapacke_empty<RowMatrix>(0, 0);
+  check_qr_lapacke_empty<RowMatrix>(0, 3);
+  check_qr_lapacke_empty<RowMatrix>(3, 0);
+}
+
 EIGEN_DECLARE_TEST(inplace_decomposition_lapacke) {
   inplace_plain_lapacke_dispatch<ColMajor>();
   inplace_plain_lapacke_dispatch<RowMajor>();
   empty_lapacke_input<ColMajor>();
   empty_lapacke_input<RowMajor>();
   colpiv_qr_lapacke_rejected_input();
+  schur_lapacke_rejected_input<ColMajor>();
+  schur_lapacke_rejected_input<RowMajor>();
+  qr_lapacke_empty<float>();
+  qr_lapacke_empty<double>();
+  qr_lapacke_empty<std::complex<float>>();
+  qr_lapacke_empty<std::complex<double>>();
   inplace_lapacke_inner_stride<ColMajor>();
   inplace_lapacke_inner_stride<RowMajor>();
 }

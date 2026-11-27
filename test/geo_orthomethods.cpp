@@ -172,6 +172,16 @@ void orthomethods_half() {
   VERIFY_IS_APPROX(v4.unitOrthogonal().cast<float>(), Vector4f(2, -1, 0, 0) / std::sqrt(5.0f));
 }
 
+// The generic path rotates the largest coefficient with coefficient 0 or 1, so it needs both to exist.
+template <typename Scalar>
+void orthomethods_too_small() {
+  using VectorType = Matrix<Scalar, Dynamic, 1>;
+  for (const Index size : {0, 1}) {
+    const VectorType v = VectorType::Ones(size);
+    VERIFY_RAISES_ASSERT(v.unitOrthogonal());
+  }
+}
+
 EIGEN_DECLARE_TEST(geo_orthomethods) {
   for (int i = 0; i < g_repeat; i++) {
     CALL_SUBTEST_1(orthomethods_2<float>());
@@ -189,5 +199,7 @@ EIGEN_DECLARE_TEST(geo_orthomethods) {
     CALL_SUBTEST_4((orthomethods<std::complex<double>, 8>()));
     CALL_SUBTEST_5((orthomethods<float, Dynamic>(36)));
     CALL_SUBTEST_6((orthomethods<double, Dynamic>(35)));
+    CALL_SUBTEST_5(orthomethods_too_small<float>());
+    CALL_SUBTEST_4(orthomethods_too_small<std::complex<double> >());
   }
 }

@@ -335,7 +335,8 @@ class SVDBase : public SolverBase<SVDBase<Derived> > {
                                          "SVDBase::solve(): invalid number of rows of the right hand side matrix b");
   }
 
-  // return true if already allocated
+  // Returns true if already allocated. Otherwise sizes the members of SVDBase, clears m_isAllocated and returns false;
+  // the derived class sets m_isAllocated once its own workspace is sized as well.
   bool allocate(Index rows, Index cols, unsigned int computationOptions);
 
   MatrixUType m_matrixU;
@@ -422,7 +423,9 @@ bool SVDBase<Derived>::allocate(Index rows, Index cols, unsigned int computation
   m_rows.setValue(rows);
   m_cols.setValue(cols);
   m_isInitialized = false;
-  m_isAllocated = true;
+  // Set by the derived allocate() once its workspace is sized, so that a retry after a throwing allocation does not
+  // take the early return above with the workspace of the previous shape.
+  m_isAllocated = false;
   m_computationOptions = computationOptions;
   m_computeFullU = ShouldComputeFullU || internal::should_svd_compute_full_u(computationOptions);
   m_computeThinU = ShouldComputeThinU || internal::should_svd_compute_thin_u(computationOptions);
@@ -433,6 +436,16 @@ bool SVDBase<Derived>::allocate(Index rows, Index cols, unsigned int computation
   eigen_assert(!(m_computeFullV && m_computeThinV) && "SVDBase: you can't ask for both full and thin V");
 
   m_diagSize.setValue(numext::mini(m_rows.value(), m_cols.value()));
+  // Refuse sizes whose products do not fit Index before sizing anything: resize(rows, cols) does not check its
+  // product under EIGEN_NO_DEBUG. The input (rows x cols) and the requested U and V are the buffers that scale with
+  // the dimensions.
+  {
+    const Index maxSize = NumTraits<Index>::highest();
+    const Index uCols = m_computeFullU ? rows : m_computeThinU ? m_diagSize.value() : 0;
+    const Index vCols = m_computeFullV ? cols : m_computeThinV ? m_diagSize.value() : 0;
+    if ((rows > 0 && (cols > maxSize / rows || uCols > maxSize / rows)) || (cols > 0 && vCols > maxSize / cols))
+      internal::throw_std_bad_alloc();
+  }
   m_singularValues.resize(m_diagSize.value());
   EIGEN_IF_CONSTEXPR (RowsAtCompileTime == Dynamic) {
     m_matrixU.resize(m_rows.value(), m_computeFullU ? m_rows.value() : m_computeThinU ? m_diagSize.value() : 0);

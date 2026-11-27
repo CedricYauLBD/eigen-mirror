@@ -107,6 +107,16 @@ class bdcsvd_impl {
 
 template <typename RealScalar_>
 void bdcsvd_impl<RealScalar_>::allocate(Index diagSize, bool compU, bool compV) {
+  // Refuse a diagSize whose buffers do not fit Index before allocating any of them. Nothing else bounds these
+  // products: the bidiagonal entry point takes diagSize from a vector, resize(rows, cols) does not check its product
+  // under EIGEN_NO_DEBUG, and resize(size) cannot tell that the product it is handed has already wrapped.
+  constexpr Index kMaxSize = NumTraits<Index>::highest();
+  // m_computed: (diagSize + 1) * diagSize <= kMaxSize
+  if (diagSize > 0 && diagSize >= kMaxSize / diagSize) throw_std_bad_alloc();
+  const Index n = diagSize + 1;
+  // m_workspace: 3 * n * n <= kMaxSize, which covers m_naiveU and m_naiveV
+  if ((compU || compV) && n > kMaxSize / 3 / n) throw_std_bad_alloc();
+
   m_compU = compU;
   m_compV = compV;
   m_numIters = 0;
@@ -125,7 +135,7 @@ void bdcsvd_impl<RealScalar_>::allocate(Index diagSize, bool compU, bool compV) 
   // structured_update(). Values-only decompositions only need five vectors:
   // diag, shifts, mus, zhat, and diagShifted.
   if (m_compU || m_compV)
-    m_workspace.resize((diagSize + 1) * (diagSize + 1) * 3);
+    m_workspace.resize(3 * n * n);
   else
     m_workspace.resize(5 * diagSize);
   m_workspaceI.resize(3 * diagSize);

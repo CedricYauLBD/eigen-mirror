@@ -457,6 +457,26 @@ void schur_reorder_overflow() {
   VERIFY_IS_EQUAL(schur.matrixT()(1, 1), a(0, 0));
 }
 
+// computeFromHessenberg() does not take compute()'s early return for sizes up to one, so the QR iteration itself has
+// to stop on an empty matrix. It used to read the 2x2 block at (-2, -2) unless the iteration limit was zero, which is
+// what the default limit of 30 per row comes to.
+template <typename MatrixType>
+void schur_empty_hessenberg() {
+  using ComplexMatrixType = typename ComplexSchur<MatrixType>::ComplexMatrixType;
+  const ComplexMatrixType empty(0, 0);
+  ComplexSchur<MatrixType> schur;
+  for (Index maxIters : {Index(-1), Index(0), Index(1), Index(100)}) {
+    schur.setMaxIterations(maxIters).computeFromHessenberg(empty, empty);
+    VERIFY_IS_EQUAL(schur.info(), Success);
+    VERIFY_IS_EQUAL(schur.matrixT().size(), 0);
+    VERIFY_IS_EQUAL(schur.matrixU().size(), 0);
+    schur.computeFromHessenberg(empty, empty, false);
+    VERIFY_IS_EQUAL(schur.info(), Success);
+    VERIFY_IS_EQUAL(schur.matrixT().size(), 0);
+    VERIFY_RAISES_ASSERT(schur.matrixU());
+  }
+}
+
 EIGEN_DECLARE_TEST(schur_complex) {
   CALL_SUBTEST_1((schur<Matrix4cd>()));
   CALL_SUBTEST_2((schur<MatrixXcf>(internal::random<int>(1, EIGEN_TEST_MAX_SIZE / 4))));
@@ -503,6 +523,10 @@ EIGEN_DECLARE_TEST(schur_complex) {
   CALL_SUBTEST_10((schur_zero<MatrixXf>(8)));
   CALL_SUBTEST_10(schur_shift_scaling<float>());
   CALL_SUBTEST_10(schur_shift_scaling<double>());
+  CALL_SUBTEST_10((schur_empty_hessenberg<MatrixXcd>()));
+  CALL_SUBTEST_10((schur_empty_hessenberg<MatrixXf>()));
+  // Bounded storage lives inside the solver, so there the block at (-2, -2) is readable memory in front of it.
+  CALL_SUBTEST_10((schur_empty_hessenberg<Matrix<std::complex<double>, Dynamic, Dynamic, 0, 8, 8>>()));
 
   CALL_SUBTEST_12((schur_reorder<Matrix4cd>(4)));
   CALL_SUBTEST_12((schur_reorder<MatrixXcd>(internal::random<int>(2, EIGEN_TEST_MAX_SIZE / 4))));
