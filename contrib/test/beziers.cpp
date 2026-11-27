@@ -466,6 +466,7 @@ void check_lsq_fitting() {
   VERIFY_IS_EQUAL(params(0), Scalar(0));
   VERIFY_IS_EQUAL(params(n - 1), Scalar(1));
   VERIFY((params >= Scalar(0)).all() && (params <= Scalar(1)).all());
+  VERIFY((params.tail(n - 1) >= params.head(n - 1)).all());
   if (isDouble) {
     VERIFY(final_residual <= Scalar(1e-6) * initial);
     for (Index i = 0; i < n; ++i) VERIFY((bezier(params(i)) - pts.col(i)).matrix().norm() <= Scalar(1e-3));
@@ -533,6 +534,44 @@ void check_lsq_repeated_parameters() {
   VERIFY(LsqFitting::SquaredResidual(samples, 2, repeated) < initial);
 }
 
+// The parameters of ordered points stay ordered. On these collinear points the unconstrained optimum of a
+// degree-1 fit from chord lengths (0, 0.4, 0.6, 1) is the orthogonal projection (0, 2/3, 1/3, 1).
+template <typename BezierType>
+void check_lsq_parameter_order() {
+  using Scalar = typename BezierType::Scalar;
+  using ParameterVectorType = typename BezierType::ParameterVectorType;
+  using PointArrayType = Array<Scalar, BezierType::Dimension, Dynamic>;
+  using LsqFitting = BezierLsqFitting<BezierType>;
+  const auto nondecreasing = [](const ParameterVectorType& t) {
+    return (t.tail(t.size() - 1) >= t.head(t.size() - 1)).all();
+  };
+
+  PointArrayType pts = PointArrayType::Zero(BezierType::Dimension, 4);
+  pts.row(0) << Scalar(0), Scalar(2), Scalar(1), Scalar(3);
+  ParameterVectorType params;
+  BezierFitting<BezierType>::ChordLengths(pts, params);
+  VERIFY(nondecreasing(params));
+  const Scalar initial = LsqFitting::SquaredResidual(pts, 1, params);
+  LsqFitting::Fit(pts, 1, params);
+  VERIFY_IS_EQUAL(params(0), Scalar(0));
+  VERIFY_IS_EQUAL(params(3), Scalar(1));
+  VERIFY(nondecreasing(params));
+  VERIFY(LsqFitting::SquaredResidual(pts, 1, params) <= initial);
+
+  // Decreasing end parameters: the parameters stay nonincreasing.
+  params << Scalar(1), Scalar(0.6), Scalar(0.4), Scalar(0);
+  LsqFitting::Fit(pts, 1, params);
+  VERIFY_IS_EQUAL(params(0), Scalar(1));
+  VERIFY_IS_EQUAL(params(3), Scalar(0));
+  VERIFY(nondecreasing(-params));
+
+  // Out-of-order initial parameters are projected onto the ordered set.
+  pts.row(0) << Scalar(0), Scalar(1), Scalar(2), Scalar(3);
+  params << Scalar(0), Scalar(0.6), Scalar(0.4), Scalar(1);
+  LsqFitting::Fit(pts, 1, params);
+  VERIFY(nondecreasing(params));
+}
+
 // Noisy real-life data (a closed curve): the residual must decrease and the parameters stay in [0,1].
 void check_lsq_fitting_data2d() {
   using ParameterVectorType = Bezier2d::ParameterVectorType;
@@ -547,6 +586,7 @@ void check_lsq_fitting_data2d() {
     VERIFY_IS_EQUAL(bezier.degree(), degree);
     VERIFY(final_residual < initial);
     VERIFY((params >= 0.).all() && (params <= 1.).all());
+    VERIFY((params.tail(n - 1) >= params.head(n - 1)).all());
     VERIFY_IS_EQUAL(params(0), 0.);
     VERIFY_IS_EQUAL(params(n - 1), 1.);
   }
@@ -581,6 +621,7 @@ void beziers_all() {
   CALL_SUBTEST(check_lsq_jacobian<BezierType>());
   CALL_SUBTEST(check_lsq_fitting<BezierType>());
   CALL_SUBTEST(check_lsq_repeated_parameters<BezierType>());
+  CALL_SUBTEST(check_lsq_parameter_order<BezierType>());
 }
 
 EIGEN_DECLARE_TEST(beziers) {
@@ -600,5 +641,6 @@ EIGEN_DECLARE_TEST(beziers) {
     CALL_SUBTEST(check_fitting<Bezier3f>());
     CALL_SUBTEST(check_lsq_fitting<Bezier2f>());
     CALL_SUBTEST(check_lsq_repeated_parameters<Bezier2f>());
+    CALL_SUBTEST(check_lsq_parameter_order<Bezier2f>());
   }
 }

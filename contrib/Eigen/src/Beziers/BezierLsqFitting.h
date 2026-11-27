@@ -29,7 +29,8 @@ namespace Eigen {
  * \f[ \frac{\partial r}{\partial t} = -\left( P^\perp \mathrm{diag}(\Pi x) + \Pi^T \mathrm{diag}(P^\perp x) \right),
  *     \qquad \Pi = A'(t)\,A(t)^+ \f]
  * where \f$ A' \f$ holds the derivatives of the Bernstein basis functions. The first and last parameters are kept
- * fixed, and the parameters are kept within the range they span.
+ * fixed, and the parameters are kept monotone between them, so that the points are traversed in order: each trial
+ * step is projected onto that ordered set (projected Gauss-Newton).
  *
  * The Jacobian is dense, \f$ dn \times n \f$ for \f$ n \f$ points of dimension \f$ d \f$. Each Gauss-Newton iteration
  * forms and factorizes it in \f$ O(d\,n^3) \f$ time and \f$ O(d\,n^2) \f$ memory, so the method suits moderate
@@ -69,9 +70,11 @@ struct BezierLsqFitting {
    * \param pts The data points, one per column. There must be at least degree+1 of them.
    * \param degree The degree of the fitted curve.
    * \param[in,out] params Initial parameters on input (one per point), optimized parameters on output.
-   *                The first and last ones are left unchanged and must differ when degree >= 1. If the parameters
-   *                take fewer than degree+1 distinct values, the interior ones are first reinitialized to chord
-   *                lengths mapped onto [params(0), params(n-1)], or to uniform values if those repeat too.
+   *                The first and last ones are left unchanged and must differ when degree >= 1. The interior ones
+   *                are first projected onto the parameters monotone from params(0) to params(n-1), so the output
+   *                is always monotone. If they then take fewer than degree+1 distinct values, they are
+   *                reinitialized to chord lengths mapped onto [params(0), params(n-1)], or to uniform values if
+   *                those repeat too.
    * \param maxIterations The maximal number of Gauss-Newton iterations.
    * \param tolerance Iterations stop once the relative decrease of the squared residual, or the step, falls below it.
    */
@@ -101,7 +104,41 @@ struct BezierLsqFitting {
  private:
   // Returns whether params takes at least count distinct values, in O(n * count).
   static bool HasDistinctParameters(const ParameterVectorType& params, Index count);
+  // Euclidean projection of the interior parameters onto the set monotone from params(0) to params(n-1).
+  static void ProjectOrdered(ParameterVectorType& params);
 };
+
+// With s = sign(t_{n-1} - t_0) and u = s t, isotonic regression of u_1..u_{n-2} by pool-adjacent-violators, then
+// clamped to [u_0, u_{n-1}]; clamping a nondecreasing vector keeps it nondecreasing, so this is the exact projection.
+// O(n), and the identity on parameters that are already ordered.
+// \sa R. E. Barlow, D. J. Bartholomew, J. M. Bremner and H. D. Brunk, Statistical Inference under Order
+//     Restrictions, Wiley, 1972.
+template <typename BezierType>
+void BezierLsqFitting<BezierType>::ProjectOrdered(ParameterVectorType& params) {
+  const Index n = params.size();
+  if (n <= 2) return;
+  const Scalar sign = params(n - 1) < params(0) ? Scalar(-1) : Scalar(1);
+  VectorType blockMean(n - 2);
+  Matrix<Index, Dynamic, 1> blockSize(n - 2);
+  Index numBlocks = 0;
+  for (Index i = 1; i < n - 1; ++i) {
+    Scalar mean = sign * params(i);
+    Index size = 1;
+    while (numBlocks > 0 && blockMean(numBlocks - 1) > mean) {
+      --numBlocks;
+      const Index merged = blockSize(numBlocks) + size;
+      mean = (blockMean(numBlocks) * Scalar(blockSize(numBlocks)) + mean * Scalar(size)) / Scalar(merged);
+      size = merged;
+    }
+    blockMean(numBlocks) = mean;
+    blockSize(numBlocks) = size;
+    ++numBlocks;
+  }
+  const Scalar lo = sign * params(0);
+  const Scalar hi = sign * params(n - 1);
+  for (Index b = 0, i = 1; b < numBlocks; i += blockSize(b), ++b)
+    params.segment(i, blockSize(b)).setConstant(sign * numext::mini(numext::maxi(blockMean(b), lo), hi));
+}
 
 template <typename BezierType>
 bool BezierLsqFitting<BezierType>::HasDistinctParameters(const ParameterVectorType& params, Index count) {
@@ -163,6 +200,7 @@ BezierType BezierLsqFitting<BezierType>::Fit(const PointArrayType& pts, Index de
   eigen_assert(params.size() == n);
   eigen_assert(n >= degree + 1 && "Fitting a Bezier curve of degree p requires at least p+1 points");
 
+  ProjectOrdered(params);
   // rank A(t) = min(degree+1, #distinct t), since A = V(t) M with V Vandermonde and M invertible.
   if (degree >= 1 && !HasDistinctParameters(params, degree + 1)) {
     eigen_assert(params(0) != params(n - 1) && "The end parameters are kept fixed, so they must differ");
@@ -175,9 +213,6 @@ BezierType BezierLsqFitting<BezierType>::Fit(const PointArrayType& pts, Index de
   // With n == degree+1 distinct parameters the curve interpolates the points: nothing to optimize.
   const Index numFree = n - 2;
   if (numFree > 0 && n > degree + 1) {
-    const Scalar lo = numext::mini(params(0), params(n - 1));
-    const Scalar hi = numext::maxi(params(0), params(n - 1));
-
     VectorType residual;
     MatrixType jacobian;
     ParameterVectorType trial;
@@ -198,9 +233,10 @@ BezierType BezierLsqFitting<BezierType>::Fit(const PointArrayType& pts, Index de
       bool accepted = false;
       for (int ls = 0; ls < 40; ++ls) {
         trial = params;
-        trial.segment(1, numFree) =
-            (params.segment(1, numFree).matrix() + alpha * step.transpose()).cwiseMax(lo).cwiseMin(hi).array();
-        // clamp(t + alpha s) == t also holds for every smaller alpha, so no further trial can decrease f.
+        trial.segment(1, numFree) += alpha * step.transpose().array();
+        ProjectOrdered(trial);
+        // P(t + alpha s) == t means s is in the normal cone of the convex ordered set at t, hence so is beta s for
+        // every beta > 0: no smaller alpha can move t, nor decrease f.
         if ((trial == params).all()) break;
         fTrial = SquaredResidual(pts, degree, trial);
         if (fTrial < f) {
