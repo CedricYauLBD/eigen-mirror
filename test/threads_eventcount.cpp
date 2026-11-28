@@ -90,6 +90,48 @@ static void test_cancel_wait_signal_forwarding() {
   VERIFY(done);
 }
 
+// An EventCount serves kMaxWaiters waiters: all of them can be in pre-wait at once, and the one with the highest index
+// is found again on the stack of parked waiters.
+static void test_max_waiters() {
+  const int kWaiters = EventCount::kMaxWaiters;
+  MaxSizeVector<EventCount::Waiter> waiters(kWaiters);
+  waiters.resize(kWaiters);
+  EventCount ec(waiters);
+
+  for (int i = 0; i < kWaiters; i++) ec.Prewait();
+  for (int i = 0; i < kWaiters; i++) ec.CancelWait();
+
+  std::atomic<bool> started(false);
+  std::atomic<bool> ready(false);
+  std::atomic<bool> done(false);
+  std::thread last([&]() {
+    ec.Prewait();
+    started.store(true);
+    if (ready.load()) {
+      ec.CancelWait();
+    } else {
+      ec.CommitWait(&waiters[kWaiters - 1]);
+    }
+    done.store(true);
+  });
+
+  while (!started.load()) {
+    std::this_thread::yield();
+  }
+  // Brief delay to allow the thread to enter CommitWait and park on stack.
+  std::this_thread::sleep_for(std::chrono::milliseconds(50));
+  ready.store(true);
+  ec.Notify(false);
+
+  auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
+  while (!done.load() && std::chrono::steady_clock::now() < deadline) {
+    std::this_thread::yield();
+  }
+  // Checked before the join: a waiter that Notify() did not find cannot be unblocked.
+  VERIFY(done.load());
+  last.join();
+}
+
 // Fake bounded counter-based queue.
 struct TestQueue {
   std::atomic<int> val_;
@@ -188,5 +230,6 @@ static void test_stress_eventcount() {
 EIGEN_DECLARE_TEST(threads_eventcount) {
   CALL_SUBTEST(test_basic_eventcount());
   CALL_SUBTEST(test_cancel_wait_signal_forwarding());
+  CALL_SUBTEST(test_max_waiters());
   CALL_SUBTEST(test_stress_eventcount());
 }

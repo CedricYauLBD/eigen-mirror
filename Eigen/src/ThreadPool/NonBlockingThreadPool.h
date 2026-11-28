@@ -40,16 +40,16 @@ class ThreadPoolTempl : public Eigen::ThreadPoolInterface {
 
   ThreadPoolTempl(int num_threads, bool allow_spinning, Environment env = Environment())
       : env_(env),
-        num_threads_(num_threads),
+        num_threads_(CheckedNumThreads(num_threads)),
         allow_spinning_(allow_spinning),
         spin_count_(
             // TODO(dvyukov,rmlarsen): The time spent in NonEmptyQueueIndex() is proportional to num_threads_ and
             // we assume that new work is scheduled at a constant rate, so we divide `kSpinCount` by number of
             // threads and number of spinning threads. The constant was picked based on a fair dice roll, tune it.
-            allow_spinning && num_threads > 0 ? kSpinCount / kMaxSpinningThreads / num_threads : 0),
-        thread_data_(num_threads),
-        all_coprimes_(num_threads),
-        waiters_(num_threads),
+            allow_spinning && num_threads_ > 0 ? kSpinCount / kMaxSpinningThreads / num_threads_ : 0),
+        thread_data_(num_threads_),
+        all_coprimes_(num_threads_),
+        waiters_(num_threads_),
         global_steal_partition_(EncodePartition(0, num_threads_)),
         spinning_state_(0),
         blocked_(0),
@@ -333,6 +333,14 @@ class ThreadPoolTempl : public Eigen::ThreadPoolInterface {
     }
   };
 
+  // ec_ cannot check this itself, because waiters_ was still empty when ec_ was constructed. Beyond kMaxWaiters, ec_
+  // loses the wakeups of parked workers. This runs while num_threads_ is initialized, so that the assertion precedes
+  // the allocation of the per-worker queues.
+  static int CheckedNumThreads(int num_threads) {
+    eigen_assert(num_threads >= 0 && num_threads <= EventCount::kMaxWaiters);
+    return num_threads;
+  }
+
   Environment env_;
   const int num_threads_;
   const bool allow_spinning_;
@@ -473,6 +481,13 @@ class ThreadPoolTempl : public Eigen::ThreadPoolInterface {
         // Now other worker threads can start exiting, which is bad if the
         // work item submits other work. So we just check emptiness here,
         // which ensures that all worker threads exit at the same time.
+        blocked_--;
+        return true;
+      }
+      // A peer that also saw blocked_ == num_threads_ may have found the last task in its re-check, decremented
+      // blocked_ and popped it; that task can schedule more work. A worker counted in blocked_ neither holds nor runs
+      // a task, so empty queues with blocked_ still at num_threads_ mean that no task is queued or running.
+      if (blocked_ != static_cast<unsigned>(num_threads_)) {
         blocked_--;
         return true;
       }

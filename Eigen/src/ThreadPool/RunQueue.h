@@ -72,9 +72,14 @@ class RunQueue {
     uint8_t s = e->state.load(std::memory_order_relaxed);
     if (s != kReady || !e->state.compare_exchange_strong(s, kBusy, std::memory_order_acquire)) return Work();
     Work w = std::move(e->w);
-    e->state.store(kEmpty, std::memory_order_release);
     front = ((front - 1) & kMask2) | (front & ~kMask2);
     front_.store(front, std::memory_order_release);
+    // A moved-from Work can still own what it held: libc++ moves a std::function with a small target by copying the
+    // target. Reset it, so that the slot does not keep the closure alive until it is reused. This can run a
+    // destructor that pushes onto the front of this queue, so the new front is stored first; that push needs this
+    // slot, which is still busy, and gets its element back as from a full queue.
+    e->w = Work();
+    e->state.store(kEmpty, std::memory_order_release);
     return w;
   }
 
@@ -102,6 +107,7 @@ class RunQueue {
     uint8_t s = e->state.load(std::memory_order_relaxed);
     if (s != kReady || !e->state.compare_exchange_strong(s, kBusy, std::memory_order_acquire)) return Work();
     Work w = std::move(e->w);
+    e->w = Work();  // See PopFront().
     e->state.store(kEmpty, std::memory_order_release);
     back_.store(back + 1 + (kSize << 1), std::memory_order_release);
     return w;
@@ -114,8 +120,19 @@ class RunQueue {
     EIGEN_MUTEX_LOCK lock(mutex_);
     unsigned back = back_.load(std::memory_order_relaxed);
     unsigned size = Size();
+    if (size == 0) return 0;
     unsigned mid = back;
     if (size > 1) mid = back + (size - 1) / 2;
+    // Grow result before claiming anything: back_ is stored only after the loop, so a push_back that throws would
+    // leave a claimed element kBusy, or kEmpty elements inside the queue. Grow at least geometrically to keep
+    // repeated appends amortized.
+    const std::size_t needed = result->size() + (mid - back) + 1;
+    const std::size_t capacity = result->capacity();
+    if (capacity < needed) {
+      const std::size_t max_size = result->max_size();
+      const std::size_t grown = capacity <= max_size / 2 ? 2 * capacity : max_size;
+      result->reserve(numext::maxi(needed, grown));
+    }
     unsigned n = 0;
     unsigned start = 0;
     for (; static_cast<int>(mid - back) >= 0; mid--) {
@@ -130,6 +147,7 @@ class RunQueue {
         eigen_plain_assert(s == kReady);
       }
       result->push_back(std::move(e->w));
+      e->w = Work();  // See PopFront().
       e->state.store(kEmpty, std::memory_order_release);
       n++;
     }
