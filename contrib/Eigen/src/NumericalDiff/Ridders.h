@@ -119,11 +119,12 @@ class Ridders : public internal::ridders_solver_traits<Functor_> {
    * evaluation points. Refinement stops when successive tableau diagonals differ by at least
    * twice the best estimated error, when evaluation points coincide or repeat the previous pair,
    * or when a non-finite value is encountered. The best finite estimate is retained;
-   * if none exists, the column contains NaNs.
+   * if none exists, the column contains NaNs. If the functor returns a negative value,
+   * df() stops and returns that value; \a jac is then only partly written and must not be used.
    *
    * \param[in] x The evaluation point.
    * \param[out] jac The Jacobian at \a x.
-   * \returns the number of functor evaluations.
+   * \returns the number of functor evaluations, or the negative value returned by the functor.
    * \sa Parameters
    */
   int df(const InputType& x, JacobianType& jac) const { return dfImpl(x, jac, nullptr); }
@@ -137,7 +138,8 @@ class Ridders : public internal::ridders_solver_traits<Functor_> {
    * \param[in] x The evaluation point.
    * \param[out] jac The Jacobian at \a x, sized by the caller to values() by x.size().
    * \param[out] error The error estimates, resized to x.size().
-   * \returns the number of functor evaluations.
+   * \returns the number of functor evaluations, or the negative value returned by the functor,
+   * in which case \a jac and \a error must not be used.
    * \sa Parameters
    */
   int df(const InputType& x, JacobianType& jac, InputType& error) const {
@@ -193,9 +195,11 @@ class Ridders : public internal::ridders_solver_traits<Functor_> {
         previousMinus = xMinus;
 
         x[j] = xPlus;
-        m_functor(x, plus);
+        int status = internal::numerical_diff_evaluate(m_functor, x, plus);
+        if (status < 0) return status;
         x[j] = xMinus;
-        m_functor(x, minus);
+        status = internal::numerical_diff_evaluate(m_functor, x, minus);
+        if (status < 0) return status;
         x[j] = input[j];
         evaluations += 2;
 

@@ -18,6 +18,8 @@
 
 #include "main.h"
 
+#include <cstdlib>
+#include <new>
 #include <thread>
 #include <contrib/Eigen/FFT>
 
@@ -579,6 +581,98 @@ inline void test_return_by_value(int len) {
   VERIFY((in1 - in).norm() < test_precision<float>());
 }
 
+// A proxy nested in an expression is evaluated into a temporary that has the proxy's type and
+// dimensions. Both must be those of the transform of nfft coefficients, whatever the length of the
+// source is and whether or not that length is fixed or bounded; otherwise the transform resizes the
+// temporary and the expression reads the storage it had before, or the temporary cannot hold it.
+template <typename VectorType>
+void check_return_by_value_nfft(const VectorType& x, int nfft) {
+  using Complex = typename VectorType::Scalar;
+  using T = typename NumTraits<Complex>::Real;
+  using ComplexVector = Matrix<Complex, Dynamic, 1>;
+  const bool is_row = x.rows() == 1;
+
+  FFT<T> fft;
+  ComplexVector expected;
+  ComplexVector actual;
+
+  fft.fwd(expected, x, nfft);
+  VERIFY_IS_EQUAL(expected.size(), Index(nfft));
+  VERIFY_IS_EQUAL(fft.fwd(x, nfft).rows(), is_row ? Index(1) : Index(nfft));
+  VERIFY_IS_EQUAL(fft.fwd(x, nfft).cols(), is_row ? Index(nfft) : Index(1));
+  actual = (T(2) * fft.fwd(x, nfft)).reshaped();
+  VERIFY_IS_APPROX(actual, T(2) * expected);
+
+  fft.inv(expected, x, nfft);
+  VERIFY_IS_EQUAL(expected.size(), Index(nfft));
+  VERIFY_IS_EQUAL(fft.inv(x, nfft).rows(), is_row ? Index(1) : Index(nfft));
+  VERIFY_IS_EQUAL(fft.inv(x, nfft).cols(), is_row ? Index(nfft) : Index(1));
+  actual = (T(2) * fft.inv(x, nfft)).reshaped();
+  VERIFY_IS_APPROX(actual, T(2) * expected);
+
+  // Without nfft the transform has the length of the source.
+  fft.fwd(expected, x);
+  VERIFY_IS_EQUAL(fft.fwd(x).rows(), x.rows());
+  VERIFY_IS_EQUAL(fft.fwd(x).cols(), x.cols());
+  actual = (T(2) * fft.fwd(x)).reshaped();
+  VERIFY_IS_APPROX(actual, T(2) * expected);
+}
+
+inline void test_return_by_value_nfft() {
+  using FixedColumn = Matrix<std::complex<double>, 10, 1>;
+  using FixedRow = Matrix<std::complex<float>, 1, 10>;
+  using BoundedColumn = Matrix<std::complex<double>, Dynamic, 1, ColMajor, 12, 1>;
+  using Single = Matrix<std::complex<float>, 1, 1>;
+
+  check_return_by_value_nfft<VectorXcd>(VectorXcd::Random(8), 16);
+  check_return_by_value_nfft<VectorXcf>(VectorXcf::Random(16), 8);
+  check_return_by_value_nfft<RowVectorXcd>(RowVectorXcd::Random(8), 16);
+  check_return_by_value_nfft<MatrixXcd>(MatrixXcd::Random(1, 8), 16);
+  check_return_by_value_nfft<MatrixXcf>(MatrixXcf::Random(8, 1), 16);
+  check_return_by_value_nfft<ArrayXcf>(ArrayXcf::Random(8), 16);
+  check_return_by_value_nfft<FixedColumn>(FixedColumn::Random(), 16);
+  check_return_by_value_nfft<FixedRow>(FixedRow::Random(), 4);
+  check_return_by_value_nfft<BoundedColumn>(BoundedColumn::Random(10), 40);
+
+  // The power spectrum of an impulse is one in every bin of the zero-padded transform.
+  FFT<double> fft;
+  const VectorXcd impulse = VectorXcd::Unit(8, 0);
+  VectorXd power = fft.fwd(impulse, 16).cwiseAbs2();
+  VERIFY_IS_APPROX(power, VectorXd::Ones(16));
+
+  // The forward transform of real samples has complex bins, also inside an expression.
+  const VectorXd real_samples = VectorXd::Random(8);
+  VectorXcd real_bins;
+  fft.fwd(real_bins, real_samples);
+  VectorXd real_power = fft.fwd(real_samples).cwiseAbs2();
+  VERIFY_IS_EQUAL(real_power.size(), real_bins.size());
+  VERIFY_IS_APPROX(real_power, real_bins.cwiseAbs2());
+  VectorXcd scaled = 2.0 * fft.fwd(real_samples);
+  VERIFY_IS_APPROX(scaled, 2.0 * real_bins);
+
+  // A source with a single coefficient is a row.
+  FFT<float> fftf;
+  const Single one = Single::Random();
+  VERIFY_IS_EQUAL(fftf.fwd(one, 4).rows(), Index(1));
+  VERIFY_IS_EQUAL(fftf.fwd(one, 4).cols(), Index(4));
+  RowVectorXcf constant = 2.f * fftf.fwd(one, 4);
+  VERIFY_IS_APPROX(constant, RowVectorXcf::Constant(4, 2.f * one.value()));
+
+  // The half spectrum of a real source has nfft / 2 + 1 bins: 5 samples padded to 8 fill a fixed
+  // destination of 5.
+  fft.SetFlag(fft.HalfSpectrum);
+  const Matrix<double, 5, 1> samples = Matrix<double, 5, 1>::Random();
+  VectorXcd expected;
+  fft.fwd(expected, samples, 8);
+  VERIFY_IS_EQUAL(expected.size(), Index(5));
+  VERIFY_IS_EQUAL(fft.fwd(samples, 8).rows(), Index(5));
+  VERIFY_IS_EQUAL(fft.fwd(samples, 8).cols(), Index(1));
+  const Matrix<std::complex<double>, 5, 1> bins = fft.fwd(samples, 8);
+  VERIFY_IS_APPROX(bins, expected);
+  VectorXd half_power = fft.fwd(samples, 8).cwiseAbs2();
+  VERIFY_IS_APPROX(half_power, expected.cwiseAbs2());
+}
+
 // Regression for issue #1537: reusing the same FFT object across real-input
 // and complex-input transforms of the same size must produce correct results.
 // Before the fix, the FFTW backend's plan cache keyed only on (nfft, inverse,
@@ -621,6 +715,62 @@ void test_reuse_real_and_complex(int nfft) {
   VERIFY(T(dif_rmse(real_in, real_round)) < test_precision<T>());
   fft.inv(complex_round, c2c_out);
   VERIFY(T(dif_rmse(complex_in, complex_round)) < test_precision<T>());
+}
+
+// One FFT object on operands whose address mod 16 changes between calls, as over the columns of a
+// matrix. FFTW runs a plan on new arrays only if src and dst each have the alignment it was created
+// with; a cache key of one bit for "both aligned" handed SIMD plans an unaligned dst.
+template <typename T>
+void test_reuse_alignment(int nfft) {
+  using Complex = typename FFT<T>::Complex;
+  using ScalarVector = Matrix<T, Dynamic, 1>;
+  using ComplexVector = Matrix<Complex, Dynamic, 1>;
+
+  const ScalarVector real_in = ScalarVector::Random(nfft);
+  const ComplexVector complex_in = ComplexVector::Random(nfft);
+  ComplexVector real_freq, complex_freq;
+  FFT<T> reference;
+  reference.fwd(real_freq, real_in);
+  reference.fwd(complex_freq, complex_in);
+
+  // Source and destination each take every offset from a 16-byte boundary that is a multiple of
+  // sizeof(T) and less than 16.
+  const Index offsets = Index(16 / sizeof(T));
+  ScalarVector src_storage(2 * nfft + 2 * offsets), dst_storage(2 * nfft + 2 * offsets);
+  T* src_base = src_storage.data();
+  while (std::uintptr_t(src_base) % 16 != 0) ++src_base;
+  T* dst_base = dst_storage.data();
+  while (std::uintptr_t(dst_base) % 16 != 0) ++dst_base;
+
+  // Each pair of offsets in turn is the first one a fresh FFT object sees, and so the one its
+  // plans are created with; the object then goes through all the other pairs.
+  for (Index first = 0; first < offsets * offsets; ++first) {
+    FFT<T> fft;
+    for (Index k = 0; k < offsets * offsets; ++k) {
+      const Index pair = (first + k) % (offsets * offsets);
+      T* src = src_base + pair / offsets;
+      T* dst = dst_base + pair % offsets;
+      Map<ScalarVector> real_src(src, nfft), real_dst(dst, nfft);
+      Map<ComplexVector> complex_src(reinterpret_cast<Complex*>(src), nfft);
+      Map<ComplexVector> complex_dst(reinterpret_cast<Complex*>(dst), nfft);
+
+      real_src = real_in;
+      fft.fwd(complex_dst, real_src);
+      VERIFY(T(dif_rmse(complex_dst, real_freq)) < test_precision<T>());
+
+      complex_src = complex_in;
+      fft.fwd(complex_dst, complex_src);
+      VERIFY(T(dif_rmse(complex_dst, complex_freq)) < test_precision<T>());
+
+      complex_src = real_freq;
+      fft.inv(real_dst, complex_src);
+      VERIFY(T(dif_rmse(real_dst, real_in)) < test_precision<T>());
+
+      complex_src = complex_freq;
+      fft.inv(complex_dst, complex_src);
+      VERIFY(T(dif_rmse(complex_dst, complex_in)) < test_precision<T>());
+    }
+  }
 }
 
 // Regression test for issue #690: a dynamically sized matrix is only known to
@@ -743,6 +893,56 @@ void test_strided_row_operands(int nfft) {
   fft.inv(back, freq_dst);
   VERIFY(T(dif_rmse(back, reference)) < test_precision<T>());
 }
+
+#if defined EIGEN_FFT_DEFAULT && defined EIGEN_EXCEPTIONS
+// kissfft allocates its plans through std::vector, so failures are injected in the global operator new: the
+// allocation that finds the countdown at zero throws, a negative countdown never does. Out of line for GCC's
+// -Wmismatched-new-delete, which reports the std::free() of an inlined operator delete.
+static int fft_allocations_before_failure = -1;
+
+EIGEN_DONT_INLINE void* operator new(std::size_t size) {
+  if (fft_allocations_before_failure >= 0 && fft_allocations_before_failure-- == 0) throw std::bad_alloc();
+  if (void* ptr = std::malloc(size != 0 ? size : 1)) return ptr;
+  throw std::bad_alloc();
+}
+EIGEN_DONT_INLINE void operator delete(void* ptr) noexcept { std::free(ptr); }
+EIGEN_DONT_INLINE void operator delete(void* ptr, std::size_t) noexcept { std::free(ptr); }
+
+// A plan interrupted by std::bad_alloc must not stay cached: with its twiddles
+// but without stages or the scratch buffer of bfly_generic, the next transform
+// of that length went out of bounds. Fail each allocation of a first transform
+// in turn, and check a second one on the same FFT object.
+template <typename T>
+void test_plan_allocation_failure(int nfft) {
+  using Complex = typename FFT<T>::Complex;
+  using ComplexVector = Matrix<Complex, Dynamic, 1>;
+
+  const ComplexVector src = ComplexVector::Random(nfft);
+  ComplexVector expected;
+  {
+    FFT<T> fft;
+    fft.fwd(expected, src);
+  }
+
+  int failures = 0;
+  for (int allocation = 0; failures == allocation; ++allocation) {
+    FFT<T> fft;
+    ComplexVector dst = ComplexVector::Zero(nfft);
+    fft_allocations_before_failure = allocation;
+    try {
+      fft.fwd(dst, src);
+    } catch (const std::bad_alloc&) {
+      ++failures;
+    }
+    fft_allocations_before_failure = -1;
+    fft.fwd(dst, src);
+    VERIFY_IS_APPROX(dst, expected);
+  }
+  // At least the cache entry, the twiddles and the stages are allocated.
+  VERIFY(failures >= 3);
+}
+#endif  // EIGEN_FFT_DEFAULT && EIGEN_EXCEPTIONS
+
 #if defined EIGEN_FFTW_DEFAULT
 // Distinct FFT objects must be usable from distinct threads concurrently.
 // FFTW's planner is not thread-safe, so the FFTW backend serializes plan
@@ -772,6 +972,41 @@ void test_concurrent_transforms() {
   for (std::size_t t = 0; t < workers.size(); ++t) workers[t].join();
   for (int t = 0; t < num_threads; ++t) VERIFY_IS_EQUAL(failures[t], 0);
 }
+
+// Transforms of different sizes must not share a cached plan: FFTW executes a
+// plan over the sizes it was created for, whatever buffers it is handed.  The
+// key used to pack the sizes next to the flags in int arithmetic, so 1-d sizes
+// that differ by a multiple of 2^28 shared a plan.  Looking a plan up does not
+// create it, which lets this cover sizes that are too large to transform here.
+template <typename T>
+struct fftw_plan_cache : internal::fftw_impl<T> {
+  using internal::fftw_impl<T>::get_plan;
+};
+
+template <typename T>
+void test_plan_cache_large_sizes() {
+  fftw_plan_cache<T> cache;
+  const int n = 1 << 22;
+  const int large = (1 << 28) + n;
+  void* const buf = nullptr;
+
+  // 1-d: sizes that are congruent modulo 2^28.
+  VERIFY(&cache.get_plan(n, false, true, buf, buf) != &cache.get_plan(large, false, true, buf, buf));
+  VERIFY(&cache.get_plan(n, false, false, buf, buf) != &cache.get_plan(large, false, false, buf, buf));
+
+  // 2-d: the second size must not wrap, nor run into the first one.
+  VERIFY(&cache.get_plan(3, n, false, false, buf, buf) != &cache.get_plan(3, large, false, false, buf, buf));
+  VERIFY(&cache.get_plan(1, 1 << 27, false, false, buf, buf) != &cache.get_plan(2, 1 << 27, false, false, buf, buf));
+
+  // A 1-d plan is not a 2-d plan with an empty first dimension.
+  VERIFY(&cache.get_plan(n, false, false, buf, buf) != &cache.get_plan(0, n, false, false, buf, buf));
+
+  // The same transform still finds its plan, and the flags still separate plans.
+  VERIFY(&cache.get_plan(large, false, true, buf, buf) == &cache.get_plan(large, false, true, buf, buf));
+  VERIFY(&cache.get_plan(3, large, true, false, buf, buf) == &cache.get_plan(3, large, true, false, buf, buf));
+  VERIFY(&cache.get_plan(large, false, true, buf, buf) != &cache.get_plan(large, true, true, buf, buf));
+  VERIFY(&cache.get_plan(large, false, true, buf, buf) != &cache.get_plan(large, false, false, buf, buf));
+}
 #endif  // EIGEN_FFTW_DEFAULT
 
 EIGEN_DECLARE_TEST(FFTW) {
@@ -791,12 +1026,17 @@ EIGEN_DECLARE_TEST(FFTW) {
   CALL_SUBTEST(test_inv_resizes_spectrum<double>());
   CALL_SUBTEST(test_inv_resizes_half_spectrum<float>());
   CALL_SUBTEST(test_inv_resizes_half_spectrum<double>());
+  CALL_SUBTEST(test_return_by_value_nfft());
   // Regression test for #1537 -- reuse one FFT object for both real and
   // complex inputs of the same size.
   CALL_SUBTEST(test_reuse_real_and_complex<float>(32));
   CALL_SUBTEST(test_reuse_real_and_complex<double>(32));
   CALL_SUBTEST(test_reuse_real_and_complex<float>(256));
   CALL_SUBTEST(test_reuse_real_and_complex<double>(256));
+  CALL_SUBTEST(test_reuse_alignment<float>(256));
+  CALL_SUBTEST(test_reuse_alignment<double>(256));
+  CALL_SUBTEST(test_reuse_alignment<float>(360));
+  CALL_SUBTEST(test_reuse_alignment<double>(360));
   CALL_SUBTEST(test_inplace_complex<float>(32));
   CALL_SUBTEST(test_inplace_complex<double>(32));
   CALL_SUBTEST(test_inplace_complex<float>(256));
@@ -870,6 +1110,16 @@ EIGEN_DECLARE_TEST(FFTW) {
 
 #if defined EIGEN_FFTW_DEFAULT
   CALL_SUBTEST(test_concurrent_transforms());
+  CALL_SUBTEST(test_plan_cache_large_sizes<float>());
+  CALL_SUBTEST(test_plan_cache_large_sizes<double>());
+#endif
+#if defined EIGEN_FFT_DEFAULT && defined EIGEN_EXCEPTIONS
+  // 7 * 11: the scratch buffer of radix 7 is there when the one of radix 11
+  // fails. 11: no scratch buffer at all. 2 * 3 * 4 * 5: stages only.
+  CALL_SUBTEST(test_plan_allocation_failure<float>(7 * 11));
+  CALL_SUBTEST(test_plan_allocation_failure<double>(7 * 11));
+  CALL_SUBTEST(test_plan_allocation_failure<double>(11));
+  CALL_SUBTEST(test_plan_allocation_failure<double>(2 * 3 * 4 * 5));
 #endif
 }
 

@@ -357,6 +357,16 @@ const typename NNLS<MatrixType>::SolutionVectorType &NNLS<MatrixType>::solve(con
 
       // Remove these indices from the inactive set and update QR decomposition
       moveToActiveSet_(infeasibleIdx);
+
+      // In exact arithmetic the inactive set never becomes empty here: a variable
+      // that enters it with a positive gradient gets a positive coefficient. The
+      // gradient and the QR solve round differently, though, and can disagree on
+      // that sign. With no variable left there is nothing to solve for: x = 0, as
+      // at the start, and the outer loop continues from there.
+      if (numInactive_ == 0) {
+        x_.setZero();
+        break;
+      }
     }
   }
 }

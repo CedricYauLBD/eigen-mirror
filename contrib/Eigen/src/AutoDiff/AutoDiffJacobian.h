@@ -67,7 +67,12 @@ class AutoDiffJacobian : public Functor {
 
     for (Index i = 0; i < jac.rows(); i++) {
       (*v)[i] = av[i].value();
-      jac.row(i) = av[i].derivatives();
+      // An output that does not depend on the inputs at x can hold a constant, whose dynamic-size
+      // derivative vector is empty and stands for a zero row.
+      if (av[i].derivatives().size() == 0)
+        jac.row(i).setZero();
+      else
+        jac.row(i) = av[i].derivatives();
     }
   }
 };

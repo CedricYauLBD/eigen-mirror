@@ -19,6 +19,14 @@
 namespace Eigen {
 
 namespace internal {
+
+// Whether the workspaces of ncv Lanczos vectors for an n x n problem are representable: ARPACK passes
+// lworkl = ncv^2 + 8 ncv as an int, and the n x ncv matrix v has n * ncv coefficients, counted in Index. Dense
+// resizing checks that product only in debug builds. Requires ncv >= 1.
+inline bool arpack_workspace_fits(Index n, int ncv) {
+  return ncv <= NumTraits<int>::highest() / (ncv + 8) && n <= NumTraits<Index>::highest() / ncv;
+}
+
 template <typename Scalar, typename RealScalar>
 struct arpack_wrapper;
 template <typename MatrixSolver, typename MatrixType, typename Scalar, bool BisSPD>
@@ -153,6 +161,10 @@ class ArpackGeneralizedSelfAdjointEigenSolver {
    * then the eigenvectors are also computed and can be retrieved by
    * calling eigenvectors().
    *
+   * ARPACK takes its sizes as \c int. The computation fails with \c InvalidInput if \p A has more than
+   * \c INT_MAX / 3 rows, or if the number of Lanczos vectors, the smaller of the size of \p A and
+   * max(2 * \p nbrEigenvalues, 20), exceeds 46336.
+   *
    */
   ArpackGeneralizedSelfAdjointEigenSolver &compute(const MatrixType &A, const MatrixType &B, Index nbrEigenvalues,
                                                    std::string eigs_sigma = "LM", int options = ComputeEigenvectors,
@@ -178,6 +190,10 @@ class ArpackGeneralizedSelfAdjointEigenSolver {
    * function can be used to retrieve them.  If \p options equals #ComputeEigenvectors,
    * then the eigenvectors are also computed and can be retrieved by
    * calling eigenvectors().
+   *
+   * ARPACK takes its sizes as \c int. The computation fails with \c InvalidInput if \p A has more than
+   * \c INT_MAX / 3 rows, or if the number of Lanczos vectors, the smaller of the size of \p A and
+   * max(2 * \p nbrEigenvalues, 20), exceeds 46336.
    *
    */
   ArpackGeneralizedSelfAdjointEigenSolver &compute(const MatrixType &A, Index nbrEigenvalues,
@@ -332,6 +348,9 @@ ArpackGeneralizedSelfAdjointEigenSolver<MatrixType, MatrixSolver, BisSPD>::compu
   m_nbrConverged = 0;
   m_nbrIterations = 0;
 
+  // ARPACK takes its sizes as int. It requires 0 < nev < n and declares workd(3 * n).
+  if (nbrEigenvalues <= 0 || nbrEigenvalues >= A.cols() || A.cols() > NumTraits<int>::highest() / 3) return *this;
+
   bool isBempty = (B.rows() == 0) || (B.cols() == 0);
 
   // For clarity, all parameters match their ARPACK name
@@ -394,35 +413,39 @@ ArpackGeneralizedSelfAdjointEigenSolver<MatrixType, MatrixSolver, BisSPD>::compu
   //
   int nev = (int)nbrEigenvalues;
 
-  // Allocate space for ARPACK to store the residual
-  //
-  Scalar *resid = new Scalar[n];
-
   // Number of Lanczos vectors, must satisfy nev < ncv <= n
   // Note that this indicates that nev != n, and we cannot compute
   // all eigenvalues of a matrix
   //
   int ncv = std::min(std::max(2 * nev, 20), n);
 
+  // ARPACK's lworkl = ncv^2 + 8 ncv is an int, and the n x ncv matrix v must have an Index number of coefficients
+  if (!internal::arpack_workspace_fits(n, ncv)) return *this;
+
+  // Allocate space for ARPACK to store the residual
+  //
+  Matrix<Scalar, Dynamic, 1> resid(n);
+
   // The working n x ncv matrix, also store the final eigenvectors (if computed)
   //
-  Scalar *v = new Scalar[n * ncv];
+  // ARPACK fills V column by column.
+  Matrix<Scalar, Dynamic, Dynamic, ColMajor> v(n, ncv);
   int ldv = n;
 
   // Working space
   //
-  Scalar *workd = new Scalar[3 * n];
+  Matrix<Scalar, Dynamic, 1> workd(3 * n);
   int lworkl = ncv * ncv + 8 * ncv;  // Must be at least this length
-  Scalar *workl = new Scalar[lworkl];
+  Matrix<Scalar, Dynamic, 1> workl(lworkl);
 
-  int *iparam = new int[11];
+  int iparam[11];
   iparam[0] = 1;  // 1 means we let ARPACK perform the shifts, 0 means we'd have to do it
   iparam[2] = std::max(300, numext::div_ceil(2 * n, std::max(ncv, 1)));
   iparam[6] = mode;  // The mode, 1 is standard ev problem, 2 for generalized ev, 3 for shift-and-invert
 
   // Used during reverse communicate to notify where arrays start
   //
-  int *ipntr = new int[11];
+  int ipntr[11];
 
   // Error codes are returned in here, initial value of 0 indicates a random initial
   // residual vector is used, any other values means resid contains the initial residual
@@ -455,32 +478,27 @@ ArpackGeneralizedSelfAdjointEigenSolver<MatrixType, MatrixSolver, BisSPD>::compu
 
   if (!(mode == 1 && isBempty) && !(mode == 2 && isBempty) && OP.info() != Success) {
     m_info = OP.info();
-    delete[] v;
-    delete[] iparam;
-    delete[] ipntr;
-    delete[] workd;
-    delete[] workl;
-    delete[] resid;
     m_isInitialized = false;
     return *this;
   }
 
   do {
-    internal::arpack_wrapper<Scalar, RealScalar>::saupd(&ido, bmat, &n, whch, &nev, &tol, resid, &ncv, v, &ldv, iparam,
-                                                        ipntr, workd, workl, &lworkl, &info);
+    internal::arpack_wrapper<Scalar, RealScalar>::saupd(&ido, bmat, &n, whch, &nev, &tol, resid.data(), &ncv, v.data(),
+                                                        &ldv, iparam, ipntr, workd.data(), workl.data(), &lworkl,
+                                                        &info);
 
     if (ido == -1 || ido == 1) {
-      Scalar *in = workd + ipntr[0] - 1;
-      Scalar *out = workd + ipntr[1] - 1;
+      Scalar *in = workd.data() + ipntr[0] - 1;
+      Scalar *out = workd.data() + ipntr[1] - 1;
 
       if (ido == 1 && mode != 2) {
-        Scalar *out2 = workd + ipntr[2] - 1;
+        Scalar *out2 = workd.data() + ipntr[2] - 1;
         if (isBempty || mode == 1)
           Matrix<Scalar, Dynamic, 1>::Map(out2, n) = Matrix<Scalar, Dynamic, 1>::Map(in, n);
         else
           Matrix<Scalar, Dynamic, 1>::Map(out2, n) = B * Matrix<Scalar, Dynamic, 1>::Map(in, n);
 
-        in = workd + ipntr[2] - 1;
+        in = workd.data() + ipntr[2] - 1;
       }
 
       if (mode == 1) {
@@ -509,8 +527,8 @@ ArpackGeneralizedSelfAdjointEigenSolver<MatrixType, MatrixSolver, BisSPD>::compu
           Matrix<Scalar, Dynamic, 1>::Map(out, n) = OP.solve(B * Matrix<Scalar, Dynamic, 1>::Map(in, n));
       }
     } else if (ido == 2) {
-      Scalar *in = workd + ipntr[0] - 1;
-      Scalar *out = workd + ipntr[1] - 1;
+      Scalar *in = workd.data() + ipntr[0] - 1;
+      Scalar *out = workd.data() + ipntr[1] - 1;
 
       if (isBempty || mode == 1)
         Matrix<Scalar, Dynamic, 1>::Map(out, n) = Matrix<Scalar, Dynamic, 1>::Map(in, n);
@@ -538,15 +556,15 @@ ArpackGeneralizedSelfAdjointEigenSolver<MatrixType, MatrixSolver, BisSPD>::compu
 
     // if howmny == "S", specifies the eigenvalues to compute (not implemented in ARPACK)
     //
-    int *select = new int[ncv];
+    Matrix<int, Dynamic, 1> select(ncv);
 
     // Final eigenvalues
     //
     m_eivalues.resize(nev, 1);
 
-    internal::arpack_wrapper<Scalar, RealScalar>::seupd(&rvec, howmny, select, m_eivalues.data(), v, &ldv, &sigma, bmat,
-                                                        &n, whch, &nev, &tol, resid, &ncv, v, &ldv, iparam, ipntr,
-                                                        workd, workl, &lworkl, &info);
+    internal::arpack_wrapper<Scalar, RealScalar>::seupd(
+        &rvec, howmny, select.data(), m_eivalues.data(), v.data(), &ldv, &sigma, bmat, &n, whch, &nev, &tol,
+        resid.data(), &ncv, v.data(), &ldv, iparam, ipntr, workd.data(), workl.data(), &lworkl, &info);
 
     if (info == -14)
       m_info = NoConvergence;
@@ -554,9 +572,7 @@ ArpackGeneralizedSelfAdjointEigenSolver<MatrixType, MatrixSolver, BisSPD>::compu
       m_info = InvalidInput;
     else {
       if (rvec) {
-        m_eivec.resize(A.rows(), nev);
-        for (int i = 0; i < nev; i++)
-          for (int j = 0; j < n; j++) m_eivec(j, i) = v[i * n + j] / scale;
+        m_eivec = v.leftCols(nev) / scale;
 
         if (mode == 1 && !isBempty && BisSPD)
           internal::OP<MatrixSolver, MatrixType, Scalar, BisSPD>::project(OP, n, nev, m_eivec.data());
@@ -569,16 +585,7 @@ ArpackGeneralizedSelfAdjointEigenSolver<MatrixType, MatrixSolver, BisSPD>::compu
 
       m_info = Success;
     }
-
-    delete[] select;
   }
-
-  delete[] v;
-  delete[] iparam;
-  delete[] ipntr;
-  delete[] workd;
-  delete[] workl;
-  delete[] resid;
 
   m_isInitialized = (m_info == Success);
 

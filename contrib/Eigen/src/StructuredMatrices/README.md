@@ -241,7 +241,9 @@ Each factor can be any of:
 `makeKroneckerOperator(a, b, c, ...)` nests to the right, so products of three or more factors stay implicit. The
 decomposition family (`eigenvalues` through `matrixV`, `rank`, `leastSquaresSolve`) works on dense copies of
 diagonal, identity and sparse factors; `rank` and `leastSquaresSolve` also materialize a nested factor. A sparse
-factor whose `SparseLU` fails solves and inverts to NaN.
+factor whose `SparseLU` fails solves and inverts to NaN. A factor whose eigenvalue or singular value decomposition
+fails, as the SVD of a non-finite factor does, contributes NaN eigenvalues, singular values and vectors; `rank()` counts
+every product with a NaN singular value.
 
 ```cpp
 SparseMatrix<double> A = ...;           // n x n

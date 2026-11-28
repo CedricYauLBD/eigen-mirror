@@ -162,13 +162,43 @@ template <typename T_SrcMat, typename T_FftIfc>
 struct fft_inv_proxy;
 
 namespace internal {
+
+// Plain type and shape of the value a proxy evaluates to. The length of a transform is set by nfft at
+// run time and need not be the length of the source, so the type keeps the source's kind (matrix or
+// array), orientation and storage order, but not its fixed or bounded length. rows() and cols() are
+// the shape fft_resize_as_vector gives a destination of that type. The forward transform has complex
+// bins even for real samples.
+template <typename T_SrcMat, bool Forward>
+struct fft_proxy_result {
+  using SrcPlain = typename T_SrcMat::PlainObject;
+  using Scalar = std::conditional_t<Forward, std::complex<typename NumTraits<typename SrcPlain::Scalar>::Real>,
+                                    typename SrcPlain::Scalar>;
+
+  static constexpr bool IsRow = int(SrcPlain::RowsAtCompileTime) == 1;
+  static constexpr bool IsCol = !IsRow && int(SrcPlain::ColsAtCompileTime) == 1;
+  static constexpr int Rows = IsRow ? 1 : Dynamic;
+  static constexpr int Cols = IsCol ? 1 : Dynamic;
+  static constexpr int Options = IsRow   ? int(SrcPlain::Options) | int(RowMajor)
+                                 : IsCol ? int(SrcPlain::Options) & ~int(RowMajor)
+                                         : int(SrcPlain::Options);
+
+  using type = std::conditional_t<std::is_same<typename traits<SrcPlain>::XprKind, MatrixXpr>::value,
+                                  Matrix<Scalar, Rows, Cols, Options>, Array<Scalar, Rows, Cols, Options> >;
+
+  static Index rows(const T_SrcMat& src, Index size) { return is_row(src) ? 1 : size; }
+  static Index cols(const T_SrcMat& src, Index size) { return is_row(src) ? size : 1; }
+
+ private:
+  static bool is_row(const T_SrcMat& src) { return IsRow || (!IsCol && src.rows() == 1); }
+};
+
 template <typename T_SrcMat, typename T_FftIfc>
 struct traits<fft_fwd_proxy<T_SrcMat, T_FftIfc> > {
-  using ReturnType = typename T_SrcMat::PlainObject;
+  using ReturnType = typename fft_proxy_result<T_SrcMat, true>::type;
 };
 template <typename T_SrcMat, typename T_FftIfc>
 struct traits<fft_inv_proxy<T_SrcMat, T_FftIfc> > {
-  using ReturnType = typename T_SrcMat::PlainObject;
+  using ReturnType = typename fft_proxy_result<T_SrcMat, false>::type;
 };
 }  // namespace internal
 
@@ -181,10 +211,17 @@ struct fft_fwd_proxy : public ReturnByValue<fft_fwd_proxy<T_SrcMat, T_FftIfc> > 
   template <typename T_DestMat>
   void evalTo(T_DestMat& dst) const;
 
-  Index rows() const { return m_src.rows(); }
-  Index cols() const { return m_src.cols(); }
+  Index rows() const { return internal::fft_proxy_result<T_SrcMat, true>::rows(m_src, dst_size()); }
+  Index cols() const { return internal::fft_proxy_result<T_SrcMat, true>::cols(m_src, dst_size()); }
 
  protected:
+  // Number of coefficients FFT::fwd(dst, src, nfft) gives dst.
+  Index dst_size() const {
+    const Index nfft = m_nfft < 1 ? m_src.size() : m_nfft;
+    const bool half = NumTraits<typename T_SrcMat::Scalar>::IsComplex == 0 && m_ifc.HasFlag(T_FftIfc::HalfSpectrum);
+    return half && nfft > 0 ? (nfft >> 1) + 1 : nfft;
+  }
+
   const T_SrcMat& m_src;
   T_FftIfc& m_ifc;
   Index m_nfft;
@@ -199,10 +236,15 @@ struct fft_inv_proxy : public ReturnByValue<fft_inv_proxy<T_SrcMat, T_FftIfc> > 
   template <typename T_DestMat>
   void evalTo(T_DestMat& dst) const;
 
-  Index rows() const { return m_src.rows(); }
-  Index cols() const { return m_src.cols(); }
+  Index rows() const { return internal::fft_proxy_result<T_SrcMat, false>::rows(m_src, dst_size()); }
+  Index cols() const { return internal::fft_proxy_result<T_SrcMat, false>::cols(m_src, dst_size()); }
 
  protected:
+  // Number of coefficients FFT::inv(dst, src, nfft) gives dst. The one exception needs the type of
+  // dst: a real dst with HalfSpectrum set and no nfft receives 2 * (src.size() - 1) of them. That dst
+  // is never the temporary of an expression, which has the complex scalar of src.
+  Index dst_size() const { return m_nfft < 1 ? m_src.size() : m_nfft; }
+
   const T_SrcMat& m_src;
   T_FftIfc& m_ifc;
   Index m_nfft;

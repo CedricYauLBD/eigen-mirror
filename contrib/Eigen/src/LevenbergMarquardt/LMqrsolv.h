@@ -49,7 +49,7 @@ void lmqrsolv(Matrix<Scalar, Rows, Cols> &s, const PermutationMatrix<Dynamic, Dy
     /*        prepare the row of d to be eliminated, locating the */
     /*        diagonal element using p from the qr factorization. */
     const PermIndex l = iPerm.indices()(j);
-    if (diag[l] == 0.) break;
+    if (diag[l] == 0.) continue;
     sdiag.tail(n - j).setZero();
     sdiag[j] = diag[l];
 
@@ -81,7 +81,7 @@ void lmqrsolv(Matrix<Scalar, Rows, Cols> &s, const PermutationMatrix<Dynamic, Dy
   /*     solve the triangular system for z. if the system is */
   /*     singular, then obtain a least squares solution. */
   Index nsing;
-  for (nsing = 0; nsing < n && sdiag[nsing] != 0; nsing++) {
+  for (nsing = 0; nsing < n && s(nsing, nsing) != 0; nsing++) {
   }
 
   wa.tail(n - nsing).setZero();

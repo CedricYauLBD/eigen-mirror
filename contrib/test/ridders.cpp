@@ -530,6 +530,49 @@ void test_ridders_empty() {
   VERIFY_IS_EQUAL(noInputs.functor().evaluations, 0);
 }
 
+// Defined on [0, 1] only. Outside it stops with a negative status and leaves y as it was.
+struct BoundedRiddersFunctor : DenseFunctor<double> {
+  BoundedRiddersFunctor() : DenseFunctor<double>(1, 3) {}
+
+  int operator()(const InputType& x, ValueType& y) const {
+    if (x[0] < 0.0 || x[0] > 1.0) return -2;
+    y.setConstant(4.0 * x[0]);
+    return 0;
+  }
+};
+
+// A functor without a status.
+struct VoidRiddersFunctor : DenseFunctor<double> {
+  VoidRiddersFunctor() : DenseFunctor<double>(1, 3) {}
+
+  void operator()(const InputType& x, ValueType& y) const { y.setConstant(4.0 * x[0]); }
+};
+
+// df() must pass a negative status of the functor on instead of differencing values the functor did not write.
+void test_ridders_functor_status() {
+  VectorXd x(1), error;
+  MatrixXd jac(3, 1);
+  const MatrixXd expected = MatrixXd::Constant(3, 1, 4.0);
+
+  Ridders<BoundedRiddersFunctor> bounded;
+  x << 0.5;
+  VERIFY(bounded.df(x, jac) > 0);
+  VERIFY_IS_APPROX(jac, expected);
+  // x is in the domain, x + h is not.
+  x << 1.0;
+  VERIFY_IS_EQUAL(bounded.df(x, jac), -2);
+  VERIFY_IS_EQUAL(bounded.df(x, jac, error), -2);
+  // x is in the domain, and so is x + h, but x - h is not.
+  x << 0.0;
+  VERIFY_IS_EQUAL(bounded.df(x, jac), -2);
+
+  Ridders<VoidRiddersFunctor> withoutStatus;
+  x << 0.5;
+  jac.setZero();
+  VERIFY(withoutStatus.df(x, jac) > 0);
+  VERIFY_IS_APPROX(jac, expected);
+}
+
 EIGEN_DECLARE_TEST(ridders) {
   CALL_SUBTEST((test_ridders_jacobian<float, 2, 4, ColMajor>()));
   CALL_SUBTEST((test_ridders_jacobian<double, 2, 4, RowMajor>()));
@@ -553,4 +596,5 @@ EIGEN_DECLARE_TEST(ridders) {
 
   CALL_SUBTEST(test_ridders_levenberg_marquardt());
   CALL_SUBTEST(test_ridders_empty());
+  CALL_SUBTEST(test_ridders_functor_status());
 }

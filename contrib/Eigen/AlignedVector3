@@ -35,6 +35,8 @@ namespace Eigen {
  * the same result can be achieved by directly using a 4D vector.
  * This class makes this process simpler.
  *
+ * The fourth coefficient is padding that the class keeps at zero, because dot(), sum(), squaredNorm() and norm()
+ * reduce over all four coefficients.
  */
 // TODO: Specialize Cwise.
 template <typename Scalar_>
@@ -153,9 +155,18 @@ class AlignedVector3 : public MatrixBase<AlignedVector3<Scalar_> > {
     return m_coeffs.dot(other.m_coeffs);
   }
 
-  inline void normalize() { m_coeffs /= norm(); }
+  // As MatrixBase::normalize() and normalized(), these leave a vector unchanged unless its squared norm z > 0.
+  // Dividing by sqrt(z) > 0 also leaves the padding at zero, which 0 / 0 and 0 / NaN do not.
+  inline void normalize() {
+    const RealScalar z = numext::real(squaredNorm());
+    if (z > RealScalar(0)) m_coeffs /= numext::sqrt(z);
+  }
 
-  inline AlignedVector3 normalized() const { return AlignedVector3(m_coeffs / norm()); }
+  inline AlignedVector3 normalized() const {
+    const RealScalar z = numext::real(squaredNorm());
+    if (z > RealScalar(0)) return AlignedVector3(m_coeffs / numext::sqrt(z));
+    return *this;
+  }
 
   inline Scalar sum() const {
     eigen_assert(m_coeffs.w() == Scalar(0));

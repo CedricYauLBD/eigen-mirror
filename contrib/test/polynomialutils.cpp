@@ -110,7 +110,30 @@ void roots_to_monicPolynomial_empty() {
   VERIFY_IS_EQUAL(fixed_poly[0], Scalar_(1));
 }
 
+// An empty coefficient vector is the zero polynomial; no coefficient may be read, inside or around it.
+template <typename Scalar_>
+void empty_polynomial() {
+  using PolynomialType = Matrix<Scalar_, Dynamic, 1>;
+  using Complex = std::complex<Scalar_>;
+
+  const PolynomialType empty(0);
+  VERIFY_IS_EQUAL(poly_eval_horner(empty, Scalar_(0.5)), Scalar_(0));
+  VERIFY_IS_EQUAL(poly_eval(empty, Scalar_(0.5)), Scalar_(0));
+  VERIFY_IS_EQUAL(poly_eval(empty, Scalar_(2)), Scalar_(0));
+  VERIFY_IS_EQUAL(poly_eval(empty, Complex(0, 2)), Complex(0));
+  VERIFY_IS_EQUAL(cauchy_min_bound(empty), Scalar_(1));
+
+  const PolynomialType storage = PolynomialType::Constant(3, Scalar_(7));
+  const Map<const PolynomialType> mapped(storage.data() + 1, 0);
+  VERIFY_IS_EQUAL(poly_eval_horner(mapped, Scalar_(0.5)), Scalar_(0));
+  VERIFY_IS_EQUAL(poly_eval(mapped, Scalar_(0.5)), Scalar_(0));
+  VERIFY_IS_EQUAL(poly_eval(mapped, Scalar_(2)), Scalar_(0));
+  VERIFY_IS_EQUAL(cauchy_min_bound(mapped), Scalar_(1));
+}
+
 EIGEN_DECLARE_TEST(polynomialutils) {
+  CALL_SUBTEST_1(empty_polynomial<double>());
+  CALL_SUBTEST_1(empty_polynomial<float>());
   for (int i = 0; i < g_repeat; i++) {
     realRoots_to_monicPolynomial_scalar<double>();
     realRoots_to_monicPolynomial_scalar<float>();

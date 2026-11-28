@@ -16,6 +16,7 @@
 
 #include <memory>
 #include <mutex>
+#include <tuple>
 
 namespace Eigen {
 
@@ -274,30 +275,30 @@ struct fftw_impl {
  protected:
   using PlanData = fftw_plan<Scalar>;
 
-  using int64_t = Eigen::numext::int64_t;
+  // (n0, n1, plan_flags), with n1 = -1 for a 1-d transform. Transforms that share a key share a plan, which runs
+  // over the sizes it was created for.
+  using PlanKey = std::tuple<int, int, int>;
 
-  using PlanMap = std::map<int64_t, PlanData>;
+  using PlanMap = std::map<PlanKey, PlanData>;
 
   PlanMap m_plans;
 
-  // Pack (inverse, real_io, inplace, aligned) into 4 contiguous low bits of
-  // the cache key.  real_io distinguishes r2c/c2r from c2c so that reusing
-  // the same FFT object across real-input and complex-input transforms
-  // doesn't return a cached plan of the wrong kind.
-  static int64_t plan_flags(bool inverse, bool real_io, void *dst, const void *src) {
+  // real_io separates r2c/c2r plans from c2c ones. The key holds the src and dst addresses mod 16 separately: a plan
+  // created without FFTW_UNALIGNED runs on new arrays only if each has the fftw_alignment_of it was created with
+  // (FFTW manual, "New-array Execute Functions").
+  static int plan_flags(bool inverse, bool real_io, void *dst, const void *src) {
     bool inplace = (dst == src);
-    bool aligned = ((reinterpret_cast<size_t>(src) & 15) | (reinterpret_cast<size_t>(dst) & 15)) == 0;
-    return (inverse << 3) | (real_io << 2) | (inplace << 1) | aligned;
+    int src_alignment = static_cast<int>(reinterpret_cast<size_t>(src) & 15);
+    int dst_alignment = static_cast<int>(reinterpret_cast<size_t>(dst) & 15);
+    return (inverse << 10) | (real_io << 9) | (inplace << 8) | (src_alignment << 4) | dst_alignment;
   }
 
   inline PlanData &get_plan(int nfft, bool inverse, bool real_io, void *dst, const void *src) {
-    int64_t key = ((nfft << 4) | plan_flags(inverse, real_io, dst, src)) << 1;
-    return m_plans[key];
+    return m_plans[PlanKey(nfft, -1, plan_flags(inverse, real_io, dst, src))];
   }
 
   inline PlanData &get_plan(int n0, int n1, bool inverse, bool real_io, void *dst, const void *src) {
-    int64_t key = (((((int64_t)n0) << 31) | (n1 << 4) | plan_flags(inverse, real_io, dst, src)) << 1) + 1;
-    return m_plans[key];
+    return m_plans[PlanKey(n0, n1, plan_flags(inverse, real_io, dst, src))];
   }
 };
 

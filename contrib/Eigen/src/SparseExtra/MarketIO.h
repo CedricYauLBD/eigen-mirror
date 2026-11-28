@@ -55,19 +55,42 @@ inline void GetMarketLine(const char* line, StorageIndex& i, StorageIndex& j, st
   value = std::complex<Scalar>(valR, valI);
 }
 
+// Return whether the line held the coefficient; val is unspecified otherwise.
 template <typename RealScalar>
-inline void GetDenseElt(const std::string& line, RealScalar& val) {
+inline bool GetDenseElt(const std::string& line, RealScalar& val) {
   std::istringstream newline(line);
-  newline >> val;
+  return bool(newline >> val);
 }
 
 template <typename RealScalar>
-inline void GetDenseElt(const std::string& line, std::complex<RealScalar>& val) {
+inline bool GetDenseElt(const std::string& line, std::complex<RealScalar>& val) {
   RealScalar valR, valI;
   std::istringstream newline(line);
-  newline >> valR >> valI;
+  if (!(newline >> valR >> valI)) return false;
   val = std::complex<RealScalar>(valR, valI);
+  return true;
 }
+
+// Whether resize() can give DenseType other dimensions. A plain Matrix or Array reallocates, and Transpose and the
+// array/matrix wrappers forward to the expression they wrap. For anything else (Map, Ref, Block, ...) it is
+// DenseBase::resize(), which only asserts that the dimensions are unchanged.
+struct is_resizable_dense_impl {
+  template <typename Derived>
+  static std::true_type test(const PlainObjectBase<Derived>*);
+  static std::false_type test(const void*);
+};
+
+template <typename DenseType>
+struct is_resizable_dense : decltype(is_resizable_dense_impl::test(std::declval<DenseType*>())) {};
+
+template <typename XprType>
+struct is_resizable_dense<Transpose<XprType>> : is_resizable_dense<XprType> {};
+
+template <typename XprType>
+struct is_resizable_dense<ArrayWrapper<XprType>> : is_resizable_dense<XprType> {};
+
+template <typename XprType>
+struct is_resizable_dense<MatrixWrapper<XprType>> : is_resizable_dense<XprType> {};
 
 template <typename Scalar>
 inline void putMarketHeader(std::string& header, int sym) {
@@ -215,13 +238,15 @@ bool loadMarket(SparseMatrixType& mat, const std::string& filename) {
 
 /**
  * \ingroup SparseExtra_Module
- * @brief Loads a dense Matrix or Vector from a matrixmarket file. If a statically sized matrix has to be parsed and the
- * file contains the wrong dimensions it is undefined behaviour.
+ * @brief Loads a dense Matrix or Vector from a matrixmarket file. \a mat is resized to the dimensions in the file. A
+ * fixed-size matrix, or an expression that cannot be resized such as a Map, a Ref or a Block, must already have them.
  *
  * @tparam DenseMatrixType to read into
- * @param mat DenseMatrix to read into, current values are overwritten, symmetries are not supported
+ * @param mat DenseMatrix to read into, current values are overwritten, symmetries are not supported. It is left
+ * untouched if the parsing does not succeed.
  * @param filename to parse matrix from
- * @return true if parsing was successful. Returns false if the parsing did not succeed.
+ * @return true if parsing was successful. Returns false if the parsing did not succeed, or if \a mat cannot take the
+ * dimensions in the file.
  */
 template <typename DenseType>
 bool loadMarketDense(DenseType& mat, const std::string& filename) {
@@ -243,8 +268,9 @@ bool loadMarketDense(DenseType& mat, const std::string& filename) {
                           (DenseType::RowsAtCompileTime != Dynamic && rows != DenseType::RowsAtCompileTime);
   bool wrong_input_cols = (DenseType::MaxColsAtCompileTime != Dynamic && cols > DenseType::MaxColsAtCompileTime) ||
                           (DenseType::ColsAtCompileTime != Dynamic && cols != DenseType::ColsAtCompileTime);
+  bool wrong_view_size = !internal::is_resizable_dense<DenseType>::value && (rows != mat.rows() || cols != mat.cols());
 
-  if (sizes_not_positive || wrong_input_rows || wrong_input_cols) {
+  if (sizes_not_positive || wrong_input_rows || wrong_input_cols || wrong_view_size) {
     if (sizes_not_positive) {
       std::cerr << "non-positive row or column size in file" << filename << "\n";
     } else {
@@ -254,26 +280,37 @@ bool loadMarketDense(DenseType& mat, const std::string& filename) {
     return false;
   }
 
-  mat.resize(rows, cols);
+  // The size line is untrusted: allocate rows * cols only once the file has supplied that many coefficients.
+  std::vector<Scalar> values;
   Index row = 0;
   Index col = 0;
-  Index n = 0;
   Scalar value;
   while (std::getline(in, line) && (row < rows) && (col < cols)) {
-    internal::GetDenseElt(line, value);
-    // matrixmarket format is column major
-    mat(row, col) = value;
+    if (!internal::GetDenseElt(line, value)) {
+      std::cerr << "Malformed element in file " << filename << "\n";
+      in.close();
+      return false;
+    }
+    values.push_back(value);
     row++;
     if (row == rows) {
       row = 0;
       col++;
     }
-    n++;
   }
   in.close();
-  if (n != mat.size()) {
+  if (col != cols) {
     std::cerr << "Unable to read all elements from file " << filename << "\n";
     return false;
+  }
+
+  mat.resize(rows, cols);
+  // matrixmarket format is column major
+  auto next_value = values.cbegin();
+  for (col = 0; col < cols; col++) {
+    for (row = 0; row < rows; row++) {
+      mat(row, col) = *next_value++;
+    }
   }
   return true;
 }

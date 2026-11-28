@@ -68,6 +68,35 @@ void testMatrixSqrtComplexConjugatePairs() {
   VERIFY(lower.isZero());
 }
 
+// RealSchur computes no U for an argument with an infinite or NaN entry, and sqrt() read U without checking info().
+// Below the first subdiagonal such an entry does not reach the square root of T either, so the result was finite.
+template <typename MatrixType>
+void testNonFiniteEntry(Index size) {
+  using Scalar = typename MatrixType::Scalar;
+  const Index positions[3][2] = {{size - 1, 0}, {0, size - 1}, {size / 2, size / 2}};
+  const Scalar inf = NumTraits<Scalar>::infinity();
+  for (Scalar value : {NumTraits<Scalar>::quiet_NaN(), inf, -inf}) {
+    for (const auto& position : positions) {
+      MatrixType A = MatrixType::Identity(size, size);
+      A(position[0], position[1]) = value;
+      MatrixType sqrtA = A.sqrt();
+      VERIFY(sqrtA.array().isNaN().all());
+    }
+  }
+}
+
+// EigenSolver forms the eigenvalues (a + d) / 2 +- i z of a 2x2 diagonal block [a b; c d] of T as d + (a - d) / 2.
+// When a - d overflows it computes no eigenvectors, and the square root of the block read them anyway.
+template <typename MatrixType>
+void testDiagonalBlockOverflow() {
+  using Scalar = typename MatrixType::Scalar;
+  const Scalar big = NumTraits<Scalar>::highest();
+  MatrixType A(2, 2);
+  A << Scalar(0.6) * big, Scalar(0.9) * big, Scalar(-0.9) * big, Scalar(-0.6) * big;
+  MatrixType sqrtA = A.sqrt();
+  VERIFY(sqrtA.array().isNaN().all());
+}
+
 EIGEN_DECLARE_TEST(matrix_square_root) {
   for (int i = 0; i < g_repeat; i++) {
     CALL_SUBTEST_1(testMatrixSqrt(Matrix3cf()));
@@ -79,4 +108,8 @@ EIGEN_DECLARE_TEST(matrix_square_root) {
     CALL_SUBTEST_6(testMatrixSqrtComplexConjugatePairs<float>());
     CALL_SUBTEST_6(testMatrixSqrtComplexConjugatePairs<double>());
   }
+  CALL_SUBTEST_4((testNonFiniteEntry<Matrix<double, Dynamic, Dynamic, RowMajor>>(9)));
+  CALL_SUBTEST_4((testDiagonalBlockOverflow<Matrix<double, Dynamic, Dynamic, RowMajor>>()));
+  CALL_SUBTEST_5((testNonFiniteEntry<Matrix4f>(4)));
+  CALL_SUBTEST_5((testNonFiniteEntry<Matrix<float, 1, 1>>(1)));
 }

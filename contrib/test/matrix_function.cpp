@@ -247,6 +247,26 @@ void testMatrixLogarithmSquareRootOverflow() {
   VERIFY(MatrixXd(A.log()).array().isNaN().all());
 }
 
+// Whether the Schur decomposition of the argument converges depends on its entries, but it used to be asserted. There
+// is no info() to report the failure through, so the result is NaN.
+template <typename MatrixType>
+void testSchurNoConvergence() {
+  using RealScalar = typename MatrixType::RealScalar;
+  using ComplexScalar = std::complex<RealScalar>;
+  MatrixType A = MatrixType::Ones(4, 4) + MatrixType::Identity(4, 4);
+  for (RealScalar entry : {NumTraits<RealScalar>::quiet_NaN(), NumTraits<RealScalar>::infinity()}) {
+    A(3, 2) = entry;
+    VERIFY(A.log().array().isNaN().all());
+    VERIFY(A.sin().array().isNaN().all());
+  }
+  // Every entry is finite and det(A) != 0, which is all that log() asks for, but the QR iteration stalls all the same.
+  A(3, 2) = NumTraits<RealScalar>::highest();
+  if (ComplexSchur<Matrix<ComplexScalar, Dynamic, Dynamic>>(A.template cast<ComplexScalar>()).info() != Success) {
+    VERIFY(A.log().array().isNaN().all());
+    VERIFY(A.sin().array().isNaN().all());
+  }
+}
+
 // An empty matrix has no eigenvalue clusters, but the start of the first block was written anyway.
 template <typename MatrixType>
 void testEmptyMatrix() {
@@ -280,6 +300,8 @@ EIGEN_DECLARE_TEST(matrix_function) {
   CALL_SUBTEST_3(testMatrixLogarithmSingular<MatrixXf>());
   CALL_SUBTEST_7(testMatrixLogarithmSingular<MatrixXd>());
   CALL_SUBTEST_7(testMatrixLogarithmSquareRootOverflow<>());
+  CALL_SUBTEST_3(testSchurNoConvergence<MatrixXf>());
+  CALL_SUBTEST_7(testSchurNoConvergence<MatrixXcd>());
   CALL_SUBTEST_3(testEmptyMatrix<MatrixXf>());
   CALL_SUBTEST_7(testEmptyMatrix<MatrixXcd>());
 }

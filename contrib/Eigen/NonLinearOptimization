@@ -106,6 +106,7 @@
  * Status LevenbergMarquardt<FunctorType,Scalar>::minimize(FVectorType  &x, const int mode)
  * {
  *     Status status = minimizeInit(x, mode);
+ *     if (status != NotStarted) return status;
  *     do {
  *         status = minimizeOneStep(x, mode);
  *     } while (status==Running);

@@ -99,22 +99,22 @@ class MatrixMarketIterator {
   }
 
   /** Return the right hand side corresponding to the current matrix.
-   * If the rhs file is not provided, a random rhs is generated
+   * If the rhs file is not provided, or does not have one entry per row of the matrix, a random rhs is generated
    */
   inline VectorType& rhs() {
     // Get the right hand side
     if (m_hasRhs) return m_rhs;
 
+    if (!m_matIsLoaded) this->matrix();
     std::string rhs_file;
     rhs_file = m_folder + "/" + m_matname + "_b.mtx";  // The pattern is matname_b.mtx
     m_hasRhs = Fileexists(rhs_file);
     if (m_hasRhs) {
-      m_rhs.resize(m_mat.cols());
-      m_hasRhs = loadMarketVector(m_rhs, rhs_file);
+      // loadMarketVector() sizes the vector from the file, which need not agree with the matrix.
+      m_hasRhs = loadMarketVector(m_rhs, rhs_file) && HasSize(m_rhs, m_mat.rows(), rhs_file);
     }
     if (!m_hasRhs) {
       // Generate a random right hand side
-      if (!m_matIsLoaded) this->matrix();
       m_refX.resize(m_mat.cols());
       m_refX.setRandom();
       m_rhs = m_mat * m_refX;
@@ -129,6 +129,8 @@ class MatrixMarketIterator {
    * then refX is randomly generated such that A*refX = b
    * where A and b are the matrix and the rhs.
    * Note that when a rhs is provided, refX is not available
+   * A provided solution that does not have one entry per column of the matrix is not available either:
+   * the returned vector is then empty.
    */
   inline VectorType& refX() {
     // Check if a reference solution is provided
@@ -138,10 +140,11 @@ class MatrixMarketIterator {
     lhs_file = m_folder + "/" + m_matname + "_x.mtx";
     m_hasrefX = Fileexists(lhs_file);
     if (m_hasrefX) {
-      m_refX.resize(m_mat.cols());
-      m_hasrefX = loadMarketVector(m_refX, lhs_file);
-    } else
-      m_refX.resize(0);
+      if (!m_matIsLoaded) this->matrix();
+      m_hasrefX = loadMarketVector(m_refX, lhs_file) && HasSize(m_refX, m_mat.cols(), lhs_file);
+    }
+    // loadMarketVector() resizes the vector before it fails.
+    if (!m_hasrefX) m_refX.resize(0);
     return m_refX;
   }
 
@@ -162,6 +165,13 @@ class MatrixMarketIterator {
       file_id.close();
       return true;
     }
+  }
+
+  // Whether vec, loaded from file, has the size that pairs it with the current matrix.
+  bool HasSize(const VectorType& vec, Index size, const std::string& file) const {
+    if (vec.size() == size) return true;
+    std::cerr << "Warning \"" << file << "\" ignored: " << vec.size() << " entries, expected " << size << std::endl;
+    return false;
   }
 
   void Getnextvalidmatrix() {

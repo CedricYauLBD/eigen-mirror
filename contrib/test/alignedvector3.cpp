@@ -100,8 +100,38 @@ void alignedvector3() {
   VERIFY(ss1.str() == ss2.str());
 }
 
+// norm() and squaredNorm() reduce over the padding coefficient too, so normalizing must keep it at zero: 0 / 0 and
+// 0 / NaN are NaN. As for a fixed-size Matrix, a vector whose squared norm is zero or NaN is left unchanged.
+template <typename Scalar>
+void alignedvector3_normalize_padding() {
+  using RefType = Matrix<Scalar, 3, 1>;
+  using FastType = AlignedVector3<Scalar>;
+  const Scalar tiny = (std::numeric_limits<Scalar>::min)();
+  const RefType unchanged[] = {RefType(0, 0, 0), RefType(tiny, 0, 0)};
+  for (const RefType &r : unchanged) {
+    FastType f(r);
+    f.normalize();
+    VERIFY_IS_EQUAL(f, r);
+    VERIFY_IS_EQUAL(f.normalized(), r);
+    VERIFY_IS_EQUAL(f.norm(), Scalar(0));
+  }
+
+  FastType invalid(std::numeric_limits<Scalar>::quiet_NaN(), 1, 2);
+  invalid.normalize();
+  VERIFY((numext::isnan)(invalid.norm()));
+  VERIFY((numext::isnan)(invalid.normalized().norm()));
+  VERIFY_IS_EQUAL(invalid.coeff(2), Scalar(2));
+
+  FastType v(3, 0, 4);
+  VERIFY_IS_APPROX(v.normalized(), RefType(Scalar(0.6), 0, Scalar(0.8)));
+  v.normalize();
+  VERIFY_IS_APPROX(v.norm(), Scalar(1));
+}
+
 EIGEN_DECLARE_TEST(alignedvector3) {
   for (int i = 0; i < g_repeat; i++) {
     CALL_SUBTEST(alignedvector3<float>());
   }
+  CALL_SUBTEST(alignedvector3_normalize_padding<float>());
+  CALL_SUBTEST(alignedvector3_normalize_padding<double>());
 }

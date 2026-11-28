@@ -638,7 +638,7 @@ class MatrixPowerReturnValue : public ReturnByValue<MatrixPowerReturnValue<Deriv
   Index cols() const { return m_A.cols(); }
 
  private:
-  const Derived& m_A;
+  typename internal::ref_selector<Derived>::type m_A;
   const RealScalar m_p;
 };
 
@@ -687,7 +687,7 @@ class MatrixComplexPowerReturnValue : public ReturnByValue<MatrixComplexPowerRet
   Index cols() const { return m_A.cols(); }
 
  private:
-  const Derived& m_A;
+  typename internal::ref_selector<Derived>::type m_A;
   const ComplexScalar m_p;
 };
 

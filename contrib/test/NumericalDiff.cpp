@@ -260,6 +260,101 @@ void test_constructors() {
   VERIFY_IS_APPROX(fjac, fexpected);
 }
 
+// Defined on [0, 1] only. Outside it stops with a negative status, as a functor does to end a fit, and leaves
+// fvec as it was.
+struct bounded_domain_functor : Functor<double> {
+  bounded_domain_functor() : Functor<double>(1, 3) {}
+  int operator()(const VectorXd &x, VectorXd &fvec) const {
+    if (x[0] < 0.0 || x[0] > 1.0) return -2;
+    fvec.setConstant(4.0 * x[0]);
+    return 0;
+  }
+};
+
+// A functor without a status.
+struct void_functor : Functor<double> {
+  void_functor() : Functor<double>(1, 3) {}
+  void operator()(const VectorXd &x, VectorXd &fvec) const { fvec.setConstant(4.0 * x[0]); }
+};
+
+// df() must pass a negative status of the functor on instead of differencing values the functor did not write.
+template <NumericalDiffMode Mode>
+void test_functor_status() {
+  VectorXd x(1);
+  MatrixXd jac(3, 1);
+  const MatrixXd expected = MatrixXd::Constant(3, 1, 4.0);
+
+  NumericalDiff<bounded_domain_functor, Mode> bounded;
+  x << 0.5;
+  VERIFY_IS_EQUAL(bounded.df(x, jac), 2);
+  VERIFY_IS_APPROX(jac, expected);
+  // x is in the domain, x + h is not.
+  x << 1.0;
+  VERIFY_IS_EQUAL(bounded.df(x, jac), -2);
+  // x is in the domain, and so is x + h, but x - h is not.
+  x << 0.0;
+  VERIFY_IS_EQUAL(bounded.df(x, jac), Mode == Central ? -2 : 2);
+  // x itself is not in the domain.
+  x << 2.0;
+  VERIFY_IS_EQUAL(bounded.df(x, jac), -2);
+
+  NumericalDiff<void_functor, Mode> without_status;
+  x << 0.5;
+  jac.setZero();
+  VERIFY_IS_EQUAL(without_status.df(x, jac), 2);
+  VERIFY_IS_APPROX(jac, expected);
+}
+
+// A functor may return a reference, such as the stream it logs to. The status of such a result is ignored, and it must
+// not be copied.
+struct reference_returning_functor : Functor<double> {
+  reference_returning_functor() : Functor<double>(1, 3) {}
+  std::ostream &operator()(const VectorXd &x, VectorXd &fvec) const {
+    fvec.setConstant(4.0 * x[0]);
+    return std::cerr;
+  }
+};
+
+template <NumericalDiffMode Mode>
+void test_reference_result() {
+  VectorXd x(1);
+  x << 0.5;
+  MatrixXd jac(3, 1);
+  NumericalDiff<reference_returning_functor, Mode> diff;
+  VERIFY_IS_EQUAL(diff.df(x, jac), 2);
+  VERIFY_IS_APPROX(jac, MatrixXd::Constant(3, 1, 4.0));
+}
+
+// Only a signed integer result is a status. A scalar result, such as an objective value, is not converted to int
+// (undefined for non-finite or huge values) and is not a request to stop when negative; a wide status is clamped.
+struct double_returning_functor : Functor<double> {
+  double_returning_functor() : Functor<double>(1, 1) {}
+  double operator()(const VectorXd &x, VectorXd &fvec) const {
+    fvec[0] = x[0];
+    return -1e300;
+  }
+};
+
+struct wide_status_functor : Functor<double> {
+  wide_status_functor() : Functor<double>(1, 1) {}
+  long long operator()(const VectorXd &, VectorXd &fvec) const {
+    fvec[0] = 0.0;
+    return std::numeric_limits<long long>::lowest();
+  }
+};
+
+template <NumericalDiffMode Mode>
+void test_status_type() {
+  VectorXd x(1);
+  x << 0.5;
+  MatrixXd jac(1, 1);
+  NumericalDiff<double_returning_functor, Mode> scalar_result;
+  VERIFY_IS_EQUAL(scalar_result.df(x, jac), 2);
+  VERIFY_IS_APPROX(jac(0, 0), 1.0);
+  NumericalDiff<wide_status_functor, Mode> wide;
+  VERIFY_IS_EQUAL(wide.df(x, jac), std::numeric_limits<int>::lowest());
+}
+
 EIGEN_DECLARE_TEST(NumericalDiff) {
   CALL_SUBTEST(test_forward());
   CALL_SUBTEST(test_central());
@@ -273,4 +368,10 @@ EIGEN_DECLARE_TEST(NumericalDiff) {
   // A non-dyadic eps also misaligns the absolute step taken for |x| < 1.
   CALL_SUBTEST(test_step_alignment<Forward>(1e-10));
   CALL_SUBTEST(test_step_alignment<Central>(1e-10));
+  CALL_SUBTEST(test_functor_status<Forward>());
+  CALL_SUBTEST(test_functor_status<Central>());
+  CALL_SUBTEST(test_reference_result<Forward>());
+  CALL_SUBTEST(test_reference_result<Central>());
+  CALL_SUBTEST(test_status_type<Forward>());
+  CALL_SUBTEST(test_status_type<Central>());
 }

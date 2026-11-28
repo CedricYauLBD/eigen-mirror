@@ -17,6 +17,7 @@
 
 #include <complex>
 #include <memory>
+#include <tuple>
 
 namespace Eigen {
 namespace internal {
@@ -221,28 +222,30 @@ struct imklfft_impl {
   }
 
  private:
-  std::map<int64_t, plan<Scalar>> m_plans;
+  // (n0, n1, plan_flags), with n1 = -1 for a 1-d transform. Transforms that share a key share a descriptor, which
+  // runs over the sizes it was created for.
+  using PlanKey = std::tuple<int, int, int>;
 
-  // Pack (real_io, inplace, aligned) into 3 contiguous low bits of the cache
-  // key.  real_io distinguishes plans built with DFTI_REAL from those built
+  std::map<PlanKey, plan<Scalar>> m_plans;
+
+  // Pack (real_io, inplace, aligned) into 3 contiguous low bits of the key's
+  // flags.  real_io distinguishes plans built with DFTI_REAL from those built
   // with DFTI_COMPLEX so reusing the same FFT object across real-input and
   // complex-input transforms doesn't return a cached plan of the wrong domain.
   // MKL DFTI descriptors are bidirectional, so forward and inverse share
   // slots intentionally.
-  static int64_t plan_flags(bool real_io, void* dst, const void* src) {
+  static int plan_flags(bool real_io, void* dst, const void* src) {
     int inplace = (dst == src) ? 1 : 0;
     int aligned = ((reinterpret_cast<size_t>(src) & 15) | (reinterpret_cast<size_t>(dst) & 15)) == 0 ? 1 : 0;
     return (int(real_io) << 2) | (inplace << 1) | aligned;
   }
 
   inline plan<Scalar>& get_plan(int nfft, bool real_io, void* dst, const void* src) {
-    int64_t key = ((nfft << 3) | plan_flags(real_io, dst, src)) << 1;
-    return m_plans[key];
+    return m_plans[PlanKey(nfft, -1, plan_flags(real_io, dst, src))];
   }
 
   inline plan<Scalar>& get_plan(int n0, int n1, bool real_io, void* dst, const void* src) {
-    int64_t key = (((((int64_t)n0) << 31) | (n1 << 3) | plan_flags(real_io, dst, src)) << 1) + 1;
-    return m_plans[key];
+    return m_plans[PlanKey(n0, n1, plan_flags(real_io, dst, src))];
   }
 };
 

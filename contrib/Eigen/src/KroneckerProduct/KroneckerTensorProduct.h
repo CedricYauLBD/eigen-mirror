@@ -36,8 +36,14 @@ class KroneckerProductBase : public ReturnByValue<Derived> {
   using Rhs = typename Traits::Rhs;
 
  public:
-  /*! \brief Constructor. */
-  KroneckerProductBase(const Lhs& A, const Rhs& B) : m_A(A), m_B(B) {}
+  /*! \brief Constructor. Throws std::bad_alloc if a dimension of the product does not fit in Index. */
+  KroneckerProductBase(const Lhs& A, const Rhs& B) : m_A(A), m_B(B) {
+    // rows() and cols() size the destination, which evalTo() then fills with one block of B per coefficient of A: a
+    // wrapped dimension would give a destination smaller than what is written. Checked in all build modes, and here
+    // rather than in rows() and cols() because ReturnByValue forwards to those from noexcept functions.
+    check_dimension_for_overflow(m_A.rows(), m_B.rows());
+    check_dimension_for_overflow(m_A.cols(), m_B.cols());
+  }
 
   inline Index rows() const { return m_A.rows() * m_B.rows(); }
   inline Index cols() const { return m_A.cols() * m_B.cols(); }
@@ -62,6 +68,11 @@ class KroneckerProductBase : public ReturnByValue<Derived> {
  protected:
   typename Lhs::Nested m_A;
   typename Rhs::Nested m_B;
+
+ private:
+  static void check_dimension_for_overflow(Index a, Index b) {
+    if (b != 0 && a > NumTraits<Index>::highest() / b) internal::throw_std_bad_alloc();
+  }
 };
 
 /*!
@@ -154,16 +165,25 @@ void KroneckerProductSparse<Lhs, Rhs>::evalTo(Dest& dst) const {
 
   // compute number of non-zeros per innervectors of dst
   {
-    // TODO: VectorXi is not necessarily big enough!
-    VectorXi nnzA = VectorXi::Zero(Dest::IsRowMajor ? m_A.rows() : m_A.cols());
+    using IndexVector = Matrix<Index, Dynamic, 1>;
+    IndexVector nnzA = IndexVector::Zero(Dest::IsRowMajor ? m_A.rows() : m_A.cols());
     for (Index kA = 0; kA < m_A.outerSize(); ++kA)
       for (LhsInnerIterator itA(lhs1, kA); itA; ++itA) nnzA(Dest::IsRowMajor ? itA.row() : itA.col())++;
 
-    VectorXi nnzB = VectorXi::Zero(Dest::IsRowMajor ? m_B.rows() : m_B.cols());
+    IndexVector nnzB = IndexVector::Zero(Dest::IsRowMajor ? m_B.rows() : m_B.cols());
     for (Index kB = 0; kB < m_B.outerSize(); ++kB)
       for (RhsInnerIterator itB(rhs1, kB); itB; ++itB) nnzB(Dest::IsRowMajor ? itB.row() : itB.col())++;
 
-    Matrix<int, Dynamic, Dynamic, ColMajor> nnzAB = nnzB * nnzA.transpose();
+    // dst stores nnz(A) * nnz(B) entries, which bounds every nnzB(i) * nnzA(j) below. That count must fit Index and
+    // StorageIndex, which can be wider than Index. A product with more entries throws, as SparseMatrix::insert() does.
+    using StorageIndex = typename Dest::StorageIndex;
+    using WideIndex = typename std::common_type<Index, StorageIndex>::type;
+    const Index maxSize =
+        static_cast<Index>(numext::mini<WideIndex>(NumTraits<StorageIndex>::highest(), NumTraits<Index>::highest()));
+    const Index totalA = nnzA.sum(), totalB = nnzB.sum();
+    if (totalB > 0 && totalA > maxSize / totalB) internal::throw_std_bad_alloc();
+
+    Matrix<Index, Dynamic, Dynamic, ColMajor> nnzAB = nnzB * nnzA.transpose();
     dst.reserve(nnzAB.reshaped());
   }
 
