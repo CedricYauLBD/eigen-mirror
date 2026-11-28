@@ -258,6 +258,7 @@ class SkewSymmetricMatrix3 : public SkewSymmetricBase<SkewSymmetricMatrix3<Scala
   using StorageKind = typename internal::traits<SkewSymmetricMatrix3>::StorageKind;
   using StorageIndex = typename internal::traits<SkewSymmetricMatrix3>::StorageIndex;
 #endif
+  EIGEN_MAKE_ALIGNED_OPERATOR_NEW_IF(bool(SkewSymmetricVectorType::NeedsToAlign))
 
  protected:
   SkewSymmetricVectorType m_vector;

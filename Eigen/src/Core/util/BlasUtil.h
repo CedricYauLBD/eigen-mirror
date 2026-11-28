@@ -582,7 +582,7 @@ using gemm_operand_mapper =
  * In particular it allows to pop out operator-, scalar multiples,
  * and conjugate */
 template <typename XprType>
-struct blas_traits {
+struct default_blas_traits {
   using Scalar = typename traits<XprType>::Scalar;
   using ExtractType = const XprType&;
   using ExtractType_ = XprType;
@@ -607,6 +607,10 @@ struct blas_traits {
   EIGEN_DEVICE_FUNC static bool hasZeroScalarFactor(const XprType&) { return false; }
 };
 
+// Unless a specialization below pops a factor, the expression is used as it stands.
+template <typename XprType>
+struct blas_traits : default_blas_traits<XprType> {};
+
 // pop conjugate
 template <typename Scalar, typename NestedXpr>
 struct blas_traits<CwiseUnaryOp<scalar_conjugate_op<Scalar>, NestedXpr> > : blas_traits<NestedXpr> {
@@ -624,15 +628,24 @@ struct blas_traits<CwiseUnaryOp<scalar_conjugate_op<Scalar>, NestedXpr> > : blas
   }
 };
 
+// Whether XprType has the compile-time sizes and the storage order of OtherXpr.
+template <typename XprType, typename OtherXpr>
+struct has_layout_of
+    : bool_constant<int(traits<XprType>::RowsAtCompileTime) == int(traits<OtherXpr>::RowsAtCompileTime) &&
+                    int(traits<XprType>::ColsAtCompileTime) == int(traits<OtherXpr>::ColsAtCompileTime) &&
+                    (int(traits<XprType>::Flags) & RowMajorBit) == (int(traits<OtherXpr>::Flags) & RowMajorBit)> {};
+
 // pop scalar multiple
-template <typename Scalar, typename NestedXpr, typename Plain>
-struct blas_traits<
-    CwiseBinaryOp<scalar_product_op<Scalar>, const CwiseNullaryOp<scalar_constant_op<Scalar>, Plain>, NestedXpr> >
-    : blas_traits<NestedXpr> {
+// A coefficient-wise product has the compile-time sizes and the storage order of its left operand, and the product
+// kernels read the popped operand by them. The constant of s * NestedXpr is built with the layout of NestedXpr; that
+// of Constant(...).cwiseProduct(NestedXpr) need not have it, and then nothing is popped.
+template <typename XprType, typename NestedXpr, bool Pop = has_layout_of<XprType, NestedXpr>::value>
+struct left_scalar_multiple_blas_traits : default_blas_traits<XprType> {};
+template <typename XprType, typename NestedXpr>
+struct left_scalar_multiple_blas_traits<XprType, NestedXpr, true> : blas_traits<NestedXpr> {
   enum { HasScalarFactor = true };
+  using Scalar = typename traits<XprType>::Scalar;
   using Base = blas_traits<NestedXpr>;
-  using XprType =
-      CwiseBinaryOp<scalar_product_op<Scalar>, const CwiseNullaryOp<scalar_constant_op<Scalar>, Plain>, NestedXpr>;
   using ExtractType = typename Base::ExtractType;
   EIGEN_DEVICE_FUNC static inline EIGEN_DEVICE_FUNC ExtractType extract(const XprType& x) {
     return Base::extract(x.rhs());
@@ -646,7 +659,14 @@ struct blas_traits<
 };
 template <typename Scalar, typename NestedXpr, typename Plain>
 struct blas_traits<
-    CwiseBinaryOp<scalar_product_op<Scalar>, NestedXpr, const CwiseNullaryOp<scalar_constant_op<Scalar>, Plain> > >
+    CwiseBinaryOp<scalar_product_op<Scalar>, const CwiseNullaryOp<scalar_constant_op<Scalar>, Plain>, NestedXpr>>
+    : left_scalar_multiple_blas_traits<
+          CwiseBinaryOp<scalar_product_op<Scalar>, const CwiseNullaryOp<scalar_constant_op<Scalar>, Plain>, NestedXpr>,
+          NestedXpr> {};
+// NestedXpr is the left operand here and has the layout of the product.
+template <typename Scalar, typename NestedXpr, typename Plain>
+struct blas_traits<
+    CwiseBinaryOp<scalar_product_op<Scalar>, NestedXpr, const CwiseNullaryOp<scalar_constant_op<Scalar>, Plain>>>
     : blas_traits<NestedXpr> {
   enum { HasScalarFactor = true };
   using Base = blas_traits<NestedXpr>;
@@ -665,16 +685,12 @@ struct blas_traits<
 template <typename Scalar, typename Plain1, typename Plain2>
 struct blas_traits<CwiseBinaryOp<scalar_product_op<Scalar>, const CwiseNullaryOp<scalar_constant_op<Scalar>, Plain1>,
                                  const CwiseNullaryOp<scalar_constant_op<Scalar>, Plain2>>>
-    : blas_traits<const CwiseNullaryOp<scalar_constant_op<Scalar>, Plain2>> {
-  static constexpr bool HasScalarFactor = true;
-  using Base = blas_traits<const CwiseNullaryOp<scalar_constant_op<Scalar>, Plain2>>;
+    : left_scalar_multiple_blas_traits<
+          CwiseBinaryOp<scalar_product_op<Scalar>, const CwiseNullaryOp<scalar_constant_op<Scalar>, Plain1>,
+                        const CwiseNullaryOp<scalar_constant_op<Scalar>, Plain2>>,
+          const CwiseNullaryOp<scalar_constant_op<Scalar>, Plain2>> {
   using XprType = CwiseBinaryOp<scalar_product_op<Scalar>, const CwiseNullaryOp<scalar_constant_op<Scalar>, Plain1>,
                                 const CwiseNullaryOp<scalar_constant_op<Scalar>, Plain2>>;
-  using ExtractType = typename Base::ExtractType;
-  EIGEN_DEVICE_FUNC static inline ExtractType extract(const XprType& x) { return Base::extract(x.rhs()); }
-  EIGEN_DEVICE_FUNC static inline Scalar extractScalarFactor(const XprType& x) {
-    return x.lhs().functor().m_other * Base::extractScalarFactor(x.rhs());
-  }
   // Either constant can represent coefficients; preserve zero/NaN multiplication.
   EIGEN_DEVICE_FUNC static bool hasZeroScalarFactor(const XprType&) { return false; }
 };

@@ -834,6 +834,72 @@ void unaligned_diagonal_products() {
   }
 }
 
+// Triangular and self-adjoint products take a diagonal of either orientation on either side.
+template <int Mode, typename Xpr, typename RefXpr, typename ColMat>
+void check_triangular_diagonal_without_linear_access(const Xpr& diag, const RefXpr& ref, const ColMat& cm) {
+  const ColMat tri = cm.template triangularView<Mode>();
+  VERIFY_IS_APPROX(ColMat(diag.asDiagonal() * cm.template triangularView<Mode>()), ColMat(ref.asDiagonal() * tri));
+  VERIFY_IS_APPROX(ColMat(cm.template triangularView<Mode>() * diag.asDiagonal()), ColMat(tri * ref.asDiagonal()));
+  VERIFY_IS_APPROX(ColMat(ref.asDiagonal() * cm.template triangularView<Mode>()), ColMat(ref.asDiagonal() * tri));
+  VERIFY_IS_APPROX(ColMat(cm.template triangularView<Mode>() * ref.asDiagonal()), ColMat(tri * ref.asDiagonal()));
+  const ColMat sym = cm.template selfadjointView<Mode&(Upper | Lower)>();
+  VERIFY_IS_APPROX(ColMat(diag.asDiagonal() * cm.template selfadjointView<Mode&(Upper | Lower)>()),
+                   ColMat(ref.asDiagonal() * sym));
+  VERIFY_IS_APPROX(ColMat(cm.template selfadjointView<Mode&(Upper | Lower)>() * diag.asDiagonal()),
+                   ColMat(sym * ref.asDiagonal()));
+}
+
+// A compile-time vector can lack LinearAccessBit; diagonal products must then index it through (row, col).
+template <typename Xpr, typename ColMat, typename RowMat>
+void check_diagonal_without_linear_access(const MatrixBase<Xpr>& diag, const ColMat& cm, const RowMat& rm) {
+  using Scalar = typename Xpr::Scalar;
+  using Vec = Matrix<Scalar, Dynamic, 1>;
+  using RowVec = Matrix<Scalar, 1, Dynamic>;
+  STATIC_CHECK(Xpr::IsVectorAtCompileTime && !(internal::evaluator<Xpr>::Flags & LinearAccessBit));
+  // Assignment does not go through index-based access here.
+  const Matrix<Scalar, Xpr::RowsAtCompileTime, Xpr::ColsAtCompileTime> ref = diag;
+  const Vec cv = cm.col(0);
+  const RowVec rv = rm.row(0);
+  VERIFY_IS_APPROX(ColMat(diag.asDiagonal() * cm), ColMat(ref.asDiagonal() * cm));
+  VERIFY_IS_APPROX(ColMat(cm * diag.asDiagonal()), ColMat(cm * ref.asDiagonal()));
+  VERIFY_IS_APPROX(RowMat(diag.asDiagonal() * rm), RowMat(ref.asDiagonal() * rm));
+  VERIFY_IS_APPROX(RowMat(rm * diag.asDiagonal()), RowMat(rm * ref.asDiagonal()));
+  VERIFY_IS_APPROX(Vec(diag.asDiagonal() * cv), Vec(ref.asDiagonal() * cv));
+  VERIFY_IS_APPROX(RowVec(rv * diag.asDiagonal()), RowVec(rv * ref.asDiagonal()));
+  VERIFY_IS_APPROX(ColMat(cm + diag.asDiagonal()), ColMat(cm + ref.asDiagonal()));
+  VERIFY_IS_APPROX(RowMat(diag.asDiagonal() - rm), RowMat(ref.asDiagonal() - rm));
+  // The coefficients of the diagonal matrix itself.
+  using Dense = Matrix<Scalar, Dynamic, Dynamic>;
+  VERIFY_IS_APPROX(Dense(diag.asDiagonal()), Dense(ref.asDiagonal()));
+  const Index i = internal::random<Index>(0, diag.size() - 1);
+  VERIFY_IS_APPROX(diag.asDiagonal().coeff(i, i), ref.asDiagonal().diagonal().coeff(i));
+  // Triangular products, which also read the unit diagonal of a unit triangular matrix.
+  check_triangular_diagonal_without_linear_access<Lower>(diag, ref, cm);
+  check_triangular_diagonal_without_linear_access<UnitLower>(diag, ref, cm);
+  check_triangular_diagonal_without_linear_access<StrictlyUpper>(diag, ref, cm);
+  check_triangular_diagonal_without_linear_access<UnitUpper>(diag, ref, cm);
+}
+
+template <typename Scalar>
+void diagonal_without_linear_access() {
+  using ColMat = Matrix<Scalar, Dynamic, Dynamic, ColMajor>;
+  using RowMat = Matrix<Scalar, Dynamic, Dynamic, RowMajor>;
+  for (Index n : {Index(1), Index(4), Index(7), Index(19)}) {
+    const ColMat cm = random_for_arithmetic<ColMat>(n, n);
+    const RowMat rm = random_for_arithmetic<RowMat>(n, n);
+    const Matrix<Scalar, Dynamic, 1> v = random_for_arithmetic<Matrix<Scalar, Dynamic, 1>>(n);
+    const Matrix<Scalar, 1, Dynamic> x = random_for_arithmetic<Matrix<Scalar, 1, Dynamic>>(n);
+    const Index i = internal::random<Index>(0, n - 1);
+    // One-row and one-column blocks of runtime shape, across and along the storage order of their matrix.
+    check_diagonal_without_linear_access(x - cm.block(i, 0, 1, n), cm, rm);
+    check_diagonal_without_linear_access(x - rm.block(i, 0, 1, n), cm, rm);
+    check_diagonal_without_linear_access(v - cm.block(0, i, n, 1), cm, rm);
+    check_diagonal_without_linear_access(v - rm.block(0, i, n, 1), cm, rm);
+    // Without direct access, an index applied to the other dimension leaves the nested matrix.
+    check_diagonal_without_linear_access(x - (cm + cm.transpose()).block(i, 0, 1, n), cm, rm);
+  }
+}
+
 template <int Mode, int Order>
 void diagonal_product_result_types() {
   using Tag0 = noncommutative_scalar::TaggedScalar<0>;
@@ -910,6 +976,57 @@ void diagonal_product_operand_order() {
   }
 }
 
+template <typename Prod, typename Ref>
+void check_singleton_diagonal_product(const Prod& prod, const Ref& ref) {
+  using Plain = Matrix<typename Prod::Scalar, Dynamic, Dynamic>;
+  STATIC_CHECK(bool(Prod::IsRowMajor) == bool(int(internal::evaluator<Prod>::Flags) & RowMajorBit));
+  Index row = -1, col = -1, refRow = -1, refCol = -1;
+  VERIFY_IS_EQUAL(prod.maxCoeff(&row, &col), ref.maxCoeff(&refRow, &refCol));
+  VERIFY(row == refRow && col == refCol);
+  VERIFY_IS_EQUAL(prod.sum(), ref.sum());
+  VERIFY_IS_EQUAL(Plain(prod), ref);
+  VERIFY_IS_EQUAL(Plain(prod.reverse()), Plain(ref.reverse()));
+  VERIFY_IS_EQUAL(Plain(prod.replicate(2, 3)), Plain(ref.replicate(2, 3)));
+}
+
+// A diagonal of maximum size 1 makes the product a vector at compile time. Its storage order is then not the one of a
+// matrix that has a single row or column only at run time, and the evaluator must report the order of the expression:
+// maxCoeff sizes its loops by the expression and indexes the evaluator by the order it reports.
+template <typename Scalar, typename DiagonalType>
+void singleton_diagonal_products() {
+  using ColMajorMatrix = Matrix<Scalar, Dynamic, Dynamic, ColMajor>;
+  using RowMajorMatrix = Matrix<Scalar, Dynamic, Dynamic, RowMajor>;
+  const Index size = 37;
+  // Only storage(0) is the diagonal. An evaluator that indexes the diagonal along the long dimension of the product
+  // reads the entries behind it, which makes every result below wrong.
+  Matrix<Scalar, Dynamic, 1> storage = Matrix<Scalar, Dynamic, 1>::Constant(size, Scalar(1000));
+  storage(0) = Scalar(2);
+  const Map<const DiagonalType> mapped(storage.data(), 1);
+  const DiagonalType plain = mapped;
+  // Distinct small integers: the extrema are unique and every product and sum is exact.
+  ColMajorMatrix wide(1, size);
+  for (Index k = 0; k < size; ++k) wide(0, k) = Scalar(int((7 * k) % size) - int(size / 2));
+  const RowMajorMatrix tall = wide.transpose();
+  const ColMajorMatrix scaledWide = Scalar(2) * wide;
+  const ColMajorMatrix scaledTall = Scalar(2) * tall;
+
+  check_singleton_diagonal_product(mapped.asDiagonal() * wide, scaledWide);
+  check_singleton_diagonal_product(plain.asDiagonal() * wide, scaledWide);
+  check_singleton_diagonal_product(tall * mapped.asDiagonal(), scaledTall);
+  check_singleton_diagonal_product(tall * plain.asDiagonal(), scaledTall);
+  // A block of a runtime number of rows and columns has no linear access, so the product has no packets.
+  check_singleton_diagonal_product(mapped.asDiagonal() * wide.topRows(1), scaledWide);
+  check_singleton_diagonal_product(tall.leftCols(1) * mapped.asDiagonal(), scaledTall);
+  // Every coefficient of a 1 x n upper and of an n x 1 lower triangular view is in the active triangle.
+  check_singleton_diagonal_product(mapped.asDiagonal() * wide.template triangularView<Upper>(), scaledWide);
+  check_singleton_diagonal_product(tall.template triangularView<Lower>() * mapped.asDiagonal(), scaledTall);
+  // A self-adjoint view is square, so the dense factor is 1 x 1 here.
+  check_singleton_diagonal_product(mapped.asDiagonal() * wide.leftCols(1).template selfadjointView<Upper>(),
+                                   scaledWide.leftCols(1));
+  check_singleton_diagonal_product(tall.topRows(1).template selfadjointView<Lower>() * mapped.asDiagonal(),
+                                   scaledTall.topRows(1));
+}
+
 EIGEN_DECLARE_TEST(diagonalmatrices) {
   for (int i = 0; i < g_repeat; i++) {
     CALL_SUBTEST_1(diagonalmatrices(Matrix<float, 1, 1>()));
@@ -955,4 +1072,9 @@ EIGEN_DECLARE_TEST(diagonalmatrices) {
   CALL_SUBTEST_13((diagonal_product_operand_order<1>()));
   CALL_SUBTEST_13((diagonal_product_operand_order<2>()));
   CALL_SUBTEST_13((diagonal_product_operand_order<Dynamic>()));
+  CALL_SUBTEST_13(diagonal_without_linear_access<float>());
+  CALL_SUBTEST_13(diagonal_without_linear_access<double>());
+  CALL_SUBTEST_13(diagonal_without_linear_access<std::complex<double>>());
+  CALL_SUBTEST_13((singleton_diagonal_products<double, Matrix<double, 1, 1>>()));
+  CALL_SUBTEST_13((singleton_diagonal_products<float, Matrix<float, Dynamic, 1, 0, 1, 1>>()));
 }

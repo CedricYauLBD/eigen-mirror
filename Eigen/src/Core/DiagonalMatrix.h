@@ -75,7 +75,7 @@ class DiagonalBase : public EigenBase<Derived> {
   /** \returns the value of the coefficient as if \c *this was a dense matrix. */
   EIGEN_DEVICE_FUNC inline Scalar coeff(Index row, Index col) const {
     eigen_assert(row >= 0 && col >= 0 && row < rows() && col < cols());
-    return row == col ? diagonal().coeff(row) : Scalar(0);
+    return row == col ? internal::vector_evaluator<DiagonalVectorType>(diagonal()).coeff(row) : Scalar(0);
   }
 
   /** \returns the number of rows. */
@@ -239,6 +239,7 @@ class DiagonalMatrix : public DiagonalBase<DiagonalMatrix<Scalar_, SizeAtCompile
   using StorageKind = typename internal::traits<DiagonalMatrix>::StorageKind;
   using StorageIndex = typename internal::traits<DiagonalMatrix>::StorageIndex;
 #endif
+  EIGEN_MAKE_ALIGNED_OPERATOR_NEW_IF(bool(DiagonalVectorType::NeedsToAlign))
 
  protected:
   DiagonalVectorType m_diagonal;
@@ -538,7 +539,7 @@ struct diagonal_matrix_evaluator : evaluator_base<XprType> {
   }
 
  protected:
-  evaluator<DiagonalVectorType> m_diagonal;
+  vector_evaluator<DiagonalVectorType> m_diagonal;
 };
 
 template <typename Scalar_, int SizeAtCompileTime, int MaxSizeAtCompileTime>

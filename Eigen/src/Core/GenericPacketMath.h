@@ -1155,7 +1155,8 @@ EIGEN_DEVICE_FUNC inline Packet pgather_partial(const Scalar* from, Index stride
 
 template <typename Scalar, typename Packet>
 EIGEN_DEVICE_FUNC inline void pscatter(Scalar* to, const Packet& from, Index /*stride*/) {
-  pstore(to, from);
+  // As for pgather, a strided coefficient is only aligned on alignof(Scalar), not on the packet.
+  pstoreu(to, from);
 }
 
 template <typename Scalar, typename Packet>

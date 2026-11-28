@@ -205,6 +205,24 @@ void syrk(const MatrixType& m) {
     VERIFY_IS_APPROX(rm2, (u * v.adjoint()).eval().template triangularView<StrictlyUpper>().toDenseMatrix());
   }
 
+  // An operand of a matrix type that is a vector only at run time, with a stride, is copied through a buffer.
+  {
+    using MatrixX = Matrix<Scalar, Dynamic, Dynamic>;
+    using RowVectorX = Matrix<Scalar, 1, Dynamic>;
+    using VectorX = Matrix<Scalar, Dynamic, 1>;
+    const VectorX strideBuffer = VectorX::Random(2 * rows);
+    const Map<const MatrixX, 0, InnerStride<> > stridedCol(strideBuffer.data(), rows, 1, InnerStride<>(2));
+    const Map<const MatrixX, 0, InnerStride<> > stridedRow(strideBuffer.data(), 1, rows, InnerStride<>(2));
+    const RowVectorX r = RowVectorX::Random(rows);
+    const VectorX u = VectorX::Random(rows);
+    m2.setZero();
+    m2.template triangularView<Lower>() += stridedCol * r;
+    VERIFY_IS_APPROX(m2, (MatrixX(stridedCol) * r).eval().template triangularView<Lower>().toDenseMatrix());
+    rm2.setZero();
+    rm2.template triangularView<Upper>() += u * stridedRow;
+    VERIFY_IS_APPROX(rm2, (u * MatrixX(stridedRow)).eval().template triangularView<Upper>().toDenseMatrix());
+  }
+
   // products assigned to a triangular part of a rectangular matrix
   {
     using MatrixX = Matrix<Scalar, Dynamic, Dynamic>;

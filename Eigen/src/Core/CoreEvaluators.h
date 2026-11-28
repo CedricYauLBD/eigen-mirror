@@ -602,6 +602,13 @@ struct unary_evaluator<CwiseUnaryOp<core_cast_op<SrcType, DstType>, ArgType>, In
   template <typename DstPacketType>
   using SrcPacketArgs8 = std::enable_if_t<(unpacket_traits<DstPacketType>::size) == (8 * SrcPacketSize), bool>;
 
+  // Load mode of source packets srcBytes apart. LoadMode aligns index * sizeof(DstType), and the linear vectorized
+  // assignment of an under-aligned destination starts at an index that need not be a multiple of the packet size:
+  // index * sizeof(SrcType) is then only a multiple of LoadMode * sizeof(SrcType) / sizeof(DstType).
+  static constexpr int src_load_mode(int loadMode, int srcBytes) {
+    return plain_enum_min(srcBytes, plain_enum_min(loadMode, loadMode * int(sizeof(SrcType)) / int(sizeof(DstType))));
+  }
+
   EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE bool check_array_bounds(Index row, Index col, Index begin, Index count) const {
     return IsRowMajor ? (col + count + begin <= cols()) : (row + count + begin <= rows());
   }
@@ -709,7 +716,7 @@ struct unary_evaluator<CwiseUnaryOp<core_cast_op<SrcType, DstType>, ArgType>, In
   EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE DstPacketType packet(Index row, Index col) const {
     constexpr int DstPacketSize = unpacket_traits<DstPacketType>::size;
     constexpr int SrcBytesIncrement = DstPacketSize * sizeof(SrcType);
-    constexpr int SrcLoadMode = plain_enum_min(SrcBytesIncrement, LoadMode);
+    constexpr int SrcLoadMode = src_load_mode(LoadMode, SrcBytesIncrement);
     return pcast<SrcPacketType, DstPacketType>(srcPacketSegment<SrcLoadMode>(row, col, 0, DstPacketSize, 0));
   }
   // Use the source packet type with the same size as DstPacketType, if it exists
@@ -718,20 +725,20 @@ struct unary_evaluator<CwiseUnaryOp<core_cast_op<SrcType, DstType>, ArgType>, In
     constexpr int DstPacketSize = unpacket_traits<DstPacketType>::size;
     using SizedSrcPacketType = typename find_packet_by_size<SrcType, DstPacketSize>::type;
     constexpr int SrcBytesIncrement = DstPacketSize * sizeof(SrcType);
-    constexpr int SrcLoadMode = plain_enum_min(SrcBytesIncrement, LoadMode);
+    constexpr int SrcLoadMode = src_load_mode(LoadMode, SrcBytesIncrement);
     return pcast<SizedSrcPacketType, DstPacketType>(srcPacket<SrcLoadMode, SizedSrcPacketType>(row, col, 0));
   }
   // unpacket_traits<DstPacketType>::size == 2 * SrcPacketSize
   template <int LoadMode, typename DstPacketType, SrcPacketArgs2<DstPacketType> = true>
   EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE DstPacketType packet(Index row, Index col) const {
-    constexpr int SrcLoadMode = plain_enum_min(SrcPacketBytes, LoadMode);
+    constexpr int SrcLoadMode = src_load_mode(LoadMode, SrcPacketBytes);
     return pcast<SrcPacketType, DstPacketType>(srcPacket<SrcLoadMode>(row, col, 0),
                                                srcPacket<SrcLoadMode>(row, col, 1));
   }
   // unpacket_traits<DstPacketType>::size == 4 * SrcPacketSize
   template <int LoadMode, typename DstPacketType, SrcPacketArgs4<DstPacketType> = true>
   EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE DstPacketType packet(Index row, Index col) const {
-    constexpr int SrcLoadMode = plain_enum_min(SrcPacketBytes, LoadMode);
+    constexpr int SrcLoadMode = src_load_mode(LoadMode, SrcPacketBytes);
     return pcast<SrcPacketType, DstPacketType>(srcPacket<SrcLoadMode>(row, col, 0), srcPacket<SrcLoadMode>(row, col, 1),
                                                srcPacket<SrcLoadMode>(row, col, 2),
                                                srcPacket<SrcLoadMode>(row, col, 3));
@@ -739,7 +746,7 @@ struct unary_evaluator<CwiseUnaryOp<core_cast_op<SrcType, DstType>, ArgType>, In
   // unpacket_traits<DstPacketType>::size == 8 * SrcPacketSize
   template <int LoadMode, typename DstPacketType, SrcPacketArgs8<DstPacketType> = true>
   EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE DstPacketType packet(Index row, Index col) const {
-    constexpr int SrcLoadMode = plain_enum_min(SrcPacketBytes, LoadMode);
+    constexpr int SrcLoadMode = src_load_mode(LoadMode, SrcPacketBytes);
     return pcast<SrcPacketType, DstPacketType>(
         srcPacket<SrcLoadMode>(row, col, 0), srcPacket<SrcLoadMode>(row, col, 1), srcPacket<SrcLoadMode>(row, col, 2),
         srcPacket<SrcLoadMode>(row, col, 3), srcPacket<SrcLoadMode>(row, col, 4), srcPacket<SrcLoadMode>(row, col, 5),
@@ -752,7 +759,7 @@ struct unary_evaluator<CwiseUnaryOp<core_cast_op<SrcType, DstType>, ArgType>, In
                                                                     Index count) const {
     constexpr int DstPacketSize = unpacket_traits<DstPacketType>::size;
     constexpr int SrcBytesIncrement = DstPacketSize * sizeof(SrcType);
-    constexpr int SrcLoadMode = plain_enum_min(SrcBytesIncrement, LoadMode);
+    constexpr int SrcLoadMode = src_load_mode(LoadMode, SrcBytesIncrement);
     return pcast<SrcPacketType, DstPacketType>(srcPacketSegment<SrcLoadMode>(row, col, begin, count, 0));
   }
   // Use the source packet type with the same size as DstPacketType, if it exists
@@ -762,7 +769,7 @@ struct unary_evaluator<CwiseUnaryOp<core_cast_op<SrcType, DstType>, ArgType>, In
     constexpr int DstPacketSize = unpacket_traits<DstPacketType>::size;
     using SizedSrcPacketType = typename find_packet_by_size<SrcType, DstPacketSize>::type;
     constexpr int SrcBytesIncrement = DstPacketSize * sizeof(SrcType);
-    constexpr int SrcLoadMode = plain_enum_min(SrcBytesIncrement, LoadMode);
+    constexpr int SrcLoadMode = src_load_mode(LoadMode, SrcBytesIncrement);
     return pcast<SizedSrcPacketType, DstPacketType>(
         srcPacketSegment<SrcLoadMode, SizedSrcPacketType>(row, col, begin, count, 0));
   }
@@ -771,7 +778,7 @@ struct unary_evaluator<CwiseUnaryOp<core_cast_op<SrcType, DstType>, ArgType>, In
   EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE DstPacketType packetSegment(Index row, Index col, Index begin,
                                                                     Index count) const {
     constexpr int NumPackets = 2;
-    constexpr int SrcLoadMode = plain_enum_min(SrcPacketBytes, LoadMode);
+    constexpr int SrcLoadMode = src_load_mode(LoadMode, SrcPacketBytes);
     PacketBlock<SrcPacketType, NumPackets> packets =
         srcPacketSegmentHelper<NumPackets, SrcLoadMode>(row, col, begin, count);
     return pcast<SrcPacketType, DstPacketType>(packets.packet[0], packets.packet[1]);
@@ -781,7 +788,7 @@ struct unary_evaluator<CwiseUnaryOp<core_cast_op<SrcType, DstType>, ArgType>, In
   EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE DstPacketType packetSegment(Index row, Index col, Index begin,
                                                                     Index count) const {
     constexpr int NumPackets = 4;
-    constexpr int SrcLoadMode = plain_enum_min(SrcPacketBytes, LoadMode);
+    constexpr int SrcLoadMode = src_load_mode(LoadMode, SrcPacketBytes);
     PacketBlock<SrcPacketType, NumPackets> packets =
         srcPacketSegmentHelper<NumPackets, SrcLoadMode>(row, col, begin, count);
     return pcast<SrcPacketType, DstPacketType>(packets.packet[0], packets.packet[1], packets.packet[2],
@@ -792,7 +799,7 @@ struct unary_evaluator<CwiseUnaryOp<core_cast_op<SrcType, DstType>, ArgType>, In
   EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE DstPacketType packetSegment(Index row, Index col, Index begin,
                                                                     Index count) const {
     constexpr int NumPackets = 8;
-    constexpr int SrcLoadMode = plain_enum_min(SrcPacketBytes, LoadMode);
+    constexpr int SrcLoadMode = src_load_mode(LoadMode, SrcPacketBytes);
     PacketBlock<SrcPacketType, NumPackets> packets =
         srcPacketSegmentHelper<NumPackets, SrcLoadMode>(row, col, begin, count);
     return pcast<SrcPacketType, DstPacketType>(packets.packet[0], packets.packet[1], packets.packet[2],
@@ -805,7 +812,7 @@ struct unary_evaluator<CwiseUnaryOp<core_cast_op<SrcType, DstType>, ArgType>, In
   EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE DstPacketType packet(Index index) const {
     constexpr int DstPacketSize = unpacket_traits<DstPacketType>::size;
     constexpr int SrcBytesIncrement = DstPacketSize * sizeof(SrcType);
-    constexpr int SrcLoadMode = plain_enum_min(SrcBytesIncrement, LoadMode);
+    constexpr int SrcLoadMode = src_load_mode(LoadMode, SrcBytesIncrement);
     return pcast<SrcPacketType, DstPacketType>(srcPacketSegment<SrcLoadMode>(index, 0, DstPacketSize, 0));
   }
   template <int LoadMode, typename DstPacketType, SrcPacketArgs1<DstPacketType> = true>
@@ -813,23 +820,23 @@ struct unary_evaluator<CwiseUnaryOp<core_cast_op<SrcType, DstType>, ArgType>, In
     constexpr int DstPacketSize = unpacket_traits<DstPacketType>::size;
     using SizedSrcPacketType = typename find_packet_by_size<SrcType, DstPacketSize>::type;
     constexpr int SrcBytesIncrement = DstPacketSize * sizeof(SrcType);
-    constexpr int SrcLoadMode = plain_enum_min(SrcBytesIncrement, LoadMode);
+    constexpr int SrcLoadMode = src_load_mode(LoadMode, SrcBytesIncrement);
     return pcast<SizedSrcPacketType, DstPacketType>(srcPacket<SrcLoadMode, SizedSrcPacketType>(index, 0));
   }
   template <int LoadMode, typename DstPacketType, SrcPacketArgs2<DstPacketType> = true>
   EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE DstPacketType packet(Index index) const {
-    constexpr int SrcLoadMode = plain_enum_min(SrcPacketBytes, LoadMode);
+    constexpr int SrcLoadMode = src_load_mode(LoadMode, SrcPacketBytes);
     return pcast<SrcPacketType, DstPacketType>(srcPacket<SrcLoadMode>(index, 0), srcPacket<SrcLoadMode>(index, 1));
   }
   template <int LoadMode, typename DstPacketType, SrcPacketArgs4<DstPacketType> = true>
   EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE DstPacketType packet(Index index) const {
-    constexpr int SrcLoadMode = plain_enum_min(SrcPacketBytes, LoadMode);
+    constexpr int SrcLoadMode = src_load_mode(LoadMode, SrcPacketBytes);
     return pcast<SrcPacketType, DstPacketType>(srcPacket<SrcLoadMode>(index, 0), srcPacket<SrcLoadMode>(index, 1),
                                                srcPacket<SrcLoadMode>(index, 2), srcPacket<SrcLoadMode>(index, 3));
   }
   template <int LoadMode, typename DstPacketType, SrcPacketArgs8<DstPacketType> = true>
   EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE DstPacketType packet(Index index) const {
-    constexpr int SrcLoadMode = plain_enum_min(SrcPacketBytes, LoadMode);
+    constexpr int SrcLoadMode = src_load_mode(LoadMode, SrcPacketBytes);
     return pcast<SrcPacketType, DstPacketType>(srcPacket<SrcLoadMode>(index, 0), srcPacket<SrcLoadMode>(index, 1),
                                                srcPacket<SrcLoadMode>(index, 2), srcPacket<SrcLoadMode>(index, 3),
                                                srcPacket<SrcLoadMode>(index, 4), srcPacket<SrcLoadMode>(index, 5),
@@ -841,7 +848,7 @@ struct unary_evaluator<CwiseUnaryOp<core_cast_op<SrcType, DstType>, ArgType>, In
   EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE DstPacketType packetSegment(Index index, Index begin, Index count) const {
     constexpr int DstPacketSize = unpacket_traits<DstPacketType>::size;
     constexpr int SrcBytesIncrement = DstPacketSize * sizeof(SrcType);
-    constexpr int SrcLoadMode = plain_enum_min(SrcBytesIncrement, LoadMode);
+    constexpr int SrcLoadMode = src_load_mode(LoadMode, SrcBytesIncrement);
     return pcast<SrcPacketType, DstPacketType>(srcPacketSegment<SrcLoadMode>(index, begin, count, 0));
   }
   // Use the source packet type with the same size as DstPacketType, if it exists
@@ -850,7 +857,7 @@ struct unary_evaluator<CwiseUnaryOp<core_cast_op<SrcType, DstType>, ArgType>, In
     constexpr int DstPacketSize = unpacket_traits<DstPacketType>::size;
     using SizedSrcPacketType = typename find_packet_by_size<SrcType, DstPacketSize>::type;
     constexpr int SrcBytesIncrement = DstPacketSize * sizeof(SrcType);
-    constexpr int SrcLoadMode = plain_enum_min(SrcBytesIncrement, LoadMode);
+    constexpr int SrcLoadMode = src_load_mode(LoadMode, SrcBytesIncrement);
     return pcast<SizedSrcPacketType, DstPacketType>(
         srcPacketSegment<SrcLoadMode, SizedSrcPacketType>(index, begin, count, 0));
   }
@@ -858,7 +865,7 @@ struct unary_evaluator<CwiseUnaryOp<core_cast_op<SrcType, DstType>, ArgType>, In
   template <int LoadMode, typename DstPacketType, SrcPacketArgs2<DstPacketType> = true>
   EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE DstPacketType packetSegment(Index index, Index begin, Index count) const {
     constexpr int NumPackets = 2;
-    constexpr int SrcLoadMode = plain_enum_min(SrcPacketBytes, LoadMode);
+    constexpr int SrcLoadMode = src_load_mode(LoadMode, SrcPacketBytes);
     PacketBlock<SrcPacketType, NumPackets> packets =
         srcPacketSegmentHelper<NumPackets, SrcLoadMode>(index, begin, count);
     return pcast<SrcPacketType, DstPacketType>(packets.packet[0], packets.packet[1]);
@@ -867,7 +874,7 @@ struct unary_evaluator<CwiseUnaryOp<core_cast_op<SrcType, DstType>, ArgType>, In
   template <int LoadMode, typename DstPacketType, SrcPacketArgs4<DstPacketType> = true>
   EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE DstPacketType packetSegment(Index index, Index begin, Index count) const {
     constexpr int NumPackets = 4;
-    constexpr int SrcLoadMode = plain_enum_min(SrcPacketBytes, LoadMode);
+    constexpr int SrcLoadMode = src_load_mode(LoadMode, SrcPacketBytes);
     PacketBlock<SrcPacketType, NumPackets> packets =
         srcPacketSegmentHelper<NumPackets, SrcLoadMode>(index, begin, count);
     return pcast<SrcPacketType, DstPacketType>(packets.packet[0], packets.packet[1], packets.packet[2],
@@ -877,7 +884,7 @@ struct unary_evaluator<CwiseUnaryOp<core_cast_op<SrcType, DstType>, ArgType>, In
   template <int LoadMode, typename DstPacketType, SrcPacketArgs8<DstPacketType> = true>
   EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE DstPacketType packetSegment(Index index, Index begin, Index count) const {
     constexpr int NumPackets = 8;
-    constexpr int SrcLoadMode = plain_enum_min(SrcPacketBytes, LoadMode);
+    constexpr int SrcLoadMode = src_load_mode(LoadMode, SrcPacketBytes);
     PacketBlock<SrcPacketType, NumPackets> packets =
         srcPacketSegmentHelper<NumPackets, SrcLoadMode>(index, begin, count);
     return pcast<SrcPacketType, DstPacketType>(packets.packet[0], packets.packet[1], packets.packet[2],
@@ -1002,7 +1009,7 @@ struct scalar_boolean_select_spec {
   using PacketXprType = CwiseTernaryOp<PacketTernaryOp, Arg1, Arg2, PacketArg3>;
 
   // Rebuild the comparison with a typed result only when the entire select expression can use packets. Otherwise,
-  // evaluate the original expression so indirect evaluators do not retain references into a temporary rewrite.
+  // evaluate the original expression: the rewrite would gain nothing.
   static constexpr bool UseTyped = (ternary_evaluator<PacketXprType>::Flags & PacketAccessBit) != 0;
   using Arg3 = std::conditional_t<UseTyped, PacketArg3, DummyArg3>;
   using XprType = std::conditional_t<UseTyped, PacketXprType, DummyXprType>;
@@ -1016,19 +1023,29 @@ struct scalar_boolean_select_spec {
   EIGEN_DEVICE_FUNC constexpr static XprType expression(const DummyXprType& xpr, std::true_type) {
     return XprType(xpr.arg1(), xpr.arg2(), Arg3(xpr.arg3().lhs(), xpr.arg3().rhs()));
   }
+
+  // The expression the evaluator is built on. The rewrite is stored, not passed as a temporary: evaluators may point
+  // into their expression, and the rewrite holds its own copy of every operand that is nested by value (NestByValue).
+  struct Storage {
+    EIGEN_DEVICE_FUNC constexpr explicit Storage(const DummyXprType& xpr)
+        : m_xpr(expression(xpr, bool_constant<UseTyped>())) {}
+    std::conditional_t<UseTyped, const XprType, const DummyXprType&> m_xpr;
+  };
 };
 
 // specialization for expressions like (a < b).select(c, d) to enable full vectorization
 template <typename Arg1, typename Arg2, typename Scalar, typename CmpLhsType, typename CmpRhsType, ComparisonName cmp>
 struct evaluator<CwiseTernaryOp<scalar_boolean_select_op<Scalar, Scalar, bool>, Arg1, Arg2,
                                 CwiseBinaryOp<scalar_cmp_op<Scalar, Scalar, cmp, false>, CmpLhsType, CmpRhsType>>>
-    : public scalar_boolean_select_spec<Arg1, Arg2, Scalar, CmpLhsType, CmpRhsType, cmp>::Base {
+    : private scalar_boolean_select_spec<Arg1, Arg2, Scalar, CmpLhsType, CmpRhsType, cmp>::Storage,
+      public scalar_boolean_select_spec<Arg1, Arg2, Scalar, CmpLhsType, CmpRhsType, cmp>::Base {
   using Helper = scalar_boolean_select_spec<Arg1, Arg2, Scalar, CmpLhsType, CmpRhsType, cmp>;
+  using Storage = typename Helper::Storage;
   using Base = typename Helper::Base;
   using DummyXprType = typename Helper::DummyXprType;
 
-  EIGEN_DEVICE_FUNC constexpr explicit evaluator(const DummyXprType& xpr)
-      : Base(Helper::expression(xpr, bool_constant<Helper::UseTyped>())) {}
+  // Storage is the first base, so the expression is constructed before, and destroyed after, its evaluator.
+  EIGEN_DEVICE_FUNC constexpr explicit evaluator(const DummyXprType& xpr) : Storage(xpr), Base(Storage::m_xpr) {}
 };
 
 // -------------------- CwiseBinaryOp --------------------
@@ -2029,6 +2046,45 @@ struct evaluator<Diagonal<ArgType, DiagIndex>> : evaluator_base<Diagonal<ArgType
  private:
   EIGEN_DEVICE_FUNC constexpr Index rowOffset() const { return m_index.value() > 0 ? 0 : -m_index.value(); }
   EIGEN_DEVICE_FUNC constexpr Index colOffset() const { return m_index.value() > 0 ? m_index.value() : 0; }
+};
+
+// -------------------- vector_evaluator --------------------
+
+// evaluator<Xpr> whose index-based accessors are valid for every compile-time vector. Such a vector can lack
+// LinearAccessBit, e.g. a row vector minus a one-row Dynamic x Dynamic block; coeff(Index) and packet(Index) then go
+// through (row, col). Kernels that walk a vector operand by index hold this instead of evaluator<Xpr>.
+// The parameter is not named XprType: MSVC lets the dependent base's XprType hide it.
+template <typename Xpr, bool UseRowCol = Xpr::IsVectorAtCompileTime && !(evaluator<Xpr>::Flags & LinearAccessBit)>
+struct vector_evaluator : evaluator<Xpr> {
+  using Base = evaluator<Xpr>;
+  EIGEN_DEVICE_FUNC constexpr EIGEN_STRONG_INLINE explicit vector_evaluator(const Xpr& xpr) : Base(xpr) {}
+};
+
+template <typename Xpr>
+struct vector_evaluator<Xpr, true> : evaluator<Xpr> {
+  using Base = evaluator<Xpr>;
+  static constexpr bool IsRow = Xpr::RowsAtCompileTime == 1;
+  // packet(row, col) loads along the evaluator's storage order; it serves packet(Index) only if the vector runs
+  // in that direction.
+  static constexpr bool PacketsFollowVector = bool(Base::Flags & RowMajorBit) == IsRow;
+  static constexpr unsigned int Flags =
+      (static_cast<unsigned int>(Base::Flags) & ~(PacketsFollowVector ? 0u : PacketAccessBit)) | LinearAccessBit;
+
+  EIGEN_DEVICE_FUNC constexpr EIGEN_STRONG_INLINE explicit vector_evaluator(const Xpr& xpr) : Base(xpr) {}
+
+  EIGEN_DEVICE_FUNC constexpr EIGEN_STRONG_INLINE decltype(auto) coeff(Index index) const {
+    return Base::coeff(IsRow ? 0 : index, IsRow ? index : 0);
+  }
+
+  template <int LoadMode, typename PacketType>
+  EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE PacketType packet(Index index) const {
+    return Base::template packet<LoadMode, PacketType>(IsRow ? 0 : index, IsRow ? index : 0);
+  }
+
+  template <int LoadMode, typename PacketType>
+  EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE PacketType packetSegment(Index index, Index begin, Index count) const {
+    return Base::template packetSegment<LoadMode, PacketType>(IsRow ? 0 : index, IsRow ? index : 0, begin, count);
+  }
 };
 
 //----------------------------------------------------------------------

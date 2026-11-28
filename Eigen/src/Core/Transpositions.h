@@ -60,11 +60,15 @@ class TranspositionsBase {
   /** \returns a reference to the stored array representing the transpositions. */
   EIGEN_DEVICE_FUNC IndicesType& indices() { return derived().indices(); }
 
-  /** Resizes to given size. */
-  inline void resize(Index newSize) { indices().resize(newSize); }
+  /** Resizes to given size, whose largest index size - 1 must fit \c StorageIndex. */
+  inline void resize(Index newSize) {
+    internal::check_permutation_size<StorageIndex>(newSize);
+    indices().resize(newSize);
+  }
 
   /** Sets \c *this to represents an identity transformation */
   void setIdentity() {
+    internal::check_permutation_size<StorageIndex>(size());
     for (Index i = 0; i < indices().size(); ++i) coeffRef(i) = internal::convert_index<StorageIndex>(i);
   }
 
@@ -164,16 +168,21 @@ class Transpositions
   using Base = TranspositionsBase<Transpositions>;
   using IndicesType = typename Traits::IndicesType;
   using StorageIndex = typename IndicesType::Scalar;
+  EIGEN_MAKE_ALIGNED_OPERATOR_NEW_IF(bool(IndicesType::NeedsToAlign))
 
   inline Transpositions() {}
 
   /** Copy constructor. */
   template <typename OtherDerived>
-  inline Transpositions(const TranspositionsBase<OtherDerived>& other) : m_indices(other.indices()) {}
+  inline Transpositions(const TranspositionsBase<OtherDerived>& other) : m_indices(other.indices()) {
+    internal::check_permutation_size<StorageIndex>(m_indices.size());
+  }
 
   /** Generic constructor from expression of the transposition indices. */
   template <typename Other>
-  explicit inline Transpositions(const MatrixBase<Other>& indices) : m_indices(indices) {}
+  explicit inline Transpositions(const MatrixBase<Other>& indices) : m_indices(indices) {
+    internal::check_permutation_size<StorageIndex>(m_indices.size());
+  }
 
   /** Copies the \a other transpositions into \c *this */
   template <typename OtherDerived>
@@ -181,9 +190,10 @@ class Transpositions
     return Base::operator=(other);
   }
 
-  /** Constructs an uninitialized permutation matrix of given size.
+  /** Constructs an uninitialized permutation matrix of given size, whose largest index size - 1 must fit \c
+   * StorageIndex.
    */
-  inline Transpositions(Index size) : m_indices(size) {}
+  inline Transpositions(Index size) : m_indices(size) { internal::check_permutation_size<StorageIndex>(size); }
 
   /** const version of indices(). */
   EIGEN_DEVICE_FUNC const IndicesType& indices() const { return m_indices; }

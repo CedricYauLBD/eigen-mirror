@@ -354,12 +354,16 @@ struct selfadjoint_product_impl<Lhs, LhsMode, false, Rhs, 0, true> {
     // coeffRef(0,0).
     if (lhs.size() == 0) return;
 
+    // make sure Dest is a compile-time vector type (bug 1166)
+    using ActualDest = std::conditional_t<Dest::IsVectorAtCompileTime, Dest, typename Dest::ColXpr>;
+
     enum {
-      EvalToDest = (Dest::InnerStrideAtCompileTime == 1),
+      EvalToDest = (ActualDest::InnerStrideAtCompileTime == 1),
       UseRhs = (ActualRhsTypeCleaned::InnerStrideAtCompileTime == 1)
     };
 
-    internal::gemv_static_vector_if<ResScalar, Dest::SizeAtCompileTime, Dest::MaxSizeAtCompileTime, !EvalToDest>
+    internal::gemv_static_vector_if<ResScalar, ActualDest::SizeAtCompileTime, ActualDest::MaxSizeAtCompileTime,
+                                    !EvalToDest>
         static_dest;
     internal::gemv_static_vector_if<RhsScalar, ActualRhsTypeCleaned::SizeAtCompileTime,
                                     ActualRhsTypeCleaned::MaxSizeAtCompileTime, !UseRhs>

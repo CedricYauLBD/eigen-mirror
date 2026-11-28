@@ -132,6 +132,23 @@ void product_selfadjoint(const MatrixType& m) {
   m2.template selfadjointView<Lower>().rankUpdate(v1, v2);
   VERIFY_IS_APPROX(m2, (m1 + v1 * v2.adjoint() + v2 * v1.adjoint()).template triangularView<Lower>().toDenseMatrix());
 
+  // rank2 update with operands that are vectors at runtime only: the constant is not popped as a scalar factor, and
+  // the buffer copies must be built from the operands' runtime rows and columns (C++14 instantiates them
+  // unconditionally)
+  {
+    using DynamicMatrix = Matrix<Scalar, Dynamic, Dynamic>;
+    const DynamicMatrix twos = DynamicMatrix::Constant(rows, 1, Scalar(2));
+    m2 = m1.template triangularView<Lower>();
+    m2.template selfadjointView<Lower>().rankUpdate(twos.cwiseProduct(v1), twos.cwiseProduct(v2));
+    VERIFY_IS_APPROX(
+        m2, (m1 + 4 * v1 * v2.adjoint() + 4 * v2 * v1.adjoint()).template triangularView<Lower>().toDenseMatrix());
+    m2 = m1.template triangularView<Upper>();
+    m2.template selfadjointView<Upper>().rankUpdate(twos.cwiseProduct(v1).conjugate(), twos.cwiseProduct(v2));
+    VERIFY_IS_APPROX(m2, (m1 + 4 * v1.conjugate() * v2.adjoint() + 4 * v2 * v1.transpose())
+                             .template triangularView<Upper>()
+                             .toDenseMatrix());
+  }
+
   m2 = m1.template triangularView<Upper>();
   m2.template selfadjointView<Upper>().rankUpdate(-v1, s2 * v2, s3);
   VERIFY_IS_APPROX(m2, (m1 + (s3 * (-v1) * (s2 * v2).adjoint() + numext::conj(s3) * (s2 * v2) * (-v1).adjoint()))
@@ -175,6 +192,20 @@ void product_selfadjoint(const MatrixType& m) {
   // matrix-vector
   m2 = m1.template triangularView<Lower>();
   VERIFY_IS_APPROX(m1 * m4, m2.template selfadjointView<Lower>() * m4);
+
+  // matrix-vector with a destination that is a vector at runtime only (see bug 1166)
+  {
+    using ColMajorDest = Matrix<Scalar, Dynamic, Dynamic, ColMajor>;
+    using RowMajorDest = Matrix<Scalar, Dynamic, Dynamic, RowMajor>;
+    ColMajorDest dest1 = ColMajorDest::Random(4, rows), ref1 = dest1;
+    RowMajorDest dest2 = RowMajorDest::Random(rows, 4), ref2 = dest2;
+    dest2.middleCols(1, 1).noalias() = m2.template selfadjointView<Lower>() * v1;
+    ref2.col(1) = m1 * v1;
+    VERIFY_IS_APPROX(dest2, ref2);
+    dest1.middleRows(1, 1).noalias() += r1 * m2.template selfadjointView<Lower>();
+    ref1.row(1) += r1 * m1;
+    VERIFY_IS_APPROX(dest1, ref1);
+  }
 }
 
 // Test selfadjoint products at blocking boundary sizes.

@@ -255,9 +255,8 @@ void check_symm_pack_lhs(Index kc) {
   VERIFY_IS_EQUAL(packed, ref);
 }
 
-template <typename Scalar, int StorageOrder>
+template <typename Scalar, int StorageOrder, int nr = internal::gebp_traits<Scalar, Scalar>::nr>
 void check_symm_pack_rhs(Index n, Index rows, Index k2) {
-  using Traits = internal::gebp_traits<Scalar, Scalar>;
   using Mat = Matrix<Scalar, Dynamic, Dynamic, StorageOrder>;
   using Mapper = internal::const_blas_data_mapper<Scalar, Index, StorageOrder>;
   Mat stored, full;
@@ -266,11 +265,26 @@ void check_symm_pack_rhs(Index n, Index rows, Index k2) {
   Matrix<Scalar, Dynamic, 1> packed = make_marked_buffer<Scalar>(rows * n);
   Matrix<Scalar, Dynamic, 1> ref = packed;
 
-  internal::symm_pack_rhs<Scalar, Index, Traits::nr, StorageOrder>()(packed.data(), stored.data(), stored.outerStride(),
-                                                                     rows, n, k2);
-  internal::gemm_pack_rhs<Scalar, Index, Mapper, Traits::nr, StorageOrder, false, false>()(
+  internal::symm_pack_rhs<Scalar, Index, nr, StorageOrder>()(packed.data(), stored.data(), stored.outerStride(), rows,
+                                                             n, k2);
+  internal::gemm_pack_rhs<Scalar, Index, Mapper, nr, StorageOrder, false, false>()(
       ref.data(), Mapper(full.data(), full.outerStride()).getSubMapper(k2, 0), rows, n);
   VERIFY_IS_EQUAL(packed, ref);
+}
+
+// A kernel with nr < 4 (gebp_traits<mpfr::mpreal> has nr == 1) has no panel grid: a depth block may start at any
+// column, and every column right of the ones read directly goes through the one-at-a-time tail. The scalar is one no
+// architecture specializes the packers for.
+template <typename Scalar>
+void symm_pack_rhs_without_panels() {
+  for (Index n = 1; n <= 7; ++n) {
+    for (Index k2 = 0; k2 < n; ++k2) {
+      for (Index rows = 1; k2 + rows <= n; ++rows) {
+        check_symm_pack_rhs<Scalar, ColMajor, 1>(n, rows, k2);
+        check_symm_pack_rhs<Scalar, RowMajor, 1>(n, rows, k2);
+      }
+    }
+  }
 }
 
 template <typename Scalar>
@@ -316,6 +330,8 @@ void symm_packers_and_rowmajor_operands() {
   symm_pack_buffers<double>();
   symm_pack_buffers<std::complex<float> >();
   symm_pack_buffers<std::complex<double> >();
+  symm_pack_rhs_without_panels<long double>();
+  symm_pack_rhs_without_panels<std::complex<long double>>();
 
   const Index sizes[] = {1, 2, 7, 8, 9, 24, 25, 31, 32, 33, 47, 48, 49, 65};
   for (Index n : sizes) {

@@ -236,6 +236,39 @@ void bug1453() {
   VERIFY_IS_APPROX(RowMatrix32i::Map(data, InnerStride<>(2)), RowMatrixXi::Map(data, 3, 2, Stride<4, 2>()));
 }
 
+// A strided destination is only aligned on alignof(Scalar), which is half of a packet for std::complex<double>. The
+// blocked product kernels write it with pscatter, which must not assume that a coefficient is aligned on a packet.
+template <int>
+void product_into_unaligned_strided_map() {
+  using Scalar = std::complex<double>;
+  using MatrixType = Matrix<Scalar, Dynamic, Dynamic, ColMajor>;
+  using Strides = Stride<Dynamic, Dynamic>;
+  const Index depth = 24, cols = 25;
+  const Scalar sentinel(7, -7);
+  // With AVX, only the last coefficient of an odd inner size is stored as a single std::complex<double>.
+  for (Index rows = 32; rows <= 33; ++rows) {
+    const MatrixType a = MatrixType::Random(rows, depth), b = MatrixType::Random(depth, cols);
+    const MatrixType expected = a * b;
+    const Index arraysize = 2 * rows * cols;
+    Scalar* a_array = internal::aligned_new<Scalar>(arraysize + 1);
+    // The second destination starts sizeof(double) bytes after an aligned address.
+    for (int k = 0; k < 2; ++k) {
+      Scalar* array = reinterpret_cast<Scalar*>(reinterpret_cast<double*>(a_array) + k);
+      Matrix<Scalar, Dynamic, 1>::Map(array, arraysize).setConstant(sentinel);
+      Map<MatrixType, Unaligned, Strides> map(array, rows, cols, Strides(2 * rows, 2));
+      Map<MatrixType, Unaligned, Strides> gaps(array + 1, rows, cols, Strides(2 * rows, 2));
+      map.noalias() = a * b;
+      VERIFY_IS_APPROX(map, expected);
+      map.noalias() += a * b;
+      VERIFY_IS_APPROX(map, 2 * expected);
+      map.noalias() -= a * b;
+      VERIFY_IS_APPROX(map, expected);
+      VERIFY_IS_CWISE_EQUAL(gaps, MatrixType::Constant(rows, cols, sentinel));
+    }
+    internal::aligned_delete(a_array, arraysize + 1);
+  }
+}
+
 EIGEN_DECLARE_TEST(mapstride) {
   for (int i = 0; i < g_repeat; i++) {
     int maxn = 3;
@@ -271,6 +304,7 @@ EIGEN_DECLARE_TEST(mapstride) {
         map_class_matrix<Unaligned>(MatrixXcd(internal::random<int>(1, maxn), internal::random<int>(1, maxn))));
 
     CALL_SUBTEST_5(bug1453<0>());
+    CALL_SUBTEST_6(product_into_unaligned_strided_map<0>());
 
     TEST_SET_BUT_UNUSED_VARIABLE(maxn);
   }

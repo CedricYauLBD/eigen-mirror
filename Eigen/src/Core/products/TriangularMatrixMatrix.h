@@ -125,16 +125,15 @@ EIGEN_DONT_INLINE void product_triangular_matrix_matrix<
       pack_lhs;
   gemm_pack_rhs<Scalar, Index, RhsMapper, Traits::nr, RhsStorageOrder> pack_rhs;
 
-  for (Index k2 = IsLower ? depth : 0; IsLower ? k2 > 0 : k2 < depth; IsLower ? k2 -= kc : k2 += kc) {
-    Index actual_kc = (std::min)(IsLower ? k2 : depth - k2, kc);
+  // Advance by the block just processed: k2 + kc and i2 + mc can overflow a 32-bit Index.
+  for (Index k2 = IsLower ? depth : 0, actual_kc; IsLower ? k2 > 0 : k2 < depth;
+       IsLower ? k2 -= actual_kc : k2 += actual_kc) {
+    actual_kc = (std::min)(IsLower ? k2 : depth - k2, kc);
     Index actual_k2 = IsLower ? k2 - actual_kc : k2;
 
     // align blocks with the end of the triangular part for trapezoidal lhs
     EIGEN_IF_CONSTEXPR (!IsLower) {
-      if ((k2 < rows) && (k2 + actual_kc > rows)) {
-        actual_kc = rows - k2;
-        k2 = k2 + actual_kc - kc;
-      }
+      if ((k2 < rows) && (k2 + actual_kc > rows)) actual_kc = rows - k2;
     }
 
     pack_rhs(blockB, rhs.getSubMapper(actual_k2, 0), actual_kc, cols);
@@ -210,8 +209,8 @@ EIGEN_DONT_INLINE void product_triangular_matrix_matrix<
     {
       Index start = IsLower ? k2 : 0;
       Index end = IsLower ? rows : (std::min)(actual_k2, rows);
-      for (Index i2 = start; i2 < end; i2 += mc) {
-        const Index actual_mc = (std::min)(i2 + mc, end) - i2;
+      for (Index i2 = start, actual_mc; i2 < end; i2 += actual_mc) {
+        actual_mc = (std::min)(mc, end - i2);
         gemm_pack_lhs<Scalar, Index, LhsMapper, Traits::mr, Traits::LhsProgress, typename Traits::LhsPacket4Packing,
                       LhsStorageOrder, false>()(blockA, lhs.getSubMapper(i2, actual_k2), actual_kc, actual_mc);
 
@@ -289,16 +288,15 @@ EIGEN_DONT_INLINE void product_triangular_matrix_matrix<
   gemm_pack_rhs<Scalar, Index, RhsMapper, Traits::nr, RhsStorageOrder> pack_rhs;
   gemm_pack_rhs<Scalar, Index, RhsMapper, Traits::nr, RhsStorageOrder, false, true> pack_rhs_panel;
 
-  for (Index k2 = IsLower ? 0 : depth; IsLower ? k2 < depth : k2 > 0; IsLower ? k2 += kc : k2 -= kc) {
-    Index actual_kc = (std::min)(IsLower ? depth - k2 : k2, kc);
+  // Advance by the block just processed: k2 + kc and i2 + mc can overflow a 32-bit Index.
+  for (Index k2 = IsLower ? 0 : depth, actual_kc; IsLower ? k2 < depth : k2 > 0;
+       IsLower ? k2 += actual_kc : k2 -= actual_kc) {
+    actual_kc = (std::min)(IsLower ? depth - k2 : k2, kc);
     Index actual_k2 = IsLower ? k2 : k2 - actual_kc;
 
     // align blocks with the end of the triangular part for trapezoidal rhs
     EIGEN_IF_CONSTEXPR (IsLower) {
-      if ((k2 < cols) && (actual_k2 + actual_kc > cols)) {
-        actual_kc = cols - k2;
-        k2 = actual_k2 + actual_kc - kc;
-      }
+      if ((k2 < cols) && (actual_k2 + actual_kc > cols)) actual_kc = cols - k2;
     }
 
     // remaining size
@@ -334,8 +332,8 @@ EIGEN_DONT_INLINE void product_triangular_matrix_matrix<
       }
     }
 
-    for (Index i2 = 0; i2 < rows; i2 += mc) {
-      const Index actual_mc = (std::min)(mc, rows - i2);
+    for (Index i2 = 0, actual_mc; i2 < rows; i2 += actual_mc) {
+      actual_mc = (std::min)(mc, rows - i2);
       pack_lhs(blockA, lhs.getSubMapper(i2, actual_k2), actual_kc, actual_mc);
 
       // triangular kernel
@@ -440,8 +438,9 @@ struct triangular_product_impl<Mode, LhsIsTriangular, Lhs, false, Rhs, false> {
     // extra KcFactor = 4 makes depth blocks too short to amortize result loads/stores; small and narrow products
     // still favor it. Fixed-size blocking packs the whole product into inline buffers and ignores KcFactor, so only
     // dynamic blocking can change; a second fixed-size blocking object would double the stack frame.
-    constexpr bool DynamicBlocking = Lhs::MaxRowsAtCompileTime == Dynamic || Rhs::MaxColsAtCompileTime == Dynamic ||
-                                     Lhs::MaxColsAtCompileTime == Dynamic;
+    constexpr bool DynamicBlocking =
+        !gemm_blocking_is_inline<Scalar, Scalar, Lhs::MaxRowsAtCompileTime, Rhs::MaxColsAtCompileTime,
+                                 Lhs::MaxColsAtCompileTime>::value;
     if (DynamicBlocking && (is_same<Scalar, float>::value || is_same<Scalar, double>::value) &&
         gebp_traits<Scalar, Scalar>::nr == 8 && stripedRows >= 512 && stripedCols >= 512) {
       using LargeBlockingType = internal::gemm_blocking_space<(Dest::Flags & RowMajorBit) ? RowMajor : ColMajor, Scalar,

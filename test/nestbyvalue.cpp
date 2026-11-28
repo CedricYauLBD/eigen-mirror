@@ -36,5 +36,17 @@ EIGEN_DECLARE_TEST(nestbyvalue) {
     VERIFY_IS_APPROX(b, a.nestByValue().rowwise().reverse().eval() + (a.nestByValue() + a.nestByValue()).eval());
     // Expressions without direct access can be nested by value too.
     VERIFY_IS_APPROX(MatrixXd((a + a).nestByValue()), (a + a).eval());
+    // select() on a comparison evaluates a rewritten expression, which holds its own copy of these operands.
+    ArrayXXd c = a.array();
+    ArrayXXd d = ArrayXXd::Random(rows, cols);
+    ArrayXXd cwise_min = (c.min)(d);
+    VERIFY_IS_CWISE_EQUAL(ArrayXXd((c < d).select(c.nestByValue(), d)), cwise_min);
+    VERIFY_IS_CWISE_EQUAL(ArrayXXd((c < d).select(c, d.nestByValue())), cwise_min);
+    VERIFY_IS_CWISE_EQUAL(ArrayXXd((c.nestByValue() < d).select(c, d)), cwise_min);
+    VERIFY_IS_CWISE_EQUAL(ArrayXXd((c < d.nestByValue()).select(c, d)), cwise_min);
+    VERIFY_IS_CWISE_EQUAL(ArrayXXd((c < d).select(c.nestByValue(), 0.0)), ArrayXXd((c < d).select(c, 0.0)));
+    Array44f e = Array44f::Random();
+    Array44f f = Array44f::Random();
+    VERIFY_IS_CWISE_EQUAL(Array44f((e < f).select(e.nestByValue(), f.nestByValue())), (e.min)(f).eval());
   }
 }

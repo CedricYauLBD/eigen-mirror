@@ -34,6 +34,9 @@ void triggerMatrixBadAlloc(Index rows, Index cols) {
   // The failed resize of a non-empty object must leave it destructible.
   VERIFY_THROWS_BADALLOC(MatrixType m(3, 3); m.resize(rows, cols));
   VERIFY_THROWS_BADALLOC(MatrixType m(3, 3); m.conservativeResize(rows, cols));
+  // An object that shares its inner dimension with the argument is reallocated in place.
+  VERIFY_THROWS_BADALLOC(MatrixType m(rows, 0); m.conservativeResizeLike(MatrixType::Zero(rows, cols)));
+  VERIFY_THROWS_BADALLOC(MatrixType m(0, cols); m.conservativeResizeLike(MatrixType::Zero(rows, cols)));
 }
 
 template <typename VectorType>
@@ -57,6 +60,19 @@ EIGEN_DECLARE_TEST(sizeoverflow) {
 
   triggerMatrixBadAlloc<MatrixXf>(times_itself_gives_0, times_itself_gives_0);
   triggerMatrixBadAlloc<MatrixXd>(times_itself_gives_0, times_itself_gives_0);
+
+  // rows * cols wraps to 16 coefficients, a size that the checks in Memory.h accept.
+  const Index times_4_gives_16 = (Index(1) << (8 * sizeof(Index) - 2)) + 4;
+  VERIFY(UIndex(UIndex(times_4_gives_16) * 4) == 16);
+  triggerMatrixBadAlloc<MatrixXd>(4, times_4_gives_16);
+  triggerMatrixBadAlloc<MatrixXd>(times_4_gives_16, 4);
+  {
+    // A refused reallocation must leave the object as it was.
+    using FixedRowsMatrix = Matrix<double, 4, Dynamic, ColMajor>;
+    FixedRowsMatrix m = FixedRowsMatrix::Ones(4, 2);
+    VERIFY_THROWS_BADALLOC(m.conservativeResizeLike(FixedRowsMatrix::Zero(4, times_4_gives_16)));
+    VERIFY_IS_EQUAL(m, FixedRowsMatrix::Ones(4, 2));
+  }
 
   // The sizes below fit Index, and their byte counts overflow size_t only when it is no wider than Index. With a
   // narrower Index, as for EIGEN_DEFAULT_DENSE_INDEX_TYPE=int on a 64-bit target, the requests are representable and

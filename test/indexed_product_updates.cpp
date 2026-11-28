@@ -133,10 +133,10 @@ void transposition_update_cases() {
   Transpositions<7, 7, short> fixed;
   for (Index i = 0; i < fixed.size(); ++i) fixed.coeffRef(i) = internal::random<short>(0, 6);
   transposition_updates<Scalar, Order>(fixed);
-  Transpositions<Dynamic, Dynamic, signed char> narrow(129);
+  Transpositions<Dynamic, Dynamic, signed char> narrow(128);
   narrow.indices().setZero();
   transposition_updates<Scalar, Order>(narrow);
-  Transpositions<Dynamic, 129, signed char> narrowBounded(129);
+  Transpositions<Dynamic, 128, signed char> narrowBounded(128);
   narrowBounded.indices().setZero();
   transposition_updates<Scalar, Order>(narrowBounded);
 }

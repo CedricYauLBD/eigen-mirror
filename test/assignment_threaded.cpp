@@ -86,7 +86,30 @@ void test_threaded_assignment(const PlainObject&, Index rows = PlainObject::Rows
   VERIFY_IS_CWISE_EQUAL(ref.bottomRightCorner(blockRows, blockCols), dst.bottomRightCorner(blockRows, blockCols));
 }
 
+// A destination that is less aligned than its packets: the packet loop starts at its first aligned coefficient, where
+// the narrower source of a cast() is aligned on fewer bytes. square() reads the source packet twice, which keeps
+// optimizers from folding its load.
+void test_threaded_cast_underaligned_dst() {
+  ThreadPool pool(4);
+  CoreThreadPoolDevice threadPoolDevice(pool);
+
+  constexpr Index Size = 1003;
+  constexpr Index MaxOffset = 64 / Index(sizeof(double));
+  EIGEN_ALIGN_TO_BOUNDARY(64) float srcData[Size];
+  EIGEN_ALIGN_TO_BOUNDARY(64) double dstData[MaxOffset + Size];
+  Map<ArrayXf, Aligned16> src(srcData, Size);
+  src.setRandom();
+  const ArrayXd ref = src.square().cast<double>();
+  for (Index offset = 0; offset <= MaxOffset; offset += Aligned16 / Index(sizeof(double))) {
+    Map<ArrayXd, Aligned16> dst(dstData + offset, Size);
+    dst.setZero();
+    dst.device(threadPoolDevice) = src.square().cast<double>();
+    VERIFY_IS_CWISE_EQUAL(ref, dst);
+  }
+}
+
 EIGEN_DECLARE_TEST(assignment_threaded) {
+  CALL_SUBTEST(test_threaded_cast_underaligned_dst());
   for (int i = 0; i < g_repeat; i++) {
     CALL_SUBTEST(test_threaded_assignment(MatrixXd(), 123, 123));
     CALL_SUBTEST(test_threaded_assignment(MatrixXcf(), 123, 123));

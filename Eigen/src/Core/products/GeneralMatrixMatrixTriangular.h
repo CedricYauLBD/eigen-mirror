@@ -108,14 +108,15 @@ struct general_matrix_matrix_triangular_product<Index, LhsScalar, LhsStorageOrde
     tribb_kernel<LhsScalar, RhsScalar, Index, Traits::mr, Traits::nr, ConjugateLhs, ConjugateRhs, ResInnerStride, UpLo>
         sybb;
 
-    for (Index k2 = 0; k2 < depth; k2 += kc) {
-      const Index actual_kc = (std::min)(k2 + kc, depth) - k2;
+    // Advance by the block just processed: k2 + kc and i2 + mc can overflow a 32-bit Index.
+    for (Index k2 = 0, actual_kc; k2 < depth; k2 += actual_kc) {
+      actual_kc = (std::min)(kc, depth - k2);
 
       // note that the actual rhs is the transpose/adjoint of mat
       pack_rhs(blockB, rhs.getSubMapper(k2, 0), actual_kc, size);
 
-      for (Index i2 = 0; i2 < size; i2 += mc) {
-        const Index actual_mc = (std::min)(i2 + mc, size) - i2;
+      for (Index i2 = 0, actual_mc; i2 < size; i2 += actual_mc) {
+        actual_mc = (std::min)(mc, size - i2);
 
         pack_lhs(blockA, lhs.getSubMapper(i2, k2), actual_kc, actual_mc);
 
@@ -258,7 +259,7 @@ struct general_product_to_triangular_selector<MatrixType, ProductType, UpLo, tru
         Scalar, actualLhsPtr, actualLhs.size(),
         (UseLhsDirectly ? const_cast<Scalar*>(actualLhs.data()) : static_lhs.data()));
     EIGEN_IF_CONSTEXPR (!UseLhsDirectly) {
-      Map<typename ActualLhs_::PlainObject>(actualLhsPtr, actualLhs.size()) = actualLhs;
+      Map<typename ActualLhs_::PlainObject>(actualLhsPtr, actualLhs.rows(), actualLhs.cols()) = actualLhs;
     }
 
     internal::gemv_static_vector_if<Scalar, Rhs::SizeAtCompileTime, Rhs::MaxSizeAtCompileTime, !UseRhsDirectly>
@@ -267,7 +268,7 @@ struct general_product_to_triangular_selector<MatrixType, ProductType, UpLo, tru
         Scalar, actualRhsPtr, actualRhs.size(),
         (UseRhsDirectly ? const_cast<Scalar*>(actualRhs.data()) : static_rhs.data()));
     EIGEN_IF_CONSTEXPR (!UseRhsDirectly) {
-      Map<typename ActualRhs_::PlainObject>(actualRhsPtr, actualRhs.size()) = actualRhs;
+      Map<typename ActualRhs_::PlainObject>(actualRhsPtr, actualRhs.rows(), actualRhs.cols()) = actualRhs;
     }
 
     // A strictly triangular part is the triangle of the trailing (size-1) block one step off the diagonal.

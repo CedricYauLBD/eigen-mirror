@@ -416,7 +416,8 @@ void evaluateProductBlockingSizesHeuristic(Index& k, Index& m, Index& n, Index n
     // However, if the entire lhs block fit within L1, then we are not going to block on the rows at all,
     // and it becomes fruitful to keep the packed rhs blocks in L1 if there is enough remaining space.
     Index max_nc;
-    const Index lhs_bytes = m * k * sizeof(LhsScalar);
+    // m * k need not fit Index (see computeProductBlockingSizes); only an lhs block within L1 matters below.
+    const Index lhs_bytes = m <= l1 / k ? static_cast<Index>(m * k * sizeof(LhsScalar)) : static_cast<Index>(l1);
     const Index remaining_l1 = static_cast<Index>(l1 - k_sub - lhs_bytes);
     if (remaining_l1 >= Index(Traits::nr * sizeof(RhsScalar)) * k) {
       // L1 blocking
@@ -505,12 +506,24 @@ inline bool useSpecificBlockingSizes(Index& k, Index& m, Index& n) {
  *   - either by a heuristic based on cache sizes;
  *   - or using fixed prescribed values (for testing purposes).
  *
+ * On output, \a m * \a k, the number of coefficients of a packed block of the left hand side, fits \c Index, also
+ * where that of the left hand side itself does not (a \c Map whose columns overlap).
+ *
  * \sa setCpuCacheSizes */
 
 template <typename LhsScalar, typename RhsScalar, int KcFactor, typename Index>
 void computeProductBlockingSizes(Index& k, Index& m, Index& n, Index num_threads = 1) {
   if (!useSpecificBlockingSizes(k, m, n)) {
     evaluateProductBlockingSizesHeuristic<LhsScalar, RhsScalar, KcFactor, Index>(k, m, n, num_threads);
+  }
+  // The heuristic keeps the rows whole where it blocks the depth or the columns, and callers size and address the
+  // packed m x k block with Index. Where m * k overflows it, block the rows: m * k <= highest / 1024, which leaves
+  // room for the block's size in bytes.
+  constexpr Index highest = NumTraits<Index>::highest();
+  if (k > 0 && m > highest / k) {
+    const Index mr = gebp_traits<LhsScalar, RhsScalar>::mr;
+    const Index max_m = highest / 1024 / k;
+    m = numext::maxi<Index>(max_m - max_m % mr, 1);
   }
 }
 
