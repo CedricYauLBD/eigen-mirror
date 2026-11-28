@@ -30,11 +30,9 @@ class CompressedStorage {
 
   CompressedStorage() = default;
 
-  explicit CompressedStorage(Index size) : m_values(0), m_indices(0), m_size(0), m_allocatedSize(0) { resize(size); }
+  explicit CompressedStorage(Index size) : CompressedStorage() { resize(size); }
 
-  CompressedStorage(const CompressedStorage& other) : m_values(0), m_indices(0), m_size(0), m_allocatedSize(0) {
-    *this = other;
-  }
+  CompressedStorage(const CompressedStorage& other) : CompressedStorage() { *this = other; }
 
   CompressedStorage& operator=(const CompressedStorage& other) {
     if (this == &other) return *this;
@@ -59,6 +57,7 @@ class CompressedStorage {
   }
 
   void reserve(Index size) {
+    if (size > NumTraits<Index>::highest() - m_size) internal::throw_std_bad_alloc();
     Index newAllocatedSize = m_size + size;
     if (newAllocatedSize > m_allocatedSize) reallocate(newAllocatedSize);
   }

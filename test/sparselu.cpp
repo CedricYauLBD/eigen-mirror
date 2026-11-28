@@ -254,6 +254,35 @@ void test_sparselu_determinants() {
   }
 }
 
+// The column elimination tree has n + 1 nodes, the dummy root n included, and its postorder counted them in
+// StorageIndex, which holds n but not n + 1 here. Node 0 is a child of node n - 3, the others of the root.
+template <typename StorageIndex>
+void test_sparselu_etree_index_limit() {
+  using IndexVector = Matrix<StorageIndex, Dynamic, 1>;
+  using SparseMatrixType = SparseMatrix<double, ColMajor, StorageIndex>;
+  const StorageIndex n = NumTraits<StorageIndex>::highest();
+
+  IndexVector etree = IndexVector::Constant(n, n), post;
+  etree(0) = StorageIndex(n - 3);
+  internal::treePostorder(n, etree, post);
+  VERIFY_IS_EQUAL(post(n), n);
+  std::sort(post.data(), post.data() + post.size());
+  VERIFY_IS_EQUAL(post, IndexVector::LinSpaced(Index(n) + 1, StorageIndex(0), n));
+
+  // The same tree through SparseLU. Symmetric mode postorders it in heap_relax_snode() and inverts the postorder
+  // there. The matrix is structurally singular: padded factor columns would not fit StorageIndex at this size.
+  SparseMatrixType A(n, n);
+  A.insert(n - 3, 0) = 1.0;
+  A.insert(0, n - 3) = 1.0;
+  A.makeCompressed();
+  for (bool symmetric : {false, true}) {
+    SparseLU<SparseMatrixType, NaturalOrdering<StorageIndex> > lu;
+    lu.isSymmetric(symmetric);
+    lu.compute(A);
+    VERIFY_IS_EQUAL(lu.info(), NumericalIssue);
+  }
+}
+
 EIGEN_DECLARE_TEST(sparselu) {
   CALL_SUBTEST_1(test_sparselu_T<float>());
   CALL_SUBTEST_2(test_sparselu_T<double>());
@@ -271,6 +300,7 @@ EIGEN_DECLARE_TEST(sparselu) {
   CALL_SUBTEST_10(test_sparselu_clear_error_state<double>());
   CALL_SUBTEST_10(test_sparselu_empty<double>());
   CALL_SUBTEST_10(test_sparselu_tiny_fill_estimate<double>());
+  CALL_SUBTEST_10(test_sparselu_etree_index_limit<short>());
   // The scaled column leads a supernode (0) or lies inside one (1); COLAMD is free to move it.
   for (Index scaledColumn = 0; scaledColumn < 2; ++scaledColumn) {
     CALL_SUBTEST_9((test_sparselu_subnormal_pivot<float, NaturalOrdering<int> >(4, scaledColumn, 1.0f)));

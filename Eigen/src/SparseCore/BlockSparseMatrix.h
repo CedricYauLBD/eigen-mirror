@@ -14,6 +14,7 @@
 #include "./InternalHeaderCheck.h"
 
 #include <algorithm>
+#include <iterator>
 #include <numeric>
 #include <utility>
 
@@ -305,11 +306,16 @@ class BlockSparseMatrix
   // -------------------------------------------------------------------------
 
   /** Resize to \a blockRows × \a blockCols blocks and set the logical nnz to zero.
-   *  Allocated block storage is retained; call squeeze() to release it. */
+   *  Allocated block storage is retained; call squeeze() to release it.
+   *  If the allocation throws, the matrix keeps its previous dimensions and has no stored blocks. */
   void resize(Index blockRows, Index blockCols) {
-    m_blockOuterSize = IsRowMajor ? blockRows : blockCols;
+    const Index blockOuterSize = IsRowMajor ? blockRows : blockCols;
+    // Drop the blocks, reallocate, then record the dimensions. conservativeResize() keeps the array if the allocation
+    // throws, whereas resize() releases it first, so m_outerIndex.size() == m_blockOuterSize + 1 holds either way.
+    m_outerIndex.setZero();
+    m_outerIndex.conservativeResize(blockOuterSize + 1);
+    m_blockOuterSize = blockOuterSize;
     m_blockInnerSize = IsRowMajor ? blockCols : blockRows;
-    m_outerIndex.resize(m_blockOuterSize + 1);
     m_outerIndex.setZero();
   }
 
@@ -372,7 +378,9 @@ class BlockSparseMatrix
    *
    * Triplet coordinates are in block space.  Triplets with the same
    * (blockRow, blockCol) pair are summed (their block values are added).
-   * The input range may be in any order.
+   * The input range may be in any order.  It is traversed once if it is
+   * single-pass (an input iterator that is not a forward iterator, such as
+   * \c std::istream_iterator), twice otherwise.
    *
    * \tparam InputIterator  Must dereference to a type with \c row(),
    *                        \c col(), and \c value() members, matching
@@ -578,6 +586,25 @@ class BlockSparseMatrix
         (std::is_same<Scalar_, typename OtherDerived::Scalar>::value),
         YOU_MIXED_DIFFERENT_NUMERIC_TYPES__YOU_NEED_TO_USE_THE_CAST_METHOD_OF_MATRIXBASE_TO_CAST_NUMERIC_TYPES_EXPLICITLY)
     return Product<OtherDerived, BlockSparseMatrix, AliasFreeProduct>(lhs.derived(), bsm);
+  }
+
+  /** \internal Implements \c dst.applyOnTheRight(*this) and \c dst \c *= \c *this.
+   *
+   * The EigenBase default assigns \c dst * \c *this to \c dst and relies on the product to protect an operand that
+   * is also the destination. The dense products above are \c AliasFreeProduct, which resizes and zeroes \c dst before
+   * reading it, so the product is evaluated into a temporary first.
+   */
+  template <typename Dest>
+  void applyThisOnTheRight(Dest& dst) const {
+    typename Dest::PlainObject result(dst * *this);
+    dst = std::move(result);
+  }
+
+  /** \internal Implements \c dst.applyOnTheLeft(*this); see applyThisOnTheRight(). */
+  template <typename Dest>
+  void applyThisOnTheLeft(Dest& dst) const {
+    typename Dest::PlainObject result(*this * dst);
+    dst = std::move(result);
   }
 
   /** Block-sparse matrix product.
@@ -928,20 +955,32 @@ template <typename Scalar_, int Options_, int BlockRows_, int BlockCols_, typena
 template <typename InputIterator>
 void BlockSparseMatrix<Scalar_, Options_, BlockRows_, BlockCols_, StorageIndex_>::setFromTriplets(InputIterator begin,
                                                                                                   InputIterator end) {
-  Index n = static_cast<Index>(std::distance(begin, end));
+  // Counting a single-pass range consumes it, so only a multi-pass range is sized in advance; any other one grows
+  // the arrays while it is read.
+  using Category = typename std::iterator_traits<InputIterator>::iterator_category;
+  constexpr bool IsMultiPass = std::is_base_of<std::forward_iterator_tag, Category>::value;
+  Index capacity = IsMultiPass ? static_cast<Index>(std::distance(begin, end)) : 0;
 
   // Copy triplet coordinates and block values into Eigen arrays.
-  Array<StorageIndex, Dynamic, 1> tOuter(n), tInner(n);
-  Array<Scalar, Dynamic, 1> tValues(n * BlockSize);
+  Array<StorageIndex, Dynamic, 1> tOuter(capacity), tInner(capacity);
+  Array<Scalar, Dynamic, 1> tValues(capacity * BlockSize);
 
   Index k = 0;
   for (InputIterator it = begin; it != end; ++it, ++k) {
+    if (k == capacity) {
+      capacity = numext::maxi(Index(16), 2 * capacity);
+      tOuter.conservativeResize(capacity);
+      tInner.conservativeResize(capacity);
+      tValues.conservativeResize(capacity * BlockSize);
+    }
     eigen_assert(it->row() >= 0 && it->row() < blockRows() && "setFromTriplets: block row out of range");
     eigen_assert(it->col() >= 0 && it->col() < blockCols() && "setFromTriplets: block col out of range");
     tOuter(k) = IsRowMajor ? StorageIndex(it->row()) : StorageIndex(it->col());
     tInner(k) = IsRowMajor ? StorageIndex(it->col()) : StorageIndex(it->row());
     BlockMap(tValues.data() + k * BlockSize) = it->value();
   }
+  // The arrays can be longer than the n triplets read: only their first n entries are set.
+  const Index n = k;
 
   // Order the triplet indices by (outer, inner) using a stable LSD radix sort:
   // pass 1 buckets by inner, pass 2 by outer.  This runs in

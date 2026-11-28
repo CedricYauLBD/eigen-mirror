@@ -254,9 +254,19 @@ class SparseVector : public SparseCompressedBase<SparseVector<Scalar_, Options_,
    */
   void conservativeResize(Index newSize) {
     if (newSize < m_size) {
-      Index i = 0;
-      while (i < m_data.size() && m_data.index(i) < newSize) ++i;
-      m_data.resize(i);
+      // The indices need not be sorted (insertBackUnordered()): k stops at the first entry to drop, and the entries
+      // behind it that stay are packed.
+      Index n = m_data.size();
+      Index k = 0;
+      while (k < n && m_data.index(k) < newSize) ++k;
+      for (Index i = k + 1; i < n; ++i) {
+        if (m_data.index(i) < newSize) {
+          m_data.value(k) = internal::move_if_assignable(m_data.value(i));
+          m_data.index(k) = m_data.index(i);
+          ++k;
+        }
+      }
+      m_data.resize(k);
     }
     m_size = newSize;
   }
@@ -319,6 +329,8 @@ class SparseVector : public SparseCompressedBase<SparseVector<Scalar_, Options_,
 
   template <typename OtherDerived>
   inline SparseVector& operator=(const SparseMatrixBase<OtherDerived>& other) {
+    eigen_assert((other.rows() == 1 || other.cols() == 1 || other.size() == 0) &&
+                 "The source expression must be a vector");
     SparseVector tmp(other.size());
     internal::sparse_vector_assign_selector<SparseVector, OtherDerived>::run(tmp, other.derived());
     this->swap(tmp);
@@ -439,10 +451,11 @@ struct sparse_vector_assign_selector<Dest, Src, SVA_Inner> {
 template <typename Dest, typename Src>
 struct sparse_vector_assign_selector<Dest, Src, SVA_Outer> {
   static void run(Dest& dst, const Src& src) {
-    eigen_internal_assert(src.outerSize() == src.size());
+    eigen_internal_assert(src.outerSize() == src.size() || src.size() == 0);
     using SrcEvaluatorType = internal::evaluator<Src>;
     SrcEvaluatorType srcEval(src);
-    for (Index i = 0; i < src.size(); ++i) {
+    // Iterate over the inner vectors that exist: src.size() exceeds src.outerSize() if src is not a vector.
+    for (Index i = 0; i < src.outerSize(); ++i) {
       typename SrcEvaluatorType::InnerIterator it(srcEval, i);
       if (it) dst.insert(i) = it.value();
     }

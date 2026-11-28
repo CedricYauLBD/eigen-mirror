@@ -18,6 +18,32 @@ namespace Eigen {
 
 namespace internal {
 
+// Allocator for the per-thread scratch of the OpenMP sparse * dense product: storage aligned to alignof(T), which
+// can exceed Eigen's configured alignment (an alignas() scalar). std::allocator provides that only where C++17
+// aligned allocation is available, and aligned_allocator only provides Eigen's configured alignment.
+template <typename T>
+struct sparse_scratch_allocator {
+  using value_type = T;
+  sparse_scratch_allocator() = default;
+  template <typename U>
+  sparse_scratch_allocator(const sparse_scratch_allocator<U>&) {}
+  T* allocate(std::size_t n) {
+    check_size_for_overflow<T>(n);
+    void* p = handmade_aligned_malloc(n * sizeof(T), numext::maxi<std::size_t>(alignof(T), sizeof(void*)));
+    if (p == nullptr && n != 0) throw_std_bad_alloc();
+    return static_cast<T*>(p);
+  }
+  void deallocate(T* p, std::size_t) { handmade_aligned_free(p); }
+  template <typename U>
+  bool operator==(const sparse_scratch_allocator<U>&) const {
+    return true;
+  }
+  template <typename U>
+  bool operator!=(const sparse_scratch_allocator<U>&) const {
+    return false;
+  }
+};
+
 template <typename Lhs, typename Rhs, typename Dest, typename Alpha>
 void ordered_sparse_dense_add(Dest& dst, const Lhs& lhs, const Rhs& rhs, const Alpha& alpha, true_type) {
   if (numext::is_exactly_zero(alpha)) return;
@@ -244,7 +270,10 @@ struct sparse_time_dense_product_impl<SparseLhsType, DenseRhsType, DenseResType,
         // require avg nnz per row >= threads so the reduction can't dominate.
         // `outer` is null for SparseVector lhs; the nnz-balanced partition needs
         // the outer-index array, so fall back to the serial scatter below.
-        if (outer && threads > 1 && mat.nonZeros() > 20000 && mat.nonZeros() >= Index(threads) * m) {
+        // The gate divides rather than forming `threads * m`, which can overflow
+        // Index. Where it holds, `threads * m <= nonZeros()`, so the `t * m`
+        // scratch offsets below fit in Index as well.
+        if (outer && threads > 1 && mat.nonZeros() > 20000 && mat.nonZeros() / threads >= m) {
           // Per-calling-thread persistent scratch (per template instantiation).
           // Grows monotonically; reused across calls. The buffer is left at
           // all-zeros after each call by folding the zero-out into the reduction
@@ -252,7 +281,9 @@ struct sparse_time_dense_product_impl<SparseLhsType, DenseRhsType, DenseResType,
           // is required: two unrelated host threads concurrently calling
           // y = A*x would otherwise race on this static buffer (and a reallocating
           // grow on one would dangle the other's scratch_ptr).
-          thread_local static std::vector<ResScalar> scratch_buf;
+          // sparse_scratch_allocator: aligned to alignof(ResScalar) in every language mode (e.g.
+          // AutoDiffScalar<Vector4d> with AVX is over-aligned).
+          thread_local static std::vector<ResScalar, sparse_scratch_allocator<ResScalar>> scratch_buf;
           const std::size_t need = static_cast<std::size_t>(threads) * static_cast<std::size_t>(m);
           if (scratch_buf.size() < need) scratch_buf.assign(need, ResScalar(0));
           ResScalar* scratch_ptr = scratch_buf.data();
@@ -270,11 +301,17 @@ struct sparse_time_dense_product_impl<SparseLhsType, DenseRhsType, DenseResType,
           // T * log n.
           const StorageIndex* const part_last = outer + n + 1;
           const StorageIndex* part_lo = outer;
+          // target = (t * nnz) / threads, split so that `t * nnz`, which can
+          // overflow Index, is never formed: t * nnz_rem < threads^2.
+          const Index nnz_quot = mat.nonZeros() / threads, nnz_rem = mat.nonZeros() % threads;
           for (Index t = 1; t < threads; ++t) {
-            const Index target = (t * mat.nonZeros()) / threads;
+            const Index target = t * nnz_quot + (t * nnz_rem) / threads;
             part_lo = std::lower_bound(part_lo, part_last, StorageIndex(target));
             part[t] = part_lo - outer;
           }
+          // rhs can be a lazy expression whose functors must not run concurrently: evaluate it here, on the
+          // calling thread. The Ref binds existing storage in place, whatever its strides.
+          const Ref<const typename Rhs::PlainObject, 0, Stride<Dynamic, Dynamic>> rhs_ref(rhs);
           for (Index c = 0; c < rhs.cols(); ++c) {
             typename Res::Scalar* y = res.data() + c * res.outerStride();
 #pragma omp parallel for schedule(static, 1) num_threads(threads)
@@ -283,7 +320,7 @@ struct sparse_time_dense_product_impl<SparseLhsType, DenseRhsType, DenseResType,
               const Index j_lo = part[t], j_hi = part[t + 1];
               for (Index j = j_lo; j < j_hi; ++j) {
                 typename ScalarBinaryOpTraits<AlphaType, typename Rhs::Scalar>::ReturnType rhs_j(alpha *
-                                                                                                 rhs.coeff(j, c));
+                                                                                                 rhs_ref.coeff(j, c));
                 const Index start = outer ? outer[j] : 0;
                 const Index end = innerNnz ? start + innerNnz[j] : (outer ? outer[j + 1] : mat.nonZeros());
                 Index k = start;
@@ -305,8 +342,12 @@ struct sparse_time_dense_product_impl<SparseLhsType, DenseRhsType, DenseResType,
             // accumulator. Each thread owns a contiguous range of row blocks
             // (static schedule) so the zero stores stay independent, and the
             // accumulator is summed in the exact t = 0..threads-1 order, keeping
-            // the result bit-identical to the scalar reduction it replaces.
-            constexpr Index kReduceBlock = 512;
+            // the result bit-identical to the scalar reduction it replaces. The
+            // accumulator is on the stack of every thread of the team, so its length
+            // is capped by EIGEN_STACK_ALLOCATION_LIMIT (and is at least 1); the
+            // length does not change the result.
+            constexpr Index kStackReduceBlock = Index(EIGEN_STACK_ALLOCATION_LIMIT / sizeof(ResScalar));
+            constexpr Index kReduceBlock = numext::maxi(Index(1), numext::mini(Index(512), kStackReduceBlock));
 #pragma omp parallel for schedule(static) num_threads(threads)
             for (Index i0 = 0; i0 < m; i0 += kReduceBlock) {
               const Index i1 = numext::mini(i0 + kReduceBlock, m);

@@ -33,7 +33,10 @@ namespace Eigen {
 namespace internal {
 
 template <typename MatrixType, unsigned int Mode>
-struct traits<SparseSelfAdjointView<MatrixType, Mode> > : traits<MatrixType> {};
+struct traits<SparseSelfAdjointView<MatrixType, Mode> > : traits<MatrixType> {
+  // The view owns no coefficients and is usually a temporary, so an expression must nest it by value.
+  static constexpr unsigned int Flags = traits<MatrixType>::Flags & ~NestByRefBit;
+};
 
 template <int SrcMode, int DstMode, bool NonHermitian, typename MatrixType, int DestOrder>
 void permute_symm_to_symm(
@@ -259,7 +262,11 @@ struct Assignment<DstXprType, SrcXprType, Functor, SparseSelfAdjoint2Sparse> {
   template <typename DestScalar, int StorageOrder>
   static void run(SparseMatrix<DestScalar, StorageOrder, StorageIndex>& dst, const SrcXprType& src,
                   const AssignOpType& /*func*/) {
-    internal::permute_symm_to_fullsymm<SrcXprType::Mode, false>(src.matrix(), dst);
+    // src may refer to dst, as in A = (A + B).selfadjointView<Lower>(), and permute_symm_to_fullsymm() clears dst
+    // before it reads src: eval through a temporary
+    SparseMatrix<DestScalar, StorageOrder, StorageIndex> tmp;
+    internal::permute_symm_to_fullsymm<SrcXprType::Mode, false>(src.matrix(), tmp);
+    dst = tmp.markAsRValue();
   }
 
   // FIXME: the handling of += and -= in sparse matrices should be cleanup so that next two overloads could be reduced
@@ -632,7 +639,10 @@ struct Assignment<DstXprType, SparseSymmetricPermutationProduct<MatrixType, Mode
   template <typename DestType, unsigned int DestMode>
   static void run(SparseSelfAdjointView<DestType, DestMode>& dst, const SrcXprType& src,
                   const internal::assign_op<Scalar, typename MatrixType::Scalar>&) {
-    internal::permute_symm_to_symm<Mode, DestMode, false>(src.matrix(), dst.matrix(), src.perm().indices().data());
+    // src may refer to dst.matrix(), which permute_symm_to_symm() clears before it reads src: eval through a temporary
+    DestType tmp;
+    internal::permute_symm_to_symm<Mode, DestMode, false>(src.matrix(), tmp, src.perm().indices().data());
+    dst.matrix() = tmp.markAsRValue();
   }
 };
 

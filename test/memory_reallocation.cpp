@@ -3,24 +3,39 @@
 
 #include "main.h"
 #include <Eigen/SparseCore>
+#include <Eigen/SparseCholesky>
 
 #include <memory>
 
 #ifdef EIGEN_TEST_WRAP_MALLOC
 static int allocations_before_failure = -1;
+// Blocks obtained through the wrappers minus blocks freed through them; only its changes are meaningful.
+static int live_allocations = 0;
 extern "C" void* real_malloc(std::size_t) asm("__real_malloc");
 extern "C" void* real_realloc(void*, std::size_t) asm("__real_realloc");
+extern "C" void real_free(void*) asm("__real_free");
 extern "C" void* wrap_malloc(std::size_t) asm("__wrap_malloc");
 extern "C" void* wrap_realloc(void*, std::size_t) asm("__wrap_realloc");
+extern "C" void wrap_free(void*) asm("__wrap_free");
 
 static bool fail_allocation() {
   if (allocations_before_failure < 0) return false;
   return allocations_before_failure-- == 0;
 }
 
-extern "C" void* wrap_malloc(std::size_t size) { return fail_allocation() ? nullptr : real_malloc(size); }
+extern "C" void* wrap_malloc(std::size_t size) {
+  void* result = fail_allocation() ? nullptr : real_malloc(size);
+  if (result != nullptr) ++live_allocations;
+  return result;
+}
 extern "C" void* wrap_realloc(void* ptr, std::size_t size) {
-  return fail_allocation() ? nullptr : real_realloc(ptr, size);
+  void* result = fail_allocation() ? nullptr : real_realloc(ptr, size);
+  if (ptr == nullptr && result != nullptr) ++live_allocations;
+  return result;
+}
+extern "C" void wrap_free(void* ptr) {
+  if (ptr != nullptr) --live_allocations;
+  real_free(ptr);
 }
 #endif
 
@@ -326,6 +341,90 @@ void compressed_storage_allocation_failure() {
     }
   }
 }
+
+// Constructs a Destination from `source` with the first allocation failing, then the second, and so on until the
+// construction succeeds. No destructor runs for an object whose constructor throws, so a constructor that throws must
+// have freed every block it obtained.
+template <typename Destination, typename Source>
+void verify_failed_construction_frees(const Source& source) {
+  int successful_allocations = 0;
+  bool caught = true;
+  while (caught) {
+    const int live_before = live_allocations;
+    caught = false;
+    allocations_before_failure = successful_allocations;
+    try {
+      Destination destination(source);
+    } catch (const std::bad_alloc&) {
+      caught = true;
+    }
+    allocations_before_failure = -1;
+    VERIFY_IS_EQUAL(live_allocations, live_before);
+    if (caught) ++successful_allocations;
+  }
+  // A leak needs an allocation that succeeds before the one that fails.
+  VERIFY(successful_allocations >= 2);
+}
+
+void compressed_storage_constructor_allocation_failure() {
+  using Storage = internal::CompressedStorage<double, int>;
+  const Index size = 3;
+  const Storage source(size);
+  verify_failed_construction_frees<Storage>(size);
+  verify_failed_construction_frees<Storage>(source);
+}
+
+// A ReturnByValue expression, which SparseMatrix(const ReturnByValue&) evaluates into the matrix under construction.
+struct InPlaceIdentity;
+
+namespace Eigen {
+namespace internal {
+template <>
+struct traits<InPlaceIdentity> {
+  using ReturnType = MatrixXd;
+};
+}  // namespace internal
+}  // namespace Eigen
+
+struct InPlaceIdentity : ReturnByValue<InPlaceIdentity> {
+  explicit InPlaceIdentity(Index size) : m_size(size) {}
+  Index rows() const { return m_size; }
+  Index cols() const { return m_size; }
+  template <typename Dest>
+  void evalTo(Dest& dst) const {
+    dst.setIdentity();
+  }
+  Index m_size;
+};
+
+template <int Options>
+void sparse_matrix_constructor_allocation_failure() {
+  using SpMat = SparseMatrix<double, Options>;
+  const Index size = 8;
+  SpMat compressed(size, size);
+  compressed.setIdentity();
+  SpMat uncompressed = compressed;
+  uncompressed.reserve(VectorXi::Constant(size, 2));
+  VERIFY(!uncompressed.isCompressed());
+  const VectorXd diagonal = VectorXd::Ones(size);
+
+  verify_failed_construction_frees<SpMat>(compressed);
+  verify_failed_construction_frees<SpMat>(uncompressed);
+  verify_failed_construction_frees<SpMat>(compressed.template selfadjointView<Lower>());
+  verify_failed_construction_frees<SpMat>(diagonal.asDiagonal());
+  verify_failed_construction_frees<SpMat>(InPlaceIdentity(size));
+}
+
+// SparseMatrix(const SparseMatrixBase&) evaluates a sparse solve into the matrix under construction.
+void sparse_matrix_from_solve_allocation_failure() {
+  using SpMat = SparseMatrix<double>;
+  const Index size = 8;
+  SpMat rhs(size, size);
+  rhs.setIdentity();
+  const SimplicialLLT<SpMat> llt(rhs);
+  VERIFY_IS_EQUAL(llt.info(), Success);
+  verify_failed_construction_frees<SpMat>(llt.solve(rhs));
+}
 #endif
 #endif
 
@@ -339,6 +438,10 @@ EIGEN_DECLARE_TEST(memory_reallocation) {
 #ifdef EIGEN_TEST_WRAP_MALLOC
   CALL_SUBTEST(compressed_storage_allocation_failure<ReallocationScalar>());
   CALL_SUBTEST(compressed_storage_allocation_failure<double>());
+  CALL_SUBTEST(compressed_storage_constructor_allocation_failure());
+  CALL_SUBTEST(sparse_matrix_constructor_allocation_failure<ColMajor>());
+  CALL_SUBTEST(sparse_matrix_constructor_allocation_failure<RowMajor>());
+  CALL_SUBTEST(sparse_matrix_from_solve_allocation_failure());
 #endif
   CALL_SUBTEST(sparse_reserve_failure());
   for (int successful_constructions : {0, 1}) {

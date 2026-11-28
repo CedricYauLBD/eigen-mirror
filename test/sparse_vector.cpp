@@ -157,11 +157,18 @@ void sparse_vector(int rows, int cols) {
       DenseVector refVec1 = DenseVector::Zero(rows);
       initSparse<Scalar>(densityVec, refVec1, vec1);
 
+      // The indices need not be sorted.
+      SparseVectorType vec2 = vec1;
+      vec2.template sortInnerIndices<std::greater<>>();
+
       vec1.conservativeResize(rows + incRows);
+      vec2.conservativeResize(rows + incRows);
       refVec1.conservativeResize(rows + incRows);
       if (incRows > 0) refVec1.tail(incRows).setZero();
 
       VERIFY_IS_APPROX(vec1, refVec1);
+      vec2.sortInnerIndices();
+      VERIFY_IS_APPROX(vec2, refVec1);
 
       // Insert new values
       if (incRows > 0) vec1.insert(vec1.rows() - 1) = refVec1(refVec1.rows() - 1) = 1;
@@ -291,6 +298,38 @@ void test_self_assignment() {
   VERIFY_IS_EQUAL(VectorXd(v.toDense()), ref);
 }
 
+// A SparseVector can only be assigned from a sparse expression that is a vector at run time: the shape of a
+// SparseMatrix is checked, as it is for dense vectors, instead of reading past its outer index array.
+void test_assign_from_matrix() {
+  SparseMatrix<double> column(5, 1), row(1, 5), matrix(3, 4), empty(0, 4);
+  column.insert(1, 0) = 2;
+  column.insert(4, 0) = 3;
+  row.insert(0, 1) = 2;
+  row.insert(0, 4) = 3;
+  matrix.insert(0, 0) = 5;
+  matrix.insert(2, 3) = 7;
+  VectorXd ref = VectorXd(column);
+
+  SparseVector<double> v = column;
+  VERIFY_IS_EQUAL(VectorXd(v), ref);
+  v = row;
+  VERIFY_IS_EQUAL(VectorXd(v), ref);
+  v = SparseMatrix<double, RowMajor>(column);
+  VERIFY_IS_EQUAL(VectorXd(v), ref);
+  v = SparseMatrix<double, RowMajor>(row);
+  VERIFY_IS_EQUAL(VectorXd(v), ref);
+  SparseVector<double, RowMajor> w = column;
+  VERIFY_IS_EQUAL(VectorXd(w.transpose()), ref);
+  v = empty;
+  VERIFY_IS_EQUAL(v.size(), Index(0));
+  VERIFY_IS_EQUAL(v.nonZeros(), Index(0));
+
+  SparseMatrix<double, RowMajor> rowMajorMatrix = matrix;
+  VERIFY_RAISES_ASSERT(v = matrix);
+  VERIFY_RAISES_ASSERT(v = rowMajorMatrix);
+  VERIFY_RAISES_ASSERT(SparseVector<double> u(matrix));
+}
+
 EIGEN_DECLARE_TEST(sparse_vector) {
   for (int i = 0; i < g_repeat; i++) {
     int r = Eigen::internal::random<int>(1, 500), c = Eigen::internal::random<int>(1, 500);
@@ -308,6 +347,7 @@ EIGEN_DECLARE_TEST(sparse_vector) {
   CALL_SUBTEST_1(test_pruning());
   CALL_SUBTEST_1(test_swap_with_matrix());
   CALL_SUBTEST_1(test_self_assignment());
+  CALL_SUBTEST_1(test_assign_from_matrix());
   CALL_SUBTEST_1(test_empty_reductions());
   CALL_SUBTEST_1(test_empty_outer_vector_block_opens_no_iterator());
 }

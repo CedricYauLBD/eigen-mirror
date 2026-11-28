@@ -47,7 +47,7 @@ class TriangularViewImpl<MatrixType, Mode, Sparse> : public SparseMatrixBase<Tri
   template <typename RhsType, typename DstType>
   EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE void _solve_impl(const RhsType& rhs, DstType& dst) const {
     EIGEN_IF_CONSTEXPR ((std::is_same<RhsType, DstType>::value)) {
-      if (internal::extract_data(dst) != internal::extract_data(rhs)) dst = rhs;
+      if (!internal::is_same_dense(dst, rhs)) dst = rhs;
     } else {
       dst = rhs;
     }
@@ -154,11 +154,11 @@ struct unary_evaluator<TriangularView<ArgType, Mode>, IteratorBased> : evaluator
 
     inline Index row() const { return (ArgType::Flags & RowMajorBit ? Base::outer() : Index(this->index())); }
     inline Index col() const { return (ArgType::Flags & RowMajorBit ? Index(this->index()) : Base::outer()); }
-    inline StorageIndex index() const {
+    inline Index index() const {
       EIGEN_IF_CONSTEXPR (HasUnitDiag) {
-        if (m_returnOne) return internal::convert_index<StorageIndex>(Base::outer());
+        if (m_returnOne) return Base::outer();
       }
-      return Base::index();
+      return internal::convert_index<Index>(Base::index());
     }
     inline Scalar value() const {
       EIGEN_IF_CONSTEXPR (HasUnitDiag) {

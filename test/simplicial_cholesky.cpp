@@ -174,6 +174,52 @@ void test_simplicial_cholesky_scatter(Index bandwidth) {
   }
 }
 
+// The right-hand side of a sparse solve may refer to the destination, and the solution may have fewer columns than it:
+// B = solver.solve(B.col(j)) has to read B before B is resized or overwritten.
+template <typename Scalar>
+void test_simplicial_cholesky_sparse_rhs_aliases_destination() {
+  using SparseMatrixType = SparseMatrix<Scalar>;
+  using DenseMatrix = Matrix<Scalar, Dynamic, Dynamic>;
+  const Index n = internal::random<Index>(5, 30);
+  const Index rhsCols = internal::random<Index>(40, 100);
+  const Index count = internal::random<Index>(2, 6);
+  DenseMatrix dA = DenseMatrix::Zero(n, n);
+  for (Index j = 0; j < n; ++j) {
+    dA(j, j) = Scalar(4);
+    if (j > 0) dA(j, j - 1) = dA(j - 1, j) = Scalar(1);
+  }
+  const SparseMatrixType A = dA.sparseView();
+  const DenseMatrix dB = DenseMatrix::Random(n, rhsCols);
+  const SparseMatrixType B = dB.sparseView();
+  SimplicialLLT<SparseMatrixType> llt(A);
+  SimplicialLDLT<SparseMatrixType> ldlt(A);
+  VERIFY_IS_EQUAL(llt.info(), Success);
+  VERIFY_IS_EQUAL(ldlt.info(), Success);
+  // The dense solve does not go through the sparse assignment.
+  const DenseMatrix refX = llt.solve(dB);
+  SparseMatrixType X;
+
+  X = B;
+  X = llt.solve(X);
+  VERIFY_IS_APPROX(DenseMatrix(X), refX);
+
+  // Column 0 comes first: a destination that is resized too early has lost its entries, but the first outer indices
+  // are still inside its shrunk array, so the solution is wrong without the test relying on an out-of-bounds read.
+  for (Index start : {Index(0), internal::random<Index>(1, rhsCols - count)}) {
+    X = B;
+    X = llt.solve(X.col(start));
+    VERIFY_IS_APPROX(DenseMatrix(X), refX.col(start));
+
+    X = B;
+    X = llt.solve(X.middleCols(start, count));
+    VERIFY_IS_APPROX(DenseMatrix(X), refX.middleCols(start, count));
+
+    X = B;
+    X = ldlt.solve(X.middleCols(start, count));
+    VERIFY_IS_APPROX(DenseMatrix(X), refX.middleCols(start, count));
+  }
+}
+
 EIGEN_DECLARE_TEST(simplicial_cholesky) {
   CALL_SUBTEST_31(test_simplicial_cholesky_scatter<float>(3));
   CALL_SUBTEST_31(test_simplicial_cholesky_scatter<float>(37));
@@ -185,4 +231,6 @@ EIGEN_DECLARE_TEST(simplicial_cholesky) {
   CALL_SUBTEST_21((test_simplicial_cholesky_T<double, int, RowMajor>()));
   CALL_SUBTEST_22((test_simplicial_cholesky_T<std::complex<double>, int, RowMajor>()));
   CALL_SUBTEST_23((test_simplicial_cholesky_T<double, long int, RowMajor>()));
+  CALL_SUBTEST_11(test_simplicial_cholesky_sparse_rhs_aliases_destination<double>());
+  CALL_SUBTEST_12(test_simplicial_cholesky_sparse_rhs_aliases_destination<std::complex<double>>());
 }

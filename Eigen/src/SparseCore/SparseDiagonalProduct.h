@@ -78,12 +78,15 @@ struct sparse_selfadjoint_diagonal_product_impl {
   using MatrixType = typename SelfAdjointViewType::MatrixTypeNested_;
   using MatrixEvaluator = evaluator<MatrixType>;
   using MatrixIterator = typename MatrixEvaluator::InnerIterator;
+  using DiagonalEvaluator = evaluator<DiagonalType>;
   using StorageIndex = typename Dest::StorageIndex;
   using VectorI = Matrix<StorageIndex, Dynamic, 1>;
   enum { IsFullMode = Mode == int(Upper | Lower), IsLowerMode = (Mode & int(Lower)) == int(Lower) };
 
   static void run(Dest& dest, const SelfAdjointViewType& selfadjoint, const DiagonalType& diagonal) {
     MatrixEvaluator matrixEval(selfadjoint.matrix());
+    // One evaluator for all entries: diagonal.coeff(i) builds one per call, and with it evaluates a nested product.
+    DiagonalEvaluator diagonalEval(diagonal);
     const Index size = selfadjoint.rows();
     VectorI count(size);
     count.setZero();
@@ -105,10 +108,10 @@ struct sparse_selfadjoint_diagonal_product_impl {
         const Index row = it.row();
         const Index col = it.col();
         if (isStored(row, col)) {
-          insertEntry(dest, count, diagonal, row, col, it.value());
+          insertEntry(dest, count, diagonalEval, row, col, it.value());
         }
         if (mirrorsStoredEntry(row, col)) {
-          insertEntry(dest, count, diagonal, col, row, numext::conj(it.value()));
+          insertEntry(dest, count, diagonalEval, col, row, numext::conj(it.value()));
         }
       }
     }
@@ -132,24 +135,22 @@ struct sparse_selfadjoint_diagonal_product_impl {
     }
   }
 
-  static EIGEN_STRONG_INLINE StorageIndex outerIndex(Index row, Index col) {
-    return internal::convert_index<StorageIndex>(Dest::IsRowMajor ? row : col);
-  }
+  // Outer indices can exceed the range of StorageIndex; only the stored inner indices are narrowed.
+  static EIGEN_STRONG_INLINE Index outerIndex(Index row, Index col) { return Dest::IsRowMajor ? row : col; }
 
   static EIGEN_STRONG_INLINE StorageIndex innerIndex(Index row, Index col) {
     return internal::convert_index<StorageIndex>(Dest::IsRowMajor ? col : row);
   }
 
   template <typename Coeff>
-  static void insertEntry(Dest& dest, VectorI& count, const DiagonalType& diagonal, Index row, Index col,
+  static void insertEntry(Dest& dest, VectorI& count, const DiagonalEvaluator& diagonalEval, Index row, Index col,
                           const Coeff& coeff) {
-    const StorageIndex outer = outerIndex(row, col);
-    const Index k = count[outer]++;
+    const Index k = count[outerIndex(row, col)]++;
     dest.innerIndexPtr()[k] = innerIndex(row, col);
     EIGEN_IF_CONSTEXPR (ProductOrder == OnTheLeft) {
-      dest.valuePtr()[k] = diagonal.coeff(row) * coeff;
+      dest.valuePtr()[k] = diagonalEval.coeff(row) * coeff;
     } else {
-      dest.valuePtr()[k] = coeff * diagonal.coeff(col);
+      dest.valuePtr()[k] = coeff * diagonalEval.coeff(col);
     }
   }
 };
@@ -269,7 +270,7 @@ struct sparse_diagonal_product_evaluator<SparseXprType, DiagCoeffType, SDP_AsCwi
     EIGEN_STRONG_INLINE Scalar value() const {
       return ProductOp()(m_sparseIter.value(), m_diagCoeffNested.coeff(index()));
     }
-    inline StorageIndex index() const { return m_sparseIter.index(); }
+    inline Index index() const { return internal::convert_index<Index>(m_sparseIter.index()); }
     inline Index outer() const { return m_sparseIter.outer(); }
     inline Index col() const { return SparseXprType::IsRowMajor ? m_sparseIter.index() : m_sparseIter.outer(); }
     inline Index row() const { return SparseXprType::IsRowMajor ? m_sparseIter.outer() : m_sparseIter.index(); }
@@ -282,7 +283,9 @@ struct sparse_diagonal_product_evaluator<SparseXprType, DiagCoeffType, SDP_AsCwi
 
    protected:
     SparseXprIter m_sparseIter;
-    DiagCoeffNested m_diagCoeffNested;
+    // A reference to the evaluator's member: DiagCoeffNested can hold the evaluated diagonal, or the expression, by
+    // value, and an assignment constructs one iterator per outer vector.
+    const remove_all_t<DiagCoeffNested>& m_diagCoeffNested;
   };
 
   sparse_diagonal_product_evaluator(const SparseXprType& sparseXpr, const DiagCoeffType& diagCoeff)

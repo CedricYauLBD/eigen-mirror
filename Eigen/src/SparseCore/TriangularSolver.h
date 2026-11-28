@@ -218,9 +218,12 @@ void reach_insert_column(Res& res, Index col, StorageIndex* xi, Index top, Index
   // Only the iterator upper reach is descending; it is read back to front, so k walks
   // up while the load walks down. Every other order is ascending by this point.
   constexpr bool Descending = Ordered && Upper;
+  // The columns come in order, so append. insert() has no free slot in the column once
+  // the solution outgrows the rhs (fill-in) and then shifts the columns already stored.
+  res.startVec(col);
   for (Index k = top; k < n; ++k) {
     StorageIndex j = xi[Descending ? top + n - 1 - k : k];
-    if (!numext::is_exactly_zero(xwork[j])) res.insert(j, col) = xwork[j];
+    if (!numext::is_exactly_zero(xwork[j])) res.insertBackByOuterInner(col, j) = xwork[j];
     xwork[j] = Scalar(0);
     mark[j] = 0;
   }
@@ -233,6 +236,8 @@ template <bool Upper, bool UnitDiag, typename Lhs, typename Rhs, typename Res, t
           std::enable_if_t<rhs_matching_slice<Lhs, Rhs>::value, int> = 0>
 void reach_solve_columns(const Lhs& lhs, const Rhs& other, Res& res, uint8_t* mark, Scalar* xwork, Index n) {
   using StorageIndex = typename traits<Lhs>::StorageIndex;
+  // 2 * n must not overflow Index.
+  if (n > NumTraits<Index>::highest() / 2) throw_std_bad_alloc();
   Matrix<StorageIndex, Dynamic, 1> iwork(2 * n);  // xi | pstack
   StorageIndex* xi = iwork.data();
   for (Index col = 0; col < other.cols(); ++col) {
@@ -258,6 +263,9 @@ template <bool Upper, bool UnitDiag, typename Lhs, typename Rhs, typename Res, t
           std::enable_if_t<!rhs_matching_slice<Lhs, Rhs>::value, int> = 0>
 void reach_solve_columns(const Lhs& lhs, const Rhs& other, Res& res, uint8_t* mark, Scalar* xwork, Index n) {
   using StorageIndex = typename traits<Lhs>::StorageIndex;
+  // 3 * n must not overflow Index: it can wrap to a small size that the allocation accepts, while xi, pstack and
+  // bIdx still take n entries each.
+  if (n > NumTraits<Index>::highest() / 3) throw_std_bad_alloc();
   Matrix<StorageIndex, Dynamic, 1> iwork(3 * n);  // xi | pstack | bIdx
   StorageIndex* xi = iwork.data();
   StorageIndex* bIdx = iwork.data() + 2 * n;

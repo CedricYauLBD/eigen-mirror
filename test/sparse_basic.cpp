@@ -971,14 +971,28 @@ void sparse_basic(const SparseMatrixType& ref) {
       SparseMatrixType m2 = m1;
       m2.makeCompressed();
 
+      // The inner indices need not be sorted: m3 is compressed and m4 is not, both in descending order.
+      SparseMatrixType m3 = m2;
+      m3.template sortInnerIndices<std::greater<>>();
+      SparseMatrixType m4 = m3;
+      m4.uncompress();
+
       m1.conservativeResize(rows + incRows, cols + incCols);
       m2.conservativeResize(rows + incRows, cols + incCols);
+      m3.conservativeResize(rows + incRows, cols + incCols);
+      m4.conservativeResize(rows + incRows, cols + incCols);
       refMat1.conservativeResize(rows + incRows, cols + incCols);
       if (incRows > 0) refMat1.bottomRows(incRows).setZero();
       if (incCols > 0) refMat1.rightCols(incCols).setZero();
 
       VERIFY_IS_APPROX(m1, refMat1);
       VERIFY_IS_APPROX(m2, refMat1);
+      for (SparseMatrixType* m : {&m3, &m4}) {
+        for (Index j = 0; j < m->outerSize(); ++j)
+          for (typename SparseMatrixType::InnerIterator it(*m, j); it; ++it) VERIFY(it.index() < m->innerSize());
+        m->sortInnerIndices();
+        VERIFY_IS_APPROX(*m, refMat1);
+      }
 
       // Insert new values
       if (incRows > 0) m1.insert(m1.rows() - 1, 0) = refMat1(refMat1.rows() - 1, 0) = 1;
@@ -1172,6 +1186,59 @@ void sparse_sub_assign_eigenbase() {
   VERIFY_IS_APPROX(MatrixXd(A), refA);
 }
 
+// Regression test: the source of a selfadjoint view assignment may refer to the destination or to a block of it, so
+// the destination must not be cleared and refilled while the source is read.
+template <typename Scalar, int Options>
+void sparse_assign_aliased_selfadjoint_view() {
+  using SparseMatrixType = SparseMatrix<Scalar, Options>;
+  using DenseMatrix = Matrix<Scalar, Dynamic, Dynamic>;
+  const Index size = internal::random<Index>(2, 50), trailing = internal::random<Index>(1, size);
+  DenseMatrix refA(size, size), refS(size, size), refSum, refLo, refUp;
+  SparseMatrixType A(size, size), S(size, size), K;
+  initSparse<Scalar>(0.3, refA, A);
+  initSparse<Scalar>(0.3, refS, S);
+  refSum = refA + refS;
+  refLo = refSum.template selfadjointView<Lower>();
+  refUp = refSum.template selfadjointView<Upper>();
+  PermutationMatrix<Dynamic, Dynamic, typename SparseMatrixType::StorageIndex> P;
+  randomPermutationVector(P.indices(), size);
+
+  // SparseMatrix = SparseSelfAdjointView
+  K = A;
+  K = K.template selfadjointView<Lower>();
+  VERIFY_IS_APPROX(K, DenseMatrix(refA.template selfadjointView<Lower>()));
+
+  K = A;
+  K.uncompress();
+  K = K.template selfadjointView<Upper>();
+  VERIFY_IS_APPROX(K, DenseMatrix(refA.template selfadjointView<Upper>()));
+
+  K = A;
+  K = (K + S).template selfadjointView<Lower>();
+  VERIFY_IS_APPROX(K, refLo);
+
+  K = A;
+  K = (K + S).template selfadjointView<Upper>();
+  VERIFY_IS_APPROX(K, refUp);
+
+  K = A;
+  K = K.bottomRightCorner(trailing, trailing).template selfadjointView<Lower>();
+  VERIFY_IS_APPROX(K, DenseMatrix(refA.bottomRightCorner(trailing, trailing).template selfadjointView<Lower>()));
+
+  // SparseSelfAdjointView = SparseSelfAdjointView, with and without a permutation
+  K = A;
+  K.template selfadjointView<Lower>() = K.template selfadjointView<Lower>();
+  VERIFY_IS_APPROX(K, DenseMatrix(refA.template triangularView<Lower>()));
+
+  K = A;
+  K.template selfadjointView<Upper>() = (K + S).template selfadjointView<Lower>();
+  VERIFY_IS_APPROX(K, DenseMatrix(refLo.template triangularView<Upper>()));
+
+  K = A;
+  K.template selfadjointView<Lower>() = (K + S).template selfadjointView<Upper>().twistedBy(P);
+  VERIFY_IS_APPROX(K, DenseMatrix(((P * refUp) * P.inverse()).eval().template triangularView<Lower>()));
+}
+
 // Regression test: AmbiVector::coeff() must return the correct linked-list element.
 template <int>
 void ambivector_coeff() {
@@ -1219,6 +1286,21 @@ void ambivector_coeff() {
   VERIFY_IS_APPROX(vec.coeff(3), 3.0);
   VERIFY_IS_APPROX(vec.coeff(7), 7.0);
   VERIFY_IS_EQUAL(vec.coeff(0), 0.0);
+}
+
+// Regression test: assigning one of the iterators that sortInnerIndices() passes to std::sort must rebind it. It must
+// not write to the entry at the start of the arrays, which belongs to an inner vector another thread may be sorting.
+template <int>
+void compressed_storage_iterator_assignment() {
+  using Iterator = internal::CompressedStorageIterator<double, int>;
+  int indices1[] = {3, 1}, indices2[] = {7, 5};
+  double values1[] = {30, 10}, values2[] = {70, 50};
+  Iterator it(0, indices1, values1);
+  it = Iterator(1, indices2, values2);
+  VERIFY_IS_EQUAL(indices1[0], 3);
+  VERIFY_IS_EQUAL(values1[0], 30.0);
+  VERIFY_IS_EQUAL((*it).key(), 5);
+  VERIFY_IS_EQUAL((*it).value(), 50.0);
 }
 
 template <typename Pattern, typename SparseMatrixType>
@@ -1432,6 +1514,81 @@ void bug1105() {
     mat.coeffRef(i, i % (n / 10)) = val;
     VERIFY(mat.data().allocatedSize() < 20 * n);
   }
+}
+
+// reserve() throws when Index or StorageIndex cannot hold the stored entries plus the reserved slots, whose sum must
+// not wrap around into a small reservation, and leaves the matrix as it was.
+template <int Options, typename StorageIndex>
+void sparse_reserve_overflow() {
+#ifdef EIGEN_EXCEPTIONS
+  using SpMat = SparseMatrix<double, Options, StorageIndex>;
+  using SizesType = Matrix<Index, Dynamic, 1>;
+  const Index highest = numext::mini<Index>(NumTraits<StorageIndex>::highest(), NumTraits<Index>::highest());
+  // 4 * (highest / 2 + 1) + 8 == 8 in the narrower of Index and StorageIndex.
+  SizesType sizes = SizesType::Constant(5, highest / 2 + 1);
+  sizes(4) = 8;
+  for (int compressed = 0; compressed < 2; ++compressed) {
+    SpMat m(5, 5);
+    m.insert(2, 2) = 1.0;
+    if (compressed) m.makeCompressed();
+    bool threw = false;
+    try {
+      m.reserve(sizes);
+    } catch (const std::bad_alloc&) {
+      threw = true;
+    }
+    VERIFY(threw);
+    VERIFY_IS_EQUAL(m.isCompressed(), compressed == 1);
+    VERIFY_IS_EQUAL(m.nonZeros(), 1);
+    VERIFY_IS_EQUAL(m.coeff(2, 2), 1.0);
+    // The matrix is still usable, and each inner vector takes what was reserved for it.
+    m.reserve(SizesType::Constant(5, 2));
+    for (Index k = 0; k < 5; ++k) m.coeffRef(k, k) = double(k + 1);
+    m.coeffRef(0, 4) = 6.0;
+    m.coeffRef(4, 0) = 7.0;
+    VERIFY_IS_EQUAL(m.nonZeros(), 7);
+    for (Index k = 0; k < 5; ++k) VERIFY_IS_EQUAL(m.coeff(k, k), double(k + 1));
+    VERIFY_IS_EQUAL(m.coeff(0, 4), 6.0);
+    VERIFY_IS_EQUAL(m.coeff(4, 0), 7.0);
+
+    // A size that does not fit in Index must not narrow to a small positive one: 2^32 + 1 is 1 in a 32-bit Index.
+    // The wide types below do not fit in any Index narrower than 64 bits, or in a narrower StorageIndex.
+    SpMat w(1, 1);
+    w.insert(0, 0) = 1.0;
+    if (compressed) w.makeCompressed();
+    const long long wideSigned = sizeof(Index) < 8 ? (1LL << 32) + 1 : NumTraits<long long>::highest();
+    const unsigned long long wideUnsigned = sizeof(Index) < 8 ? (1ULL << 32) + 1 : (1ULL << 63) + 1;
+    for (int kind = 0; kind < 2; ++kind) {
+      bool wideThrew = false;
+      try {
+        if (kind == 0)
+          w.reserve(std::vector<long long>(1, wideSigned));
+        else
+          w.reserve(std::vector<unsigned long long>(1, wideUnsigned));
+      } catch (const std::bad_alloc&) {
+        wideThrew = true;
+      }
+      VERIFY(wideThrew);
+      VERIFY_IS_EQUAL(w.isCompressed(), compressed == 1);
+      VERIFY_IS_EQUAL(w.nonZeros(), 1);
+      VERIFY_IS_EQUAL(w.coeff(0, 0), 1.0);
+    }
+  }
+
+  // The single-size overload adds to the stored entries as well.
+  SpMat m(5, 5);
+  m.insert(2, 2) = 1.0;
+  m.makeCompressed();
+  bool threw = false;
+  try {
+    m.reserve(NumTraits<Index>::highest());
+  } catch (const std::bad_alloc&) {
+    threw = true;
+  }
+  VERIFY(threw);
+  VERIFY_IS_EQUAL(m.nonZeros(), 1);
+  VERIFY_IS_EQUAL(m.coeff(2, 2), 1.0);
+#endif
 }
 
 // A short StorageIndex bounds the number of stored entries, not the outer dimension, which exceeds its range here.
@@ -1727,6 +1884,18 @@ void sparse_shift_moves() {
     verify_movable_entries(m, ref);
   }
 
+  // conservativeResize() to 5 inner indices drops the index 6. In descending order it is the first entry of its
+  // vector, and the entries behind it are packed.
+  for (bool compressed : {true, false}) {
+    SpMat m = base;
+    m.template sortInnerIndices<std::greater<>>();
+    if (!compressed) m.uncompress();
+    MovableScalarCounters::reset();
+    m.conservativeResize(SpMat::IsRowMajor ? n : 5, SpMat::IsRowMajor ? 5 : n);
+    VERIFY_SHIFT_COUNTS(0);
+    verify_movable_entries(m, SpMat::IsRowMajor ? MatrixXd(baseRef.leftCols(5)) : MatrixXd(baseRef.topRows(5)));
+  }
+
   // setFromTriplets() sums duplicate entries and packs the first entry of each coefficient in front. Its copies are
   // those of reading the triplets and of the transposing assignment that sorts the result.
   {
@@ -1876,6 +2045,10 @@ EIGEN_DECLARE_TEST(sparse_basic) {
   CALL_SUBTEST_5((big_sparse_triplet<SparseMatrix<double, ColMajor, long int>>(10000, 10000, 0.125)));
 
   CALL_SUBTEST_5(bug1105<0>());
+  CALL_SUBTEST_2((sparse_reserve_overflow<ColMajor, Index>()));
+  CALL_SUBTEST_2((sparse_reserve_overflow<RowMajor, Index>()));
+  CALL_SUBTEST_2((sparse_reserve_overflow<ColMajor, short>()));
+  CALL_SUBTEST_2((sparse_reserve_overflow<RowMajor, short>()));
   CALL_SUBTEST_2((sparse_insert_narrow_index<ColMajor>()));
   CALL_SUBTEST_2((sparse_insert_narrow_index<RowMajor>()));
   CALL_SUBTEST_2((sparse_insert_full_index_range<ColMajor>()));
@@ -1892,7 +2065,12 @@ EIGEN_DECLARE_TEST(sparse_basic) {
   CALL_SUBTEST_1((sparse_isapprox_extreme_scales<double, RowMajor>()));
   CALL_SUBTEST_1((sparse_isapprox_extreme_scales<std::complex<double>, ColMajor>()));
   CALL_SUBTEST_1(sparse_sub_assign_eigenbase<0>());
+  for (int i = 0; i < g_repeat; ++i) {
+    CALL_SUBTEST_1((sparse_assign_aliased_selfadjoint_view<double, ColMajor>()));
+    CALL_SUBTEST_1((sparse_assign_aliased_selfadjoint_view<std::complex<double>, RowMajor>()));
+  }
   CALL_SUBTEST_1(ambivector_coeff<0>());
+  CALL_SUBTEST_1(compressed_storage_iterator_assignment<0>());
   CALL_SUBTEST_1(sparsity_pattern_ref_sparse_expressions<0>());
   CALL_SUBTEST_1(materialize_at_plus_a_pattern_basic<0>());
   for (int i = 0; i < g_repeat; ++i) {

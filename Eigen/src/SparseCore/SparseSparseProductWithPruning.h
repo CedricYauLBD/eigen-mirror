@@ -96,7 +96,7 @@ struct sparse_sparse_product_with_pruning_selector<Lhs, Rhs, ResultType, ColMajo
   using RealScalar = typename ResultType::RealScalar;
   static void run(const Lhs& lhs, const Rhs& rhs, ResultType& res, const RealScalar& tolerance) {
     // we need a col-major matrix to hold the result
-    using SparseTemporaryType = SparseMatrix<typename ResultType::Scalar, ColMajor, typename ResultType::StorageIndex>;
+    using SparseTemporaryType = WithStorageOrder<ResultType, ColMajor>;
     SparseTemporaryType res_{res.rows(), res.cols()};
     internal::sparse_sparse_product_with_pruning_impl<Lhs, Rhs, SparseTemporaryType>(lhs, rhs, res_, tolerance);
     res = res_;
@@ -118,8 +118,8 @@ template <typename Lhs, typename Rhs, typename ResultType>
 struct sparse_sparse_product_with_pruning_selector<Lhs, Rhs, ResultType, RowMajor, RowMajor, ColMajor> {
   using RealScalar = typename ResultType::RealScalar;
   static void run(const Lhs& lhs, const Rhs& rhs, ResultType& res, const RealScalar& tolerance) {
-    using ColMajorMatrixLhs = SparseMatrix<typename Lhs::Scalar, ColMajor, typename Lhs::StorageIndex>;
-    using ColMajorMatrixRhs = SparseMatrix<typename Rhs::Scalar, ColMajor, typename Lhs::StorageIndex>;
+    using ColMajorMatrixLhs = WithStorageOrder<Lhs, ColMajor>;
+    using ColMajorMatrixRhs = WithStorageOrder<Rhs, ColMajor>;
     ColMajorMatrixLhs colLhs(lhs);
     ColMajorMatrixRhs colRhs(rhs);
     internal::sparse_sparse_product_with_pruning_impl<ColMajorMatrixLhs, ColMajorMatrixRhs, ResultType>(colLhs, colRhs,
@@ -131,7 +131,7 @@ template <typename Lhs, typename Rhs, typename ResultType>
 struct sparse_sparse_product_with_pruning_selector<Lhs, Rhs, ResultType, ColMajor, RowMajor, RowMajor> {
   using RealScalar = typename ResultType::RealScalar;
   static void run(const Lhs& lhs, const Rhs& rhs, ResultType& res, const RealScalar& tolerance) {
-    using RowMajorMatrixLhs = SparseMatrix<typename Lhs::Scalar, RowMajor, typename Lhs::StorageIndex>;
+    using RowMajorMatrixLhs = WithStorageOrder<Lhs, RowMajor>;
     RowMajorMatrixLhs rowLhs(lhs);
     sparse_sparse_product_with_pruning_selector<RowMajorMatrixLhs, Rhs, ResultType, RowMajor, RowMajor>::run(
         rowLhs, rhs, res, tolerance);
@@ -142,7 +142,7 @@ template <typename Lhs, typename Rhs, typename ResultType>
 struct sparse_sparse_product_with_pruning_selector<Lhs, Rhs, ResultType, RowMajor, ColMajor, RowMajor> {
   using RealScalar = typename ResultType::RealScalar;
   static void run(const Lhs& lhs, const Rhs& rhs, ResultType& res, const RealScalar& tolerance) {
-    using RowMajorMatrixRhs = SparseMatrix<typename Rhs::Scalar, RowMajor, typename Lhs::StorageIndex>;
+    using RowMajorMatrixRhs = WithStorageOrder<Rhs, RowMajor>;
     RowMajorMatrixRhs rowRhs(rhs);
     sparse_sparse_product_with_pruning_selector<Lhs, RowMajorMatrixRhs, ResultType, RowMajor, RowMajor, RowMajor>::run(
         lhs, rowRhs, res, tolerance);
@@ -153,7 +153,7 @@ template <typename Lhs, typename Rhs, typename ResultType>
 struct sparse_sparse_product_with_pruning_selector<Lhs, Rhs, ResultType, ColMajor, RowMajor, ColMajor> {
   using RealScalar = typename ResultType::RealScalar;
   static void run(const Lhs& lhs, const Rhs& rhs, ResultType& res, const RealScalar& tolerance) {
-    using ColMajorMatrixRhs = SparseMatrix<typename Rhs::Scalar, ColMajor, typename Lhs::StorageIndex>;
+    using ColMajorMatrixRhs = WithStorageOrder<Rhs, ColMajor>;
     ColMajorMatrixRhs colRhs(rhs);
     internal::sparse_sparse_product_with_pruning_impl<Lhs, ColMajorMatrixRhs, ResultType>(lhs, colRhs, res, tolerance);
   }
@@ -163,7 +163,7 @@ template <typename Lhs, typename Rhs, typename ResultType>
 struct sparse_sparse_product_with_pruning_selector<Lhs, Rhs, ResultType, RowMajor, ColMajor, ColMajor> {
   using RealScalar = typename ResultType::RealScalar;
   static void run(const Lhs& lhs, const Rhs& rhs, ResultType& res, const RealScalar& tolerance) {
-    using ColMajorMatrixLhs = SparseMatrix<typename Lhs::Scalar, ColMajor, typename Lhs::StorageIndex>;
+    using ColMajorMatrixLhs = WithStorageOrder<Lhs, ColMajor>;
     ColMajorMatrixLhs colLhs(lhs);
     internal::sparse_sparse_product_with_pruning_impl<ColMajorMatrixLhs, Rhs, ResultType>(colLhs, rhs, res, tolerance);
   }

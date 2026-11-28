@@ -40,8 +40,11 @@ inline void compute_nnz_balanced_partition(const StorageIndex* outer, Index oute
   if (numChunks <= 1 || outerSize == 0 || totalNnz == 0) return;
   const StorageIndex* const last = outer + outerSize + 1;
   const StorageIndex* lo = outer;
+  // target = (t * totalNnz) / numChunks, split so that `t * totalNnz`, which
+  // can overflow Index, is never formed: t * nnzRem < numChunks^2.
+  const Index nnzQuot = totalNnz / numChunks, nnzRem = totalNnz % numChunks;
   for (int t = 1; t < numChunks; ++t) {
-    Index target = (static_cast<Index>(t) * totalNnz) / numChunks;
+    Index target = t * nnzQuot + (t * nnzRem) / numChunks;
     lo = std::lower_bound(lo, last, static_cast<StorageIndex>(target));
     boundaries[t] = lo - outer;
   }
