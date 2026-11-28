@@ -236,6 +236,43 @@ void test_unaryview_direct_access_product() {
   VERIFY_IS_APPROX(actual, a_values * b_values);
 }
 
+void test_unaryview_empty() {
+  // An empty view has no coefficient 0, so data() has nothing to apply the functor to.
+  struct counting_view_op {
+    Index* calls;
+    double& operator()(UnaryViewBox& box) const {
+      ++*calls;
+      return box.value;
+    }
+    const double& operator()(const UnaryViewBox& box) const {
+      ++*calls;
+      return box.value;
+    }
+  };
+
+  Index calls = 0;
+  Matrix<UnaryViewBox, Dynamic, 1> boxes(0);
+  auto view = boxes.unaryViewExpr(counting_view_op{&calls});
+  const auto& const_view = view;
+  VERIFY(view.data() == nullptr);
+  VERIFY(const_view.data() == nullptr);
+
+  // Direct access sends all of these through data().
+  MatrixXd m(3, 0);
+  const VectorXd zero = VectorXd::Zero(3);
+  VERIFY_IS_EQUAL(VectorXd(m * view), zero);
+  VERIFY_IS_EQUAL(RowVectorXd(view.transpose() * m.transpose()), zero.transpose());
+  for (double& x : view) x = 0.;
+  Ref<VectorXd, 0, InnerStride<>> view_ref(view);
+  VERIFY_IS_EQUAL(view_ref.size(), Index(0));
+  VERIFY_IS_EQUAL(calls, Index(0));
+
+  // real() and imag() are views too. Over an empty indexed view, coefficient 0 fails the index assertion.
+  VectorXcd z(0);
+  VERIFY_IS_EQUAL(VectorXd(m * z.real()), zero);
+  VERIFY_IS_EQUAL(VectorXd(m * z(seqN(0, 0, 2)).imag()), zero);
+}
+
 EIGEN_DECLARE_TEST(unaryviewstride) {
   CALL_SUBTEST_1((unaryview_stride<1, 2>(MatrixXf())));
   CALL_SUBTEST_1((unaryview_stride<0, 0>(MatrixXf())));
@@ -249,4 +286,5 @@ EIGEN_DECLARE_TEST(unaryviewstride) {
   CALL_SUBTEST_4(test_unaryview_pointer_result());
   CALL_SUBTEST_4(test_unaryview_solve());
   CALL_SUBTEST_4(test_unaryview_direct_access_product());
+  CALL_SUBTEST_4(test_unaryview_empty());
 }

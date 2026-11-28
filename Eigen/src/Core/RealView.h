@@ -82,7 +82,7 @@ struct evaluator<RealView<Xpr>> : private evaluator<Xpr> {
   using ComplexCoeffReturnType = std::conditional_t<CoeffByReference, const ComplexScalar&, ComplexScalar>;
   using CoeffReturnType = std::conditional_t<CoeffByReference, const Scalar&, Scalar>;
 
-  EIGEN_DEVICE_FUNC explicit evaluator(XprType realView) : BaseEvaluator(realView.m_xpr) {}
+  EIGEN_DEVICE_FUNC explicit evaluator(const XprType& realView) : BaseEvaluator(realView.m_xpr) {}
 
   template <bool Enable = CoeffByReference, std::enable_if_t<!Enable, bool> = true>
   constexpr EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE Scalar coeff(Index row, Index col) const {
@@ -310,12 +310,20 @@ class RealView : public internal::dense_xpr_base<RealView<Xpr>>::type {
   EIGEN_DEVICE_FUNC constexpr Index rows() const noexcept { return Xpr::IsRowMajor ? m_xpr.rows() : 2 * m_xpr.rows(); }
   EIGEN_DEVICE_FUNC constexpr Index cols() const noexcept { return Xpr::IsRowMajor ? 2 * m_xpr.cols() : m_xpr.cols(); }
   EIGEN_DEVICE_FUNC constexpr Index size() const noexcept { return 2 * m_xpr.size(); }
+  // The parts of non-adjacent complex coefficients have no uniform stride. A view without direct access still reports
+  // the strides below, but they do not address its coefficients through data(): check has_direct_access first.
   EIGEN_DEVICE_FUNC constexpr Index innerStride() const noexcept { return m_xpr.innerStride(); }
   EIGEN_DEVICE_FUNC constexpr Index outerStride() const noexcept { return 2 * m_xpr.outerStride(); }
+  // The inner dimension is twice m_xpr's, so it can only be even. An odd request must not be rounded down: a caller
+  // that resizes its destination and then fills it would write past the end.
   EIGEN_DEVICE_FUNC void resize(Index rows, Index cols) {
+    eigen_assert((Xpr::IsRowMajor ? cols : rows) % 2 == 0 && "RealView::resize() requires an even inner size.");
     m_xpr.resize(Xpr::IsRowMajor ? rows : rows / 2, Xpr::IsRowMajor ? cols / 2 : cols);
   }
-  EIGEN_DEVICE_FUNC void resize(Index size) { m_xpr.resize(size / 2); }
+  EIGEN_DEVICE_FUNC void resize(Index size) {
+    eigen_assert(size % 2 == 0 && "RealView::resize() requires an even size.");
+    m_xpr.resize(size / 2);
+  }
   using ScalarWithConstIfNotLvalue = std::conditional_t<internal::is_lvalue<Xpr>::value, Scalar, const Scalar>;
   EIGEN_DEVICE_FUNC ScalarWithConstIfNotLvalue* data() {
     return reinterpret_cast<ScalarWithConstIfNotLvalue*>(m_xpr.data());
@@ -367,7 +375,7 @@ class RealView : public internal::dense_xpr_base<RealView<Xpr>>::type {
 
  protected:
   friend struct internal::evaluator<RealView>;
-  Xpr& m_xpr;
+  typename internal::ref_selector<Xpr>::non_const_type m_xpr;
 };
 
 template <typename Xpr>

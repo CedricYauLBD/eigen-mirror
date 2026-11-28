@@ -490,6 +490,47 @@ void reshape_empty_auto_all() {
   VERIFY_IS_EQUAL(a.reshaped(8, AutoSize).cols(), 3);
 }
 
+// A superdiagonal and an imaginary part do not start where the nested expression's storage starts, so MapBase
+// must not assert the alignment of that storage on them.
+template <typename Scalar>
+void reshape_unaligned_views() {
+  using Mat = Matrix<Scalar, Dynamic, Dynamic>;
+  using Vec = Matrix<Scalar, Dynamic, 1>;
+  using CMat = Matrix<std::complex<Scalar>, Dynamic, Dynamic>;
+  STATIC_CHECK(int(internal::traits<decltype(std::declval<Mat&>().diagonal(1))>::Alignment) == 0);
+  STATIC_CHECK(int(internal::traits<decltype(std::declval<CMat&>().imag())>::Alignment) == 0);
+
+  const Mat m = Mat::Random(7, 7);
+  const Vec superdiagonal = m.diagonal(1);
+  VERIFY_IS_EQUAL(Mat(m.diagonal(1).reshaped(2, 3)), Mat(superdiagonal.reshaped(2, 3)));
+
+  CMat c = CMat::Random(7, 4);
+  const Mat imag = c.imag();
+  VERIFY_IS_EQUAL(Mat(c.imag().reshaped(4, 7)), Mat(imag.reshaped(4, 7)));
+  VERIFY_IS_EQUAL(Mat(c.imag().diagonal(1).reshaped(1, 3)), Mat(imag.diagonal(1).reshaped(1, 3)));
+}
+
+// The requested shape is checked against the number of coefficients without forming rows * cols,
+// which can overflow and wrap around to that number.
+void reshape_size_overflow() {
+  const Index half = Index(1) << (8 * sizeof(Index) - 2);  // (half + 1) * 4 wraps to 4
+  VectorXd v = VectorXd::LinSpaced(4, 1, 4);
+  VERIFY_RAISES_ASSERT(v.reshaped(half + 1, 4));
+  VERIFY_RAISES_ASSERT(v.reshaped(4, half + 1));
+  VERIFY_RAISES_ASSERT(v.reshaped(fix<4>, half + 1));
+  VERIFY_RAISES_ASSERT((2 * v).reshaped(half + 1, 4));
+  VERIFY_RAISES_ASSERT((2 * v).reshaped(-2, -2));
+  VERIFY_RAISES_ASSERT(VectorXd().reshaped(half, 4));
+  VERIFY_IS_EQUAL(v.reshaped(2, 2).size(), 4);
+  VERIFY_IS_EQUAL(VectorXd().reshaped(0, 5).size(), 0);
+  VERIFY_IS_EQUAL(VectorXd().reshaped(5, 0).size(), 0);
+
+  // The fixed-size constructor: 1073741825 * 4 wraps to 4 in int.
+  using Doubled = decltype(2 * v);
+  VERIFY_RAISES_ASSERT((Reshaped<const Doubled, 1073741825, 4>(2 * v)));
+  VERIFY_IS_EQUAL((Reshaped<const Doubled, 2, 2>(2 * v).size()), 4);
+}
+
 EIGEN_DECLARE_TEST(reshape) {
   using RowMatrixXi = Matrix<int, Dynamic, Dynamic, RowMajor>;
   using RowMatrix4i = Matrix<int, 4, 4, RowMajor>;
@@ -523,6 +564,9 @@ EIGEN_DECLARE_TEST(reshape) {
   CALL_SUBTEST_8(reshape_evaluator_outlives_expression<RowMajor>());
   CALL_SUBTEST_8(reshape_inner_iterator());
   CALL_SUBTEST_8(reshape_empty_auto_all());
+  CALL_SUBTEST_8(reshape_unaligned_views<float>());
+  CALL_SUBTEST_8(reshape_unaligned_views<double>());
+  CALL_SUBTEST_8(reshape_size_overflow());
 
   for (int i = 0; i < g_repeat; i++) {
     CALL_SUBTEST_7(reshape_copies<float>(17, 13));

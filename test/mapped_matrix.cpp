@@ -246,6 +246,54 @@ void map_outer_stride_boundary() {
   }
 }
 
+// The extents of a Map or a Ref must stay within MaxRowsAtCompileTime and MaxColsAtCompileTime of the mapped type, as
+// resize() requires of a plain object: the product kernels copy a strided vector into a buffer of
+// MaxSizeAtCompileTime coefficients.
+void map_max_size_at_compile_time() {
+  using BoundedVector = Matrix<double, Dynamic, 1, ColMajor, 4, 1>;
+  using BoundedRowVector = Matrix<double, 1, Dynamic, RowMajor, 1, 4>;
+  using BoundedMatrix = Matrix<double, Dynamic, Dynamic, ColMajor, 4, 3>;
+  using StridedMap = Map<const BoundedVector, 0, InnerStride<>>;
+  using StridedConstRef = Ref<const BoundedVector, 0, InnerStride<>>;
+  using StridedRef = Ref<BoundedVector, 0, InnerStride<>>;
+  using MatrixRef = Ref<const BoundedMatrix>;
+  using ColMajorMatrix = Matrix<double, Dynamic, Dynamic, ColMajor>;
+  using RowMajorMatrix = Matrix<double, Dynamic, Dynamic, RowMajor>;
+
+  VectorXd v = random_for_arithmetic<VectorXd>(20);
+  ColMajorMatrix m = random_for_arithmetic<ColMajorMatrix>(5, 4);
+
+  // Extents at the bounds are valid.
+  VERIFY_IS_EQUAL(Map<BoundedVector>(v.data(), 4).size(), Index(4));
+  VERIFY_IS_EQUAL(Map<BoundedRowVector>(v.data(), 4).size(), Index(4));
+  VERIFY_IS_EQUAL(Map<BoundedMatrix>(v.data(), 4, 3).size(), Index(12));
+  VERIFY_IS_EQUAL(StridedMap(v.data(), 4, InnerStride<>(2)).size(), Index(4));
+  VERIFY_IS_EQUAL(StridedConstRef(v.head(4)).size(), Index(4));
+  VERIFY_IS_EQUAL(StridedRef(v.head(4)).size(), Index(4));
+  VERIFY_IS_EQUAL(MatrixRef(m.topLeftCorner(4, 3)).size(), Index(12));
+
+  // These products pack the strided right-hand side and the strided destination, respectively.
+  const RowMajorMatrix a = random_for_arithmetic<RowMajorMatrix>(3, 4);
+  const ColMajorMatrix b = random_for_arithmetic<ColMajorMatrix>(4, 3);
+  const StridedMap x(v.data(), 4, InnerStride<>(2));
+  VectorXd ax = a * StridedConstRef(x);
+  VERIFY_IS_APPROX(ax, a * x.eval());
+  VectorXd y = VectorXd::Zero(8);
+  StridedRef y_ref(Map<VectorXd, 0, InnerStride<2>>(y.data(), 4));
+  y_ref.noalias() += b * ax;
+  VERIFY_IS_APPROX((Map<VectorXd, 0, InnerStride<2>>(y.data(), 4)), b * ax);
+
+  VERIFY_RAISES_ASSERT((Map<BoundedVector>(v.data(), 5)));
+  VERIFY_RAISES_ASSERT((Map<BoundedRowVector>(v.data(), 5)));
+  VERIFY_RAISES_ASSERT((Map<BoundedMatrix>(v.data(), 5, 3)));
+  VERIFY_RAISES_ASSERT((Map<BoundedMatrix>(v.data(), 4, 4)));
+  VERIFY_RAISES_ASSERT((StridedMap(v.data(), 5, InnerStride<>(2))));
+  VERIFY_RAISES_ASSERT((StridedConstRef(v)));
+  VERIFY_RAISES_ASSERT((StridedRef(v)));
+  VERIFY_RAISES_ASSERT((MatrixRef(m.topRows(4))));
+  VERIFY_RAISES_ASSERT((MatrixRef(m.leftCols(3))));
+}
+
 EIGEN_DECLARE_TEST(mapped_matrix) {
   for (int i = 0; i < g_repeat; i++) {
     CALL_SUBTEST_1(map_class_vector(Matrix<float, 1, 1>()));
@@ -274,6 +322,7 @@ EIGEN_DECLARE_TEST(mapped_matrix) {
   // Strided map tests at vectorization boundaries (deterministic, outside g_repeat).
   CALL_SUBTEST_12(map_inner_stride_boundary<float>());
   CALL_SUBTEST_12(map_inner_stride_boundary<double>());
+  CALL_SUBTEST_12(map_max_size_at_compile_time());
   CALL_SUBTEST_13(map_outer_stride_boundary<float>());
   CALL_SUBTEST_13(map_outer_stride_boundary<double>());
 }

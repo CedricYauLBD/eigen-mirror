@@ -146,6 +146,8 @@ class MapBase<Derived, ReadOnlyAccessors> : public internal::dense_xpr_base<Deri
     EIGEN_STATIC_ASSERT_VECTOR_ONLY(Derived)
     eigen_assert(vecSize >= 0);
     eigen_assert(dataPtr == 0 || SizeAtCompileTime == Dynamic || SizeAtCompileTime == vecSize);
+    // As in PlainObjectBase::resize(): kernels size fixed buffers from the compile-time bounds of the type.
+    eigen_assert(MaxSizeAtCompileTime == Dynamic || vecSize <= MaxSizeAtCompileTime);
     checkSanity<Derived>();
   }
 
@@ -154,6 +156,9 @@ class MapBase<Derived, ReadOnlyAccessors> : public internal::dense_xpr_base<Deri
       : m_data(dataPtr), m_rows(rows), m_cols(cols) {
     eigen_assert((dataPtr == 0) || (rows >= 0 && (RowsAtCompileTime == Dynamic || RowsAtCompileTime == rows) &&
                                     cols >= 0 && (ColsAtCompileTime == Dynamic || ColsAtCompileTime == cols)));
+    // As in PlainObjectBase::resize(): kernels size fixed buffers from the compile-time bounds of the type.
+    eigen_assert((MaxRowsAtCompileTime == Dynamic || rows <= MaxRowsAtCompileTime) &&
+                 (MaxColsAtCompileTime == Dynamic || cols <= MaxColsAtCompileTime));
     checkSanity<Derived>();
   }
 

@@ -129,7 +129,8 @@ class Reshaped : public ReshapedImpl<XprType, Rows, Cols, Order, typename intern
                         YOU_MIXED_MATRICES_OF_DIFFERENT_SIZES)
     eigen_assert((RowsAtCompileTime == Dynamic || RowsAtCompileTime == reshapeRows) &&
                  (ColsAtCompileTime == Dynamic || ColsAtCompileTime == reshapeCols));
-    eigen_assert(reshapeRows * reshapeCols == xpr.rows() * xpr.cols());
+    eigen_assert(internal::reshape_preserves_size(reshapeRows, reshapeCols, xpr.rows() * xpr.cols()) &&
+                 "Reshaping must preserve the number of coefficients");
   }
 };
 

@@ -59,7 +59,10 @@ struct traits<Diagonal<MatrixType, DiagIndex> > : traits<MatrixType> {
     Flags = (unsigned int)MatrixTypeNested_::Flags &
             (MaskLvalueBit | DirectAccessBit),  // FIXME DirectAccessBit should not be handled by expressions
     MatrixTypeOuterStride = outer_stride_at_compile_time<MatrixType>::value,
-    OuterStrideAtCompileTime = 0
+    OuterStrideAtCompileTime = 0,
+    // As in Block: a sub- or superdiagonal does not start at the first coefficient, so data() does not have the
+    // alignment of the nested expression's storage.
+    Alignment = 0
   };
   static constexpr int MatrixTypeInnerStride = inner_stride_at_compile_time<MatrixType>::value;
   static constexpr int InnerStrideAtCompileTime = MatrixTypeOuterStride == Dynamic || MatrixTypeInnerStride == Dynamic
