@@ -335,6 +335,19 @@ bool packet_path_flushes_subnormals() {
   return numext::is_exactly_zero(half_tiny);
 }
 
+// First exponent of the scale sweep 2^minExp, 2^(minExp + step), ... that the packet path can resolve. A packet unit
+// that flushes subnormals loses up to min() in every operation whose operand or result is below it, an error of
+// min() / 2^e relative to data of magnitude 2^e. That is within eps only for 2^e >= min() / eps, so the sweep starts at
+// the first scale of the grid above that there.
+template <typename RealScalar>
+int scale_sweep_min_exponent(int minExp, int step) {
+  const int flushFloor = std::numeric_limits<RealScalar>::min_exponent - 2 + std::numeric_limits<RealScalar>::digits;
+  if (packet_path_flushes_subnormals<RealScalar>()) {
+    while (minExp < flushFloor) minExp += step;
+  }
+  return minExp;
+}
+
 // Whether dividing a normal value by a subnormal divisor yields its IEEE 754
 // quotient here.  Two things defeat it: hardware that flushes subnormal inputs
 // (x86 DAZ, Arm FZ, MIPS FS) reads the divisor as zero, and a compiler
