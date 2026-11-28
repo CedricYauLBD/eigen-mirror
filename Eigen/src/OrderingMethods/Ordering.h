@@ -102,24 +102,32 @@ class COLAMDOrdering {
   using PermutationType = PermutationMatrix<Dynamic, Dynamic, StorageIndex>;
   using IndexVector = Matrix<StorageIndex, Dynamic, 1>;
 
-  /** Compute the permutation vector \a perm from the sparse matrix \a mat. */
+  /** Compute the permutation vector \a perm from the sparse matrix \a mat.
+   * Throws \c std::bad_alloc if the rows, columns or stored entries of \a mat, or COLAMD's workspace of about
+   * 2.2 nnz + 7 cols + 4 rows indices, exceed the range of \c StorageIndex.
+   */
   template <typename MatrixType>
   void operator()(const MatrixType& mat, PermutationType& perm) const {
-    using MatrixStorageIndex = typename MatrixType::StorageIndex;
-    Matrix<MatrixStorageIndex, Dynamic, 1> outer_buf, inner_buf;
-    internal::SparsityPatternRef<MatrixStorageIndex> pat =
-        internal::make_col_major_pattern_ref(mat, outer_buf, inner_buf);
-    const StorageIndex m = internal::convert_index<StorageIndex>(pat.innerSize);
-    const StorageIndex n = internal::convert_index<StorageIndex>(pat.outerSize);
+    using PatternIndex = typename pattern_index<MatrixType>::type;
+    Matrix<PatternIndex, Dynamic, 1> outer_buf, inner_buf;
+    internal::SparsityPatternRef<PatternIndex> pat = internal::make_col_major_pattern_ref(mat, outer_buf, inner_buf);
     // Accumulate in Index — Eigen's contract is that any valid nnz fits there
-    // (mat.nonZeros() returns Index), so the sum can't overflow. One
-    // bounds-checked narrow to StorageIndex at the end catches the only real
-    // overflow case (total > StorageIndex range).
+    // (mat.nonZeros() returns Index), so the sum can't overflow.
     Index total_nnz = 0;
     for (Index j = 0; j < pat.outerSize; ++j) total_nnz += pat.nonZeros(j);
+    // convert_index() checks the range only under EIGEN_INTERNAL_DEBUGGING, and with narrowed sizes Colamd rejects
+    // valid row indices or is handed an undersized workspace.
+    internal::check_sparse_solver_size_for_overflow<StorageIndex>(pat.innerSize, pat.outerSize);
+    if (total_nnz > NumTraits<StorageIndex>::highest()) internal::throw_std_bad_alloc();
+    const StorageIndex m = internal::convert_index<StorageIndex>(pat.innerSize);
+    const StorageIndex n = internal::convert_index<StorageIndex>(pat.outerSize);
     const StorageIndex nnz = internal::convert_index<StorageIndex>(total_nnz);
 
-    StorageIndex Alen = internal::Colamd::recommended(nnz, m, n);
+    const StorageIndex Alen = internal::Colamd::recommended(nnz, m, n);
+    if (Alen < 0) internal::throw_std_bad_alloc();
+    // StorageIndex can be wider than Index, and the workspace below is allocated with an Index length.
+    using WideIndex = std::common_type_t<Index, StorageIndex>;
+    if (WideIndex(Alen) > WideIndex(NumTraits<Index>::highest())) internal::throw_std_bad_alloc();
     double knobs[internal::Colamd::NKnobs];
     StorageIndex stats[internal::Colamd::NStats];
     internal::Colamd::set_defaults(knobs);
@@ -131,20 +139,36 @@ class COLAMDOrdering {
     p(0) = 0;
     for (StorageIndex j = 0; j < n; ++j) {
       const Index nz = pat.nonZeros(j);
-      const MatrixStorageIndex* src = pat.inner + pat.outer[j];
-      copy_colamd_indices(src, nz, A.data() + p(j), std::is_same<MatrixStorageIndex, StorageIndex>());
+      const PatternIndex* src = pat.inner + pat.outer[j];
+      copy_colamd_indices(src, nz, A.data() + p(j), std::is_same<PatternIndex, StorageIndex>());
       p(j + 1) = p(j) + static_cast<StorageIndex>(nz);
     }
 
     StorageIndex info = internal::Colamd::compute_ordering(m, n, Alen, A.data(), p.data(), knobs, stats);
-    EIGEN_UNUSED_VARIABLE(info);
     eigen_assert(info && "COLAMD failed");
+    // Colamd fails only on a malformed pattern. p then holds no ordering to invert.
+    if (!info) {
+      perm.setIdentity(n);
+      return;
+    }
 
     perm.resize(n);
     for (StorageIndex i = 0; i < n; i++) perm.indices()(p(i)) = i;
   }
 
  private:
+  // Index type of the column-major pattern handed to COLAMD. A column-major SparseMatrix is read in place, in its own
+  // index type. Any other source is materialized in StorageIndex rather than in the source's index type: the row
+  // numbers of a row-major source are outer indices, which can exceed the range of that type.
+  template <typename MatrixType>
+  struct pattern_index {
+    using type = StorageIndex;
+  };
+  template <typename Scalar, typename MatrixStorageIndex>
+  struct pattern_index<SparseMatrix<Scalar, ColMajor, MatrixStorageIndex>> {
+    using type = MatrixStorageIndex;
+  };
+
   template <typename SrcStorageIndex>
   static void copy_colamd_indices(const SrcStorageIndex* src, Index nz, StorageIndex* dst, std::true_type) {
     std::copy_n(src, nz, dst);

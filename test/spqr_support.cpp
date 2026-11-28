@@ -183,6 +183,46 @@ void test_spqr_q_product_strided_rhs() {
   VERIFY_IS_APPROX(solver.matrixQ() * (tall + tall), Q * DenseMatrix(tall + tall));
 }
 
+// solve() works on max(rows, cols) rows, more than a destination with a compile-time bound for the unknowns can hold.
+template <typename = void>
+void test_spqr_solve_bounded_destination() {
+  using MatrixType = SparseMatrix<double, ColMajor>;
+  using DenseMatrix = Matrix<double, Dynamic, Dynamic>;
+  using DenseVector = Matrix<double, Dynamic, 1>;
+
+  DenseMatrix dA(6, 4);
+  dA << 4.0, 1.0, 0.0, 0.0,  //
+      1.0, 0.0, 2.0, 0.0,    //
+      -2.0, 3.0, 0.0, 6.0,   //
+      0.0, 5.0, -1.0, 0.0,   //
+      0.0, 0.0, 7.0, 2.0,    //
+      0.0, 0.0, 0.0, 3.0;
+
+  MatrixType A = dA.sparseView();
+  A.makeCompressed();
+
+  DenseVector b(6);
+  b << 1.0, -2.0, 0.5, 4.0, -1.0, 3.0;
+  const DenseVector refX = dA.colPivHouseholderQr().solve(b);
+
+  SPQR<MatrixType> solver(A);
+  VERIFY_IS_EQUAL(solver.info(), Success);
+  VERIFY_IS_EQUAL(solver.rank(), A.cols());
+
+  const Matrix<double, Dynamic, 1, ColMajor, 4, 1> boundedVector = solver.solve(b);
+  VERIFY_IS_EQUAL(solver.info(), Success);
+  VERIFY_IS_APPROX(boundedVector, refX);
+
+  const Matrix<double, 4, 1> fixedVector = solver.solve(b);
+  VERIFY_IS_APPROX(fixedVector, refX);
+
+  // A block of a fixed-size vector inherits the vector's bound.
+  Matrix<double, 5, 1> padded = Matrix<double, 5, 1>::Ones();
+  padded.head(A.cols()) = solver.solve(b);
+  VERIFY_IS_APPROX(padded.head(A.cols()), refX);
+  VERIFY_IS_EQUAL(padded(4), 1.0);
+}
+
 EIGEN_DECLARE_TEST(spqr_support) {
   CALL_SUBTEST_1(test_spqr_scalar<double>());
   CALL_SUBTEST_2(test_spqr_scalar<std::complex<double> >());
@@ -190,4 +230,5 @@ EIGEN_DECLARE_TEST(spqr_support) {
   CALL_SUBTEST_3(test_spqr_matrix_q_times_identity_expression<>());
   CALL_SUBTEST_4(test_spqr_q_product_strided_rhs<double>());
   CALL_SUBTEST_4(test_spqr_q_product_strided_rhs<std::complex<double> >());
+  CALL_SUBTEST_3(test_spqr_solve_bounded_destination<>());
 }

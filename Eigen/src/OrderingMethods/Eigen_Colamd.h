@@ -211,6 +211,14 @@ inline IndexType colamd_r(IndexType n_row) {
   return IndexType(((n_row) + 1) * sizeof(RowStructure<IndexType>) / sizeof(IndexType));
 }
 
+/* Adds count * size to total.  Returns false, leaving total unchanged, if the result does not fit in IndexType. */
+template <typename IndexType>
+inline bool add_size(IndexType &total, IndexType count, IndexType size) {
+  if (count > (NumTraits<IndexType>::highest() - total) / size) return (false);
+  total += count * size;
+  return (true);
+}
+
 // Prototypes of non-user callable routines
 template <typename IndexType>
 static IndexType init_rows_cols(IndexType n_row, IndexType n_col, RowStructure<IndexType> Row[],
@@ -254,7 +262,7 @@ static inline IndexType clear_mark(IndexType n_row, RowStructure<IndexType> Row[
  * \brief Returns the recommended value of Alen
  *
  * Returns recommended value of Alen for use by colamd.
- * Returns -1 if any input argument is negative.
+ * Returns -1 if any input argument is negative, or if the recommended value does not fit in IndexType.
  * The use of this routine or macro is optional.
  * Note that the macro uses its arguments more than once,
  * so be careful for side effects, if you pass expressions as arguments to COLAMD_RECOMMENDED.
@@ -266,10 +274,16 @@ static inline IndexType clear_mark(IndexType n_row, RowStructure<IndexType> Row[
  */
 template <typename IndexType>
 inline IndexType recommended(IndexType nnz, IndexType n_row, IndexType n_col) {
-  if ((nnz) < 0 || (n_row) < 0 || (n_col) < 0)
+  if ((nnz) < 0 || (n_row) < 0 || (n_col) < 0) return (-1);
+  /* 2*nnz + colamd_c (n_col) + colamd_r (n_row) + n_col + nnz/5, summed so that no partial sum overflows: */
+  /* a wrapped sum would be a valid Alen that is far too small.  The sum starts from Col [n_col] and Row [n_row]. */
+  const IndexType col_size = IndexType(sizeof(ColStructure<IndexType>) / sizeof(IndexType));
+  const IndexType row_size = IndexType(sizeof(RowStructure<IndexType>) / sizeof(IndexType));
+  IndexType Alen = col_size + row_size;
+  if (!add_size(Alen, nnz, IndexType(2)) || !add_size(Alen, nnz / 5, IndexType(1)) ||
+      !add_size(Alen, n_col, IndexType(col_size + 1)) || !add_size(Alen, n_row, row_size))
     return (-1);
-  else
-    return (2 * (nnz) + colamd_c(n_col) + colamd_r(n_row) + (n_col) + ((nnz) / 5));
+  return (Alen);
 }
 
 /**

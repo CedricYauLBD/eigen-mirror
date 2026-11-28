@@ -372,6 +372,74 @@ void test_sparseqr_zero_dimension() {
   }
 }
 
+// solve() works on max(rows, cols) rows, more than a destination with a compile-time bound for the unknowns can hold.
+template <typename Scalar>
+void test_sparseqr_solve_bounded_destination() {
+  using MatrixType = SparseMatrix<Scalar, ColMajor>;
+  using DenseMat = Matrix<Scalar, Dynamic, Dynamic>;
+  const Index rows = 12, cols = 3;
+  const DenseMat dA = DenseMat::Random(rows, cols);
+  MatrixType A = dA.sparseView();
+  A.makeCompressed();
+  const DenseMat b = DenseMat::Random(rows, 2);
+  const DenseMat refX = dA.colPivHouseholderQr().solve(b);
+
+  SparseQR<MatrixType, COLAMDOrdering<int> > solver(A);
+  VERIFY_IS_EQUAL(solver.info(), Success);
+  VERIFY_IS_EQUAL(solver.rank(), cols);
+
+  const Matrix<Scalar, Dynamic, 1, ColMajor, 4, 1> boundedVector = solver.solve(b.col(0));
+  VERIFY_IS_EQUAL(solver.info(), Success);
+  VERIFY_IS_APPROX(boundedVector, refX.col(0));
+
+  const Matrix<Scalar, Dynamic, Dynamic, RowMajor, 4, 2> boundedMatrix = solver.solve(b);
+  VERIFY_IS_APPROX(boundedMatrix, refX);
+
+  const Matrix<Scalar, 3, 1> fixedVector = solver.solve(b.col(0));
+  VERIFY_IS_APPROX(fixedVector, refX.col(0));
+
+  // A block of a fixed-size vector inherits the vector's bound.
+  Matrix<Scalar, 5, 1> padded = Matrix<Scalar, 5, 1>::Ones();
+  padded.head(cols) = solver.solve(b.col(0));
+  VERIFY_IS_APPROX(padded.head(cols), refX.col(0));
+  VERIFY_IS_EQUAL(padded(3), Scalar(1));
+  VERIFY_IS_EQUAL(padded(4), Scalar(1));
+}
+
+// SparseQR numbers rows and columns with StorageIndex. A dimension beyond its range used to wrap, and analyzePattern()
+// then wrote in front of the column permutation. Every stored index of these matrices fits signed char.
+template <typename T = double>
+void test_sparseqr_narrow_index() {
+  using SpMat = SparseMatrix<T, ColMajor, signed char>;
+  const Index highest = NumTraits<signed char>::highest();
+  const Index sizes[][2] = {{4, highest}, {4, highest + 1}, {4, 300}, {300, 4}};
+  SparseQR<SpMat, NaturalOrdering<signed char> > qr;
+  for (const auto& size : sizes) {
+    const Index rows = size[0], cols = size[1];
+    SpMat A(rows, cols);
+    for (Index i = 0; i < 4; ++i) A.insert(i, cols - 1 - i) = T(i + 1);
+    A.makeCompressed();
+    if (rows <= highest && cols <= highest) {
+      qr.compute(A);
+      VERIFY_IS_EQUAL(qr.info(), Success);
+      VERIFY_IS_EQUAL(qr.rank(), 4);
+      continue;
+    }
+#ifdef EIGEN_EXCEPTIONS
+    bool threw = false;
+    try {
+      qr.compute(A);
+    } catch (const std::bad_alloc&) {
+      threw = true;
+    }
+    VERIFY(threw);
+    // The solver still holds the factorization of the first matrix.
+    VERIFY_IS_EQUAL(qr.cols(), highest);
+    VERIFY_IS_EQUAL(qr.rank(), 4);
+#endif
+  }
+}
+
 EIGEN_DECLARE_TEST(sparseqr) {
   for (int i = 0; i < g_repeat; ++i) {
     CALL_SUBTEST_1(test_sparseqr_scalar<double>());
@@ -381,6 +449,9 @@ EIGEN_DECLARE_TEST(sparseqr) {
   CALL_SUBTEST_3(test_sparseqr_empty<>());
   CALL_SUBTEST_3(test_sparseqr_zero_dimension<>());
   CALL_SUBTEST_3(test_sparseqr_zero_dimension<std::complex<double> >());
+  CALL_SUBTEST_3(test_sparseqr_solve_bounded_destination<double>());
+  CALL_SUBTEST_3(test_sparseqr_solve_bounded_destination<std::complex<double> >());
+  CALL_SUBTEST_3(test_sparseqr_narrow_index<>());
   CALL_SUBTEST_4(test_sparseqr_lookahead_rejects_replaceable_weak_pivot<>());
   CALL_SUBTEST_5(test_sparseqr_tiny_independent_column<>());
   CALL_SUBTEST_6(test_sparseqr_explicit_threshold_disables_lookahead<>());

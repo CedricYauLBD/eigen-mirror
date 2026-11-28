@@ -83,7 +83,7 @@ class DiagonalPreconditioner {
   /** \internal */
   template <typename Rhs, typename Dest>
   void _solve_impl(const Rhs& b, Dest& x) const {
-    x = m_invdiag.array() * b.array();
+    x = m_invdiag.asDiagonal() * b;
   }
 
   template <typename Rhs>

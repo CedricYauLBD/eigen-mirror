@@ -237,7 +237,8 @@ class SparseQR : public SparseSolverBase<SparseQR<MatrixType_, OrderingType_> > 
     Index rank = this->rank();
 
     // Compute Q^* * b;
-    typename Dest::PlainObject y, b;
+    // Up to max(rows(), cols()) rows, more than a Dest with a compile-time bound for cols() rows can hold.
+    Matrix<typename Dest::Scalar, Dynamic, Dest::ColsAtCompileTime, 0, Dynamic, Dest::MaxColsAtCompileTime> y, b;
     y = this->matrixQ().adjoint() * B;
     b = y;
 
@@ -351,6 +352,7 @@ void SparseQR<MatrixType, OrderingType>::analyzePattern(const MatrixType& mat) {
   eigen_assert(
       mat.isCompressed() &&
       "SparseQR requires a sparse matrix in compressed mode. Call .makeCompressed() before passing it to SparseQR");
+  internal::check_sparse_solver_size_for_overflow<StorageIndex>(mat.rows(), mat.cols());
   // Copy to a column major matrix if the input is rowmajor
   std::conditional_t<MatrixType::IsRowMajor, QRMatrixType, const MatrixType&> matCpy(mat);
   // Compute the column fill reducing ordering

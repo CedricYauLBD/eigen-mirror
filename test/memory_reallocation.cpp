@@ -3,6 +3,7 @@
 
 #include "main.h"
 #include <Eigen/SparseCore>
+#include <Eigen/SparseLU>
 
 #include <memory>
 
@@ -326,6 +327,45 @@ void compressed_storage_allocation_failure() {
     }
   }
 }
+
+// Fail each allocation of a second compute() in turn. When the failure leaves compute() as std::bad_alloc, info() must
+// stop reporting the first factorization: by then the call has overwritten part of it, and solve() would read the rest.
+void sparselu_allocation_failure() {
+  const Index n = 50;
+  SparseMatrix<double> first(n, n), second(n, n);
+  first.setIdentity();
+  for (Index j = 0; j < n; ++j) {
+    if (j > 0) second.insert(0, j) = 1;
+    second.insert(j, j) = double(2 * n);
+    if (j > 0) second.insert(j, 0) = 1;
+  }
+  second.makeCompressed();
+  const VectorXd b = VectorXd::Ones(n);
+
+  int thrown = 0;
+  bool injected = true;
+  for (int successful_allocations = 0; injected; ++successful_allocations) {
+    SparseLU<SparseMatrix<double>> lu(first);
+    VERIFY_IS_EQUAL(lu.info(), Success);
+    bool caught = false;
+    allocations_before_failure = successful_allocations;
+    try {
+      lu.compute(second);
+    } catch (const std::bad_alloc&) {
+      caught = true;
+    }
+    injected = allocations_before_failure < 0;
+    allocations_before_failure = -1;
+    if (caught) {
+      ++thrown;
+      VERIFY(lu.info() != Success);
+    }
+    lu.compute(second);
+    VERIFY_IS_EQUAL(lu.info(), Success);
+    VERIFY_IS_APPROX(second * lu.solve(b), b);
+  }
+  VERIFY(thrown > 0);
+}
 #endif
 #endif
 
@@ -339,6 +379,7 @@ EIGEN_DECLARE_TEST(memory_reallocation) {
 #ifdef EIGEN_TEST_WRAP_MALLOC
   CALL_SUBTEST(compressed_storage_allocation_failure<ReallocationScalar>());
   CALL_SUBTEST(compressed_storage_allocation_failure<double>());
+  CALL_SUBTEST(sparselu_allocation_failure());
 #endif
   CALL_SUBTEST(sparse_reserve_failure());
   for (int successful_constructions : {0, 1}) {

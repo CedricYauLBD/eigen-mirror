@@ -184,7 +184,8 @@ class SPQR : public SparseSolverBase<SPQR<MatrixType_> > {
     eigen_assert(b.cols() == 1 && "This method is for vectors only");
 
     // Compute Q^T * b
-    typename Dest::PlainObject y, y2;
+    // Up to max(rows(), cols()) rows, more than a Dest with a compile-time bound for cols() rows can hold.
+    Matrix<typename Dest::Scalar, Dynamic, Dest::ColsAtCompileTime, 0, Dynamic, Dest::MaxColsAtCompileTime> y, y2;
     y = matrixQ().transpose() * b;
 
     // Solves with the triangular matrix R

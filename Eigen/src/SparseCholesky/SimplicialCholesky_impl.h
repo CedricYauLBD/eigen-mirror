@@ -157,16 +157,13 @@ struct simpl_chol_helper {
     std::fill_n(firstChild, size, kEmpty);
     std::fill_n(firstSibling, size, kEmpty);
 
-    for (StorageIndex j = 0; j < size; j++) {
+    // Prepending in descending order leaves each child list ascending. Appending in ascending order would walk the
+    // list of a node with k children k times: O(k^2), against O(size) overall here.
+    for (StorageIndex j = size - 1; j >= 0; j--) {
       StorageIndex p = parent[j];
       if (p == kEmpty) continue;
-      StorageIndex c = firstChild[p];
-      if (c == kEmpty)
-        firstChild[p] = j;
-      else {
-        while (firstSibling[c] != kEmpty) c = firstSibling[c];
-        firstSibling[c] = j;
-      }
+      firstSibling[j] = firstChild[p];
+      firstChild[p] = j;
     }
   }
 

@@ -194,6 +194,103 @@ void test_pattern_value_separation() {
   VERIFY(ilut.info() == Eigen::Success);
 }
 
+// AMD orders a row with more than 10 * sqrt(n) entries last, which puts all of them in the lower part of the row.
+// factorize() searched the columns left in that part for each one it eliminated, size^2 / 2 = 1.2e9 steps for this
+// row. Whether ILUT keeps or drops the entries of 1e-10, the factorization is exact to the precision checked.
+template <typename T>
+void test_long_row() {
+  using Vector = Matrix<T, Dynamic, 1>;
+  const int size = 50000;
+  std::vector<Triplet<T>> triplets;
+  for (int i = 0; i < size; ++i) {
+    const bool large = i % (size / 4) == 1;
+    triplets.emplace_back(i, i, T(4));
+    if (i > 0) triplets.emplace_back(0, i, large ? T(1) : T(1e-10));
+    if (large) triplets.emplace_back(i, 0, T(1));
+  }
+  SparseMatrix<T> A(size, size);
+  A.setFromTriplets(triplets.begin(), triplets.end());
+  const Vector x = Vector::LinSpaced(size, T(1), T(2));
+  const Vector b = A * x;
+
+  IncompleteLUT<T> ilut(A);
+  VERIFY_IS_EQUAL(ilut.info(), Success);
+  VERIFY_IS_APPROX(ilut.solve(b), x);
+}
+
+// Without dropping, and with fewer entries per row than are kept, ILUT is the exact LU factorization.
+template <typename T, typename I_>
+void check_exact_factorization(const std::vector<Triplet<T>>& triplets, int size) {
+  using Vector = Matrix<T, Dynamic, 1>;
+  SparseMatrix<T, ColMajor, I_> A(size, size);
+  A.setFromTriplets(triplets.begin(), triplets.end());
+  const Vector x = Vector::LinSpaced(size, T(1), T(2));
+  const Vector b = A * x;
+
+  IncompleteLUT<T, I_> ilut;
+  ilut.setDroptol(0);
+  ilut.setFillfactor(size);
+  ilut.compute(A);
+  VERIFY_IS_EQUAL(ilut.info(), Success);
+  VERIFY_IS_APPROX(ilut.solve(b), x);
+}
+
+// The lower part of a row is eliminated by increasing column, while fill-in adds columns to it in any order. The next
+// column is searched among at most 32 columns and taken from a heap beyond that. With the AMD ordering, rows of the
+// 5-point stencil start with 3 or 4 columns and grow past 32. In the chain, one row starts with 38 columns, fill-in
+// doubles them, and the last elimination adds a column when the heap is empty.
+template <typename T, typename I_>
+void test_elimination_order() {
+  std::vector<Triplet<T>> triplets;
+  const int side = 24;
+  for (int i = 0; i < side; ++i)
+    for (int j = 0; j < side; ++j) {
+      const int row = i * side + j;
+      triplets.emplace_back(row, row, T(5));
+      if (i > 0) triplets.emplace_back(row, row - side, T(-1));
+      if (i + 1 < side) triplets.emplace_back(row, row + side, T(-2));
+      if (j > 0) triplets.emplace_back(row, row - 1, T(-1));
+      if (j + 1 < side) triplets.emplace_back(row, row + 1, T(-0.5));
+    }
+  check_exact_factorization<T, I_>(triplets, side * side);
+
+  triplets.clear();
+  const int size = 200;
+  for (int i = 0; i < size; ++i) {
+    triplets.emplace_back(i, i, T(4));
+    if (i > 0) triplets.emplace_back(i, i - 1, T(-1));
+    if (i + 1 < size) triplets.emplace_back(i, i + 1, T(-2));
+    if (i > 1 && i < 80 && i % 2 == 0) triplets.emplace_back(0, i, T(0.25));
+  }
+  check_exact_factorization<T, I_>(triplets, size);
+}
+
+// A row that stores a column twice is not valid input, but factorize() must stay in bounds on it. Row 0 of the chain
+// above, with column 10 stored twice, is long enough to take the columns from the heap.
+template <typename T>
+void test_repeated_column() {
+  const int size = 200;
+  SparseMatrix<T> A(size, size);
+  A.reserve(5 * size);
+  for (int j = 0; j < size; ++j) {
+    A.startVec(j);
+    if (j > 1 && j < 80 && j % 2 == 0) {
+      A.insertBackByOuterInnerUnordered(j, 0) = T(0.25);
+      if (j == 10) A.insertBackByOuterInnerUnordered(j, 0) = T(0.25);
+    }
+    if (j > 0) A.insertBackByOuterInnerUnordered(j, j - 1) = T(-2);
+    A.insertBackByOuterInnerUnordered(j, j) = T(4);
+    if (j + 1 < size) A.insertBackByOuterInnerUnordered(j, j + 1) = T(-1);
+  }
+  A.finalize();
+
+  IncompleteLUT<T> ilut;
+  ilut.setDroptol(0);
+  ilut.setFillfactor(size);
+  ilut.compute(A);
+  VERIFY(ilut.info() == Success || ilut.info() == NumericalIssue);
+}
+
 // A 0x0 matrix divided by its size when computing the fill-in per row.
 template <typename T>
 void test_empty() {
@@ -237,6 +334,7 @@ EIGEN_DECLARE_TEST(incomplete_LUT) {
   CALL_SUBTEST_1((test_incompleteLUT_T<float, int>()));
   CALL_SUBTEST_2((test_incompleteLUT_T<std::complex<double>, int>()));
   CALL_SUBTEST_3((test_incompleteLUT_T<double, long int>()));
+  CALL_SUBTEST_3((test_elimination_order<double, long int>()));
 
   CALL_SUBTEST_4(test_extract_LU<double>());
   CALL_SUBTEST_4(test_extract_LU<float>());
@@ -246,6 +344,9 @@ EIGEN_DECLARE_TEST(incomplete_LUT) {
   CALL_SUBTEST_5(test_structurally_singular<double>());
   CALL_SUBTEST_5(test_zero_pivot_numerical_issue<double>());
   CALL_SUBTEST_5(test_pattern_value_separation<double>());
+  CALL_SUBTEST_5(test_long_row<double>());
+  CALL_SUBTEST_5((test_elimination_order<double, int>()));
+  CALL_SUBTEST_5(test_repeated_column<double>());
   CALL_SUBTEST_5(test_empty<double>());
   CALL_SUBTEST_5(test_incompleteLU<double>());
 }

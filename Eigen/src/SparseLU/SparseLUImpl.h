@@ -49,9 +49,10 @@ class SparseLUImpl {
   Index pivotL(const Index jcol, const RealScalar& diagpivotthresh, IndexVector& perm_r, IndexVector& iperm_c,
                Index& pivrow, GlobalLU_t& glu);
   template <typename Traits>
-  void dfs_kernel(const StorageIndex jj, IndexVector& perm_r, Index& nseg, IndexVector& panel_lsub, IndexVector& segrep,
-                  Ref<IndexVector> repfnz_col, IndexVector& xprune, Ref<IndexVector> marker, IndexVector& parent,
-                  IndexVector& xplore, GlobalLU_t& glu, Index& nextl_col, Index krow, Traits& traits);
+  Index dfs_kernel(const StorageIndex jj, IndexVector& perm_r, Index& nseg, IndexVector& panel_lsub,
+                   IndexVector& segrep, Ref<IndexVector> repfnz_col, IndexVector& xprune, Ref<IndexVector> marker,
+                   IndexVector& parent, IndexVector& xplore, GlobalLU_t& glu, Index& nextl_col, Index krow,
+                   Traits& traits);
   void panel_dfs(const Index m, const Index w, const Index jcol, MatrixType& A, IndexVector& perm_r, Index& nseg,
                  ScalarVector& dense, IndexVector& panel_lsub, IndexVector& segrep, IndexVector& repfnz,
                  IndexVector& xprune, IndexVector& marker, IndexVector& parent, IndexVector& xplore, GlobalLU_t& glu);

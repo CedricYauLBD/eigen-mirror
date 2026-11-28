@@ -215,6 +215,23 @@ void test_minres_small_rhs() {
   check_sparse_small_rhs(solver_float);
 }
 
+// A NaN or infinite right-hand side is not a defect of the preconditioner and must not fail the assertion that checks
+// it: the solve ends without converging.
+void test_minres_nonfinite_rhs() {
+  const Index n = 6;
+  MatrixXd A = MatrixXd::Zero(n, n);
+  A.diagonal().setConstant(4.0);
+  A.diagonal(1).setConstant(-1);
+  A.diagonal(-1).setConstant(-1);
+  MINRES<MatrixXd, Lower | Upper, IdentityPreconditioner> solver(A);
+  for (double value : {std::numeric_limits<double>::quiet_NaN(), std::numeric_limits<double>::infinity()}) {
+    VectorXd rhs = VectorXd::Ones(n);
+    rhs(2) = value;
+    VectorXd x = solver.solve(rhs);
+    VERIFY_IS_EQUAL(solver.info(), NoConvergence);
+  }
+}
+
 EIGEN_DECLARE_TEST(minres) {
   CALL_SUBTEST_1(test_minres_T<double>());
   CALL_SUBTEST_3(test_minres_extreme_rhs());
@@ -223,5 +240,6 @@ EIGEN_DECLARE_TEST(minres) {
   CALL_SUBTEST_4(test_minres_poisson<DiagonalPreconditioner<double>>());
   CALL_SUBTEST_4(test_minres_small_rhs<>());
   CALL_SUBTEST_4(test_minres_default_accuracy<>());
+  CALL_SUBTEST_4(test_minres_nonfinite_rhs());
   CALL_SUBTEST_4((check_matrix_free_accessors<MINRES<MatrixFreeOperator, Lower | Upper, IdentityPreconditioner>>()));
 }

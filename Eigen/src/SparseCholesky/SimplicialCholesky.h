@@ -985,6 +985,7 @@ template <bool NonHermitian>
 void SimplicialCholeskyBase<Derived>::ordering(const MatrixType& a, ConstCholMatrixPtr& pmat, CholMatrixType& ap) {
   EIGEN_INTERNAL_ASSERT_SQUARE(a);
   const Index size = a.rows();
+  internal::check_sparse_solver_size_for_overflow<StorageIndex>(size, size);
   pmat = &ap;
   // Note that ordering methods compute the inverse permutation
   EIGEN_IF_CONSTEXPR ((!std::is_same<OrderingType, NaturalOrdering<StorageIndex> >::value)) {

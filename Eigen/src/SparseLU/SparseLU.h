@@ -320,6 +320,10 @@ class SparseLU : public SparseSolverBase<SparseLU<MatrixType_, OrderingType_>>,
    *          \c NumericalIssue if the LU factorization reports a problem, zero diagonal for instance
    *          \c InvalidInput if the input matrix is invalid
    *
+   * After analyzePattern() info() may be queried; it reports \c NumericalIssue until factorize() has run.
+   * \c Success is reported only for a factorize() that ran to completion: not after analyzePattern() alone, and not
+   * when analyzePattern() or factorize() was left through an exception such as \c std::bad_alloc.
+   *
    * You can get a readable error message with lastErrorMessage().
    *
    * \sa lastErrorMessage()
@@ -472,9 +476,10 @@ class SparseLU : public SparseSolverBase<SparseLU<MatrixType_, OrderingType_>>,
   }
 
   // Variables
-  mutable ComputationInfo m_info;
-  bool m_factorizationIsOk;
-  bool m_analysisIsOk;
+  // m_info == Success and m_factorizationIsOk hold only while the permutations and factors below describe m_mat.
+  mutable ComputationInfo m_info = NumericalIssue;
+  bool m_factorizationIsOk = false;
+  bool m_analysisIsOk = false;
   std::string m_lastError;
   NCMatrix m_mat;                                              // The input (permuted ) matrix
   SCMatrix m_Lstore;                                           // The lower triangular matrix (supernodal)
@@ -516,6 +521,17 @@ class SparseLU : public SparseSolverBase<SparseLU<MatrixType_, OrderingType_>>,
 template <typename MatrixType, typename OrderingType>
 void SparseLU<MatrixType, OrderingType>::analyzePattern(const MatrixType& mat) {
   // TODO  It is possible as in SuperLU to compute row and column scaling vectors to equilibrate the matrix mat.
+
+  // The postorder of the elimination tree also numbers a dummy root, hence cols() + 1.
+  internal::check_sparse_solver_size_for_overflow<StorageIndex>(mat.rows(), mat.cols() + 1);
+
+  // m_mat and m_perm_c are about to change and any allocation below may throw, so the previous analysis and
+  // factorization end here; info() reports Success again once factorize() completes.
+  m_analysisIsOk = false;
+  m_factorizationIsOk = false;
+  m_info = NumericalIssue;
+  // info() may be queried from here on and reports NumericalIssue until factorize() completes.
+  m_isInitialized = true;
 
   // Firstly, copy the whole input matrix.
   m_mat = mat;
@@ -607,8 +623,10 @@ void SparseLU<MatrixType, OrderingType>::factorize(const MatrixType& matrix) {
   m_isInitialized = true;
 
   // Reset state from any prior factorize() so info() and lastErrorMessage()
-  // describe this call's outcome, not the previous matrix's.
-  m_info = Success;
+  // describe this call's outcome, not the previous matrix's. That outcome is
+  // a failure until the factors are complete: any allocation below may throw.
+  m_info = NumericalIssue;
+  m_factorizationIsOk = false;
   m_lastError.clear();
 
   // Apply the column permutation computed in analyzepattern()

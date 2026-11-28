@@ -87,25 +87,35 @@ void minimum_degree_ordering(SparseMatrix<Scalar, ColMajor, StorageIndex>& C,
   using UnsignedIndex = std::make_unsigned_t<StorageIndex>;
   UnsignedIndex hash;
 
+  // The nodes 0..n and the positions in C are stored as StorageIndex, and perm and C are resized through Index, so
+  // C.cols() and the size of C with its elbow room, t = cnz + cnz / 5 + 2 * n, must be in the range of both types;
+  // either can be the wider one (long long with a 32-bit Index). t <= max_index implies n + 1 <= max_index.
+  using WideIndex = std::common_type_t<Index, StorageIndex>;
+  const StorageIndex max_index =
+      StorageIndex(numext::mini<WideIndex>(NumTraits<StorageIndex>::highest(), NumTraits<Index>::highest()));
+  if (C.cols() > max_index) internal::throw_std_bad_alloc();
   StorageIndex n = StorageIndex(C.cols());
   dense = std::max<StorageIndex>(16, StorageIndex(10 * numext::sqrt(double(n)))); /* find dense threshold */
-  dense = (std::min)(n - 2, dense);
+  dense = std::min<StorageIndex>(n - 2, dense);
 
   StorageIndex cnz = StorageIndex(C.nonZeros());
+  if (cnz / 5 > max_index - cnz || n > (max_index - cnz - cnz / 5) / 2) internal::throw_std_bad_alloc();
   perm.resize(n + 1);
   t = cnz + cnz / 5 + 2 * n; /* add elbow room to C */
   C.resizeNonZeros(t);
 
-  // get workspace
-  ei_declare_aligned_stack_constructed_variable(StorageIndex, W, 8 * (n + 1), 0);
+  // get workspace: 8 arrays of n + 1 entries, indexed by node. 8 * (n + 1) can exceed the range of StorageIndex.
+  const Index stride = Index(n) + 1;
+  if (stride > NumTraits<Index>::highest() / 8) internal::throw_std_bad_alloc();
+  ei_declare_aligned_stack_constructed_variable(StorageIndex, W, 8 * stride, 0);
   StorageIndex* len = W;
-  StorageIndex* nv = W + (n + 1);
-  StorageIndex* next = W + 2 * (n + 1);
-  StorageIndex* head = W + 3 * (n + 1);
-  StorageIndex* elen = W + 4 * (n + 1);
-  StorageIndex* degree = W + 5 * (n + 1);
-  StorageIndex* w = W + 6 * (n + 1);
-  StorageIndex* hhead = W + 7 * (n + 1);
+  StorageIndex* nv = W + stride;
+  StorageIndex* next = W + 2 * stride;
+  StorageIndex* head = W + 3 * stride;
+  StorageIndex* elen = W + 4 * stride;
+  StorageIndex* degree = W + 5 * stride;
+  StorageIndex* w = W + 6 * stride;
+  StorageIndex* hhead = W + 7 * stride;
   StorageIndex* last = perm.indices().data(); /* use P as workspace for last */
 
   /* --- Initialize quotient graph ---------------------------------------- */
@@ -173,7 +183,8 @@ void minimum_degree_ordering(SparseMatrix<Scalar, ColMajor, StorageIndex>& C,
     nel += nvk;             /* nv[k] nodes of A eliminated */
 
     /* --- Garbage collection ------------------------------------------- */
-    if (elenk > 0 && cnz + mindeg >= nzmax) {
+    // cnz + mindeg can exceed the range of StorageIndex; nzmax - mindeg >= 2 * n - mindeg >= 0 cannot.
+    if (elenk > 0 && cnz >= nzmax - mindeg) {
       for (j = 0; j < n; j++) {
         p = Cp[j];
         if (p >= 0) /* j is a live node or element */

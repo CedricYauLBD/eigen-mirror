@@ -83,25 +83,55 @@ SparsityPatternRef<StorageIndex> make_col_major_pattern_ref(const SparseMatrix<S
 }
 
 /** \internal
+ * The largest column offset or entry count that a pattern buffer indexed by StorageIndex and sized by Index can hold:
+ * the smaller of the ranges of the two types, which differ when StorageIndex is wider than Index (32-bit Index).
+ * Callers test a sum as \c count > limit - offset before adding, so the sum itself never overflows.
+ */
+template <typename StorageIndex>
+StorageIndex pattern_offset_limit() {
+  using WideIndex = std::common_type_t<Index, StorageIndex>;
+  return static_cast<StorageIndex>(
+      numext::mini<WideIndex>(WideIndex(NumTraits<StorageIndex>::highest()), WideIndex(NumTraits<Index>::highest())));
+}
+
+/** \internal
  * Generic fallback for any other sparse expression (row-major, products,
  * permutations, etc.). The pattern is materialized into \c outer_buf and
  * \c inner_buf via a value-free counting transpose driven by the expression
  * evaluator. Some evaluators may materialize internally.
+ *
+ * \c StorageIndex is the caller's choice, given by the buffers, and need not
+ * be the source's own index type: the rows of a row-major source are its outer
+ * dimension, which can exceed the range of that type. It must hold the row
+ * count and the number of entries of \c amat; throws \c std::bad_alloc if it
+ * does not. A column-major \c SparseMatrix with another index type than the
+ * buffers' also takes this path.
  */
-template <typename Derived>
-SparsityPatternRef<typename Derived::StorageIndex> make_col_major_pattern_ref(
-    const SparseMatrixBase<Derived>& amat_base, Matrix<typename Derived::StorageIndex, Dynamic, 1>& outer_buf,
-    Matrix<typename Derived::StorageIndex, Dynamic, 1>& inner_buf) {
-  using StorageIndex = typename Derived::StorageIndex;
+template <typename Derived, typename StorageIndex>
+SparsityPatternRef<StorageIndex> make_col_major_pattern_ref(const SparseMatrixBase<Derived>& amat_base,
+                                                            Matrix<StorageIndex, Dynamic, 1>& outer_buf,
+                                                            Matrix<StorageIndex, Dynamic, 1>& inner_buf) {
   const Derived& amat = amat_base.derived();
   internal::evaluator<Derived> amat_eval(amat);
   const Index n_cols = amat.cols();
   const Index n_outer = amat.outerSize();
 
+  // The column count, the row count and every offset must fit in StorageIndex, which can be narrower than the source's
+  // index type. Check them before narrowing: the offsets are summed in Index and tested as they grow.
+  check_sparse_solver_size_for_overflow<StorageIndex>(amat.rows(), n_cols);
+  const StorageIndex max_offset = pattern_offset_limit<StorageIndex>();
   outer_buf.setZero(n_cols + 1);
   for (Index i = 0; i < n_outer; ++i)
-    for (typename internal::evaluator<Derived>::InnerIterator it(amat_eval, i); it; ++it) ++outer_buf(it.col() + 1);
-  for (Index j = 0; j < n_cols; ++j) outer_buf(j + 1) += outer_buf(j);
+    for (typename internal::evaluator<Derived>::InnerIterator it(amat_eval, i); it; ++it) {
+      if (outer_buf(it.col() + 1) == max_offset) throw_std_bad_alloc();
+      ++outer_buf(it.col() + 1);
+    }
+  StorageIndex offset = 0;
+  for (Index j = 0; j < n_cols; ++j) {
+    if (outer_buf(j + 1) > max_offset - offset) throw_std_bad_alloc();
+    offset += outer_buf(j + 1);
+    outer_buf(j + 1) = offset;
+  }
   inner_buf.resize(outer_buf(n_cols));
   Matrix<StorageIndex, Dynamic, 1> head = outer_buf.head(n_cols);
   for (Index i = 0; i < n_outer; ++i)
@@ -203,10 +233,9 @@ void materialize_col_major_pattern(const SparsityPatternRef<StorageIndex>& pat,
   materialize_col_major_pattern(pat, static_cast<const StorageIndex*>(nullptr), out);
 }
 
-// The two materializers below — materialize_at_plus_a_pattern and
-// materialize_selfadjoint_pattern<UpLo> — share a common skeleton (counting
-// sort to build A^T, then two passes of linear two-way merge to count and
-// write column sizes). The two-way merge bodies are duplicated rather than
+// materialize_at_plus_a_pattern below builds A^T by counting sort and then
+// makes two passes of linear two-way merge, to count and to write the column
+// sizes. The bodies of the two merge passes are duplicated rather than
 // extracted into shared helpers because every attempt to factor them out
 // regressed performance by 2–5% on medium matrices: lambda-predicate
 // unification (because the lambda call wasn't elided across the inner loop)
@@ -238,6 +267,8 @@ void materialize_at_plus_a_pattern(const SparsityPatternRef<StorageIndex>& A,
                                    SparseMatrix<signed char, ColMajor, StorageIndex>& out) {
   const Index n = A.outerSize;
   eigen_assert(n == A.innerSize && "materialize_at_plus_a_pattern: A must be square");
+  // A zero-copy view of a column-major matrix is not range-checked by its builder; the pass below narrows indices.
+  check_sparse_solver_size_for_overflow<StorageIndex>(n, n);
 
   // 1. Build A^T's column starts (= A's row counts) via counting sort.
   Matrix<StorageIndex, Dynamic, 1> AT_p(n + 1);
@@ -268,6 +299,7 @@ void materialize_at_plus_a_pattern(const SparsityPatternRef<StorageIndex>& A,
   out.resize(n, n);
   StorageIndex* out_p = out.outerIndexPtr();
   out_p[0] = 0;
+  const StorageIndex max_offset = pattern_offset_limit<StorageIndex>();
   for (Index j = 0; j < n; ++j) {
     const StorageIndex* a_col = A.inner + A.outer[j];
     const Index a_nz = A.nonZeros(j);
@@ -287,7 +319,9 @@ void materialize_at_plus_a_pattern(const SparsityPatternRef<StorageIndex>& A,
       ++count;
     }
     count += (a_nz - ia) + (at_nz - it);
-    out_p[j + 1] = out_p[j] + convert_index<StorageIndex>(count);
+    // The merged pattern can have more entries than A, so test the sum before it is formed.
+    if (count > Index(max_offset - out_p[j])) throw_std_bad_alloc();
+    out_p[j + 1] = out_p[j] + static_cast<StorageIndex>(count);
   }
 
   const StorageIndex total = out_p[n];
@@ -328,6 +362,12 @@ void materialize_at_plus_a_pattern(const SparsityPatternRef<StorageIndex>& A,
  * \c Upper; entries of \a A outside that triangle (and outside the diagonal)
  * are ignored, matching \c selfadjointView semantics.
  *
+ * Every entry of \a A is tested against the triangle once, by value, and a
+ * kept off-diagonal entry is emitted together with its mirror image. The
+ * result is therefore symmetric, as AMD requires, whether or not the inner
+ * indices of \a A are sorted; its columns are sorted whenever those of \a A
+ * are.
+ *
  * Output is a compressed column-major \c SparseMatrix<signed char> with
  * placeholder values, suitable for the AMD ordering pipeline. \b Precondition:
  * \a A is square; \a out's storage must not alias \a A.
@@ -340,114 +380,56 @@ void materialize_selfadjoint_pattern(const SparsityPatternRef<StorageIndex>& A,
   const Index n = A.outerSize;
   eigen_assert(n == A.innerSize && "materialize_selfadjoint_pattern: A must be square");
   constexpr bool IsLower = (UpLo == static_cast<unsigned>(Lower));
+  check_sparse_solver_size_for_overflow<StorageIndex>(n, n);
 
-  // 1. Count filtered row occurrences (A^T's column lengths). For UpLo == Lower
-  //    we keep entries with row >= col; for Upper, row <= col. The diagonal is
-  //    kept in both cases.
-  Matrix<StorageIndex, Dynamic, 1> AT_p(n + 1);
-  AT_p.setZero();
-  for (Index j = 0; j < n; ++j) {
-    const Index nz = A.nonZeros(j);
-    const StorageIndex* col = A.inner + A.outer[j];
-    for (Index k = 0; k < nz; ++k) {
-      const StorageIndex r = col[k];
-      const bool keep = IsLower ? (Index(r) >= j) : (Index(r) <= j);
-      if (keep) ++AT_p(r + 1);
-    }
-  }
-  for (Index i = 0; i < n; ++i) AT_p(i + 1) += AT_p(i);
-
-  // 2. Place A^T's inner indices. The kept entries of column j are visited in
-  //    sorted row-order, so each A^T column ends up sorted. \a head is a deep
-  //    copy used as a per-column write cursor while \c AT_p stays untouched.
-  const StorageIndex a_nnz = AT_p(n);
-  Matrix<StorageIndex, Dynamic, 1> AT_i(a_nnz);
-  Matrix<StorageIndex, Dynamic, 1> head = AT_p.head(n);
-  for (Index j = 0; j < n; ++j) {
-    const Index nz = A.nonZeros(j);
-    const StorageIndex* col = A.inner + A.outer[j];
-    for (Index k = 0; k < nz; ++k) {
-      const StorageIndex r = col[k];
-      const bool keep = IsLower ? (Index(r) >= j) : (Index(r) <= j);
-      if (keep) AT_i(head(r)++) = convert_index<StorageIndex>(j);
-    }
-  }
-
-  // Cache the kept-range bound for each column so passes 3 and 4 don't both
-  // pay the binary search. For UpLo == Lower the kept range starts at
-  // \c lower_bound(j) and runs to the end of the column; for Upper it starts
-  // at 0 and ends at \c upper_bound(j). Storing only the side that requires a
-  // search keeps scratch to one Index per column.
-  Matrix<Index, Dynamic, 1> a_split(n);
-  for (Index j = 0; j < n; ++j) {
-    const StorageIndex* a_col = A.inner + A.outer[j];
-    const Index a_nz = A.nonZeros(j);
-    EIGEN_IF_CONSTEXPR (IsLower) {
-      a_split(j) = std::lower_bound(a_col, a_col + a_nz, StorageIndex(j)) - a_col;
-    } else {
-      a_split(j) = std::upper_bound(a_col, a_col + a_nz, StorageIndex(j)) - a_col;
-    }
-  }
-
-  // 3. First merge pass: count column sizes of pattern(A + A^T) over the
-  //    filtered subrange of each column.
+  // 1. Count the entries of each output column. For UpLo == Lower we keep
+  //    entries with row >= col; for Upper, row <= col. A kept entry (r, j)
+  //    goes to column j and, unless it is on the diagonal, its mirror image
+  //    (j, r) goes to column r. \c resize() zeroes the outer index array.
+  //    The expanded pattern can hold more entries than \a A, so each count and each offset is tested against the range
+  //    of StorageIndex before it is stored, and nothing is allocated for the inner indices until the total is known.
   out.resize(n, n);
   StorageIndex* out_p = out.outerIndexPtr();
-  out_p[0] = 0;
+  const StorageIndex max_offset = pattern_offset_limit<StorageIndex>();
   for (Index j = 0; j < n; ++j) {
-    const StorageIndex* a_col = A.inner + A.outer[j];
-    const Index a_nz = A.nonZeros(j);
-    const StorageIndex* a_kept = IsLower ? a_col + a_split(j) : a_col;
-    const Index a_kept_nz = IsLower ? (a_nz - a_split(j)) : a_split(j);
-    const StorageIndex* at_col = AT_i.data() + AT_p(j);
-    const Index at_nz = AT_p(j + 1) - AT_p(j);
-    Index ia = 0, it = 0, count = 0;
-    while (ia < a_kept_nz && it < at_nz) {
-      const StorageIndex va = a_kept[ia], vt = at_col[it];
-      if (va < vt) {
-        ++ia;
-      } else if (va > vt) {
-        ++it;
-      } else {
-        ++ia;
-        ++it;
+    const Index nz = A.nonZeros(j);
+    const StorageIndex* col = A.inner + A.outer[j];
+    for (Index k = 0; k < nz; ++k) {
+      const StorageIndex r = col[k];
+      const bool keep = IsLower ? (Index(r) >= j) : (Index(r) <= j);
+      if (!keep) continue;
+      if (out_p[j + 1] == max_offset) throw_std_bad_alloc();
+      ++out_p[j + 1];
+      if (Index(r) != j) {
+        if (out_p[r + 1] == max_offset) throw_std_bad_alloc();
+        ++out_p[r + 1];
       }
-      ++count;
     }
-    count += (a_kept_nz - ia) + (at_nz - it);
-    out_p[j + 1] = out_p[j] + convert_index<StorageIndex>(count);
+  }
+  StorageIndex offset = 0;
+  for (Index j = 0; j < n; ++j) {
+    if (out_p[j + 1] > max_offset - offset) throw_std_bad_alloc();
+    offset += out_p[j + 1];
+    out_p[j + 1] = offset;
   }
 
   const StorageIndex total = out_p[n];
   out.resizeNonZeros(total);
 
-  // 4. Second merge pass: write merged inner indices.
+  // 2. Place the inner indices with the same by-value filter. Mirror images j < c (Lower) or j > c (Upper) reach
+  //    column c before or after its own entries respectively, so a sorted \a A yields a sorted result.
   StorageIndex* out_i = out.innerIndexPtr();
+  Matrix<StorageIndex, Dynamic, 1> head = Matrix<StorageIndex, Dynamic, 1>::Map(out_p, n);
   for (Index j = 0; j < n; ++j) {
-    const StorageIndex* a_col = A.inner + A.outer[j];
-    const Index a_nz = A.nonZeros(j);
-    const StorageIndex* a_kept = IsLower ? a_col + a_split(j) : a_col;
-    const Index a_kept_nz = IsLower ? (a_nz - a_split(j)) : a_split(j);
-    const StorageIndex* at_col = AT_i.data() + AT_p(j);
-    const Index at_nz = AT_p(j + 1) - AT_p(j);
-    StorageIndex* dst = out_i + out_p[j];
-    Index ia = 0, it = 0;
-    while (ia < a_kept_nz && it < at_nz) {
-      const StorageIndex va = a_kept[ia], vt = at_col[it];
-      if (va < vt) {
-        *dst++ = va;
-        ++ia;
-      } else if (va > vt) {
-        *dst++ = vt;
-        ++it;
-      } else {
-        *dst++ = va;
-        ++ia;
-        ++it;
-      }
+    const Index nz = A.nonZeros(j);
+    const StorageIndex* col = A.inner + A.outer[j];
+    for (Index k = 0; k < nz; ++k) {
+      const StorageIndex r = col[k];
+      const bool keep = IsLower ? (Index(r) >= j) : (Index(r) <= j);
+      if (!keep) continue;
+      out_i[head(j)++] = r;
+      if (Index(r) != j) out_i[head(r)++] = convert_index<StorageIndex>(j);
     }
-    while (ia < a_kept_nz) *dst++ = a_kept[ia++];
-    while (it < at_nz) *dst++ = at_col[it++];
   }
   std::fill_n(out.valuePtr(), total, static_cast<signed char>(1));
 }

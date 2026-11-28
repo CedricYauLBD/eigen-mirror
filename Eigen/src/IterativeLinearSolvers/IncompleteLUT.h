@@ -437,6 +437,10 @@ void IncompleteLUT<Scalar, StorageIndex>::factorize(const MatrixType_& amat) {
   Vector u(n);    // real values of the row -- maximum size is n --
   VectorI ju(n);  // column position of the values in u -- maximum size  is n
   VectorI jr(n);  // Indicate the position of the nonzero elements in the vector u -- A zero location is indicated by -1
+  // Min-heap of the columns ju(jj:jj + lower_cols.size()) of the current row, used once more than max_scan columns of
+  // its lower part are left to eliminate: searching them for the smallest at every step is quadratic in their number.
+  std::vector<StorageIndex> lower_cols;
+  const Index max_scan = 32;
 
   // Apply the static row permutation (from analyzePattern), then the
   // fill-reducing symmetric permutation.
@@ -508,8 +512,29 @@ void IncompleteLUT<Scalar, StorageIndex>::factorize(const MatrixType_& amat) {
       // In order to eliminate in the correct order,
       // we must select first the smallest column index among  ju(jj:sizel)
       Index k;
-      Index minrow = ju.segment(jj, sizel - jj).minCoeff(&k);  // k is relative to the segment
-      k += jj;
+      Index minrow;
+      if (lower_cols.empty() && sizel - jj <= max_scan) {
+        minrow = ju.segment(jj, sizel - jj).minCoeff(&k);  // k is relative to the segment
+        k += jj;
+      } else {
+        // Invariant: the heap holds the columns at ju(jj .. jj + lower_cols.size() - 1). Push those behind them: all
+        // of them at first, then the ones that fill-in appended to ju.
+        for (Index pos = jj + static_cast<Index>(lower_cols.size()); pos < sizel; ++pos) {
+          lower_cols.push_back(ju(pos));
+          std::push_heap(lower_cols.begin(), lower_cols.end(), std::greater<StorageIndex>());
+        }
+        std::pop_heap(lower_cols.begin(), lower_cols.end(), std::greater<StorageIndex>());
+        minrow = lower_cols.back();
+        lower_cols.pop_back();
+        k = jr(minrow);  // position of minrow in ju
+        // A row that stores minrow twice has reset jr(minrow) at the first copy: scan for the second, as the linear
+        // search would.
+        if (EIGEN_PREDICT_FALSE(k < jj)) {
+          k = jj;
+          while (ju(k) != minrow) ++k;
+        }
+        eigen_internal_assert(k >= jj && k < sizel && ju(k) == minrow);
+      }
       if (minrow != ju(jj)) {
         // swap the two locations
         Index j = ju(jj);

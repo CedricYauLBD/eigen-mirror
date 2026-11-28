@@ -1368,6 +1368,13 @@ void materialize_selfadjoint_pattern_random_impl() {
   SparseMatrixType expected(n, n);
   expected = a.template selfadjointView<UpLo>();
   verify_same_pattern(got, expected);
+
+  // The pattern must not depend on the order of the inner indices, which a compressed matrix need not keep sorted.
+  // The triangle used to be selected by binary search, and AMD indexed out of bounds with the non-symmetric result.
+  a.sortInnerIndices<std::greater<>>();
+  pat = internal::make_col_major_pattern_ref(a, outer, inner);
+  internal::materialize_selfadjoint_pattern<UpLo>(pat, got);
+  verify_same_pattern(got, expected);
 }
 
 template <int>
