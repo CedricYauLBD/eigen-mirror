@@ -982,7 +982,7 @@ struct conservative_resize_like_impl {
     _this.derived().swap(tmp);
   }
 
-  static void run(DenseBase<Derived>& _this, const DenseBase<OtherDerived>& other) {
+  EIGEN_DEVICE_FUNC static void run(DenseBase<Derived>& _this, const DenseBase<OtherDerived>& other) {
     if (_this.rows() == other.rows() && _this.cols() == other.cols()) return;
 
     // Note: Here is space for improvement. Basically, for conservativeResize(Index,Index),

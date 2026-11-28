@@ -725,6 +725,9 @@ if(EIGEN_GPU_TEST_MODE MATCHES "^(cuda|hip)")
   ei_add_test(gpu_basic)
   set_property(SOURCE gpu_basic.cu APPEND PROPERTY COMPILE_OPTIONS
                "$<$<COMPILE_LANG_AND_ID:CUDA,NVIDIA>:--fmad=false>")
+  ei_add_test(gpu_matrix)
+  ei_add_test(gpu_cholesky)
+  ei_add_test(gpu_lu)
   ei_add_test(packetmath_gpu)
 
   unset(EIGEN_ADD_TEST_FILENAME_EXTENSION)

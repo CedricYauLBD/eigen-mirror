@@ -253,7 +253,7 @@ class MatrixBase : public DenseBase<Derived> {
   EIGEN_DEVICE_FUNC static const BasisReturnType UnitW();
 
   EIGEN_DEVICE_FUNC constexpr const DiagonalWrapper<const Derived> asDiagonal() const;
-  const PermutationWrapper<const Derived> asPermutation() const;
+  EIGEN_DEVICE_FUNC const PermutationWrapper<const Derived> asPermutation() const;
   EIGEN_DEVICE_FUNC constexpr const SkewSymmetricWrapper<const Derived> asSkewSymmetric() const;
 
   EIGEN_DEVICE_FUNC Derived& setIdentity();
@@ -262,7 +262,7 @@ class MatrixBase : public DenseBase<Derived> {
   EIGEN_DEVICE_FUNC Derived& setUnit(Index newSize, Index i);
 
   bool isIdentity(const RealScalar& prec = NumTraits<Scalar>::dummy_precision()) const;
-  bool isDiagonal(const RealScalar& prec = NumTraits<Scalar>::dummy_precision()) const;
+  EIGEN_DEVICE_FUNC bool isDiagonal(const RealScalar& prec = NumTraits<Scalar>::dummy_precision()) const;
 
   bool isUpperTriangular(const RealScalar& prec = NumTraits<Scalar>::dummy_precision()) const;
   bool isLowerTriangular(const RealScalar& prec = NumTraits<Scalar>::dummy_precision()) const;
@@ -340,12 +340,12 @@ class MatrixBase : public DenseBase<Derived> {
   /////////// LU module ///////////
 
   template <typename PermutationIndex = DefaultPermutationIndex>
-  inline FullPivLU<PlainObject, PermutationIndex> fullPivLu() const;
+  EIGEN_DEVICE_FUNC inline FullPivLU<PlainObject, PermutationIndex> fullPivLu() const;
   template <typename PermutationIndex = DefaultPermutationIndex>
-  inline PartialPivLU<PlainObject, PermutationIndex> partialPivLu() const;
+  EIGEN_DEVICE_FUNC inline PartialPivLU<PlainObject, PermutationIndex> partialPivLu() const;
 
   template <typename PermutationIndex = DefaultPermutationIndex>
-  inline PartialPivLU<PlainObject, PermutationIndex> lu() const;
+  EIGEN_DEVICE_FUNC inline PartialPivLU<PlainObject, PermutationIndex> lu() const;
 
   EIGEN_DEVICE_FUNC inline Inverse<Derived> inverse() const;
 
@@ -363,9 +363,9 @@ class MatrixBase : public DenseBase<Derived> {
 
   /////////// Cholesky module ///////////
 
-  inline LLT<PlainObject> llt() const;
-  inline LDLT<PlainObject> ldlt() const;
-  inline BunchKaufman<PlainObject> bunchKaufman() const;
+  EIGEN_DEVICE_FUNC inline LLT<PlainObject> llt() const;
+  EIGEN_DEVICE_FUNC inline LDLT<PlainObject> ldlt() const;
+  EIGEN_DEVICE_FUNC inline BunchKaufman<PlainObject> bunchKaufman() const;
 
   /////////// QR module ///////////
 
