@@ -148,6 +148,15 @@
 #define EIGEN_BLAS_POSTFIX EIGEN_CAT(EIGEN_BLAS_SYMBOL_SUFFIX, _)
 #define EIGEN_BLAS_SYM(NAME) EIGEN_CAT(NAME, EIGEN_BLAS_POSTFIX)
 
+// Asm-labelled C++ declarations in Eigen::internal cannot conflict with differently typed vendor prototypes (#2420).
+#if (EIGEN_COMP_GNUC || EIGEN_COMP_CLANG) && defined(__USER_LABEL_PREFIX__)
+#define EIGEN_BLAS_DECL(FUNC, PARAMS) \
+  void EIGEN_BLAS_SYM(FUNC)           \
+      PARAMS __asm__(EIGEN_MAKESTRING(__USER_LABEL_PREFIX__) EIGEN_MAKESTRING(EIGEN_BLAS_SYM(FUNC)))
+#else
+#define EIGEN_BLAS_DECL(FUNC, PARAMS) extern "C" void EIGEN_BLAS_SYM(FUNC) PARAMS
+#endif
+
 #if defined(EIGEN_USE_BLAS) && !defined(EIGEN_USE_MKL)
 #include "blas.h"
 #endif

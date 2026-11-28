@@ -132,13 +132,11 @@ EIGEN_BLAS_GEMM_SPECIALIZATION(scomplex, cf, float, EIGEN_BLAS_SYM(cgemm))
 // use sbgemm for bfloat16.
 #if defined(EIGEN_USE_OPENBLAS_BFLOAT16) && EIGEN_USE_OPENBLAS_BFLOAT16
 
-extern "C" {
-// OpenBLAS prototype.
-void EIGEN_BLAS_SYM(sbgemm)(const char* trans_a, const char* trans_b, const EIGEN_BLAS_INT* M, const EIGEN_BLAS_INT* N,
-                            const EIGEN_BLAS_INT* K, const float* alpha, const Eigen::bfloat16* A,
-                            const EIGEN_BLAS_INT* lda, const Eigen::bfloat16* B, const EIGEN_BLAS_INT* ldb,
-                            const float* beta, float* C, const EIGEN_BLAS_INT* ldc);
-}  // extern "C"
+// OpenBLAS routine; f77blas.h declares it with non-const char* and uint16_t*.
+EIGEN_BLAS_DECL(sbgemm, (const char* trans_a, const char* trans_b, const EIGEN_BLAS_INT* M, const EIGEN_BLAS_INT* N,
+                         const EIGEN_BLAS_INT* K, const float* alpha, const Eigen::bfloat16* A,
+                         const EIGEN_BLAS_INT* lda, const Eigen::bfloat16* B, const EIGEN_BLAS_INT* ldb,
+                         const float* beta, float* C, const EIGEN_BLAS_INT* ldc));
 
 template <typename Index, int LhsStorageOrder, bool ConjugateLhs, int RhsStorageOrder, bool ConjugateRhs>
 struct general_matrix_matrix_product<Index, Eigen::bfloat16, LhsStorageOrder, ConjugateLhs, Eigen::bfloat16,
