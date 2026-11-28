@@ -95,6 +95,21 @@ void test_ilp64_level1() {
   }
 }
 
+// Increments that do not fit in 32 bits, with n = 1 so that only the first element is accessed. A routine that
+// narrows them sees 2^31 as negative and 2^32 as zero, and then returns without touching x.
+void test_ilp64_wide_increment() {
+  EIGEN_BLAS_INT one = 1;
+  for (EIGEN_BLAS_INT inc : {EIGEN_BLAS_INT(1) << 31, EIGEN_BLAS_INT(1) << 32}) {
+    double x = -3.0;
+    double alpha = 2.0;
+    VERIFY_IS_EQUAL(BLASFUNC(dasum)(&one, &x, &inc), 3.0);
+    VERIFY_IS_EQUAL(BLASFUNC(dnrm2)(&one, &x, &inc), 3.0);
+    VERIFY_IS_EQUAL(BLASFUNC(idamax)(&one, &x, &inc), EIGEN_BLAS_INT(1));
+    BLASFUNC(dscal)(&one, &alpha, &x, &inc);
+    VERIFY_IS_EQUAL(x, -6.0);
+  }
+}
+
 template <typename Scalar>
 void test_ilp64_eigen_blas_dispatch() {
   using Mat = Eigen::Matrix<Scalar, Eigen::Dynamic, Eigen::Dynamic>;
@@ -135,6 +150,7 @@ void test_ilp64_eigen_blas_dispatch() {
 EIGEN_DECLARE_TEST(blas_ilp64) {
   CALL_SUBTEST(test_ilp64_upper_word_sensitivity());
   CALL_SUBTEST(test_ilp64_level1());
+  CALL_SUBTEST(test_ilp64_wide_increment());
   CALL_SUBTEST(test_ilp64_eigen_blas_dispatch<float>());
   CALL_SUBTEST(test_ilp64_eigen_blas_dispatch<double>());
   CALL_SUBTEST(test_ilp64_eigen_blas_dispatch<std::complex<float>>());

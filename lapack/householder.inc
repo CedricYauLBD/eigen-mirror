@@ -114,14 +114,17 @@ EIGEN_LAPACK_FUNC(larf)
 
   const bool applyleft = (SIDE(*side) == LEFT);
 
-  // Trim trailing zeros of v; for INCV < 0 its last entry is v[0].
+  // Trim trailing zeros of v; for INCV < 0 its last entry is v[0]. Offsets into v are Eigen::Index, since
+  // (lastv - 1) * INCV can overflow a 32-bit EIGEN_BLAS_INT. A one-element v may have INCV = INT_MIN, which cannot be
+  // negated, so the increment is only stepped over or negated when another element remains.
+  const Eigen::Index inc = *incv;
   EIGEN_BLAS_INT lastv = applyleft ? *m : *n;
-  EIGEN_BLAS_INT idx = *incv > 0 ? (lastv - 1) * *incv : 0;
-  while (lastv > 0 && v[idx] == Scalar(0)) {
+  Eigen::Index idx = inc > 0 ? (lastv - 1) * inc : 0;
+  while (lastv > 1 && v[idx] == Scalar(0)) {
     --lastv;
-    idx -= *incv;
+    idx -= inc;
   }
-  if (lastv == 0) return;
+  if (lastv == 1 && v[idx] == Scalar(0)) return;
 
   const EIGEN_BLAS_INT lastc =
       applyleft ? Eigen::internal::ilaxlc(lastv, *n, c, *ldc) : Eigen::internal::ilaxlr(*m, lastv, c, *ldc);
@@ -140,11 +143,11 @@ EIGEN_LAPACK_FUNC(larf)
       C_sub.noalias() -= (*tau) * (w * v_sub.adjoint());
     }
   };
-  if (*incv > 0) {
-    apply_reflector(make_vector(v, lastv, *incv));
+  if (inc > 0) {
+    apply_reflector(make_vector(v, lastv, inc));
   } else {
     // After trimming k entries, idx = k |INCV| is the offset of the retained v(0:lastv-1).
-    auto v_reversed = make_vector(v + idx, lastv, -*incv);
+    auto v_reversed = make_vector(v + idx, lastv, lastv > 1 ? -inc : 1);
     apply_reflector(v_reversed.reverse());
   }
 }

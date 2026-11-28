@@ -228,8 +228,14 @@ class AccelerateImpl : public SparseSolverBase<AccelerateImpl<MatrixType_, UpLo_
   void setOrder(SparseOrder_t order) { m_order = order; }
 
  private:
+  // Accelerate reads column j as the entries [columnStarts[j], columnStarts[j + 1]), so it must not see the free slots
+  // of an uncompressed matrix. This Ref refers to a compressed matrix in place and copies an uncompressed one.
+  using CompressedMatrixRef = Ref<const MatrixType, StandardCompressedFormat>;
+
+  // A views the storage of a and columnStarts and must not outlive them.
   template <typename T>
-  void buildAccelSparseMatrix(const SparseMatrix<T>& a, AccelSparseMatrix& A, std::vector<long>& columnStarts) {
+  void buildAccelSparseMatrix(const Ref<const SparseMatrix<T>, StandardCompressedFormat>& a, AccelSparseMatrix& A,
+                              std::vector<long>& columnStarts) {
     const Index nColumnsStarts = a.cols() + 1;
 
     columnStarts.resize(nColumnsStarts);
@@ -327,7 +333,8 @@ void AccelerateImpl<MatrixType_, UpLo_, Solver_, EnforceSquare_>::compute(const 
   AccelSparseMatrix A{};
   std::vector<long> columnStarts;
 
-  buildAccelSparseMatrix(a, A, columnStarts);
+  const CompressedMatrixRef compressed(a);
+  buildAccelSparseMatrix(compressed, A, columnStarts);
 
   doAnalysis(A);
 
@@ -352,7 +359,8 @@ void AccelerateImpl<MatrixType_, UpLo_, Solver_, EnforceSquare_>::analyzePattern
   AccelSparseMatrix A{};
   std::vector<long> columnStarts;
 
-  buildAccelSparseMatrix(a, A, columnStarts);
+  const CompressedMatrixRef compressed(a);
+  buildAccelSparseMatrix(compressed, A, columnStarts);
 
   doAnalysis(A);
 
@@ -376,7 +384,8 @@ void AccelerateImpl<MatrixType_, UpLo_, Solver_, EnforceSquare_>::factorize(cons
   AccelSparseMatrix A{};
   std::vector<long> columnStarts;
 
-  buildAccelSparseMatrix(a, A, columnStarts);
+  const CompressedMatrixRef compressed(a);
+  buildAccelSparseMatrix(compressed, A, columnStarts);
 
   doFactorization(A);
 }
@@ -391,12 +400,24 @@ void AccelerateImpl<MatrixType_, UpLo_, Solver_, EnforceSquare_>::_solve_impl(co
   }
 
   eigen_assert(m_nRows == b.rows());
-  eigen_assert(((b.cols() == 1) || b.outerStride() == b.rows()));
 
   SparseStatus_t status = SparseStatusOK;
 
+  // An AccelDenseMatrix has no row stride, and bmat and xmat below set columnStride = rowCount:
+  // Accelerate reads b and writes x as contiguous column-major arrays.
+  const bool b_contiguous = b.derived().rowStride() == 1 && (b.cols() == 1 || b.derived().colStride() == b.rows());
+  const bool x_contiguous = x.derived().rowStride() == 1 && (x.cols() == 1 || x.derived().colStride() == x.rows());
+  Matrix<Scalar, Dynamic, Dynamic, ColMajor> b_tmp, x_tmp;
   Scalar* b_ptr = const_cast<Scalar*>(b.derived().data());
-  Scalar* x_ptr = const_cast<Scalar*>(x.derived().data());
+  if (!b_contiguous) {
+    b_tmp = b;
+    b_ptr = b_tmp.data();
+  }
+  Scalar* x_ptr = x.derived().data();
+  if (!x_contiguous) {
+    x_tmp.resize(x.rows(), x.cols());
+    x_ptr = x_tmp.data();
+  }
 
   AccelDenseMatrix xmat{};
   xmat.attributes = SparseAttributes_t();
@@ -414,6 +435,7 @@ void AccelerateImpl<MatrixType_, UpLo_, Solver_, EnforceSquare_>::_solve_impl(co
 
   SparseSolve(*m_numericFactorization, bmat, xmat);
 
+  if (!x_contiguous) x.derived() = x_tmp;
   updateInfoStatus(status);
 }
 

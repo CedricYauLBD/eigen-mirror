@@ -60,6 +60,96 @@ DECL_GSSVX(d, double, double)
 DECL_GSSVX(z, double, std::complex<double>)
 #undef DECL_GSSVX
 
+#if defined(SUPERLU_MAJOR_VERSION) && (SUPERLU_MAJOR_VERSION >= 5)
+#define EIGEN_SUPERLU_HAS_FACTORIZATION_STEPS
+
+// The routines that gssvx calls to factorize a matrix, for internal::superlu_factorize().
+#define DECL_FACTORIZATION_STEPS(PREFIX, FLOATTYPE, KEYTYPE)                                                           \
+  extern "C" {                                                                                                         \
+  extern void PREFIX##gsequ(SuperMatrix *, FLOATTYPE *, FLOATTYPE *, FLOATTYPE *, FLOATTYPE *, FLOATTYPE *, int *);    \
+  extern void PREFIX##laqgs(SuperMatrix *, FLOATTYPE *, FLOATTYPE *, FLOATTYPE, FLOATTYPE, FLOATTYPE, char *);         \
+  extern void PREFIX##gstrf(superlu_options_t *, SuperMatrix *, int, int, int *, void *, int, int *, int *,            \
+                            SuperMatrix *, SuperMatrix *, GlobalLU_t *, SuperLUStat_t *, int *);                       \
+  extern FLOATTYPE PREFIX##langs(char *, SuperMatrix *);                                                               \
+  extern void PREFIX##gscon(char *, SuperMatrix *, SuperMatrix *, FLOATTYPE, FLOATTYPE *, SuperLUStat_t *, int *);     \
+  }                                                                                                                    \
+  inline void SuperLU_gsequ(SuperMatrix *A, FLOATTYPE *R, FLOATTYPE *C, FLOATTYPE *rowcnd, FLOATTYPE *colcnd,          \
+                            FLOATTYPE *amax, int *info, KEYTYPE) {                                                     \
+    PREFIX##gsequ(A, R, C, rowcnd, colcnd, amax, info);                                                                \
+  }                                                                                                                    \
+  inline void SuperLU_laqgs(SuperMatrix *A, FLOATTYPE *R, FLOATTYPE *C, FLOATTYPE rowcnd, FLOATTYPE colcnd,            \
+                            FLOATTYPE amax, char *equed, KEYTYPE) {                                                    \
+    PREFIX##laqgs(A, R, C, rowcnd, colcnd, amax, equed);                                                               \
+  }                                                                                                                    \
+  inline void SuperLU_gstrf(superlu_options_t *options, SuperMatrix *A, int relax, int panel_size, int *etree,         \
+                            int *perm_c, int *perm_r, SuperMatrix *L, SuperMatrix *U, SuperLUStat_t *stats, int *info, \
+                            KEYTYPE) {                                                                                 \
+    GlobalLU_t gLU;                                                                                                    \
+    PREFIX##gstrf(options, A, relax, panel_size, etree, nullptr, 0, perm_c, perm_r, L, U, &gLU, stats, info);          \
+  }                                                                                                                    \
+  inline FLOATTYPE SuperLU_langs(char *norm, SuperMatrix *A, KEYTYPE) { return PREFIX##langs(norm, A); }               \
+  inline void SuperLU_gscon(char *norm, SuperMatrix *L, SuperMatrix *U, FLOATTYPE anorm, FLOATTYPE *rcond,             \
+                            SuperLUStat_t *stats, int *info, KEYTYPE) {                                                \
+    PREFIX##gscon(norm, L, U, anorm, rcond, stats, info);                                                              \
+  }
+
+DECL_FACTORIZATION_STEPS(s, float, float)
+DECL_FACTORIZATION_STEPS(c, float, std::complex<float>)
+DECL_FACTORIZATION_STEPS(d, double, double)
+DECL_FACTORIZATION_STEPS(z, double, std::complex<double>)
+#undef DECL_FACTORIZATION_STEPS
+
+namespace internal {
+
+// Does what gssvx does for options->Fact != FACTORED and no right-hand side, with the same meaning of the arguments.
+// gssvx itself, through SuperLU 7.0.1 at least, returns without freeing the column-permuted matrix when the
+// factorization meets a zero pivot.
+template <typename Scalar>
+void superlu_factorize(superlu_options_t *options, SuperMatrix *A, int *perm_c, int *perm_r, int *etree, char *equed,
+                       typename NumTraits<Scalar>::Real *R, typename NumTraits<Scalar>::Real *C, SuperMatrix *L,
+                       SuperMatrix *U, SuperLUStat_t *stats, int *info) {
+  using RealScalar = typename NumTraits<Scalar>::Real;
+  *equed = 'N';
+  *info = 0;
+  if (A->nrow != A->ncol) {
+    *info = -2;
+    return;
+  }
+
+  // SuperLU factorizes column-major matrices: it takes a row-major A as the transpose of a column-major one.
+  SuperMatrix AA = *A;
+  bool transposed = options->Trans != NOTRANS;
+  if (A->Stype == SLU_NR) {
+    AA.Stype = SLU_NC;
+    transposed = !transposed;
+  }
+
+  if (options->Equil == YES) {
+    RealScalar rowcnd, colcnd, amax;
+    int equil_info = 0;
+    SuperLU_gsequ(&AA, R, C, &rowcnd, &colcnd, &amax, &equil_info, Scalar());
+    if (equil_info == 0) SuperLU_laqgs(&AA, R, C, rowcnd, colcnd, amax, equed, Scalar());
+  }
+
+  if (options->ColPerm != MY_PERMC && options->Fact == DOFACT) get_perm_c(options->ColPerm, &AA, perm_c);
+  SuperMatrix AC;
+  sp_preorder(options, &AA, perm_c, etree, &AC);
+  SuperLU_gstrf(options, &AC, sp_ienv(2), sp_ienv(1), etree, perm_c, perm_r, L, U, stats, info, Scalar());
+  Destroy_CompCol_Permuted(&AC);
+
+  if (*info == 0 && options->ConditionNumber == YES) {
+    char norm = transposed ? 'I' : '1';
+    RealScalar rcond = 0;
+    int rcond_info = 0;
+    SuperLU_gscon(&norm, L, U, SuperLU_langs(&norm, &AA, Scalar()), &rcond, stats, &rcond_info, Scalar());
+    // As gssvx does for a matrix that is singular to working precision.
+    if (rcond < NumTraits<RealScalar>::epsilon() / 2) *info = A->ncol + 1;
+  }
+}
+
+}  // namespace internal
+#endif
+
 #ifdef MILU_ALPHA
 #define EIGEN_SUPERLU_HAS_ILU
 #endif
@@ -390,6 +480,7 @@ class SuperLUBase : public SparseSolverBase<Derived> {
   void init() {
     m_info = InvalidInput;
     m_isInitialized = false;
+    m_factorizationFailed = false;
     m_sluL.Store = 0;
     m_sluU.Store = 0;
   }
@@ -426,6 +517,9 @@ class SuperLUBase : public SparseSolverBase<Derived> {
 
   mutable ComputationInfo m_info;
   int m_factorizationIsOk;
+  // Set when the factorization returned info other than 0 or n + 1: the row permutation and the factors may then be
+  // incomplete or unallocated, so they must be neither read nor passed back to SuperLU.
+  bool m_factorizationFailed;
   int m_analysisIsOk;
   mutable bool m_extractedDataAreDirty;
 
@@ -543,6 +637,7 @@ class SuperLU : public SuperLUBase<MatrixType_, SuperLU<MatrixType_> > {
 
   using Base::m_analysisIsOk;
   using Base::m_extractedDataAreDirty;
+  using Base::m_factorizationFailed;
   using Base::m_factorizationIsOk;
   using Base::m_info;
   using Base::m_isInitialized;
@@ -573,19 +668,26 @@ void SuperLU<MatrixType>::factorize(const MatrixType &a) {
 
   m_sluOptions.ColPerm = COLAMD;
   int info = 0;
-  RealScalar recip_pivot_growth, rcond;
-  RealScalar ferr, berr;
 
   StatInit(&m_sluStat);
-  SuperLU_gssvx(&m_sluOptions, &m_sluA, m_q.data(), m_p.data(), &m_sluEtree[0], &m_sluEqued, &m_sluRscale[0],
-                &m_sluCscale[0], &m_sluL, &m_sluU, nullptr, 0, &m_sluB, &m_sluX, &recip_pivot_growth, &rcond, &ferr,
+#ifdef EIGEN_SUPERLU_HAS_FACTORIZATION_STEPS
+  internal::superlu_factorize<Scalar>(&m_sluOptions, &m_sluA, m_q.data(), m_p.data(), m_sluEtree.data(), &m_sluEqued,
+                                      m_sluRscale.data(), m_sluCscale.data(), &m_sluL, &m_sluU, &m_sluStat, &info);
+#else
+  RealScalar recip_pivot_growth, rcond;
+  RealScalar ferr, berr;
+  SuperLU_gssvx(&m_sluOptions, &m_sluA, m_q.data(), m_p.data(), m_sluEtree.data(), &m_sluEqued, m_sluRscale.data(),
+                m_sluCscale.data(), &m_sluL, &m_sluU, nullptr, 0, &m_sluB, &m_sluX, &recip_pivot_growth, &rcond, &ferr,
                 &berr, &m_sluStat, &info, Scalar());
+#endif
   StatFree(&m_sluStat);
 
   m_extractedDataAreDirty = true;
 
   // FIXME: implement more detailed error checking based on SuperLU info codes.
   m_info = info == 0 ? Success : NumericalIssue;
+  // info == n + 1 only reports a small reciprocal condition number; the factors are complete then.
+  m_factorizationFailed = info != 0 && info != m_matrix.cols() + 1;
   m_factorizationIsOk = true;
 }
 
@@ -598,6 +700,13 @@ void SuperLU<MatrixType>::_solve_impl(const MatrixBase<Rhs> &b, MatrixBase<Dest>
 
   const Index rhsCols = b.cols();
   eigen_assert(m_matrix.rows() == b.rows());
+
+  // The factors of a failed factorization are unusable, and SuperLU does not check what it is handed as FACTORED.
+  if (m_factorizationFailed) {
+    x.setZero();
+    m_info = NumericalIssue;
+    return;
+  }
 
   m_sluOptions.Trans = NOTRANS;
   m_sluOptions.Fact = FACTORED;
@@ -612,7 +721,9 @@ void SuperLU<MatrixType>::_solve_impl(const MatrixBase<Rhs> &b, MatrixBase<Dest>
   m_sluB = SluMatrix::Map(b_ref.const_cast_derived());
   m_sluX = SluMatrix::Map(x_ref.const_cast_derived());
 
-  typename Rhs::PlainObject b_cpy;
+  // SuperLU scales the right hand side in place if it equilibrated the matrix. Like b_ref, the copy must be
+  // column-major whatever the storage order of b.
+  Matrix<typename Rhs::Scalar, Dynamic, Dynamic, ColMajor> b_cpy;
   if (m_sluEqued != 'N') {
     b_cpy = b;
     m_sluB = SluMatrix::Map(b_cpy.const_cast_derived());
@@ -621,9 +732,9 @@ void SuperLU<MatrixType>::_solve_impl(const MatrixBase<Rhs> &b, MatrixBase<Dest>
   StatInit(&m_sluStat);
   int info = 0;
   RealScalar recip_pivot_growth, rcond;
-  SuperLU_gssvx(&m_sluOptions, &m_sluA, m_q.data(), m_p.data(), &m_sluEtree[0], &m_sluEqued, &m_sluRscale[0],
-                &m_sluCscale[0], &m_sluL, &m_sluU, nullptr, 0, &m_sluB, &m_sluX, &recip_pivot_growth, &rcond,
-                &m_sluFerr[0], &m_sluBerr[0], &m_sluStat, &info, Scalar());
+  SuperLU_gssvx(&m_sluOptions, &m_sluA, m_q.data(), m_p.data(), m_sluEtree.data(), &m_sluEqued, m_sluRscale.data(),
+                m_sluCscale.data(), &m_sluL, &m_sluU, nullptr, 0, &m_sluB, &m_sluX, &recip_pivot_growth, &rcond,
+                m_sluFerr.data(), m_sluBerr.data(), &m_sluStat, &info, Scalar());
   StatFree(&m_sluStat);
 
   if (x.derived().data() != x_ref.data()) x = x_ref;
@@ -653,8 +764,13 @@ void SuperLUBase<MatrixType, Derived>::extractData() const {
 
     const Index size = m_matrix.rows();
     m_l.resize(size, size);
-    m_l.resizeNonZeros(Lstore->nnz);
     m_u.resize(size, size);
+    if (m_factorizationFailed) {
+      // Nothing to extract: the factors stay empty, which determinant() reads as a zero pivot.
+      m_extractedDataAreDirty = false;
+      return;
+    }
+    m_l.resizeNonZeros(Lstore->nnz);
     m_u.resizeNonZeros(Ustore->nnz);
 
     int *Lcol = m_l.outerIndexPtr();
@@ -870,8 +986,8 @@ void SuperILU<MatrixType>::factorize(const MatrixType &a) {
   RealScalar recip_pivot_growth, rcond;
 
   StatInit(&m_sluStat);
-  SuperLU_gsisx(&m_sluOptions, &m_sluA, m_q.data(), m_p.data(), &m_sluEtree[0], &m_sluEqued, &m_sluRscale[0],
-                &m_sluCscale[0], &m_sluL, &m_sluU, nullptr, 0, &m_sluB, &m_sluX, &recip_pivot_growth, &rcond,
+  SuperLU_gsisx(&m_sluOptions, &m_sluA, m_q.data(), m_p.data(), m_sluEtree.data(), &m_sluEqued, m_sluRscale.data(),
+                m_sluCscale.data(), &m_sluL, &m_sluU, nullptr, 0, &m_sluB, &m_sluX, &recip_pivot_growth, &rcond,
                 &m_sluStat, &info, Scalar());
   StatFree(&m_sluStat);
 
@@ -888,7 +1004,7 @@ void SuperILU<MatrixType>::_solve_impl(const MatrixBase<Rhs> &b, MatrixBase<Dest
                "The decomposition is not in a valid state for solving, you must first call either compute() or "
                "analyzePattern()/factorize()");
 
-  const int rhsCols = b.cols();
+  const Index rhsCols = b.cols();
   eigen_assert(m_matrix.rows() == b.rows());
 
   m_sluOptions.Trans = NOTRANS;
@@ -904,7 +1020,9 @@ void SuperILU<MatrixType>::_solve_impl(const MatrixBase<Rhs> &b, MatrixBase<Dest
   m_sluB = SluMatrix::Map(b_ref.const_cast_derived());
   m_sluX = SluMatrix::Map(x_ref.const_cast_derived());
 
-  typename Rhs::PlainObject b_cpy;
+  // SuperLU scales the right hand side in place if it equilibrated the matrix. Like b_ref, the copy must be
+  // column-major whatever the storage order of b.
+  Matrix<typename Rhs::Scalar, Dynamic, Dynamic, ColMajor> b_cpy;
   if (m_sluEqued != 'N') {
     b_cpy = b;
     m_sluB = SluMatrix::Map(b_cpy.const_cast_derived());
@@ -914,8 +1032,8 @@ void SuperILU<MatrixType>::_solve_impl(const MatrixBase<Rhs> &b, MatrixBase<Dest
   RealScalar recip_pivot_growth, rcond;
 
   StatInit(&m_sluStat);
-  SuperLU_gsisx(&m_sluOptions, &m_sluA, m_q.data(), m_p.data(), &m_sluEtree[0], &m_sluEqued, &m_sluRscale[0],
-                &m_sluCscale[0], &m_sluL, &m_sluU, nullptr, 0, &m_sluB, &m_sluX, &recip_pivot_growth, &rcond,
+  SuperLU_gsisx(&m_sluOptions, &m_sluA, m_q.data(), m_p.data(), m_sluEtree.data(), &m_sluEqued, m_sluRscale.data(),
+                m_sluCscale.data(), &m_sluL, &m_sluU, nullptr, 0, &m_sluB, &m_sluX, &recip_pivot_growth, &rcond,
                 &m_sluStat, &info, Scalar());
   StatFree(&m_sluStat);
 

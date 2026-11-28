@@ -11,6 +11,13 @@
 #ifndef EIGEN_BLAS_COMMON_H
 #define EIGEN_BLAS_COMMON_H
 
+// Sizes, increments and leading dimensions are passed on as Eigen::Index, which also holds the element offsets. Shared
+// libraries hide internal Eigen symbols and can keep the default even when C++ callers narrow it; static archives
+// share COMDAT symbols with callers and must keep the caller's EIGEN_DEFAULT_DENSE_INDEX_TYPE.
+#if defined(EIGEN_BLAS_BUILD_DLL) || defined(EIGEN_LAPACK_BUILD_DLL)
+#undef EIGEN_DEFAULT_DENSE_INDEX_TYPE
+#endif
+
 #include "../Eigen/Core"
 #include "../Eigen/Jacobi"
 
@@ -21,6 +28,10 @@
 #endif
 
 #include "blas.h"
+
+// A target whose pointers are narrower than EIGEN_BLAS_INT cannot address more than Index holds anyway.
+static_assert(sizeof(Eigen::Index) >= (std::min)(sizeof(EIGEN_BLAS_INT), sizeof(std::ptrdiff_t)),
+              "Eigen::Index is too narrow to hold every EIGEN_BLAS_INT and every element offset");
 
 constexpr size_t kBlasNameLength = 6;
 
