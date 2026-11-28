@@ -147,3 +147,41 @@ build:windows:x86-64:msvc-14.29:default:affected:
   variables:
     EIGEN_CI_CCACHE_POOL: build-windows-x86-64-msvc-14-29-default
   rules: !reference [.rules:libeigen:affected-tests:windows, rules]
+
+######### MSVC cross-compiled on Linux ########################################
+# Builds the Windows unit tests on a Linux runner, driving the real MSVC
+# toolchain through Wine.  This gives merge requests MSVC coverage without
+# occupying the Windows runners; the resulting binaries are run by the matching
+# job in test.windows.gitlab-ci.yml.
+#
+# Note that this is a different MSVC than the native Windows jobs use: it
+# matches the hosted Windows runner the tests run on, not EIGEN_CI_MSVC_VER.
+
+.build:windows:cross:
+  # Publishes the build tree only: setup.msvc-wine.sh installs the toolchain in
+  # .msvc/ beside it, which must never reach an artifact.
+  extends: .artifacts:windows:builddir
+  needs: []
+  stage: build
+  image: ${EIGEN_CI_IMAGE_LINUX_AMD64_MSVC_WINE_BUILD}
+  variables:
+    EIGEN_CI_MSVC_VS_MAJOR: "17"
+    # Visual Studio 17.14 == MSVC 14.44 (v143), which is what the hosted Windows
+    # runners report. Keeping these in step means the binaries run against the
+    # runtime they were built against. Read the value off a
+    # test:windows:cross:... job log ("this runner has ...") rather than from
+    # the runner image's recipe: its chocolatey package version tracks the
+    # installer, not the toolset the installer pulls.
+    EIGEN_CI_MSVC_VS_VERSION: "17.14"
+    EIGEN_CI_TEST_CUSTOM_CXX_FLAGS: "/d2ReducedOptimizeHugeFunctions;/DEIGEN_STRONG_INLINE=inline;/Os"
+    EIGEN_CI_ADDITIONAL_ARGS: ""
+  script:
+    - ./ci/scripts/build.windows-cross.script.sh
+  tags:
+    - saas-linux-medium-amd64
+
+build:windows:cross:x86-64:msvc-14.44:smoketest:
+  extends: .build:windows:cross
+  variables:
+    EIGEN_CI_BUILD_TARGET: buildsmoketests
+  rules: !reference [.rules:libeigen:smoketest:msvc-cross, rules]
