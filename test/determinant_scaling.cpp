@@ -109,7 +109,7 @@ void check_overflowing_determinant(const Solver& solver, const ScaledProblem<Sca
   VERIFY(!(numext::isnan)(numext::real(det)) && !(numext::isnan)(numext::imag(det)));
   VERIFY_IS_EQUAL(numext::real(Scalar(solver.absDeterminant())), NumTraits<RealScalar>::infinity());
   const RealScalar expectedLog = numext::log(numext::abs(problem.determinant)) +
-                                 RealScalar(problem.S.rows() * problem.scaleExponent) * numext::log(RealScalar(2));
+                                 RealScalar(problem.S.rows() * problem.scaleExponent) * RealScalar(EIGEN_LN2);
   VERIFY(numext::abs(numext::real(Scalar(solver.logAbsDeterminant())) - expectedLog) <=
          problem.tolerance + RealScalar(4) * NumTraits<RealScalar>::epsilon() * expectedLog);
 }

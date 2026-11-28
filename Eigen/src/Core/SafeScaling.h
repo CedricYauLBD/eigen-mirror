@@ -830,7 +830,9 @@ class scaled_product {
       magnitude *= RealScalar(2);
       --exponent;
     }
-    return numext::log(magnitude) + RealScalar(exponent) * numext::log(RealScalar(2));
+    // The literal, not log(2): Clang folds log(2) of a 128-bit long double with the accuracy of double (seen with
+    // Clang 21 for riscv64). RealScalar is a built-in type here, see has_scaled_product.
+    return numext::log(magnitude) + RealScalar(exponent) * RealScalar(EIGEN_LN2);
   }
 
  private:
