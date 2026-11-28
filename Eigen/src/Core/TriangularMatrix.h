@@ -99,10 +99,14 @@ class TriangularBase : public EigenBase<Derived> {
   using TransposeReturnType = typename ReturnTypes::TransposeReturnType;
   using ConstTransposeReturnType = typename ReturnTypes::ConstTransposeReturnType;
 
+ protected:
+  EIGEN_DEFAULT_COPY_CONSTRUCTOR(TriangularBase)
+
   EIGEN_DEVICE_FUNC inline TriangularBase() {
     eigen_assert(!((int(Mode) & int(UnitDiag)) && (int(Mode) & int(ZeroDiag))));
   }
 
+ public:
   EIGEN_DEVICE_FUNC constexpr Index rows() const noexcept { return derived().nestedExpression().rows(); }
   EIGEN_DEVICE_FUNC constexpr Index cols() const noexcept { return derived().nestedExpression().cols(); }
   EIGEN_DEVICE_FUNC constexpr Index size() const noexcept { return rows() * cols(); }

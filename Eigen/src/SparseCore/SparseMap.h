@@ -132,6 +132,7 @@ class SparseMapBase<Derived, ReadOnlyAccessors> : public SparseCompressedBase<De
         m_values(valuePtr),
         m_innerNonZeros(0) {}
 
+ protected:
   // A vector map points m_outerIndex at its own m_zero_nnz, which a copy must not share.
   inline SparseMapBase(const SparseMapBase& other)
       : Base(other),
@@ -143,6 +144,7 @@ class SparseMapBase<Derived, ReadOnlyAccessors> : public SparseCompressedBase<De
         m_values(other.m_values),
         m_innerNonZeros(other.m_innerNonZeros) {}
 
+ public:
   // Rebinds like the implicit copy assignment did, with the same m_zero_nnz redirect.
   inline SparseMapBase& operator=(const SparseMapBase& other) {
     m_outerSize = other.m_outerSize;
@@ -172,8 +174,7 @@ class SparseMapBase<Derived, WriteAccessors> : public SparseMapBase<Derived, Rea
   enum { IsRowMajor = Base::IsRowMajor };
 
   using Base::operator=;
-  EIGEN_DEFAULT_COPY_CONSTRUCTOR(SparseMapBase)
-  SparseMapBase& operator=(const SparseMapBase&) = default;
+  EIGEN_DEVICE_FUNC SparseMapBase& operator=(const SparseMapBase&) = default;
 
  public:
   //----------------------------------------
@@ -222,6 +223,8 @@ class SparseMapBase<Derived, WriteAccessors> : public SparseMapBase<Derived, Rea
       : Base(size, nnz, innerIndexPtr, valuePtr) {}
 
  protected:
+  EIGEN_DEFAULT_COPY_CONSTRUCTOR(SparseMapBase)
+
   inline SparseMapBase() = default;
 };
 

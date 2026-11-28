@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: MPL-2.0
 
 ei_add_failtest("failtest_sanity_check")
+ei_add_failtest("eigenbase_brace_construction")
 
 ei_add_failtest("bool_subtract")
 ei_add_failtest("bool_negate")

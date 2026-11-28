@@ -228,6 +228,10 @@ class SkewSymmetricBase : public EigenBase<Derived> {
       const SkewSymmetricBase& lhs, const MatrixBase<OtherDerived>& rhs) {
     return lhs.toDenseMatrix() - rhs.derived();
   }
+
+ protected:
+  EIGEN_DEFAULT_COPY_CONSTRUCTOR(SkewSymmetricBase)
+  EIGEN_DEFAULT_EMPTY_CONSTRUCTOR_AND_DESTRUCTOR(SkewSymmetricBase)
 };
 
 /** \class SkewSymmetricMatrix3

@@ -28,10 +28,20 @@ namespace Eigen {
  *
  * Notice that this class is trivial, it is only used to disambiguate overloaded functions.
  *
+ * \note Custom derived expressions should define their own constructors. Brace initialization of a derived
+ * aggregate can require access to the protected base constructors or destructor. Add a user-provided constructor
+ * to retain portable brace initialization:
+ * \code
+ * Expr() {}
+ * \endcode
+ * An explicitly defaulted constructor does not disable aggregate initialization in C++17.
+ *
  * \sa \blank \ref TopicClassHierarchy
  */
 template <typename Derived>
 struct EigenBase {
+  EIGEN_DEVICE_FUNC EigenBase& operator=(const EigenBase&) = default;
+
   //   typedef typename internal::plain_matrix_type<Derived>::type PlainObject;
 
   /** \brief The interface type of indices
@@ -110,6 +120,10 @@ struct EigenBase {
   EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE DeviceWrapper<Derived, Device> device(Device& device);
   template <typename Device>
   EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE DeviceWrapper<const Derived, Device> device(Device& device) const;
+
+ protected:
+  EIGEN_DEFAULT_COPY_CONSTRUCTOR(EigenBase)
+  EIGEN_DEFAULT_EMPTY_CONSTRUCTOR_AND_DESTRUCTOR(EigenBase)
 };
 
 /***************************************************************************

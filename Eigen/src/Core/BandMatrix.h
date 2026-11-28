@@ -38,7 +38,12 @@ class BandMatrixBase : public EigenBase<Derived> {
   using CoefficientsType = typename internal::traits<Derived>::CoefficientsType;
   using Base = EigenBase<Derived>;
 
+  EIGEN_DEVICE_FUNC BandMatrixBase& operator=(const BandMatrixBase&) = default;
+
  protected:
+  EIGEN_DEFAULT_COPY_CONSTRUCTOR(BandMatrixBase)
+  EIGEN_DEFAULT_EMPTY_CONSTRUCTOR_AND_DESTRUCTOR(BandMatrixBase)
+
   enum {
     DataRowsAtCompileTime = ((Supers != Dynamic) && (Subs != Dynamic)) ? 1 + Supers + Subs : Dynamic,
     SizeAtCompileTime = min_size_prefer_dynamic(RowsAtCompileTime, ColsAtCompileTime)

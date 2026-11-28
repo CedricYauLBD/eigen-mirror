@@ -76,6 +76,8 @@ class SolverBase : public EigenBase<Derived> {
   using Scalar = typename internal::traits<Derived>::Scalar;
   using CoeffReturnType = Scalar;
 
+  EIGEN_DEVICE_FUNC SolverBase& operator=(const SolverBase&) = default;
+
   template <typename Derived_>
   friend struct internal::solve_assertion;
 
@@ -102,9 +104,13 @@ class SolverBase : public EigenBase<Derived> {
                                                    : 2
   };
 
+ protected:
+  EIGEN_DEFAULT_COPY_CONSTRUCTOR(SolverBase)
+
   /** Default constructor */
   SolverBase() = default;
 
+ public:
   using Base::derived;
 
   /** \returns an expression of the solution x of \f$ A x = b \f$ using the current decomposition of A.

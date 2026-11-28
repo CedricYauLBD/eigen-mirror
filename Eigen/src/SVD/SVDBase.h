@@ -132,11 +132,16 @@ class SVDBase : public SolverBase<SVDBase<Derived> > {
  public:
   template <typename Derived_>
   friend struct internal::solve_assertion;
+  template <typename MatrixType>
+  friend class Transpose;
 
   using MatrixType = typename internal::traits<Derived>::MatrixType;
   using Scalar = typename MatrixType::Scalar;
   using RealScalar = typename NumTraits<typename MatrixType::Scalar>::Real;
   using StorageIndex = typename Eigen::internal::traits<SVDBase>::StorageIndex;
+
+  EIGEN_DEVICE_FUNC SVDBase& operator=(const SVDBase&) = default;
+  EIGEN_DEVICE_FUNC SVDBase& operator=(SVDBase&&) = default;
 
   static constexpr bool ShouldComputeFullU = internal::traits<Derived>::ShouldComputeFullU;
   static constexpr bool ShouldComputeThinU = internal::traits<Derived>::ShouldComputeThinU;
@@ -323,6 +328,8 @@ class SVDBase : public SolverBase<SVDBase<Derived> > {
 
  protected:
   EIGEN_STATIC_ASSERT_NON_INTEGER(Scalar)
+  EIGEN_DEFAULT_COPY_CONSTRUCTOR(SVDBase)
+  EIGEN_DEVICE_FUNC SVDBase(SVDBase&&) = default;
 
   void _check_compute_assertions() const { eigen_assert(m_isInitialized && "SVD is not initialized."); }
 
