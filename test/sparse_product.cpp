@@ -19,6 +19,8 @@ inline void on_temporary_creation() {
   { on_temporary_creation(); }
 
 #include "sparse.h"
+#include <map>
+#include <set>
 
 #define EIGEN_TEST_ANNOYING_SCALAR_DONT_THROW
 #include "AnnoyingScalar.h"
@@ -134,10 +136,10 @@ void sparse_product() {
 
 #ifndef EIGEN_SPARSE_PRODUCT_IGNORE_TEMPORARY_COUNT
     // make sure the right product implementation is called:
-    if ((!SparseMatrixType::IsRowMajor) && m2.rows() <= m3.cols()) {
-      VERIFY_EVALUATION_COUNT(m4 = m2 * m3, 2);  // 2 for transposing and get a sorted result.
+    if (!SparseMatrixType::IsRowMajor) {
+      VERIFY_EVALUATION_COUNT(m4 = m2 * m3, 0);  // the product is sorted as computed, and moved into m4.
       VERIFY_EVALUATION_COUNT(m4 = (m2 * m3).pruned(0), 1);
-      VERIFY_EVALUATION_COUNT(m4 = (m2 * m3).eval().pruned(0), 4);
+      VERIFY_EVALUATION_COUNT(m4 = (m2 * m3).eval().pruned(0), 2);
     }
 #endif
 
@@ -603,10 +605,7 @@ void test_mixed_storage() {
   test_mixed_storage_imp<ColMajor, ColMajor, ColMajor>();
 }
 
-// The pruned sparse*sparse product accumulates each column into an AmbiVector,
-// which stores its coefficients either in a dense buffer or in a linked list of
-// (index, value) nodes depending on the estimated density. Both storage modes
-// must construct, move, and destroy the coefficients properly for
+// The pruned sparse*sparse product must construct, move, and destroy the coefficients properly for
 // non-trivially-copyable scalars (issue #2873).
 template <typename = void>
 void test_pruned_product_custom_scalar() {
@@ -614,8 +613,6 @@ void test_pruned_product_custom_scalar() {
   using DenseMat = Matrix<AnnoyingScalar, Dynamic, Dynamic>;
   int instances_before = AnnoyingScalar::instances;
   {
-    // Low density runs the AmbiVector in linked-list mode, high density in
-    // dense-buffer mode.
     for (double density : {0.02, 0.3}) {
       const Index n = 50;
       SpMat A(n, n), B(n, n);
@@ -629,8 +626,7 @@ void test_pruned_product_custom_scalar() {
       DenseMat refC = DenseMat(A).lazyProduct(DenseMat(B));
       VERIFY_IS_APPROX(DenseMat(C), refC);
     }
-    // A single dense column in a large matrix overflows the initial node
-    // capacity and exercises the linked-list reallocation path.
+    // A single long column in a large matrix.
     {
       const Index n = 1200;
       SpMat A(n, n), B(n, n);
@@ -647,284 +643,9 @@ void test_pruned_product_custom_scalar() {
   VERIFY_IS_EQUAL(AnnoyingScalar::instances, instances_before);
 }
 
-// setZero() drops the AmbiVector's whole linked list, and the pruned product
-// reaches it through init(), which drops the list too. Neither may abandon the
-// coefficients the dropped nodes own, and neither may leave a node behind for
-// the next coeffRef() to construct over.
+// A long vector whose lowest index arrives last.
 template <typename = void>
-void test_ambivector_discard_custom_scalar() {
-  using AmbiVec = internal::AmbiVector<AnnoyingScalar, int>;
-  const Index n = 32;
-  int instances_before = AnnoyingScalar::instances;
-  {
-    AmbiVec v(n);
-    for (int discard = 0; discard < 2; ++discard) {
-      v.init(IsSparse);
-      v.restart();
-      for (Index i = 0; i < n; i += 3) v.coeffRef(i) = AnnoyingScalar(float(i) + 1.0f);
-      VERIFY_IS_EQUAL(v.nonZeros(), (n + 2) / 3);
-
-      if (discard == 0)
-        v.setZero();
-      else
-        v.init(IsSparse);
-      VERIFY_IS_EQUAL(v.nonZeros(), 0);
-
-      // Reinserting must find storage no live node occupies.
-      v.restart();
-      v.coeffRef(1) = AnnoyingScalar(5.0f);
-      VERIFY_IS_APPROX(v.coeff(1), AnnoyingScalar(5.0f));
-      VERIFY_IS_APPROX(v.coeff(0), AnnoyingScalar(0.0f));
-    }
-  }
-  VERIFY_IS_EQUAL(AnnoyingScalar::instances, instances_before);
-}
-
-// resize() reuses its allocation whenever the new size still fits, and the
-// sub-vector bounds an iterator walks describe the size the vector had before.
-template <typename = void>
-void test_ambivector_resize_bounds() {
-  using AmbiVec = internal::AmbiVector<double, int>;
-  {
-    AmbiVec v(20);
-    v.init(IsDense);
-    v.setZero();
-    v.coeffRef(15) = 15.0;
-
-    // Shrinking below the coefficient just written: iteration must end at the
-    // new size rather than reaching a coefficient that is no longer part of the
-    // vector.
-    v.resize(10);
-    VERIFY_IS_EQUAL(v.size(), 10);
-    v.init(IsDense);
-    Index count = 0;
-    for (AmbiVec::Iterator it(v); it; ++it) {
-      VERIFY(it.index() < v.size());
-      ++count;
-    }
-    VERIFY_IS_EQUAL(count, 0);
-  }
-  {
-    // Growing within the spare capacity: iteration must reach the coefficients
-    // the new size added.
-    AmbiVec v(10);
-    v.init(IsDense);
-    v.setZero();
-    v.resize(20);
-    VERIFY_IS_EQUAL(v.size(), 20);
-    v.init(IsDense);
-    v.setZero();
-    v.coeffRef(19) = 19.0;
-    Index count = 0;
-    for (AmbiVec::Iterator it(v); it; ++it) {
-      VERIFY_IS_EQUAL(it.index(), 19);
-      VERIFY_IS_APPROX(it.value(), 19.0);
-      ++count;
-    }
-    VERIFY_IS_EQUAL(count, 1);
-  }
-}
-
-#if defined(EIGEN_EXCEPTIONS)
-namespace ambivector_throwing {
-struct scalar_exception {};
-
-// A scalar that counts its live instances and can be made to throw from the
-// constructor AmbiVector builds a node's coefficient with, or from relocating an
-// already stored coefficient when the list outgrows its capacity. Relocation is
-// keyed on a nonzero source value, which a freshly built node never has, so that
-// each flag selects exactly one of the two paths whether or not the compiler
-// elides the initialization of a node's coefficient from Scalar(0).
-struct ThrowingScalar {
-  static int live;
-  static bool throw_on_construction;
-  static bool throw_on_relocation;
-
-  float value;
-
-  ThrowingScalar() : value(0) { ++live; }
-  ThrowingScalar(int v) : value(float(v)) {
-    if (throw_on_construction) throw scalar_exception();
-    ++live;
-  }
-  ThrowingScalar(const ThrowingScalar& other) : value(other.value) {
-    if (throw_on_relocation && other.value != 0) throw scalar_exception();
-    ++live;
-  }
-  ThrowingScalar(ThrowingScalar&& other) {
-    if (throw_on_relocation && other.value != 0) throw scalar_exception();
-    value = other.value;
-    ++live;
-  }
-  ThrowingScalar& operator=(const ThrowingScalar& other) {
-    value = other.value;
-    return *this;
-  }
-  ThrowingScalar& operator=(ThrowingScalar&& other) {
-    value = other.value;
-    return *this;
-  }
-  ~ThrowingScalar() { --live; }
-};
-
-int ThrowingScalar::live = 0;
-bool ThrowingScalar::throw_on_construction = false;
-bool ThrowingScalar::throw_on_relocation = false;
-}  // namespace ambivector_throwing
-
-// A coefficient that fails to construct leaves no node: the count of live nodes
-// the destructor walks may not include it, and the vector must remain usable.
-template <typename = void>
-void test_ambivector_failed_insertion() {
-  using ambivector_throwing::ThrowingScalar;
-  using AmbiVec = internal::AmbiVector<ThrowingScalar, int>;
-  const int live_before = ThrowingScalar::live;
-  {
-    AmbiVec v(8);
-    v.init(IsSparse);
-    v.restart();
-
-    ThrowingScalar::throw_on_construction = true;
-    bool threw = false;
-    try {
-      v.coeffRef(0);
-    } catch (const ambivector_throwing::scalar_exception&) {
-      threw = true;
-    }
-    ThrowingScalar::throw_on_construction = false;
-    VERIFY(threw);
-    VERIFY_IS_EQUAL(v.nonZeros(), 0);
-
-    v.restart();
-    v.coeffRef(0) = ThrowingScalar(3);
-    v.coeffRef(4) = ThrowingScalar(4);
-    VERIFY_IS_EQUAL(v.nonZeros(), 2);
-
-    // The same for the two remaining insertion branches, which reach a node through the list
-    // rather than starting one: a new lowest index, and an index past the last node.
-    v.setZero();
-    v.restart();
-    v.coeffRef(5) = ThrowingScalar(5);
-
-    ThrowingScalar::throw_on_construction = true;
-    threw = false;
-    try {
-      v.coeffRef(0);
-    } catch (const ambivector_throwing::scalar_exception&) {
-      threw = true;
-    }
-    ThrowingScalar::throw_on_construction = false;
-    VERIFY(threw);
-    VERIFY_IS_EQUAL(v.nonZeros(), 1);
-
-    ThrowingScalar::throw_on_construction = true;
-    threw = false;
-    try {
-      v.coeffRef(7);
-    } catch (const ambivector_throwing::scalar_exception&) {
-      threw = true;
-    }
-    ThrowingScalar::throw_on_construction = false;
-    VERIFY(threw);
-    VERIFY_IS_EQUAL(v.nonZeros(), 1);
-
-    v.restart();
-    v.coeffRef(0) = ThrowingScalar(1);
-    v.coeffRef(7) = ThrowingScalar(7);
-    VERIFY_IS_EQUAL(v.nonZeros(), 3);
-  }
-  VERIFY_IS_EQUAL(ThrowingScalar::live, live_before);
-}
-
-// A throwing relocation must release the buffer it was relocating into and
-// leave the capacity describing the buffer the vector still owns, so that the
-// next insertion relocates again instead of writing past its end. The leak
-// itself shows up under a leak checker; the retry below is what fails when the
-// capacity has already been advanced.
-template <typename = void>
-void test_ambivector_failed_reallocation() {
-  using ambivector_throwing::ThrowingScalar;
-  using AmbiVec = internal::AmbiVector<ThrowingScalar, int>;
-  const int live_before = ThrowingScalar::live;
-  {
-    // Sized so that the initial node capacity is a fraction of the vector's own
-    // size, which is what makes the reallocation path reachable at all.
-    const Index n = 1200;
-    AmbiVec v(n);
-    v.init(IsSparse);
-    v.restart();
-
-    // Insert until the list has to grow, which is the first insertion that
-    // relocates an already stored coefficient and therefore the first that
-    // throws.
-    ThrowingScalar::throw_on_relocation = true;
-    Index inserted = 0;
-    bool threw = false;
-    while (!threw) {
-      VERIFY(inserted < n);
-      try {
-        // In C++14 mode, NVHPC 22.9 through at least 26.5 do not destroy the right-hand temporary if a combined
-        // assignment's coeffRef() throws.
-        ThrowingScalar& value = v.coeffRef(inserted);
-        value = ThrowingScalar(1);
-        ++inserted;
-      } catch (const ambivector_throwing::scalar_exception&) {
-        threw = true;
-      }
-    }
-    ThrowingScalar::throw_on_relocation = false;
-    VERIFY(inserted > 0);
-    VERIFY_IS_EQUAL(v.nonZeros(), inserted);
-
-    // Same insertion again, now relocating for real.
-    v.restart();
-    v.coeffRef(inserted) = ThrowingScalar(2);
-    VERIFY_IS_EQUAL(v.nonZeros(), inserted + 1);
-  }
-  VERIFY_IS_EQUAL(ThrowingScalar::live, live_before);
-}
-
-// An insertion at the front of a list that has filled its capacity must relocate the list first, not write a node
-// past its end. Descending indices make every insertion a front insertion. A write past the end is invisible
-// without a sanitizer, but the relocation it skips is not: it throws here.
-template <typename = void>
-void test_ambivector_front_insertion_relocates() {
-  using ambivector_throwing::ThrowingScalar;
-  using AmbiVec = internal::AmbiVector<ThrowingScalar, int>;
-  const int live_before = ThrowingScalar::live;
-  {
-    const Index n = 1200;  // a list capacity of a third of n
-    AmbiVec v(n);
-    v.init(IsSparse);
-    v.restart();
-
-    ThrowingScalar::throw_on_relocation = true;
-    Index inserted = 0;
-    bool threw = false;
-    while (!threw && inserted < n / 2) {
-      try {
-        ThrowingScalar& value = v.coeffRef(n - 1 - inserted);
-        value = ThrowingScalar(1);
-        ++inserted;
-      } catch (const ambivector_throwing::scalar_exception&) {
-        threw = true;
-      }
-    }
-    ThrowingScalar::throw_on_relocation = false;
-    VERIFY(threw);
-    VERIFY_IS_EQUAL(v.nonZeros(), inserted);
-
-    v.restart();
-    v.coeffRef(n - 1 - inserted) = ThrowingScalar(2);
-    VERIFY_IS_EQUAL(v.nonZeros(), inserted + 1);
-  }
-  VERIFY_IS_EQUAL(ThrowingScalar::live, live_before);
-}
-#endif  // EIGEN_EXCEPTIONS
-
-// A list that fills its initial capacity must grow before an insertion at its front.
-template <typename = void>
-void test_ambivector_front_insertion_growth() {
+void test_pruned_product_front_insertion() {
   const int n = 1000;
   SparseMatrix<double> A(n, 2), B(2, 100);
   for (int i = 1; i <= n / 2; ++i) A.insert(i, 0) = 1.0;
@@ -934,6 +655,187 @@ void test_ambivector_front_insertion_growth() {
   SparseMatrix<double> C = (A * B).pruned();
   VERIFY_IS_EQUAL(C.nonZeros(), n / 2 + 1);
   VERIFY_IS_APPROX(MatrixXd(C.toDense()), MatrixXd(A.toDense() * B.toDense()));
+}
+
+// Result vectors whose products arrive out of order and all cancel, between vectors that keep entries: an emptied
+// vector must leave nothing behind for the next one.
+template <typename = void>
+void test_pruned_product_cancelled_vector() {
+  SparseMatrix<double> A(12, 4), B(4, 5);
+  A.insert(5, 0) = 1.0;
+  A.insert(9, 0) = 1.0;
+  A.insert(2, 1) = 1.0;
+  A.insert(2, 2) = -1.0;
+  A.insert(5, 2) = -1.0;
+  A.insert(9, 2) = -1.0;
+  A.insert(9, 3) = 3.0;
+  A.insert(5, 3) = 2.0;
+  for (Index j : {0, 2, 3})
+    for (Index k = 0; k < 3; ++k) B.insert(k, j) = 1.0;
+  B.insert(0, 1) = 1.0;
+  B.insert(3, 1) = 1.0;
+  B.insert(3, 4) = 1.0;
+  B.insert(1, 4) = 1.0;
+  SparseMatrix<double> C = (A * B).pruned();
+  VERIFY_IS_EQUAL(C.innerIndicesAreSorted(), C.outerSize());
+  VERIFY_IS_EQUAL(C.nonZeros(), Index(5));
+  VERIFY_IS_EQUAL((MatrixXd(C) - MatrixXd(A) * MatrixXd(B)).norm(), 0.0);
+}
+
+// The product summed entry by entry, so that a repeated inner index of an operand vector counts every time.
+template <typename Dense, typename Lhs, typename Rhs>
+Dense sparse_product_reference(const Lhs& lhs, const Rhs& rhs) {
+  Dense l = Dense::Zero(lhs.rows(), lhs.cols()), r = Dense::Zero(rhs.rows(), rhs.cols());
+  for (Index k = 0; k < lhs.outerSize(); ++k)
+    for (typename Lhs::InnerIterator it(lhs, k); it; ++it) l(it.row(), it.col()) += it.value();
+  for (Index k = 0; k < rhs.outerSize(); ++k)
+    for (typename Rhs::InnerIterator it(rhs, k); it; ++it) r(it.row(), it.col()) += it.value();
+  return l * r;
+}
+
+// Result vectors of two to four terms with at most 8 entries in all are sorted and summed by the network of
+// bucket_sorter, which takes terms in any order and with repeated indices; longer ones take the other paths. Terms
+// interleave and share indices; one vector is unsorted and one repeats an index. Integer values make sums exact.
+template <typename Scalar, int Order>
+void test_sparse_product_small_vectors() {
+  using SpMat = SparseMatrix<Scalar, Order>;
+  using ColMat = SparseMatrix<Scalar, ColMajor>;
+  using Dense = Matrix<Scalar, Dynamic, Dynamic>;
+  const Index rows = 60, mid = 12, cols = 50;
+  // Vector k has k % 4 + 1 entries, every (k % 3 + 2)-th row from k; vector mid - 1 is empty.
+  ColMat a(rows, mid), b(mid, cols);
+  a.reserve(VectorXi::Constant(mid, 4));
+  for (Index k = 0; k + 1 < mid; ++k)
+    for (Index q = 0; q <= k % 4; ++q) a.insert(k + q * (k % 3 + 2), k) = Scalar(double(1 + (q + k) % 4));
+  a.makeCompressed();
+  // Vector 3 is reversed and vector 7 repeats its first index.
+  std::reverse(a.innerIndexPtr() + a.outerIndexPtr()[3], a.innerIndexPtr() + a.outerIndexPtr()[4]);
+  a.innerIndexPtr()[a.outerIndexPtr()[7] + 1] = a.innerIndexPtr()[a.outerIndexPtr()[7]];
+  // Column j of b sums j % 4 + 1 vectors of a from (5 j) % mid, so sums have 1 to 16 entries.
+  for (Index j = 0; j < cols; ++j)
+    for (Index t = 0; t <= j % 4; ++t) b.insert((5 * j + 3 * t) % mid, j) = Scalar(double(t % 2 ? -1 : 2));
+  b.makeCompressed();
+  // Row-major, the terms of a result row are rows of the right operand: multiply the transposes, b^T a^T.
+  const bool rowMajor = Order == RowMajor;
+  Dense ref = sparse_product_reference<Dense>(a, b);
+  if (rowMajor) ref = Dense(ref.transpose());
+  for (bool compressed : {true, false}) {
+    // a, or a^T row-major, from the arrays of a: a conversion would reject the reversed and the repeated indices.
+    SpMat terms(rowMajor ? mid : rows, rowMajor ? rows : mid);
+    terms.resizeNonZeros(a.nonZeros());
+    std::copy(a.outerIndexPtr(), a.outerIndexPtr() + mid + 1, terms.outerIndexPtr());
+    std::copy(a.innerIndexPtr(), a.innerIndexPtr() + a.nonZeros(), terms.innerIndexPtr());
+    std::copy(a.valuePtr(), a.valuePtr() + a.nonZeros(), terms.valuePtr());
+    SpMat weights = rowMajor ? SpMat(b.transpose()) : SpMat(b);
+    if (!compressed) terms.uncompress();
+    SpMat c = rowMajor ? SpMat(weights * terms) : SpMat(terms * weights);
+    VERIFY_IS_EQUAL(c.innerIndicesAreSorted(), c.outerSize());
+    VERIFY_IS_EQUAL(Dense(c), ref);
+    SpMat p = rowMajor ? SpMat((weights * terms).pruned()) : SpMat((terms * weights).pruned());
+    VERIFY_IS_EQUAL(p.innerIndicesAreSorted(), p.outerSize());
+    VERIFY_IS_EQUAL(Dense(p), ref);
+    VERIFY(p.nonZeros() <= c.nonZeros());
+  }
+}
+
+// Indices of 2^61 or more do not fit the keys of bucket_sorter: a small sum of them must take another path.
+template <typename = void>
+void test_sparse_product_small_vectors_huge_indices() {
+  using StorageIndex = long long;
+  using SpMat = SparseMatrix<double, ColMajor, StorageIndex>;
+  if (sizeof(Index) < 8) return;
+  const Index rows = Index(1) << 62;
+  const StorageIndex top = StorageIndex(rows - 1), half = StorageIndex(1) << 61;
+  SpMat a(rows, 2), b(2, 1);
+  a.insert(half - 1, 0) = 1.0;
+  a.insert(top - 2, 0) = 2.0;
+  a.insert(half, 1) = 3.0;
+  a.insert(top - 2, 1) = 4.0;
+  a.insert(top, 1) = 5.0;
+  b.insert(0, 0) = 2.0;
+  b.insert(1, 0) = -1.0;
+  SpMat c = a * b;
+  VERIFY_IS_EQUAL(c.innerIndicesAreSorted(), c.outerSize());
+  VERIFY_IS_EQUAL(c.nonZeros(), Index(4));
+  const StorageIndex expectedIndices[] = {half - 1, half, top - 2, top};
+  const double expectedValues[] = {2.0, -3.0, 0.0, -5.0};
+  for (Index p = 0; p < 4; ++p) {
+    VERIFY_IS_EQUAL(c.innerIndexPtr()[p], expectedIndices[p]);
+    VERIFY_IS_EQUAL(c.valuePtr()[p], expectedValues[p]);
+  }
+}
+
+// Result vectors of one or two operand vectors are merged, which needs sorted operand vectors without a repeated
+// index. An operand that breaks this must take the general path and give the same product.
+template <typename = void>
+void test_sparse_product_few_terms_unsorted() {
+  const Index rows = 200, mid = 12, cols = 30;
+  SparseMatrix<double> A(rows, mid), B(mid, cols);
+  for (Index k = 0; k < mid; ++k)
+    for (Index q = 0; q < 20; ++q) A.coeffRef((7 * q + 13 * k) % rows, k) = double(1 + (q + k) % 5);
+  A.makeCompressed();
+  for (Index j = 0; j < cols; ++j) {
+    B.coeffRef(j % mid, j) = 2.0;
+    if (j % 3) B.coeffRef((5 * j + 1) % mid, j) = -1.0;
+  }
+  B.makeCompressed();
+  MatrixXd ref = MatrixXd(A) * MatrixXd(B);
+  for (int variant = 0; variant < 3; ++variant) {
+    SparseMatrix<double> lhs = A;
+    // 1: every vector reversed; 2: one index out of place in every other vector.
+    for (Index k = 0; k < mid; ++k) {
+      Index begin = lhs.outerIndexPtr()[k], end = lhs.outerIndexPtr()[k + 1];
+      if (variant == 1) {
+        std::reverse(lhs.innerIndexPtr() + begin, lhs.innerIndexPtr() + end);
+        std::reverse(lhs.valuePtr() + begin, lhs.valuePtr() + end);
+      } else if (variant == 2 && k % 2 == 0) {
+        std::swap(lhs.innerIndexPtr()[begin + 3], lhs.innerIndexPtr()[end - 1]);
+        std::swap(lhs.valuePtr()[begin + 3], lhs.valuePtr()[end - 1]);
+      }
+    }
+    SparseMatrix<double> C = lhs * B;
+    VERIFY_IS_EQUAL(C.innerIndicesAreSorted(), C.outerSize());
+    VERIFY_IS_EQUAL((MatrixXd(C) - ref).norm(), 0.0);
+    SparseMatrix<double> P = (lhs * B).pruned();
+    VERIFY_IS_EQUAL(P.innerIndicesAreSorted(), P.outerSize());
+    VERIFY_IS_EQUAL((MatrixXd(P) - ref).norm(), 0.0);
+    VERIFY(P.nonZeros() <= C.nonZeros());
+  }
+}
+
+// An inner dimension of 2^62: indices there do not fit the packed keys of the bucket sort, which must then sort
+// by insertion. Three terms per vector with distinct indices keep the vectors on the appended path, and nothing of
+// the inner dimension is allocated.
+template <typename = void>
+void test_sparse_product_huge_inner_dimension() {
+  using StorageIndex = long long;
+  using SpMat = SparseMatrix<double, ColMajor, StorageIndex>;
+  if (sizeof(Index) < 8) return;
+  const Index rows = Index(1) << 62, perVector = 80, mid = 6;
+  SpMat a(rows, mid), b(mid, 2);
+  a.reserve(VectorXi::Constant(mid, int(perVector)));
+  std::map<StorageIndex, double> expected[2];
+  for (Index k = 0; k < mid; ++k)
+    for (Index q = 0; q < perVector; ++q) {
+      // Spread over the whole range, shifted per vector except for every seventh index, which the vectors share.
+      StorageIndex i = StorageIndex(rows - 1 - ((perVector - 1 - q) * (rows / 100) + (q % 7 == 0 ? 0 : k * 1000 + q)));
+      a.insertBackUncompressed(i, k) = double(1 + (q + k) % 5);
+    }
+  for (Index j = 0; j < 2; ++j)
+    for (Index t = 0; t < 3; ++t) b.insert(3 * j + t, j) = double(t + 2);
+  for (Index j = 0; j < 2; ++j)
+    for (SpMat::InnerIterator bi(b, j); bi; ++bi)
+      for (SpMat::InnerIterator ai(a, bi.index()); ai; ++ai) expected[j][ai.index()] += ai.value() * bi.value();
+  SpMat c = a * b;
+  VERIFY_IS_EQUAL(c.innerIndicesAreSorted(), c.outerSize());
+  VERIFY_IS_EQUAL(c.nonZeros(), Index(expected[0].size() + expected[1].size()));
+  VERIFY(Index(expected[0].size()) < 3 * perVector);
+  for (Index j = 0; j < 2; ++j)
+    for (SpMat::InnerIterator it(c, j); it; ++it) {
+      auto found = expected[j].find(it.index());
+      VERIFY(found != expected[j].end() && found->second == it.value());
+    }
+  VERIFY(c.innerIndexPtr()[c.nonZeros() - 1] > rows / 2);
 }
 
 template <typename = void>
@@ -1126,7 +1028,7 @@ void test_sparse_diagonal_products() {
   }
 }
 
-// Pruned selects the pruning kernel and drops the entries whose product row or column is empty.
+// Pruned selects the pruned product and drops the entries whose product row or column is empty.
 template <bool Pruned, int LOrder, int ROrder, int DstOrder>
 void test_sparse_product_operand_order() {
   using Scalar = noncommutative_scalar::NoncommutingBlock;
@@ -1146,8 +1048,8 @@ void test_sparse_product_operand_order() {
     SparseMatrix<Scalar, DstOrder> sparse(2, 2), publicSparse;
     Matrix<Scalar, Dynamic, Dynamic, DstOrder> dense;
     if (Pruned) {
-      internal::sparse_sparse_product_with_pruning_selector<decltype(lhs), decltype(rhs), decltype(sparse)>::run(
-          lhs, rhs, sparse, 0.0);
+      internal::conservative_sparse_sparse_product_selector<decltype(lhs), decltype(rhs), decltype(sparse)>::run(
+          lhs, rhs, sparse, internal::sparse_product_keep_above<double>{0.0});
       publicSparse = (lhs * rhs).pruned(Scalar(0), 0.0);
     } else {
       sparse = lhs * rhs;
@@ -1165,6 +1067,87 @@ void test_sparse_product_operand_order() {
       }
     lhs.makeCompressed();
     rhs.makeCompressed();
+  }
+}
+
+// Operands that both lack the storage order of the result. The selector converts the operands, or, when the kernel in
+// their storage order has far fewer terms and few products, runs it there and converts the result; the shapes take
+// each way, and the last two have far fewer terms but too many products. The scalar
+// does not commute, so a swapped operand order shows, and some sums cancel to zero, which the pruned product drops.
+template <int OperandOrder>
+void test_sparse_product_result_conversion() {
+  using Scalar = noncommutative_scalar::NoncommutingBlock;
+  constexpr int ResOrder = OperandOrder == ColMajor ? RowMajor : ColMajor;
+  using Operand = SparseMatrix<Scalar, OperandOrder>;
+  using Result = SparseMatrix<Scalar, ResOrder>;
+  auto random_operand = [](Index rows, Index cols, Index perColumn) {
+    Operand m(rows, cols);
+    m.reserve(VectorXi::Constant(m.outerSize(), int(perColumn * cols / m.outerSize() + perColumn)));
+    for (Index j = 0; j < cols; ++j) {
+      std::set<Index> chosen;
+      while (Index(chosen.size()) < perColumn) chosen.insert(internal::random<Index>(0, rows - 1));
+      // A fifth of the entries are stored zeros, so that some sums are zero.
+      for (Index i : chosen) {
+        Scalar& entry = m.insert(i, j);
+        if (internal::random<int>(0, 4) != 0)
+          for (int& value : entry.values) value = internal::random<int>(-2, 2);
+      }
+    }
+    return m;
+  };
+  struct Shape {
+    Index rows, mid, cols, lhsPerColumn, rhsPerColumn;
+  };
+  const Shape shapes[] = {
+      {60, 40, 30, 6, 1}, {30, 40, 60, 1, 6}, {40, 40, 40, 3, 3}, {60, 10, 30, 30, 4}, {30, 10, 60, 12, 5}};
+  for (int s = 0; s < 5; ++s) {
+    const Shape& shape = shapes[s];
+    Operand lhs = random_operand(shape.rows, shape.mid, shape.lhsPerColumn);
+    Operand rhs = random_operand(shape.mid, shape.cols, shape.rhsPerColumn);
+    const bool convertsResult = OperandOrder == ColMajor ? internal::sparse_product_converts_result(lhs, rhs)
+                                                         : internal::sparse_product_converts_result(rhs, lhs);
+    const Index lhsNonZeros = lhs.nonZeros(), rhsNonZeros = rhs.nonZeros();
+    const bool fewerTerms = OperandOrder == ColMajor ? lhsNonZeros > 2 * rhsNonZeros : rhsNonZeros > 2 * lhsNonZeros;
+    VERIFY_IS_EQUAL(fewerTerms, s == (OperandOrder == ColMajor ? 0 : 1) || s == (OperandOrder == ColMajor ? 3 : 4));
+    VERIFY_IS_EQUAL(convertsResult, s == (OperandOrder == ColMajor ? 0 : 1));
+
+    // The reference sums the products in a dense matrix and marks the entries that the patterns generate.
+    using Dense = Matrix<Scalar, Dynamic, Dynamic>;
+    Dense expected = Dense::Constant(shape.rows, shape.cols, Scalar(0));
+    Matrix<bool, Dynamic, Dynamic> generated = Matrix<bool, Dynamic, Dynamic>::Constant(shape.rows, shape.cols, false);
+    for (Index lhsOuter = 0; lhsOuter < lhs.outerSize(); ++lhsOuter)
+      for (typename Operand::InnerIterator lhsIt(lhs, lhsOuter); lhsIt; ++lhsIt)
+        for (Index rhsOuter = 0; rhsOuter < rhs.outerSize(); ++rhsOuter)
+          for (typename Operand::InnerIterator rhsIt(rhs, rhsOuter); rhsIt; ++rhsIt)
+            if (rhsIt.row() == lhsIt.col()) {
+              expected(lhsIt.row(), rhsIt.col()) += lhsIt.value() * rhsIt.value();
+              generated(lhsIt.row(), rhsIt.col()) = true;
+            }
+    Index generatedCount = 0, nonZeroCount = 0;
+    for (Index j = 0; j < shape.cols; ++j)
+      for (Index i = 0; i < shape.rows; ++i) {
+        generatedCount += generated(i, j);
+        nonZeroCount += expected(i, j).values != Scalar(0).values;
+      }
+    VERIFY(nonZeroCount < generatedCount);
+
+    for (int compressed = 0; compressed < 2; ++compressed) {
+      Result conservative = lhs * rhs;
+      // The public pruned product runs the selector for its own plain type; this selector is reached directly.
+      Result pruned(shape.rows, shape.cols);
+      internal::conservative_sparse_sparse_product_selector<Operand, Operand, Result>::run(
+          lhs, rhs, pruned, internal::sparse_product_keep_above<double>{0.0});
+      Result publicPruned = (lhs * rhs).pruned(Scalar(0), 0.0);
+      for (const Result* result : {&conservative, &pruned, &publicPruned}) {
+        VERIFY(result->isCompressed());
+        VERIFY_IS_EQUAL(result->innerIndicesAreSorted(), result->outerSize());
+        VERIFY_IS_EQUAL(result->nonZeros(), result == &conservative ? generatedCount : nonZeroCount);
+        for (Index j = 0; j < shape.cols; ++j)
+          for (Index i = 0; i < shape.rows; ++i) VERIFY(result->coeff(i, j).values == expected(i, j).values);
+      }
+      lhs.makeCompressed();
+      rhs.makeCompressed();
+    }
   }
 }
 
@@ -1335,6 +1318,261 @@ void check_sparse_triangular_view_products_all_modes() {
   }
 }
 
+// Products large enough that the kernel takes each of its ways of building a vector. Long vectors whose indices
+// rarely repeat go through a direct table if they are dense in their range, and are otherwise appended to buckets.
+// A bucket is sorted by insertion; one that a cluster overfills goes through a direct table or is split again. The
+// other vectors are marked and then sorted: already in order, by insertion, through a direct table, or in buckets.
+// The reference sums the same products through setFromTriplets. The entries are signed, so some sums cancel, and
+// the pruned product must drop exactly those at or below its tolerance on each of the paths.
+template <int LhsOrder, int RhsOrder, int ResOrder>
+void sparse_product_large() {
+  using Triplets = std::vector<Triplet<double>>;
+  enum Pattern { Scattered, Run, Window, Pooled };
+  // perColumn entries per column: at random rows, in one contiguous run from a random row, at random rows among the
+  // 3000 that follow a random row, or 100 of the 300 scattered rows of one of three pools, so that columns of a pool
+  // share most of their rows.
+  auto random_matrix = [](Index rows, Index cols, Index perColumn, Pattern pattern) {
+    Triplets triplets;
+    for (Index j = 0; j < cols; ++j) {
+      Index first = internal::random<Index>(0, rows - 1);
+      for (Index k = 0; k < perColumn; ++k) {
+        Index i = internal::random<Index>(0, rows - 1);
+        if (pattern == Run) i = (first + k) % rows;
+        if (pattern == Window) i = (first + internal::random<Index>(0, 2999)) % rows;
+        if (pattern == Pooled) i = ((j % 3) * 7919 + ((j * 37 + k * 3) % 300) * 127) % rows;
+        Index v = (i + 3 * j + k) % 7 - 3;
+        triplets.emplace_back(i, j, double(v == 0 ? 4 : v));
+      }
+    }
+    SparseMatrix<double> m(rows, cols);
+    m.setFromTriplets(triplets.begin(), triplets.end());
+    return m;
+  };
+  struct Shape {
+    Index rows, mid, cols, lhsPerColumn, rhsPerColumn;
+    Pattern pattern;
+  };
+  const Shape shapes[] = {
+      {3000, 3000, 300, 40, 40, Scattered},  // about 1200 distinct indices of 1600 products on 3000 rows: direct
+      {60000, 200, 200, 300, 3, Scattered},  // 900 products on 60000 rows: appended, buckets sorted by insertion
+      {200000, 300, 200, 100, 4, Run},       // four runs of 100: appended, each cluster through a direct table
+      {400000, 300, 200, 60, 4, Window},     // four windows of 60: appended, each cluster split again
+      {400, 400, 200, 60, 60, Scattered},    // 3600 products on 400 rows: marked, then direct as dense in its range
+      {40000, 300, 200, 100, 30, Pooled},    // 3000 products on 900 scattered rows: marked, sorted in buckets
+      {5000, 500, 500, 20, 3, Run},          // three runs of 20: marked, then in order or sorted by insertion
+      {5000, 500, 500, 20, 2, Run},          // two runs of 20: merged
+      {60000, 200, 200, 300, 2, Scattered},  // two scattered vectors of 300: merged
+      {20000, 300, 100, 40, 1, Run},         // one run of 40: copied; few rhs entries
+  };
+  for (const Shape& shape : shapes) {
+    SparseMatrix<double> a = random_matrix(shape.rows, shape.mid, shape.lhsPerColumn, shape.pattern);
+    SparseMatrix<double> b = random_matrix(shape.mid, shape.cols, shape.rhsPerColumn, Scattered);
+    Triplets triplets;
+    for (Index j = 0; j < b.outerSize(); ++j)
+      for (SparseMatrix<double>::InnerIterator bIt(b, j); bIt; ++bIt)
+        for (SparseMatrix<double>::InnerIterator aIt(a, bIt.index()); aIt; ++aIt)
+          triplets.emplace_back(aIt.index(), j, aIt.value() * bIt.value());
+    SparseMatrix<double, ResOrder> ref(shape.rows, shape.cols);
+    ref.setFromTriplets(triplets.begin(), triplets.end());
+
+    SparseMatrix<double, LhsOrder> lhs = std::move(a);
+    SparseMatrix<double, RhsOrder> rhs = std::move(b);
+    SparseMatrix<double, ResOrder> res = lhs * rhs;
+    VERIFY(res.isCompressed());
+    VERIFY_IS_EQUAL(res.innerIndicesAreSorted(), res.outerSize());
+    VERIFY_IS_EQUAL(res.nonZeros(), ref.nonZeros());
+    // integer-valued entries: the sums are exact in any order
+    VERIFY_IS_EQUAL((res - ref).norm(), 0.0);
+
+    // The pruned product drops the sums v with |v| <= tolerance: exact zeros, then also 1 and 2.
+    for (double tolerance : {0.0, 2.5}) {
+      SparseMatrix<double, ResOrder> prunedRef = ref;
+      prunedRef.prune([tolerance](Index, Index, double v) { return numext::abs(v) > tolerance; });
+      SparseMatrix<double, ResOrder> pruned = (lhs * rhs).pruned(1.0, tolerance);
+      VERIFY(pruned.isCompressed());
+      VERIFY_IS_EQUAL(pruned.innerIndicesAreSorted(), pruned.outerSize());
+      VERIFY_IS_EQUAL(pruned.nonZeros(), prunedRef.nonZeros());
+      VERIFY_IS_EQUAL((pruned - prunedRef).norm(), 0.0);
+      if (tolerance > 0.0) VERIFY(pruned.nonZeros() < res.nonZeros());
+    }
+  }
+}
+
+// Long inner vectors of the sorted product, for a scalar type, an index type and each storage order of the operands
+// and of the result: these take the bucket paths, which the small products above do not reach. The scalars are
+// integer-valued, so every sum is exact and the result is compared with == against products summed in a map.
+//
+// x has long inner vectors with a dense run, scattered indices, and indices at geometrically growing gaps, which
+// are clusters within clusters and split more than once. The vectors of y choose one vector of x, or three with the
+// same indices; a vector with three products per index makes the next one marked. For a row-major result the
+// product is y^T x^T, so that the long vectors are the rows of the right operand. With unsortedOperands, the inner
+// vectors of both operands are stored in reverse order.
+template <typename Scalar>
+Scalar sparse_product_test_value(Index v, Scalar*) {
+  return Scalar(double(v));
+}
+template <typename Real>
+std::complex<Real> sparse_product_test_value(Index v, std::complex<Real>*) {
+  return std::complex<Real>(Real(v), Real(v % 3 - 1));
+}
+inline noncommutative_scalar::Quaternion sparse_product_test_value(Index v, noncommutative_scalar::Quaternion*) {
+  return noncommutative_scalar::Quaternion(double(v), double(v % 3 - 1), double(v % 2), double(v % 5 - 2));
+}
+
+template <typename Scalar, typename StorageIndex, int LhsOrder, int RhsOrder, int ResOrder>
+void sparse_product_long_vectors(bool unsortedOperands) {
+  using Entry = std::pair<Index, Index>;
+  using Entries = std::map<Entry, Scalar>;
+  const Index inner = numext::mini<Index>(2000000, Index(NumTraits<StorageIndex>::highest()));
+  const Index mid = 4, outer = 4;
+
+  std::vector<Index> indices;
+  for (Index k = 0; k < 30; ++k) indices.push_back(inner / 3 + k);
+  for (Index k = 0; k < 60; ++k) indices.push_back((inner / 61) * k + 7);
+  double gap = 1.0;
+  for (Index k = 0; Index(gap) + k < inner / 4; ++k, gap *= 1.25) indices.push_back(inner / 2 + Index(gap) + k);
+  std::sort(indices.begin(), indices.end());
+  indices.erase(std::unique(indices.begin(), indices.end()), indices.end());
+  VERIFY(Index(indices.size()) > 64);
+
+  // x(i, k) for i in indices; y(k, j): vectors 0 and 3 take x(:, 3), vectors 1 and 2 take x(:, 0..2).
+  Entries x, y;
+  for (Index k = 0; k < mid; ++k)
+    for (Index q = 0; q < Index(indices.size()); ++q)
+      x[Entry(indices[q], k)] = sparse_product_test_value(1 + (q + 2 * k) % 5, static_cast<Scalar*>(nullptr));
+  y[Entry(3, 0)] = sparse_product_test_value(2, static_cast<Scalar*>(nullptr));
+  y[Entry(3, 3)] = sparse_product_test_value(3, static_cast<Scalar*>(nullptr));
+  for (Index j = 1; j < 3; ++j)
+    for (Index k = 0; k < 3; ++k) y[Entry(k, j)] = sparse_product_test_value(1 + j + k, static_cast<Scalar*>(nullptr));
+
+  const bool transposed = ResOrder == RowMajor;
+  auto transpose = [](const Entries& m) {
+    Entries t;
+    for (const auto& e : m) t[Entry(e.first.second, e.first.first)] = e.second;
+    return t;
+  };
+  const Entries l = transposed ? transpose(y) : x;
+  const Entries r = transposed ? transpose(x) : y;
+  const Index rows = transposed ? outer : inner, cols = transposed ? inner : outer;
+  const Index middle = mid;
+
+  auto build = [&](const Entries& m, Index nrows, Index ncols, auto& matrix) {
+    std::vector<Triplet<Scalar, StorageIndex>> triplets;
+    for (const auto& e : m) triplets.emplace_back(StorageIndex(e.first.first), StorageIndex(e.first.second), e.second);
+    matrix.resize(nrows, ncols);
+    matrix.setFromTriplets(triplets.begin(), triplets.end());
+    if (unsortedOperands)
+      for (Index j = 0; j < matrix.outerSize(); ++j) {
+        Index begin = matrix.outerIndexPtr()[j], end = matrix.outerIndexPtr()[j + 1];
+        std::reverse(matrix.innerIndexPtr() + begin, matrix.innerIndexPtr() + end);
+        std::reverse(matrix.valuePtr() + begin, matrix.valuePtr() + end);
+      }
+  };
+  SparseMatrix<Scalar, LhsOrder, StorageIndex> lhs;
+  SparseMatrix<Scalar, RhsOrder, StorageIndex> rhs;
+  build(l, rows, middle, lhs);
+  build(r, middle, cols, rhs);
+
+  Entries ref;
+  for (const auto& b : r)
+    for (const auto& a : l)
+      if (a.first.second == b.first.first) {
+        Entry at(a.first.first, b.first.second);
+        auto found = ref.find(at);
+        if (found == ref.end())
+          ref[at] = a.second * b.second;
+        else
+          found->second += a.second * b.second;
+      }
+
+  SparseMatrix<Scalar, ResOrder, StorageIndex> res = lhs * rhs;
+  VERIFY(res.isCompressed());
+  VERIFY_IS_EQUAL(res.innerIndicesAreSorted(), res.outerSize());
+  VERIFY_IS_EQUAL(res.nonZeros(), Index(ref.size()));
+  Index mismatches = 0;
+  for (Index j = 0; j < res.outerSize(); ++j)
+    for (typename SparseMatrix<Scalar, ResOrder, StorageIndex>::InnerIterator it(res, j); it; ++it) {
+      auto found = ref.find(Entry(it.row(), it.col()));
+      mismatches += found == ref.end() || !(found->second == it.value());
+    }
+  VERIFY_IS_EQUAL(mismatches, Index(0));
+
+  // The pruned product keeps exactly the entries above its tolerance.
+  using RealScalar = typename NumTraits<Scalar>::Real;
+  const RealScalar tolerance = RealScalar(12);
+  Index expected = 0;
+  for (const auto& e : ref) expected += !(numext::abs(e.second) <= tolerance);
+  VERIFY(expected > 0 && expected < Index(ref.size()));
+  SparseMatrix<Scalar, ResOrder, StorageIndex> pruned = (lhs * rhs).pruned(Scalar(1), tolerance);
+  VERIFY(pruned.isCompressed());
+  VERIFY_IS_EQUAL(pruned.innerIndicesAreSorted(), pruned.outerSize());
+  VERIFY_IS_EQUAL(pruned.nonZeros(), expected);
+  mismatches = 0;
+  for (Index j = 0; j < pruned.outerSize(); ++j)
+    for (typename SparseMatrix<Scalar, ResOrder, StorageIndex>::InnerIterator it(pruned, j); it; ++it) {
+      auto found = ref.find(Entry(it.row(), it.col()));
+      mismatches += found == ref.end() || !(found->second == it.value()) || numext::abs(it.value()) <= tolerance;
+    }
+  VERIFY_IS_EQUAL(mismatches, Index(0));
+}
+
+template <typename Scalar, typename StorageIndex>
+void sparse_product_long_vectors_all_orders() {
+  for (bool unsortedOperands : {false, true}) {
+    sparse_product_long_vectors<Scalar, StorageIndex, ColMajor, ColMajor, ColMajor>(unsortedOperands);
+    sparse_product_long_vectors<Scalar, StorageIndex, RowMajor, ColMajor, ColMajor>(unsortedOperands);
+    sparse_product_long_vectors<Scalar, StorageIndex, ColMajor, RowMajor, ColMajor>(unsortedOperands);
+    sparse_product_long_vectors<Scalar, StorageIndex, RowMajor, RowMajor, ColMajor>(unsortedOperands);
+    sparse_product_long_vectors<Scalar, StorageIndex, ColMajor, ColMajor, RowMajor>(unsortedOperands);
+    sparse_product_long_vectors<Scalar, StorageIndex, RowMajor, ColMajor, RowMajor>(unsortedOperands);
+    sparse_product_long_vectors<Scalar, StorageIndex, ColMajor, RowMajor, RowMajor>(unsortedOperands);
+    sparse_product_long_vectors<Scalar, StorageIndex, RowMajor, RowMajor, RowMajor>(unsortedOperands);
+  }
+}
+
+// A matrix may have highest() + 1 rows, so that highest() is an inner index. The direct table of the sorted product
+// must keep that index: in the first vector of a product, in a vector that is marked and then sorted, and in a
+// cluster at the end of a vector that is appended to buckets.
+template <typename StorageIndex>
+void sparse_product_highest_inner_index() {
+  using SpMat = SparseMatrix<double, ColMajor, StorageIndex>;
+  const Index rows = Index(NumTraits<StorageIndex>::highest()) + 1;
+  {
+    SpMat a(rows, 2), b(2, 2);
+    a.insert(rows - 4, 0) = 1.0;
+    a.insert(rows - 1, 0) = 2.0;
+    a.insert(rows - 3, 1) = 3.0;
+    a.insert(rows - 2, 1) = 4.0;
+    a.insert(rows - 1, 1) = 5.0;
+    for (Index j = 0; j < 2; ++j)
+      for (Index i = 0; i < 2; ++i) b.insert(i, j) = 1.0;
+    SpMat c = a * b;
+    VERIFY_IS_EQUAL(c.innerIndicesAreSorted(), c.outerSize());
+    VERIFY_IS_EQUAL(c.nonZeros(), Index(8));
+    for (Index j = 0; j < 2; ++j) {
+      VERIFY_IS_EQUAL(c.coeff(rows - 4, j), 1.0);
+      VERIFY_IS_EQUAL(c.coeff(rows - 3, j), 3.0);
+      VERIFY_IS_EQUAL(c.coeff(rows - 2, j), 4.0);
+      VERIFY_IS_EQUAL(c.coeff(rows - 1, j), 7.0);
+    }
+  }
+  {
+    // row 0 and the last 12 rows, twice: 26 products
+    const Index cluster = 12;
+    SpMat a(rows, 2), b(2, 1);
+    for (Index j = 0; j < 2; ++j) {
+      a.insert(0, j) = 1.0;
+      for (Index k = 0; k < cluster; ++k) a.insert(rows - cluster + k, j) = double(k + 1);
+      b.insert(j, 0) = 1.0;
+    }
+    SpMat c = a * b;
+    VERIFY_IS_EQUAL(c.innerIndicesAreSorted(), c.outerSize());
+    VERIFY_IS_EQUAL(c.nonZeros(), cluster + 1);
+    VERIFY_IS_EQUAL(c.coeff(0, 0), 2.0);
+    for (Index k = 0; k < cluster; ++k) VERIFY_IS_EQUAL(c.coeff(rows - cluster + k, 0), double(2 * (k + 1)));
+  }
+}
+
 EIGEN_DECLARE_TEST(sparse_product) {
   sparse_structured_view_product_sfinae<SparseMatrix<double, ColMajor>>();
   sparse_structured_view_product_sfinae<SparseMatrix<double, RowMajor>>();
@@ -1386,15 +1624,28 @@ EIGEN_DECLARE_TEST(sparse_product) {
     CALL_SUBTEST_11((test_sparse_product_operand_order<true, RowMajor, ColMajor, RowMajor>()));
     CALL_SUBTEST_11((test_sparse_product_operand_order<true, RowMajor, RowMajor, ColMajor>()));
     CALL_SUBTEST_11((test_sparse_product_operand_order<true, RowMajor, RowMajor, RowMajor>()));
+    CALL_SUBTEST_11((test_sparse_product_result_conversion<ColMajor>()));
+    CALL_SUBTEST_11((test_sparse_product_result_conversion<RowMajor>()));
 
     CALL_SUBTEST_6((test_pruned_product_custom_scalar<>()));
-    CALL_SUBTEST_6((test_ambivector_discard_custom_scalar<>()));
-    CALL_SUBTEST_6((test_ambivector_resize_bounds<>()));
-    CALL_SUBTEST_6((test_ambivector_front_insertion_growth<>()));
-#if defined(EIGEN_EXCEPTIONS)
-    CALL_SUBTEST_6((test_ambivector_failed_insertion<>()));
-    CALL_SUBTEST_6((test_ambivector_failed_reallocation<>()));
-    CALL_SUBTEST_6((test_ambivector_front_insertion_relocates<>()));
-#endif
+    CALL_SUBTEST_6((test_pruned_product_front_insertion<>()));
+    CALL_SUBTEST_6((test_pruned_product_cancelled_vector<>()));
+    CALL_SUBTEST_6((test_sparse_product_few_terms_unsorted<>()));
+    CALL_SUBTEST_6((test_sparse_product_small_vectors<double, ColMajor>()));
+    CALL_SUBTEST_6((test_sparse_product_small_vectors<double, RowMajor>()));
+    CALL_SUBTEST_6((test_sparse_product_small_vectors<std::complex<double>, ColMajor>()));
+    CALL_SUBTEST_6((test_sparse_product_small_vectors_huge_indices<>()));
+    CALL_SUBTEST_6((test_sparse_product_huge_inner_dimension<>()));
   }
+  CALL_SUBTEST_3((sparse_product_long_vectors_all_orders<double, int>()));
+  CALL_SUBTEST_4((sparse_product_long_vectors_all_orders<double, short>()));
+  CALL_SUBTEST_4((sparse_product_long_vectors_all_orders<double, long long>()));
+  CALL_SUBTEST_5((sparse_product_long_vectors_all_orders<std::complex<double>, int>()));
+  CALL_SUBTEST_7((sparse_product_long_vectors_all_orders<noncommutative_scalar::Quaternion, int>()));
+  CALL_SUBTEST_3((sparse_product_highest_inner_index<signed char>()));
+  CALL_SUBTEST_3((sparse_product_highest_inner_index<short>()));
+  CALL_SUBTEST_3((sparse_product_large<ColMajor, ColMajor, ColMajor>()));
+  CALL_SUBTEST_3((sparse_product_large<RowMajor, RowMajor, RowMajor>()));
+  CALL_SUBTEST_3((sparse_product_large<RowMajor, ColMajor, ColMajor>()));
+  CALL_SUBTEST_3((sparse_product_large<ColMajor, ColMajor, RowMajor>()));
 }

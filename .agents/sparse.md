@@ -69,23 +69,49 @@ into a sparse destination. So `Q`, unlike `R`, comes out sorted.
   replacing them. All four take an optional functor for combining duplicates; the default sums them.
 - `insert()` requires that the entry not already exist. Use `coeffRef()` when it might exist. Before inserting in random
   order, call `reserve(const SizesType&)`: the sequential fast path applies only when outer indices increase.
-- The sparse-sparse product selectors keep the result sorted on purpose. They choose between inserting in sorted order
-  and an unsorted pass followed by a transpose round-trip, which sorts as a side effect
-  ([`ConservativeSparseSparseProduct.h`](../Eigen/src/SparseCore/ConservativeSparseSparseProduct.h)). A new product,
-  permutation, or assembly path must also leave the indices sorted. `sortInnerIndices()` and `innerIndicesAreSorted()`
-  on `SparseCompressedBase` are the tools for this. Check `innerIndicesAreSorted()` in a test, not only in reasoning.
+- The sparse-sparse product selectors keep the result sorted on purpose. All eight combinations of storage
+  orders run one kernel that builds each inner vector sorted
+  ([`ConservativeSparseSparseProduct.h`](../Eigen/src/SparseCore/ConservativeSparseSparseProduct.h)). A selector
+  converts each operand that lacks the storage order of the result. When both lack it, the selector can instead run
+  the kernel in the operands' order and convert the result. The comment above the selectors gives the rule, which
+  compares the operands' entry counts and the number of products. Neither form wins everywhere: converting the result
+  is faster for `A * P` products in algebraic multigrid, and slower for `A * A` and for products whose result has more
+  entries than the operands. Benchmark all three kinds, on a machine with a small cache too, before you change the
+  rule. A new product, permutation, or assembly path must also leave the indices sorted. `sortInnerIndices()` and
+  `innerIndicesAreSorted()` on `SparseCompressedBase` are the tools for this. Check `innerIndicesAreSorted()` in a
+  test, not only in reasoning.
+- When a new kernel must produce sorted inner vectors, read "Postconditions And Invariants" in
+  [`benchmarking.md`](benchmarking.md) before you choose a structure that keeps a vector sorted while it accumulates.
+  The inner vector is read only when it is complete, so the order is a postcondition.
 
 ## Products
 
-`A * B` on two sparse operands uses the conservative product; `(A * B).pruned()` selects the pruning product in
-[`SparseSparseProductWithPruning.h`](../Eigen/src/SparseCore/SparseSparseProductWithPruning.h) instead. The two
-differ in results, not only in speed. The conservative product stores every entry that the operands' sparsity patterns
-generate, even one whose sum cancels to exactly zero. The pruning product drops finished values at or below its
-tolerance. So the two produce different patterns from the same operands, and a test or benchmark written against one
-does not transfer to the other.
+`A * B` on two sparse operands uses the conservative product; `(A * B).pruned()` is the pruned product. Both run the
+kernel in [`ConservativeSparseSparseProduct.h`](../Eigen/src/SparseCore/ConservativeSparseSparseProduct.h). The kernel
+describes each result vector as a sum of terms, and `sparse_accumulator` in
+[`SparseAccumulator.h`](../Eigen/src/SparseCore/SparseAccumulator.h) builds the vector. The accumulator takes a `Keep`
+predicate over the finished value of each entry: `sparse_product_keep_all` for the conservative product,
+`sparse_product_keep_above` for the pruned one. The two differ in results. The conservative product stores every entry
+that the operands' sparsity patterns generate, even one whose sum cancels to exactly zero. The pruned product drops
+finished values at or below its tolerance. So the two produce different patterns from the same operands, and a test
+written against one does not transfer to the other.
+
+When you change where the predicate runs, apply it only to the finished sum of an index. A partial sum can be small
+while the final sum is large. `prune_inner_vector` therefore filters each inner vector once it is complete.
+
+When you remove entries from a vector that the marked path built, reset their markers. The marker holds positions in
+the result storage, so a stale marker at or past the new end of the vector makes the next vector add to a wrong entry.
+`prune_inner_vector` takes the marker for this, and `test/sparse_product.cpp` fails without the reset.
+
+When you write a `Terms` adapter for `sparse_accumulator`, mark its members `EIGEN_ALWAYS_INLINE`, and benchmark it in
+a translation unit that instantiates several products. `EIGEN_STRONG_INLINE` is plain `inline` on GCC. GCC 14 left the
+`Term` constructor of the product adapter out of line in such a unit, which cost 15-45% on vectors of one or two
+terms, while a program with a single product showed no loss.
 
 Neither product reserves the exact result size in advance. The conservative product starts from the heuristic
-`nonZerosEstimate()` sum, documented at its definition, and grows or over-allocates from there.
+`nonZerosEstimate()` sum, documented at its definition, and grows from there by doubling. It does not shrink the
+storage afterwards, so the result of `C = A * B` can hold more capacity than `C.nonZeros()` entries. Do not assert that
+`data().allocatedSize()` equals `nonZeros()` after a product.
 
 Threaded SpMV is opt-in: [`Eigen/SparseCore`](../Eigen/SparseCore) includes `ThreadedSparseProduct.h` and
 `Eigen/ThreadPool` only when `EIGEN_USE_THREADS` is defined. Its tests are in `test/sparse_threaded_product.cpp`, and
