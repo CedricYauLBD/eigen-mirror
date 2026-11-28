@@ -9,6 +9,7 @@ set(Eigen_LegacyShim_HEADERS
   AlignedVector3
   ArpackSupport
   AutoDiff
+  Beziers
   BVH
   EulerAngles
   FFT

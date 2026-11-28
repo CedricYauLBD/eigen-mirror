@@ -10,6 +10,7 @@ set(Eigen_HEADERS
   AlignedVector3
   ArpackSupport
   AutoDiff
+  Beziers
   BVH
   EulerAngles
   FFT
