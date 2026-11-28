@@ -435,6 +435,120 @@ static void test_empty_dims(const internal::TensorBlockShapeType block_shape) {
   }
 }
 
+#ifdef EIGEN_EXCEPTIONS
+// A device for TensorBlockScratchAllocator that refuses requests on demand and checks that every buffer is released
+// exactly once.
+struct RefusingDevice {
+  void* allocate(size_t num_bytes) const {
+    if (refuse) throw std::bad_alloc();
+    void* buffer = internal::aligned_malloc(num_bytes);
+    live.insert(buffer);
+    return buffer;
+  }
+  void deallocate(void* buffer) const {
+    VERIFY(live.erase(buffer) == 1);
+    internal::aligned_free(buffer);
+  }
+  bool refuse = false;
+  mutable std::set<void*> live;
+};
+#endif
+
+#ifdef EIGEN_EXCEPTIONS
+// An allocator that throws on demand, for the list of buffers that TensorBlockScratchAllocator keeps.
+static bool g_refuse_metadata_alloc = false;
+template <typename T>
+struct RefusingAllocator {
+  using value_type = T;
+  template <typename U>
+  struct rebind {
+    using other = RefusingAllocator<U>;
+  };
+  RefusingAllocator() = default;
+  template <typename U>
+  RefusingAllocator(const RefusingAllocator<U>&) noexcept {}
+  T* allocate(std::size_t n) {
+    if (g_refuse_metadata_alloc) throw std::bad_alloc();
+    return std::allocator<T>().allocate(n);
+  }
+  void deallocate(T* p, std::size_t n) noexcept { std::allocator<T>().deallocate(p, n); }
+  template <typename U>
+  bool operator==(const RefusingAllocator<U>&) const noexcept {
+    return true;
+  }
+  template <typename U>
+  bool operator!=(const RefusingAllocator<U>&) const noexcept {
+    return false;
+  }
+};
+
+// A buffer that the scratch allocator cannot record, because its list of buffers cannot grow, is not leaked.
+static void test_scratch_allocator_failed_registration() {
+  RefusingDevice device;
+  {
+    internal::TensorBlockScratchAllocator<RefusingDevice, RefusingAllocator> scratch(device);
+    g_refuse_metadata_alloc = false;
+    scratch.allocate(64);
+    g_refuse_metadata_alloc = true;
+    bool threw = false;
+    size_t allocated = 1;
+    try {
+      for (int i = 0; i < 64; ++i) {
+        scratch.allocate(64);
+        ++allocated;
+      }
+    } catch (const std::bad_alloc&) {
+      threw = true;
+    }
+    g_refuse_metadata_alloc = false;
+    VERIFY(threw);
+    VERIFY_IS_EQUAL(device.live.size(), allocated);
+
+    // The allocator stays usable once memory is available again.
+    scratch.reset();
+    for (size_t i = 0; i < allocated + 1; ++i) scratch.allocate(64);
+    VERIFY_IS_EQUAL(device.live.size(), allocated + 1);
+  }
+  VERIFY(device.live.empty());
+}
+#endif
+
+// A scratch buffer that the device refuses to grow is not released twice.
+static void test_scratch_allocator_failed_growth() {
+#ifdef EIGEN_EXCEPTIONS
+  RefusingDevice device;
+  {
+    internal::TensorBlockScratchAllocator<RefusingDevice> scratch(device);
+    scratch.allocate(64);
+    scratch.allocate(64);
+    VERIFY_IS_EQUAL(device.live.size(), size_t(2));
+
+    // The second buffer of the next block has to grow.
+    scratch.reset();
+    scratch.allocate(64);
+    device.refuse = true;
+    bool threw = false;
+    try {
+      scratch.allocate(128);
+    } catch (const std::bad_alloc&) {
+      threw = true;
+    }
+    VERIFY(threw);
+
+    // The allocator stays usable once the device has memory again.
+    device.refuse = false;
+    scratch.reset();
+    void* first = scratch.allocate(64);
+    void* second = scratch.allocate(128);
+    VERIFY(first != second);
+    VERIFY(device.live.count(first) == 1);
+    VERIFY(device.live.count(second) == 1);
+    VERIFY_IS_EQUAL(device.live.size(), size_t(2));
+  }
+  VERIFY(device.live.empty());
+#endif
+}
+
 #define TEST_LAYOUTS(NAME)        \
   CALL_SUBTEST(NAME<ColMajor>()); \
   CALL_SUBTEST(NAME<RowMajor>())
@@ -462,6 +576,10 @@ EIGEN_DECLARE_TEST(tensor_block_access) {
   TEST_LAYOUTS(test_skewed_inner_dim_block_shape);
   TEST_LAYOUTS_WITH_ARG(test_empty_dims, TensorBlockShapeType::kUniformAllDims);
   TEST_LAYOUTS_WITH_ARG(test_empty_dims, TensorBlockShapeType::kSkewedInnerDims);
+  CALL_SUBTEST(test_scratch_allocator_failed_growth());
+#ifdef EIGEN_EXCEPTIONS
+  CALL_SUBTEST(test_scratch_allocator_failed_registration());
+#endif
 }
 
 #undef TEST_LAYOUTS

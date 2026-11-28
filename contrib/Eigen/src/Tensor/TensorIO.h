@@ -41,8 +41,9 @@ struct TensorIOFormatBase {
   }
 
   void init_spacer() {
-    if (flags & DontAlignCols) return;
+    // The printer indexes spacer even with DontAlignCols, which leaves the entries empty.
     spacer.resize(prefix.size());
+    if (flags & DontAlignCols) return;
     spacer[0] = "";
     int i = int(tenPrefix.length()) - 1;
     while (i >= 0 && tenPrefix[i] != '\n') {

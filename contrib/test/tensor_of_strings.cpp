@@ -132,6 +132,103 @@ static void test_initialization() {
   }
 }
 
+struct StringSize {
+  int operator()(const std::string& s) const { return static_cast<int>(s.size()); }
+};
+
+// Longer than the small-string buffer, so every string owns heap memory.
+struct NumberToString {
+  std::string operator()(int number) const {
+    std::ostringstream s;
+    s << "a string too long for the small buffer " << number;
+    return s.str();
+  }
+};
+
+template <typename Scalar>
+struct DefaultGenerator {
+  Scalar operator()(const Eigen::array<Eigen::Index, 2>&) const { return Scalar(); }
+};
+
+template <typename Expr>
+constexpr bool block_access() {
+  return Eigen::TensorEvaluator<Expr, Eigen::DefaultDevice>::BlockAccess;
+}
+
+// Blocks are materialized in scratch memory that holds no constructed coefficients, so the operations that
+// materialize them serve blocks only of a scalar that needs no construction.
+template <typename Scalar, bool Expected>
+static void check_block_access_of_materializing_operations() {
+  Tensor<Scalar, 2> lvalue;
+  const Tensor<Scalar, 2>& t = lvalue;
+  const Tensor<Scalar, 4> t4;
+  const Tensor<Scalar, 5> t5;
+  const Eigen::array<Eigen::Index, 2> indices{{1, 1}};
+  const Eigen::array<bool, 2> reversed{{false, true}};
+  const Eigen::array<std::pair<Eigen::Index, Eigen::Index>, 2> paddings;
+  const DefaultGenerator<Scalar> generator;
+
+  STATIC_CHECK((block_access<decltype(t.shuffle(indices))>() == Expected));
+  STATIC_CHECK((block_access<decltype(lvalue.shuffle(indices))>() == Expected));
+  STATIC_CHECK((block_access<decltype(t.roll(indices))>() == Expected));
+  STATIC_CHECK((block_access<decltype(lvalue.roll(indices))>() == Expected));
+  STATIC_CHECK((block_access<decltype(t.stridedSlice(indices, indices, indices))>() == Expected));
+  STATIC_CHECK((block_access<decltype(lvalue.stridedSlice(indices, indices, indices))>() == Expected));
+  STATIC_CHECK((block_access<decltype(t.concatenate(t, 0))>() == Expected));
+  STATIC_CHECK((block_access<decltype(lvalue.concatenate(lvalue, 0))>() == Expected));
+  STATIC_CHECK((block_access<decltype(t.reverse(reversed))>() == Expected));
+  STATIC_CHECK((block_access<decltype(t.pad(paddings))>() == Expected));
+  STATIC_CHECK((block_access<decltype(t.generate(generator))>() == Expected));
+  STATIC_CHECK((block_access<decltype(t.inflate(indices))>() == Expected));
+  STATIC_CHECK((block_access<decltype(t.extract_patches(indices))>() == Expected));
+  STATIC_CHECK((block_access<decltype(t4.extract_image_patches(1, 1))>() == Expected));
+  STATIC_CHECK((block_access<decltype(t5.extract_volume_patches(1, 1, 1))>() == Expected));
+  // These forward the blocks of their argument and materialize the lazy ones. A reshape serves views of any scalar,
+  // and the slice of it has no raw buffer for the layout swap to serve instead.
+  STATIC_CHECK((block_access<decltype(t.reshape(indices).broadcast(indices))>() == Expected));
+  STATIC_CHECK((block_access<decltype(t.reshape(indices).chip(0, 0))>() == Expected));
+  STATIC_CHECK((block_access<decltype(t.reshape(indices).slice(indices, indices).swap_layout())>() == Expected));
+}
+
+static void test_block_evaluation() {
+  check_block_access_of_materializing_operations<std::string, false>();
+  check_block_access_of_materializing_operations<std::complex<float>, true>();
+  check_block_access_of_materializing_operations<float, true>();
+
+  Tensor<int, 2> numbers(4, 6);
+  Tensor<std::string, 2> t(4, 6);
+  for (int i = 0; i < 4; ++i) {
+    for (int j = 0; j < 6; ++j) {
+      numbers(i, j) = i + 4 * j;
+      t(i, j) = NumberToString()(numbers(i, j));
+    }
+  }
+  const Eigen::array<bool, 2> reverse_first{{true, false}};
+  const Eigen::array<bool, 2> reverse_second{{false, true}};
+  const Eigen::array<int, 2> transpose{{1, 0}};
+
+  // An lvalue and an rvalue operation that both prefer block evaluation.
+  Tensor<std::string, 2> reordered(6, 4);
+  reordered.shuffle(transpose) = t.reverse(reverse_second);
+  // An arithmetic root, which is tiled, over operands that are not arithmetic.
+  Tensor<int, 2> sizes = t.concatenate(t, 0).unaryExpr(StringSize());
+  Tensor<int, 2> equal = (t.shuffle(transpose) == reordered.reverse(reverse_first)).cast<int>();
+  // A lazy block of strings under an operation that materializes it.
+  Tensor<int, 1> row_sizes = numbers.unaryExpr(NumberToString()).chip(1, 0).unaryExpr(StringSize());
+
+  for (int i = 0; i < 4; ++i) {
+    for (int j = 0; j < 6; ++j) {
+      VERIFY_IS_EQUAL(reordered(j, i), t(i, 5 - j));
+      VERIFY_IS_EQUAL(sizes(i, j), StringSize()(t(i, j)));
+      VERIFY_IS_EQUAL(sizes(i + 4, j), StringSize()(t(i, j)));
+      VERIFY_IS_EQUAL(equal(j, i), 1);
+    }
+  }
+  for (int j = 0; j < 6; ++j) {
+    VERIFY_IS_EQUAL(row_sizes(j), StringSize()(t(1, j)));
+  }
+}
+
 EIGEN_DECLARE_TEST(tensor_of_strings) {
   // Beware: none of this is likely to ever work on a GPU.
   CALL_SUBTEST(test_assign());
@@ -139,4 +236,5 @@ EIGEN_DECLARE_TEST(tensor_of_strings) {
   CALL_SUBTEST(test_slices());
   CALL_SUBTEST(test_additions());
   CALL_SUBTEST(test_initialization());
+  CALL_SUBTEST(test_block_evaluation());
 }

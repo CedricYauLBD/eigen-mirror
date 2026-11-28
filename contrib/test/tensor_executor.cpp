@@ -9,11 +9,14 @@
 // SPDX-License-Identifier: MPL-2.0
 
 #define EIGEN_USE_THREADS
+#define EIGEN_TEST_ANNOYING_SCALAR_DONT_THROW
 
 #include "main.h"
 
+#include <stdexcept>
 #include <Eigen/Tensor>
 #include "tensor_test_helpers.h"
+#include "AnnoyingScalar.h"
 #include "../Eigen/SpecialFunctions"
 
 using Eigen::ColMajor;
@@ -833,6 +836,48 @@ void test_async_execute_select(Device d) {
   for (Index i = 0; i < dst.size(); ++i) VERIFY_IS_EQUAL(dst.coeff(i), numext::maxi(lhs.coeff(i), rhs.coeff(i)));
 }
 
+#ifdef EIGEN_EXCEPTIONS
+struct ThrowingGenerator {
+  float operator()(const array<Index, 2>& coords) const {
+    if (coords[0] == 11 && coords[1] == 13) throw std::runtime_error("ThrowingGenerator");
+    return 1.0f;
+  }
+};
+#endif
+
+// cleanup() releases the temporaries that evalSubExprsIfNeeded() allocated, here the result of a contraction. The
+// DefaultDevice executors call it also when the evaluation throws.
+template <bool Vectorizable, TiledEvaluation Tiling>
+void test_execute_throwing_expr(DefaultDevice d) {
+#ifdef EIGEN_EXCEPTIONS
+  Tensor<AnnoyingScalar, 2> lhs(16, 8);
+  Tensor<AnnoyingScalar, 2> rhs(8, 16);
+  Tensor<float, 2> dst(16, 16);
+  lhs.setConstant(AnnoyingScalar(1.0f));
+  rhs.setConstant(AnnoyingScalar(2.0f));
+
+  const array<IndexPair<int>, 1> contract_dims{{IndexPair<int>(1, 0)}};
+  const array<Index, 2> shape{{16, 16}};
+  // reshape() serves blocks of the contraction's result; cast() and generate() serve packets of float.
+  const auto expr = lhs.contract(rhs, contract_dims).reshape(shape).cast<float>() + dst.generate(ThrowingGenerator());
+
+  using Assign = TensorAssignOp<decltype(dst), const decltype(expr)>;
+  using Executor = internal::TensorExecutor<const Assign, DefaultDevice, Vectorizable, Tiling>;
+
+  const int instances = AnnoyingScalar::instances;
+  bool threw = false;
+  try {
+    Executor::run(Assign(dst, expr), d);
+  } catch (const std::runtime_error&) {
+    threw = true;
+  }
+  VERIFY(threw);
+  VERIFY_IS_EQUAL(AnnoyingScalar::instances, instances);
+#else
+  EIGEN_UNUSED_VARIABLE(d);
+#endif
+}
+
 // Eigen defines EIGEN_DONT_VECTORIZE without a value, e.g. when EIGEN_DONT_ALIGN disables alignment.
 #ifdef EIGEN_DONT_VECTORIZE
 #define VECTORIZABLE(T, VAL) false
@@ -929,6 +974,10 @@ EIGEN_DECLARE_TEST(tensor_executor) {
   CALL_SUBTEST_8(test_random_capabilities(internal::UniformRandomGenerator<float>(123)));
   CALL_SUBTEST_8(test_random_capabilities(internal::NormalRandomGenerator<float>(123)));
   CALL_SUBTEST_8(test_custom_nullary_functor_block_access());
+  CALL_SUBTEST_8((test_execute_throwing_expr<false, TiledEvaluation::Off>(default_device)));
+  CALL_SUBTEST_8((test_execute_throwing_expr<false, TiledEvaluation::On>(default_device)));
+  CALL_SUBTEST_8((test_execute_throwing_expr<VECTORIZABLE(float, true), TiledEvaluation::Off>(default_device)));
+  CALL_SUBTEST_8((test_execute_throwing_expr<VECTORIZABLE(float, true), TiledEvaluation::On>(default_device)));
 
   CALL_SUBTEST_COMBINATIONS(9, test_execute_reshape, float, 2);
   CALL_SUBTEST_COMBINATIONS(9, test_execute_reshape, float, 3);

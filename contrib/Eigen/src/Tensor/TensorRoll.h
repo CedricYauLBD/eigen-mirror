@@ -85,7 +85,7 @@ struct TensorEvaluator<const TensorRollOp<RollDimensions, ArgType>, Device> {
   enum {
     IsAligned = false,
     PacketAccess = TensorEvaluator<ArgType, Device>::PacketAccess,
-    BlockAccess = NumDims > 0,
+    BlockAccess = NumDims > 0 && internal::is_block_materializable<Scalar>::value,
     PreferBlockAccess = true,
     CoordAccess = false,  // to be implemented
     RawAccess = false
@@ -336,7 +336,8 @@ struct TensorEvaluator<TensorRollOp<RollDimensions, ArgType>, Device>
     PacketAccess = TensorEvaluator<ArgType, Device>::PacketAccess,
     // writeBlock() scatters the block into the argument's buffer as bulk
     // copies of the wrap-around pieces, so it needs raw storage underneath.
-    BlockAccess = TensorEvaluator<ArgType, Device>::RawAccess,
+    BlockAccess = TensorEvaluator<ArgType, Device>::RawAccess &&
+                  internal::is_block_materializable<typename XprType::Scalar>::value,
     // The coeff/packet write path pays a full div/mod index walk per scalar;
     // the block path is a handful of bulk copies. Mirrors the rvalue side.
     PreferBlockAccess = true,

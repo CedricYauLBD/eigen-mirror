@@ -18,6 +18,15 @@ namespace Eigen {
 
 namespace internal {
 
+// Calls cleanup() when the executor returns or the evaluation throws. Declare it after evalSubExprsIfNeeded() has
+// returned: that call allocates the temporaries that cleanup() releases, and an evaluator that throws from it has
+// already released its own.
+template <typename Evaluator>
+struct TensorEvaluatorCleanupGuard {
+  Evaluator& evaluator;
+  ~TensorEvaluatorCleanupGuard() { evaluator.cleanup(); }
+};
+
 /**
  * \ingroup Tensor_Module
  *
@@ -52,21 +61,13 @@ class TensorExecutor {
   static EIGEN_STRONG_INLINE void run(const Expression& expr, const Device& device = DefaultDevice()) {
     TensorEvaluator<Expression, Device> evaluator(expr, device);
     const bool needs_assign = evaluator.evalSubExprsIfNeeded(nullptr);
+    const TensorEvaluatorCleanupGuard<TensorEvaluator<Expression, Device>> cleanup_guard{evaluator};
     if (needs_assign) {
-      // Scalars that require initialization take this path, and their operations may throw. Release the temporaries
-      // that evalSubExprsIfNeeded allocated before the exception propagates.
-      EIGEN_TRY {
-        const StorageIndex size = static_cast<StorageIndex>(array_prod(evaluator.dimensions()));
-        for (StorageIndex i = 0; i < size; ++i) {
-          evaluator.evalScalar(i);
-        }
-      }
-      EIGEN_CATCH(...) {
-        evaluator.cleanup();
-        EIGEN_THROW;
+      const StorageIndex size = static_cast<StorageIndex>(array_prod(evaluator.dimensions()));
+      for (StorageIndex i = 0; i < size; ++i) {
+        evaluator.evalScalar(i);
       }
     }
-    evaluator.cleanup();
   }
 };
 
@@ -89,6 +90,7 @@ class TensorExecutor<Expression, DefaultDevice, /*Vectorizable=*/true,
   static EIGEN_STRONG_INLINE void run(const Expression& expr, const DefaultDevice& device = DefaultDevice()) {
     TensorEvaluator<Expression, DefaultDevice> evaluator(expr, device);
     const bool needs_assign = evaluator.evalSubExprsIfNeeded(nullptr);
+    const TensorEvaluatorCleanupGuard<TensorEvaluator<Expression, DefaultDevice>> cleanup_guard{evaluator};
     if (needs_assign) {
       const StorageIndex size = static_cast<StorageIndex>(array_prod(evaluator.dimensions()));
       const int PacketSize =
@@ -111,7 +113,6 @@ class TensorExecutor<Expression, DefaultDevice, /*Vectorizable=*/true,
         evaluator.evalScalar(i);
       }
     }
-    evaluator.cleanup();
   }
 };
 
@@ -142,6 +143,7 @@ class TensorExecutor<Expression, DefaultDevice, Vectorizable,
 
     // TODO(ezhulenev): Do not use tiling for small tensors?
     const bool needs_assign = evaluator.evalSubExprsIfNeeded(nullptr);
+    const TensorEvaluatorCleanupGuard<Evaluator> cleanup_guard{evaluator};
 
     if (needs_assign) {
       // Query expression tree for desired block size/shape.
@@ -159,7 +161,6 @@ class TensorExecutor<Expression, DefaultDevice, Vectorizable,
         scratch.reset();
       }
     }
-    evaluator.cleanup();
   }
 };
 

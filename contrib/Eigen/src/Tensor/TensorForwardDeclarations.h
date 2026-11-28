@@ -172,6 +172,17 @@ enum FFTDirection { FFT_FORWARD = 0, FFT_REVERSE = 1 };
 
 namespace internal {
 
+// Whether the temporaries that a device allocates with allocate_temp() are host memory, which host code may construct
+// and destruct elements in. The GPU and SYCL devices allocate them in device memory.
+template <typename Device>
+struct temporaries_are_host_memory : bool_constant<!std::is_same<std::remove_const_t<Device>, GpuDevice>::value &&
+                                                   !std::is_same<std::remove_const_t<Device>, SyclDevice>::value> {};
+
+// Whether the evaluator of a Device must construct the elements of a temporary of Scalar that it fills by assignment.
+template <typename Scalar, typename Device>
+struct temporaries_need_construction
+    : bool_constant<NumTraits<Scalar>::RequireInitialization && temporaries_are_host_memory<Device>::value> {};
+
 template <typename Device, typename Expression>
 struct IsVectorizable {
   static constexpr bool value = TensorEvaluator<Expression, Device>::PacketAccess;

@@ -92,9 +92,12 @@ struct TensorEvaluator<const TensorLayoutSwapOp<ArgType>, Device> {
     PacketAccess = TensorEvaluator<ArgType, Device>::PacketAccess,
     // Layout swap is a no-op at the flat-memory level: serve blocks from the
     // argument's raw data pointer when it has one, and otherwise forward the
-    // block request to the argument with reversed dimensions.
-    BlockAccess =
-        (TensorEvaluator<ArgType, Device>::RawAccess || TensorEvaluator<ArgType, Device>::BlockAccess) && NumDims > 0,
+    // block request to the argument with reversed dimensions. A forwarded
+    // block that comes back lazy is materialized here.
+    BlockAccess = (TensorEvaluator<ArgType, Device>::RawAccess ||
+                   (TensorEvaluator<ArgType, Device>::BlockAccess &&
+                    internal::is_block_materializable<typename XprType::Scalar>::value)) &&
+                  NumDims > 0,
     PreferBlockAccess = TensorEvaluator<ArgType, Device>::PreferBlockAccess,
     CoordAccess = false,  // to be implemented
     RawAccess = TensorEvaluator<ArgType, Device>::RawAccess

@@ -174,11 +174,9 @@ class TensorRefBase : public TensorBase<Derived> {
   template <typename Expression,
             typename EnableIf = std::enable_if_t<!std::is_same<std::decay_t<Expression>, Derived>::value>>
   EIGEN_STRONG_INLINE TensorRefBase& operator=(const Expression& expr) {
-    unrefEvaluator();
-    m_evaluator = new TensorLazyEvaluator < Dimensions, Expression, DefaultDevice,
-    /*IsWritable=*/!std::is_const<PlainObjectType>::value&& bool(is_lvalue<Expression>::value) >
-        (expr, DefaultDevice());
-    m_evaluator->incrRefCount();
+    // The current evaluator is released last: expr may read *this, and building the evaluator of expr may throw.
+    TensorRefBase other(expr);
+    numext::swap(m_evaluator, other.m_evaluator);
     return *this;
   }
 

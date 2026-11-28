@@ -289,6 +289,31 @@ static void test_fft_in_place_assign(int n) {
   }
 }
 
+// argmax()/argmin() evaluate a temporary expression built around a copy of their argument, so the FFT
+// evaluator nested in it outlives the TensorFFTOp it was constructed from.
+template <int DataLayout, typename FFTDims>
+static void test_fft_nested_in_argmax(const FFTDims& fft) {
+  Tensor<std::complex<float>, 2, DataLayout> input(8, 12);
+  input.setRandom();
+  Tensor<float, 2, DataLayout> magnitude = input.template fft<Eigen::BothParts, FFT_FORWARD>(fft).abs();
+
+  Tensor<DenseIndex, 0, DataLayout> expected = magnitude.argmax();
+  Tensor<DenseIndex, 0, DataLayout> actual = input.template fft<Eigen::BothParts, FFT_FORWARD>(fft).abs().argmax();
+  VERIFY_IS_EQUAL(actual(), expected());
+
+  expected = magnitude.argmin();
+  actual = input.template fft<Eigen::BothParts, FFT_FORWARD>(fft).abs().argmin();
+  VERIFY_IS_EQUAL(actual(), expected());
+
+  Tensor<DenseIndex, 1, DataLayout> expected_along_dim = magnitude.argmax(1);
+  Tensor<DenseIndex, 1, DataLayout> actual_along_dim =
+      input.template fft<Eigen::BothParts, FFT_FORWARD>(fft).abs().argmax(1);
+  VERIFY_IS_EQUAL(actual_along_dim.dimension(0), expected_along_dim.dimension(0));
+  for (int i = 0; i < expected_along_dim.dimension(0); ++i) {
+    VERIFY_IS_EQUAL(actual_along_dim(i), expected_along_dim(i));
+  }
+}
+
 template <typename RealScalar, int DataLayout>
 static void test_fft_large_impulse() {
   constexpr int n = 65536;
@@ -414,6 +439,57 @@ static void test_fft_non_power_of_2_accuracy() {
   }
 }
 
+// The Scalar of an fft() expression is the type of its result, which differs from the type of its input for a real
+// input with BothParts and for a complex input with RealPart or ImagPart. An enclosing slice() or fft() sizes its
+// memcpy of the materialized result with that Scalar.
+template <typename RealScalar, int DataLayout>
+static void test_fft_result_scalar() {
+  using Complex = std::complex<RealScalar>;
+  constexpr int n = 64;
+  Tensor<RealScalar, 1, DataLayout> real_input(n);
+  Tensor<Complex, 1, DataLayout> complex_input(n);
+  real_input.setRandom();
+  complex_input.setRandom();
+  const array<int, 1> fft = {{0}};
+  const array<Index, 1> first = {{n / 4}};
+  const array<Index, 1> count = {{n / 4}};
+  const RealScalar untouched(-1);
+
+  using RealToComplex = decltype(real_input.template fft<BothParts, FFT_FORWARD>(fft));
+  using ComplexToReal = decltype(complex_input.template fft<RealPart, FFT_FORWARD>(fft));
+  STATIC_CHECK((std::is_same<typename RealToComplex::Scalar, Complex>::value));
+  STATIC_CHECK((std::is_same<typename ComplexToReal::Scalar, RealScalar>::value));
+
+  // The slice is the first quarter of `storage`: a copy of n / 4 complex coefficients would also fill the second.
+  Tensor<RealScalar, 1, DataLayout> real_part = complex_input.template fft<RealPart, FFT_FORWARD>(fft);
+  Tensor<RealScalar, 1, DataLayout> storage(n);
+  storage.setConstant(untouched);
+  TensorMap<Tensor<RealScalar, 1, DataLayout>> real_part_slice(storage.data(), n / 4);
+  real_part_slice = complex_input.template fft<RealPart, FFT_FORWARD>(fft).slice(first, count);
+  for (int i = 0; i < n / 4; ++i) {
+    VERIFY_IS_APPROX(real_part_slice(i), real_part(n / 4 + i));
+  }
+  for (int i = n / 4; i < n; ++i) {
+    VERIFY_IS_EQUAL(storage(i), untouched);
+  }
+
+  // A copy of n / 4 real coefficients would leave the second half of the slice as it was.
+  Tensor<Complex, 1, DataLayout> spectrum = real_input.template fft<BothParts, FFT_FORWARD>(fft);
+  Tensor<Complex, 1, DataLayout> spectrum_slice(n / 4);
+  spectrum_slice.setConstant(Complex(untouched, untouched));
+  spectrum_slice = real_input.template fft<BothParts, FFT_FORWARD>(fft).slice(first, count);
+  for (int i = 0; i < n / 4; ++i) {
+    VERIFY_IS_APPROX(spectrum_slice(i), spectrum(n / 4 + i));
+  }
+
+  Tensor<Complex, 1, DataLayout> nested_reference = real_part.template fft<BothParts, FFT_REVERSE>(fft);
+  Tensor<Complex, 1, DataLayout> nested =
+      complex_input.template fft<RealPart, FFT_FORWARD>(fft).eval().template fft<BothParts, FFT_REVERSE>(fft);
+  for (int i = 0; i < n; ++i) {
+    VERIFY_IS_APPROX(nested(i), nested_reference(i));
+  }
+}
+
 EIGEN_DECLARE_TEST(tensor_fft) {
   test_fft_complex_input_golden();
   test_fft_real_input_golden();
@@ -476,6 +552,11 @@ EIGEN_DECLARE_TEST(tensor_fft) {
   test_fft_in_place_assign<double>(64);
   test_fft_in_place_assign<double>(100);
 
+  test_fft_nested_in_argmax<ColMajor>(array<int, 1>{{1}});
+  test_fft_nested_in_argmax<RowMajor>(array<int, 1>{{1}});
+  test_fft_nested_in_argmax<ColMajor>(std::vector<int>{1, 0});
+  test_fft_nested_in_argmax<RowMajor>(std::vector<int>{1, 0});
+
   test_fft_large_impulse<float, ColMajor>();
   test_fft_large_impulse<double, ColMajor>();
   test_fft_large_impulse<float, RowMajor>();
@@ -484,4 +565,9 @@ EIGEN_DECLARE_TEST(tensor_fft) {
   test_chained_fft<RowMajor>();
   test_fft_non_power_of_2_accuracy<float>();
   test_fft_non_power_of_2_accuracy<double>();
+
+  test_fft_result_scalar<float, ColMajor>();
+  test_fft_result_scalar<double, ColMajor>();
+  test_fft_result_scalar<float, RowMajor>();
+  test_fft_result_scalar<double, RowMajor>();
 }

@@ -8,9 +8,13 @@
 // with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
 // SPDX-License-Identifier: MPL-2.0
 
+#define EIGEN_TEST_ANNOYING_SCALAR_DONT_THROW
+
 #include "main.h"
 
 #include <Eigen/Tensor>
+
+#include "AnnoyingScalar.h"
 
 using Eigen::Tensor;
 
@@ -398,6 +402,99 @@ static void test_custom_binary_op_exact_output_type() {
   verify_exact_output_type<DataLayout, EqualWidthIndex>();
 }
 
+struct AddOp {
+  template <typename Input>
+  DSizes<DenseIndex, 2> dimensions(const Input& input) const {
+    return input.dimensions();
+  }
+
+  template <typename Input, typename Output, typename Device>
+  void eval(const Input& input, Output& output, const Device& device) const {
+    output.device(device) = input + input;
+  }
+
+  template <typename Lhs, typename Rhs>
+  DSizes<DenseIndex, 2> dimensions(const Lhs& lhs, const Rhs&) const {
+    return lhs.dimensions();
+  }
+
+  template <typename Lhs, typename Rhs, typename Output, typename Device>
+  void eval(const Lhs& lhs, const Rhs& rhs, Output& output, const Device& device) const {
+    output.device(device) = lhs + rhs;
+  }
+};
+
+#ifdef EIGEN_EXCEPTIONS
+struct ThrowingAddOp : AddOp {
+  template <typename Input, typename Output, typename Device>
+  void eval(const Input& input, Output& output, const Device& device) const {
+    AddOp::eval(input, output, device);
+    throw std::runtime_error("custom op");
+  }
+
+  template <typename Lhs, typename Rhs, typename Output, typename Device>
+  void eval(const Lhs& lhs, const Rhs& rhs, Output& output, const Device& device) const {
+    AddOp::eval(lhs, rhs, output, device);
+    throw std::runtime_error("custom op");
+  }
+};
+
+// A functor that throws after it wrote the temporary result buffer: the evaluator must destruct and release it.
+template <int DataLayout>
+static void test_throwing_functor() {
+  Tensor<float, 2, DataLayout> values(5, 7);
+  values.setRandom();
+
+  AnnoyingScalar::instances = 0;
+  {
+    const Tensor<AnnoyingScalar, 2, DataLayout> a = values.template cast<AnnoyingScalar>();
+    Tensor<AnnoyingScalar, 2, DataLayout> result(5, 7);
+    int thrown = 0;
+    try {
+      result = a.customOp(ThrowingAddOp()) + a;
+    } catch (const std::runtime_error&) {
+      ++thrown;
+    }
+    try {
+      result = a.customOp(a, ThrowingAddOp()) + a;
+    } catch (const std::runtime_error&) {
+      ++thrown;
+    }
+    VERIFY_IS_EQUAL(thrown, 2);
+  }
+  VERIFY_IS_EQUAL(AnnoyingScalar::instances, 0);
+}
+#endif
+
+// A custom op nested in another expression evaluates into a temporary result buffer. For scalars that require
+// initialization, that buffer must be constructed before the functor assigns into it, and destructed afterwards.
+template <int DataLayout>
+static void test_scalar_require_initialization() {
+  Tensor<float, 2, DataLayout> lhs(5, 7);
+  Tensor<float, 2, DataLayout> rhs(5, 7);
+  lhs.setRandom();
+  rhs.setRandom();
+
+  AnnoyingScalar::instances = 0;
+  {
+    const Tensor<AnnoyingScalar, 2, DataLayout> a_lhs = lhs.template cast<AnnoyingScalar>();
+    const Tensor<AnnoyingScalar, 2, DataLayout> a_rhs = rhs.template cast<AnnoyingScalar>();
+
+    Tensor<AnnoyingScalar, 2, DataLayout> result = a_lhs.customOp(AddOp()) + a_rhs;
+    Tensor<float, 2, DataLayout> actual = result.template cast<float>();
+    for (Index i = 0; i < actual.size(); ++i) {
+      VERIFY_IS_APPROX(actual.data()[i], lhs.data()[i] + lhs.data()[i] + rhs.data()[i]);
+    }
+
+    result = a_lhs.customOp(a_rhs, AddOp()) + a_rhs;
+    actual = result.template cast<float>();
+    for (Index i = 0; i < actual.size(); ++i) {
+      VERIFY_IS_APPROX(actual.data()[i], lhs.data()[i] + rhs.data()[i] + rhs.data()[i]);
+    }
+  }
+  VERIFY_IS_EQUAL(AnnoyingScalar::instances, 0);
+}
+
 EIGEN_DECLARE_TEST(tensor_custom_op) {
   CALL_SUBTEST(test_custom_unary_op());
   CALL_SUBTEST(test_custom_binary_op());
@@ -413,4 +510,10 @@ EIGEN_DECLARE_TEST(tensor_custom_op) {
   CALL_SUBTEST(test_custom_binary_op_custom_index<RowMajor>());
   CALL_SUBTEST(test_custom_binary_op_exact_output_type<ColMajor>());
   CALL_SUBTEST(test_custom_binary_op_exact_output_type<RowMajor>());
+  CALL_SUBTEST(test_scalar_require_initialization<ColMajor>());
+  CALL_SUBTEST(test_scalar_require_initialization<RowMajor>());
+#ifdef EIGEN_EXCEPTIONS
+  CALL_SUBTEST(test_throwing_functor<ColMajor>());
+  CALL_SUBTEST(test_throwing_functor<RowMajor>());
+#endif
 }

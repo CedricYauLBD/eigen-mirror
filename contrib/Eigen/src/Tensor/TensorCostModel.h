@@ -183,8 +183,9 @@ class TensorCostModel {
     double per_coeff = numext::maxi(mem, comp);
     double total = output_size * per_coeff;
 
-    // Not enough total work to justify thread pool dispatch.
-    if (total < kStartupCycles) return 1;
+    // Not enough total work to justify thread pool dispatch. Negated so that a
+    // NaN cost also returns here instead of reaching the int conversion below.
+    if (!(total >= kStartupCycles)) return 1;
 
     // Each thread needs at least kPerThreadCycles of work to
     // amortize dispatch and synchronization overhead.

@@ -788,7 +788,7 @@ struct TensorEvaluator<const TensorStridingSlicingOp<StartIndices, StopIndices, 
     PacketAccess = TensorEvaluator<ArgType, Device>::PacketAccess,
     // Blocks are materialized from the nested evaluator's raw buffer with one
     // (possibly strided or reversed) line copy per inner run.
-    BlockAccess = TensorEvaluator<ArgType, Device>::RawAccess,
+    BlockAccess = TensorEvaluator<ArgType, Device>::RawAccess && internal::is_block_materializable<Scalar>::value,
     PreferBlockAccess = true,
     RawAccess = false
   };
@@ -1070,7 +1070,8 @@ struct TensorEvaluator<TensorStridingSlicingOp<StartIndices, StopIndices, Stride
     PacketAccess = TensorEvaluator<ArgType, Device>::PacketAccess,
     // Blocks are scattered into the nested evaluator's raw buffer with one
     // (possibly strided or reversed) line copy per inner run.
-    BlockAccess = TensorEvaluator<ArgType, Device>::RawAccess,
+    BlockAccess = TensorEvaluator<ArgType, Device>::RawAccess &&
+                  internal::is_block_materializable<typename XprType::Scalar>::value,
     PreferBlockAccess = true,
     CoordAccess = TensorEvaluator<ArgType, Device>::CoordAccess,
     RawAccess = false

@@ -261,7 +261,7 @@ class Tensor : public TensorBase<Tensor<Scalar_, NumIndices_, Options_, IndexTyp
 
   /** Normal Dimension */
   EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE explicit Tensor(const array<Index, NumIndices>& dimensions)
-      : m_storage(internal::array_prod(dimensions), dimensions) {
+      : m_storage(internal::checked_array_prod(dimensions), dimensions) {
     EIGEN_INITIALIZE_COEFFS_IF_THAT_OPTION_IS_ENABLED
   }
 
@@ -300,8 +300,15 @@ class Tensor : public TensorBase<Tensor<Scalar_, NumIndices_, Options_, IndexTyp
   EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE Tensor& operator=(const OtherDerived& other) {
     using Assign = TensorAssignOp<Tensor, const OtherDerived>;
     Assign assign(*this, other);
-    resize(TensorEvaluator<const Assign, DefaultDevice>(assign, DefaultDevice()).dimensions());
-    internal::TensorExecutor<const Assign, DefaultDevice>::run(assign, DefaultDevice());
+    if (dimensions_match(dimensions(),
+                         TensorEvaluator<const Assign, DefaultDevice>(assign, DefaultDevice()).dimensions())) {
+      internal::TensorExecutor<const Assign, DefaultDevice>::run(assign, DefaultDevice());
+    } else {
+      // The expression may read *this, as in a = a.concatenate(b, 0).eval(), so it is evaluated into a separate
+      // tensor before *this gives up its dimensions and data.
+      Tensor result(other);
+      m_storage.swap(result.m_storage);
+    }
     return *this;
   }
 
@@ -315,15 +322,7 @@ class Tensor : public TensorBase<Tensor<Scalar_, NumIndices_, Options_, IndexTyp
 
   /** Normal Dimension */
   EIGEN_DEVICE_FUNC void resize(const array<Index, NumIndices>& dimensions) {
-#ifndef EIGEN_NO_DEBUG
-    Index size = Index(1);
-    for (int i = 0; i < NumIndices; i++) {
-      internal::check_rows_cols_for_overflow<Dynamic, Dynamic, Dynamic>::run(size, dimensions[i]);
-      size *= dimensions[i];
-    }
-#else
-    Index size = internal::array_prod(dimensions);
-#endif
+    Index size = internal::checked_array_prod(dimensions);
 
 #ifdef EIGEN_INITIALIZE_COEFFS
     bool size_changed = size != this->size();

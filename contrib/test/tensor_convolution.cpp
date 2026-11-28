@@ -134,6 +134,32 @@ static void test_strides() {
   VERIFY_IS_APPROX(result(1), (input(6) * kernel(0) + input(9) * kernel(1) + input(12) * kernel(2)));
 }
 
+template <int DataLayout>
+static void test_rank0_kernel() {
+  // A rank-0 kernel convolves no dimension: it scales the input and keeps its shape.
+  Tensor<float, 0, DataLayout> kernel;
+  kernel.setRandom();
+  Eigen::array<ptrdiff_t, 0> dims;
+
+  // 35 coefficients: whole packets and a scalar tail.
+  Tensor<float, 2, DataLayout> input(5, 7);
+  input.setRandom();
+  Tensor<float, 2, DataLayout> result = input.convolve(kernel, dims);
+  VERIFY_IS_EQUAL(result.dimension(0), 5);
+  VERIFY_IS_EQUAL(result.dimension(1), 7);
+  for (int i = 0; i < 5; ++i) {
+    for (int j = 0; j < 7; ++j) {
+      VERIFY_IS_APPROX(result(i, j), input(i, j) * kernel());
+    }
+  }
+
+  // A rank-0 input has no strides either.
+  Tensor<float, 0, DataLayout> scalar;
+  scalar.setRandom();
+  Tensor<float, 0, DataLayout> scaled = scalar.convolve(kernel, dims);
+  VERIFY_IS_APPROX(scaled(), scalar() * kernel());
+}
+
 EIGEN_DECLARE_TEST(tensor_convolution) {
   CALL_SUBTEST(test_evals<ColMajor>());
   CALL_SUBTEST(test_evals<RowMajor>());
@@ -143,4 +169,6 @@ EIGEN_DECLARE_TEST(tensor_convolution) {
   CALL_SUBTEST(test_modes<RowMajor>());
   CALL_SUBTEST(test_strides<ColMajor>());
   CALL_SUBTEST(test_strides<RowMajor>());
+  CALL_SUBTEST(test_rank0_kernel<ColMajor>());
+  CALL_SUBTEST(test_rank0_kernel<RowMajor>());
 }

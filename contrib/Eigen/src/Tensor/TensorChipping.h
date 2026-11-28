@@ -202,7 +202,7 @@ struct TensorEvaluator<const TensorChippingOp<DimId, ArgType>, Device> {
     // slice offsets.
     IsAligned = false,
     PacketAccess = TensorEvaluator<ArgType, Device>::PacketAccess,
-    BlockAccess = TensorEvaluator<ArgType, Device>::BlockAccess,
+    BlockAccess = TensorEvaluator<ArgType, Device>::BlockAccess && internal::is_block_materializable<Scalar>::value,
     // Chipping of outer-most dimension is a trivial operation, because we can
     // read and write directly from the underlying tensor using a single offset.
     IsOuterChipping = (Layout == ColMajor && DimId == NumInputDims - 1) || (Layout == RowMajor && DimId == 0),
