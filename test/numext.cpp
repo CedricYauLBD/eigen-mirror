@@ -1184,9 +1184,12 @@ void check_complex_divide_ties_and_zero_signs() {
 #if EIGEN_COMP_MSVC
 #pragma float_control(precise, on, push)
 #pragma fenv_access(on)
-#elif EIGEN_COMP_CLANG && (EIGEN_ARCH_i386_OR_x86_64 || (EIGEN_ARCH_ARM64 && EIGEN_COMP_CLANG >= 1600)) && \
+#elif EIGEN_COMP_CLANG &&                                                         \
+    (EIGEN_ARCH_i386_OR_x86_64 || (EIGEN_ARCH_PPC && EIGEN_COMP_CLANG >= 1200) || \
+     (EIGEN_ARCH_ARM64 && EIGEN_COMP_CLANG >= 1600)) &&                           \
     !defined(__GPUCC__) && !defined(__SYCL_DEVICE_ONLY__)
-// AArch64 strict floating-point support was enabled in Clang 16.
+// Strict floating-point support was enabled in Clang 12 for PowerPC and in Clang 16 for AArch64.
+// On PowerPC, Clang otherwise multiplies an unused vector lane in the bfloat16 fma, where inf * 0 raises FE_INVALID.
 #pragma STDC FENV_ACCESS ON
 #endif
 
@@ -1300,7 +1303,9 @@ void check_narrow_fma_nonfinite() {
 #if EIGEN_COMP_MSVC
 #pragma fenv_access(off)
 #pragma float_control(pop)
-#elif EIGEN_COMP_CLANG && (EIGEN_ARCH_i386_OR_x86_64 || (EIGEN_ARCH_ARM64 && EIGEN_COMP_CLANG >= 1600)) && \
+#elif EIGEN_COMP_CLANG &&                                                         \
+    (EIGEN_ARCH_i386_OR_x86_64 || (EIGEN_ARCH_PPC && EIGEN_COMP_CLANG >= 1200) || \
+     (EIGEN_ARCH_ARM64 && EIGEN_COMP_CLANG >= 1600)) &&                           \
     !defined(__GPUCC__) && !defined(__SYCL_DEVICE_ONLY__)
 #pragma STDC FENV_ACCESS OFF
 #endif
