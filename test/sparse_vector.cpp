@@ -157,11 +157,18 @@ void sparse_vector(int rows, int cols) {
       DenseVector refVec1 = DenseVector::Zero(rows);
       initSparse<Scalar>(densityVec, refVec1, vec1);
 
+      // The indices need not be sorted.
+      SparseVectorType vec2 = vec1;
+      vec2.template sortInnerIndices<std::greater<>>();
+
       vec1.conservativeResize(rows + incRows);
+      vec2.conservativeResize(rows + incRows);
       refVec1.conservativeResize(rows + incRows);
       if (incRows > 0) refVec1.tail(incRows).setZero();
 
       VERIFY_IS_APPROX(vec1, refVec1);
+      vec2.sortInnerIndices();
+      VERIFY_IS_APPROX(vec2, refVec1);
 
       // Insert new values
       if (incRows > 0) vec1.insert(vec1.rows() - 1) = refVec1(refVec1.rows() - 1) = 1;

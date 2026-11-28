@@ -305,11 +305,16 @@ class BlockSparseMatrix
   // -------------------------------------------------------------------------
 
   /** Resize to \a blockRows × \a blockCols blocks and set the logical nnz to zero.
-   *  Allocated block storage is retained; call squeeze() to release it. */
+   *  Allocated block storage is retained; call squeeze() to release it.
+   *  If the allocation throws, the matrix keeps its previous dimensions and has no stored blocks. */
   void resize(Index blockRows, Index blockCols) {
-    m_blockOuterSize = IsRowMajor ? blockRows : blockCols;
+    const Index blockOuterSize = IsRowMajor ? blockRows : blockCols;
+    // Drop the blocks, reallocate, then record the dimensions. conservativeResize() keeps the array if the allocation
+    // throws, whereas resize() releases it first, so m_outerIndex.size() == m_blockOuterSize + 1 holds either way.
+    m_outerIndex.setZero();
+    m_outerIndex.conservativeResize(blockOuterSize + 1);
+    m_blockOuterSize = blockOuterSize;
     m_blockInnerSize = IsRowMajor ? blockCols : blockRows;
-    m_outerIndex.resize(m_blockOuterSize + 1);
     m_outerIndex.setZero();
   }
 

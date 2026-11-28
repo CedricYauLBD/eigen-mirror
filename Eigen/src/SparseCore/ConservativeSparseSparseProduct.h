@@ -106,9 +106,16 @@ static void conservative_sparse_sparse_product_impl(const Lhs& lhs, const Rhs& r
   res.finalize();
 }
 
-// Helper template to generate new sparse matrix types
+// Helper template to generate new sparse matrix types.
+// A copy in the other storage order stores the outer positions of Source as inner indices, and StorageIndex bounds
+// the stored indices of Source, not its outer dimension. A copy with a StorageIndex narrower than int therefore
+// stores Index. Wider index types are kept: outgrowing them takes an outer index array of 8 GiB or more.
 template <class Source, int Order>
-using WithStorageOrder = SparseMatrix<typename Source::Scalar, Order, typename Source::StorageIndex>;
+using WithStorageOrder =
+    SparseMatrix<typename Source::Scalar, Order,
+                 std::conditional_t<(((traits<Source>::Flags & RowMajorBit) ? RowMajor : ColMajor) != Order) &&
+                                        (sizeof(typename Source::StorageIndex) < sizeof(int)),
+                                    Index, typename Source::StorageIndex>>;
 
 template <typename Lhs, typename Rhs, typename ResultType,
           int LhsStorageOrder = (traits<Lhs>::Flags & RowMajorBit) ? RowMajor : ColMajor,

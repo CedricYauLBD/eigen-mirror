@@ -342,6 +342,135 @@ void check_storage_order_change_from_storage() {
   }
 }
 
+// A sparse expression can have more coefficients than Index can count, so the non-zero estimate of a block must not
+// be computed from size(). Below, n is the number of bits of Index.
+void check_block_nonzeros_estimate() {
+  using MatrixType = SparseMatrix<double, ColMajor, Index>;
+  auto estimate = [](const auto& xpr) {
+    return internal::evaluator<std::decay_t<decltype(xpr)>>(xpr).nonZerosEstimate();
+  };
+  const Index quarter = Index(1) << (8 * sizeof(Index) - 2);
+
+  // A.size() == 2^n wraps to 0.
+  MatrixType A(quarter / 2, 8);
+  for (Index j = 0; j < 8; ++j) A.insert(A.rows() - 1 - j, j) = double(j + 1);
+  A.makeCompressed();
+  VERIFY_IS_EQUAL(estimate(A.block(0, 2, A.rows(), 4)), Index(4));
+  VERIFY_IS_EQUAL(estimate(A.block(0, 0, A.rows(), 8)), Index(8));
+  const auto At = A.transpose();
+  VERIFY_IS_EQUAL(estimate(At.block(2, 0, 4, A.rows())), Index(4));
+
+  // B.size() == 2^n - 1 wraps to -1 and the block's size() == 2^(n-1) to the lowest Index: their quotient traps.
+  MatrixType B(NumTraits<Index>::highest() / 3 * 2 + 1, 3);
+  for (Index j = 0; j < 3; ++j) B.insert(j, j) = 1;
+  VERIFY_IS_EQUAL(estimate(B.topLeftCorner(quarter, 2)), Index(1));  // 3 * 2^(n-1) / (2^n - 1)
+
+  // A block of an empty expression has no non-zeros.
+  SparseMatrix<double> E(0, 3);
+  VERIFY_IS_EQUAL(estimate(E.block(0, 1, 0, 2)), Index(0));
+}
+
+// The vector across the inner vectors: a row of a column-major matrix, a column of a row-major one.
+template <typename T, std::enable_if_t<(T::Flags & RowMajorBit) != 0, int> = 0>
+auto outervec(T& matrix, Index index) -> decltype(matrix.col(index)) {
+  return matrix.col(index);
+}
+
+template <typename T, std::enable_if_t<(T::Flags & RowMajorBit) == 0, int> = 0>
+auto outervec(T& matrix, Index index) -> decltype(matrix.row(index)) {
+  return matrix.row(index);
+}
+
+// A short StorageIndex bounds the stored inner indices and the number of entries, not the outer dimension. Blocks
+// must address outer vectors past its range, and the indices of a vector across them exceed it.
+template <int Options>
+void check_blocks_past_narrow_index_range() {
+  using SpMat = SparseMatrix<double, Options, short>;
+  using DenseMat = Matrix<double, Dynamic, Dynamic, Options>;
+  const Index highest = NumTraits<short>::highest();
+  const Index n = 2 * highest + 1000;
+  // As a short, the second outer index is -1 and the third one is 5, the first.
+  const Index outers[] = {5, 2 * highest + 1, 2 * highest + 7, n - 1};
+  SpMat m(SpMat::IsRowMajor ? n : 4, SpMat::IsRowMajor ? 4 : n);
+  DenseMat ref = DenseMat::Zero(m.rows(), m.cols());
+  // Inner index 0 is stored in every other vector, so that two vectors across differ in pattern.
+  for (Index k = 0; k < 4; ++k)
+    for (Index inner = k % 2; inner < 4; ++inner) {
+      const double value = double(10 * k + inner + 1);
+      insert_by_outer(m, outers[k], inner) = value;
+      (SpMat::IsRowMajor ? ref(outers[k], inner) : ref(inner, outers[k])) = value;
+    }
+  const VectorXd weights = VectorXd::LinSpaced(n, 1.0, double(n));
+  SparseVector<double, Options, short> replacement(4);
+  replacement.insert(0) = 7.0;
+
+  for (int compressed = 0; compressed < 2; ++compressed) {
+    if (compressed) m.makeCompressed();
+    auto map = make_map(m);
+
+    // Inner vectors and inner panels, of a matrix and of a compressed expression.
+    VERIFY_IS_EQUAL(innerpanel(m, 1, n - 1).outerSize(), n - 1);
+    VERIFY_IS_EQUAL(innerpanel(m, 6, n - 6).nonZeros(), (innerpanel(ref, 6, n - 6).array() != 0.0).count());
+    VERIFY_IS_APPROX(innerpanel(m, 6, n - 6), innerpanel(ref, 6, n - 6));
+    for (Index k = 0; k < 4; ++k) {
+      VERIFY_IS_EQUAL(innervec(m, outers[k]).nonZeros(), (innervec(ref, outers[k]).array() != 0.0).count());
+      VERIFY_IS_APPROX(innervec(m, outers[k]), innervec(ref, outers[k]));
+      VERIFY_IS_APPROX(innervec(map, outers[k]), innervec(ref, outers[k]));
+      VERIFY_IS_APPROX(innerpanel(m, outers[k] - 2, 3), innerpanel(ref, outers[k] - 2, 3));
+      VERIFY_IS_APPROX(innerpanel(map, outers[k] - 2, 3), innerpanel(ref, outers[k] - 2, 3));
+    }
+
+    // A vector across the inner vectors, read through row()/col() and through index().
+    VERIFY_IS_APPROX(outervec(m, 2), outervec(ref, 2));
+    VERIFY_IS_APPROX(outervec(map, 2), outervec(ref, 2));
+    VERIFY_IS_EQUAL(outervec(m, 2).dot(weights), outervec(ref, 2).dot(weights));
+    VERIFY_IS_APPROX(outervec(m, 2).tail(highest), outervec(ref, 2).tail(highest));
+    VERIFY_IS_EQUAL(outervec(m, 2).tail(highest).dot(weights.tail(highest)),
+                    outervec(ref, 2).tail(highest).dot(weights.tail(highest)));
+    // Expressions of such vectors pass these indices on.
+    VERIFY_IS_APPROX(outervec(m, 0) + outervec(m, 3), outervec(ref, 0) + outervec(ref, 3));
+    VERIFY_IS_EQUAL((outervec(m, 0) + outervec(m, 3)).dot(weights), (outervec(ref, 0) + outervec(ref, 3)).dot(weights));
+    VERIFY_IS_APPROX(outervec(m, 0).cwiseProduct(outervec(m, 3)), outervec(ref, 0).cwiseProduct(outervec(ref, 3)));
+    VERIFY_IS_EQUAL(outervec(m, 0).cwiseProduct(outervec(m, 3)).dot(weights),
+                    outervec(ref, 0).cwiseProduct(outervec(ref, 3)).dot(weights));
+    if (SpMat::IsRowMajor) {
+      VERIFY_IS_APPROX(weights.asDiagonal() * m.col(2), weights.asDiagonal() * ref.col(2));
+    } else {
+      VERIFY_IS_APPROX(m.row(2) * weights.asDiagonal(), ref.row(2) * weights.asDiagonal());
+    }
+    // This triangular view keeps the whole vector.
+    VERIFY_IS_APPROX(outervec(m, 2).template triangularView < SpMat::IsRowMajor ? Lower : Upper > ().toDense(),
+                     outervec(ref, 2));
+
+    // A generic block that starts past the range.
+    const Index start = outers[1] - 1;
+    VERIFY_IS_APPROX(SpMat::IsRowMajor ? m.block(start, 1, 8, 3) : m.block(1, start, 3, 8),
+                     SpMat::IsRowMajor ? ref.block(start, 1, 8, 3) : ref.block(1, start, 3, 8));
+
+    // Sparse destinations that can hold these indices: a wider index type, or the same one as outer positions.
+    VERIFY_IS_APPROX((SparseMatrix<double, ColMajor, int>(outervec(m, 3))), outervec(ref, 3));
+    VERIFY_IS_APPROX((SparseMatrix<double, RowMajor, int>(outervec(m, 3))), outervec(ref, 3));
+    VERIFY_IS_APPROX(SpMat(outervec(m, 3)), outervec(ref, 3));
+
+    // Writing an inner vector past the range must leave alone the vector that its narrowed index names.
+    const Index target = outers[1 + compressed];
+    m.innerVector(target) = replacement;
+    innervec(ref, target) = replacement.toDense();
+    VERIFY_IS_EQUAL(m.nonZeros(), (ref.array() != 0.0).count());
+    VERIFY_IS_APPROX(m, ref);
+  }
+
+  // The unit diagonal of a triangular view lies at outer positions as well.
+  SpMat square(n, n);
+  insert_by_outer(square, outers[1], 3) = 2.0;
+  const SparseMatrix<double, Options, int> unit =
+      square.template triangularView < SpMat::IsRowMajor ? UnitLower : UnitUpper > ();
+  VERIFY_IS_EQUAL(unit.nonZeros(), n + 1);
+  VectorXd expected = weights;
+  expected(SpMat::IsRowMajor ? outers[1] : 3) += 2.0 * weights(SpMat::IsRowMajor ? 3 : outers[1]);
+  VERIFY_IS_EQUAL(VectorXd(unit * weights), expected);
+}
+
 template <typename SparseMatrixType>
 void sparse_block(const SparseMatrixType& ref) {
   const Index rows = ref.rows();
@@ -622,6 +751,7 @@ EIGEN_DECLARE_TEST(sparse_block) {
     CALL_SUBTEST_1((sparse_block(SparseMatrix<double>(1, 1))));
     CALL_SUBTEST_1(check_one_by_one_blocks());
     CALL_SUBTEST_1(check_aliased_inner_panel_assignment());
+    CALL_SUBTEST_1(check_block_nonzeros_estimate());
     CALL_SUBTEST_1(check_inner_panel_assignment_from_uncompressed<ColMajor>());
     CALL_SUBTEST_1(check_inner_panel_assignment_from_uncompressed<RowMajor>());
     CALL_SUBTEST_1(check_storage_order_change_from_storage<ColMajor>());
@@ -648,4 +778,6 @@ EIGEN_DECLARE_TEST(sparse_block) {
     CALL_SUBTEST_5((sparse_block(SparseMatrix<AnnoyingScalar>(r, c))));
     CALL_SUBTEST_6(check_inner_panel_compressed_api());
   }
+  CALL_SUBTEST_4(check_blocks_past_narrow_index_range<ColMajor>());
+  CALL_SUBTEST_4(check_blocks_past_narrow_index_range<RowMajor>());
 }

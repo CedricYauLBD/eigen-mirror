@@ -200,6 +200,78 @@ void verify_threaded_scatter_ieee754() {
   Eigen::setNbThreads(prev_threads);
 }
 
+// As strictly aligned as Eigen's dynamic storage: with AVX or wider packets this is more than std::allocator provides
+// before C++17. Construction checks it. The 128-byte variant is beyond Eigen's own alignment, so the stack accumulator
+// of the reduction needs the scalar's alignment, which an alignas() of Eigen's weaker alignment would contradict; the
+// scalar's storage in Eigen's containers is then not checked.
+template <int Align>
+struct alignas(Align) OverAlignedScalarT {
+  double value;
+  static void check(const OverAlignedScalarT* p) {
+    if (Align <= EIGEN_DEFAULT_ALIGN_BYTES) VERIFY(std::uintptr_t(p) % alignof(OverAlignedScalarT) == 0);
+  }
+  OverAlignedScalarT(double v = 0) : value(v) { check(this); }
+  OverAlignedScalarT(const OverAlignedScalarT& other) : value(other.value) { check(this); }
+  OverAlignedScalarT& operator=(const OverAlignedScalarT&) = default;
+  OverAlignedScalarT& operator+=(const OverAlignedScalarT& other) {
+    value += other.value;
+    return *this;
+  }
+  friend OverAlignedScalarT operator*(const OverAlignedScalarT& a, const OverAlignedScalarT& b) {
+    return a.value * b.value;
+  }
+};
+using OverAlignedScalar = OverAlignedScalarT<EIGEN_DEFAULT_ALIGN_BYTES>;
+using WiderAlignedScalar = OverAlignedScalarT<128>;
+
+namespace Eigen {
+// The threaded kernel is reserved for scalars whose product is known to commute.
+template <int Align>
+struct ScalarBinaryOpTraits<OverAlignedScalarT<Align>, OverAlignedScalarT<Align>> {
+  using ReturnType = OverAlignedScalarT<Align>;
+  static constexpr bool IsCommutative = true;
+};
+}  // namespace Eigen
+
+// The per-thread accumulators of the ColMajor SpMV OMP scatter/reduce path
+// hold result scalars, so they must be aligned as the result itself is.
+template <typename Scalar>
+void verify_threaded_scatter_overaligned() {
+  STATIC_CHECK((internal::functor_is_commutative<internal::scalar_product_op<Scalar> >::value));
+  const int prev_threads = Eigen::nbThreads();
+  Eigen::setNbThreads(4);
+
+  // 4 entries per column -> 32768 nnz: above the 20000-nnz threshold and, for
+  // up to 4 threads, at least threads*m for the gate. The accumulators are
+  // then large enough for glibc to map them separately, 16 bytes past a page
+  // boundary: misaligned unless the allocator sees to it.
+  const Index n = 8192, nnz_per_col = 4;
+  SparseMatrix<Scalar, ColMajor> A(n, n);
+  A.reserve(VectorXi::Constant(n, int(nnz_per_col)));
+  VectorXd x_ref(n), y_ref = VectorXd::Zero(n);
+  for (Index j = 0; j < n; ++j) {
+    x_ref[j] = double(j % 7 + 1);
+    for (Index k = 0; k < nnz_per_col; ++k) {
+      const Index i = (j + k * k) % n;
+      A.insert(i, j) = Scalar(double(k + 1));
+      y_ref[i] += double(k + 1) * x_ref[j];
+    }
+  }
+  A.makeCompressed();
+  VERIFY(A.nonZeros() > 20000);
+
+  Matrix<Scalar, Dynamic, 1> x(n);
+  for (Index j = 0; j < n; ++j) x[j] = Scalar(x_ref[j]);
+  // Twice: the second product reuses the accumulators, which the first one
+  // must have left zeroed.
+  for (int pass = 0; pass < 2; ++pass) {
+    const Matrix<Scalar, Dynamic, 1> y = A * x;
+    for (Index i = 0; i < n; ++i) VERIFY_IS_EQUAL(y[i].value, y_ref[i]);
+  }
+
+  Eigen::setNbThreads(prev_threads);
+}
+
 template <typename Scalar>
 void run_grid() {
   using Vec = Matrix<Scalar, Dynamic, 1>;
@@ -224,6 +296,29 @@ void run_grid() {
   }
 }
 
+// The partition targets are floor(t * nnz / chunks), computed without forming the product t * nnz, which can overflow
+// Index. Compare with the product formed in long long, on an outer index array with one entry per outer vector.
+void verify_nnz_balanced_partition() {
+  for (Index totalNnz : {Index(1), Index(7), Index(1000), Index(123457), Index(1) << 30}) {
+    for (int chunks : {2, 3, 7, 64, 1000, 46341}) {
+      // outer[i] = i * totalNnz / outerSize: the entries are spread evenly over the outer vectors.
+      const Index outerSize = numext::mini<Index>(totalNnz, 200000);
+      std::vector<long long> outer(outerSize + 1);
+      for (Index i = 0; i <= outerSize; ++i) outer[i] = ((long long)i * totalNnz) / outerSize;
+      std::vector<Index> boundaries;
+      internal::compute_nnz_balanced_partition(outer.data(), outerSize, totalNnz, chunks, boundaries);
+      VERIFY_IS_EQUAL(Index(boundaries.size()), Index(chunks) + 1);
+      VERIFY_IS_EQUAL(boundaries[0], Index(0));
+      VERIFY_IS_EQUAL(boundaries[chunks], outerSize);
+      for (int t = 1; t < chunks; ++t) {
+        const long long target = ((long long)t * totalNnz) / chunks;
+        const Index expected = std::lower_bound(outer.begin(), outer.end(), target) - outer.begin();
+        VERIFY_IS_EQUAL(boundaries[t], expected);
+      }
+    }
+  }
+}
+
 EIGEN_DECLARE_TEST(sparse_threaded_product) {
   for (int i = 0; i < g_repeat; ++i) {
     CALL_SUBTEST_1(run_grid<float>());
@@ -231,5 +326,8 @@ EIGEN_DECLARE_TEST(sparse_threaded_product) {
     CALL_SUBTEST_3(run_grid<std::complex<double> >());
     CALL_SUBTEST_4(verify_threaded_scatter_ieee754<double>());
     CALL_SUBTEST_4(verify_threaded_scatter_ieee754<float>());
+    CALL_SUBTEST_4(verify_threaded_scatter_overaligned<OverAlignedScalar>());
+    CALL_SUBTEST_4(verify_threaded_scatter_overaligned<WiderAlignedScalar>());
+    CALL_SUBTEST_5(verify_nnz_balanced_partition());
   }
 }

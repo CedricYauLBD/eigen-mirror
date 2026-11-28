@@ -59,6 +59,7 @@ class CompressedStorage {
   }
 
   void reserve(Index size) {
+    if (size > NumTraits<Index>::highest() - m_size) internal::throw_std_bad_alloc();
     Index newAllocatedSize = m_size + size;
     if (newAllocatedSize > m_allocatedSize) reallocate(newAllocatedSize);
   }

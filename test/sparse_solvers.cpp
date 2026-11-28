@@ -296,6 +296,41 @@ void sparse_triangular_solve_rhs_order() {
   }
 }
 
+// The sparse triangular solve of a sparse rhs carves its index workspace out of one vector of 2 * n entries, or of
+// 3 * n if the StorageIndex of the rhs differs from that of the factor. A count that does not fit Index must be refused
+// with std::bad_alloc before anything is allocated: 3 * n can wrap to a small non-negative size. The rhs is empty, so
+// that nothing of size n is accessed.
+template <typename RhsStorageIndex>
+bool sparse_triangular_solve_throws_bad_alloc(Index n) {
+#ifdef EIGEN_EXCEPTIONS
+  SparseMatrix<double> lhs(1, 1);
+  lhs.insert(0, 0) = 1.0;
+  lhs.makeCompressed();
+  SparseMatrix<double, ColMajor, RhsStorageIndex> rhs(1, 1), res(1, 1);
+  uint8_t mark = 0;
+  double xwork = 0.0;
+  try {
+    internal::reach_solve_columns<false, false>(lhs, rhs, res, &mark, &xwork, n);
+  } catch (const std::bad_alloc&) {
+    return true;
+  }
+  return false;
+#else
+  EIGEN_UNUSED_VARIABLE(n);
+  return true;
+#endif
+}
+
+template <typename = void>
+void sparse_triangular_solve_workspace_overflow() {
+  const Index highest = NumTraits<Index>::highest();
+  // same StorageIndex as the factor: 2 * n entries
+  for (Index n : {highest / 2 + 1, highest}) VERIFY(sparse_triangular_solve_throws_bad_alloc<int>(n));
+  // another StorageIndex: 3 * n entries; three times highest / 3 * 2 + 2 wraps to 2
+  for (Index n : {highest / 3 + 1, highest / 3 * 2 + 2, highest})
+    VERIFY(sparse_triangular_solve_throws_bad_alloc<std::int64_t>(n));
+}
+
 EIGEN_DECLARE_TEST(sparse_solvers) {
   for (int i = 0; i < g_repeat; i++) {
     CALL_SUBTEST_1((sparse_triangular_solve_rhs_order<double, ColMajor>()));
@@ -306,4 +341,5 @@ EIGEN_DECLARE_TEST(sparse_solvers) {
     CALL_SUBTEST_2(sparse_solvers<std::complex<double> >(s, s));
     CALL_SUBTEST_1(sparse_solvers<double>(s, s));
   }
+  CALL_SUBTEST_1(sparse_triangular_solve_workspace_overflow());
 }
