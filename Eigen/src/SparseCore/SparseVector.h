@@ -463,6 +463,8 @@ struct sparse_vector_assign_selector<Dest, Src, SVA_RuntimeSwitch> {
 
 // Specialization for SparseVector.
 // Serializes [size, numNonZeros, innerIndices, values].
+// deserialize() returns sorted inner indices, so an unsorted vector does not round-trip byte for byte, and rejects a
+// repeated inner index.
 template <typename Scalar, int Options, typename StorageIndex>
 class Serializer<SparseVector<Scalar, Options, StorageIndex>, void> {
  public:
@@ -499,6 +501,7 @@ class Serializer<SparseVector<Scalar, Options, StorageIndex>, void> {
     if (data_bytes != 0) {
       memcpy(dest, value.valuePtr(), data_bytes);
     }
+    internal::clear_serialized_padding<Scalar>(dest, data_bytes);
     dest += data_bytes;
 
     return dest;
@@ -517,6 +520,7 @@ class Serializer<SparseVector<Scalar, Options, StorageIndex>, void> {
     // The header is untrusted: check the sizes before allocating, and every inner index after copying.
     if (EIGEN_PREDICT_FALSE(header.size < 0 || header.num_non_zeros < 0 ||
                             header.num_non_zeros > NumTraits<StorageIndex>::highest() ||
+                            header.num_non_zeros > header.size ||
                             static_cast<numext::uint64_t>(header.num_non_zeros) >
                                 static_cast<numext::uint64_t>(end - src) / (sizeof(StorageIndex) + sizeof(Scalar))))
       return nullptr;
@@ -534,15 +538,33 @@ class Serializer<SparseVector<Scalar, Options, StorageIndex>, void> {
 
     // Values.
     data_bytes = sizeof(Scalar) * header.num_non_zeros;
+    if (EIGEN_PREDICT_FALSE(!internal::valid_serialized_values<Scalar>(src, header.num_non_zeros))) {
+      value.resize(0);
+      return nullptr;
+    }
     if (data_bytes != 0) {
       memcpy(value.valuePtr(), src, data_bytes);
     }
     src += data_bytes;
 
+    bool ordered = true;
     for (Index k = 0; k < header.num_non_zeros; ++k) {
-      if (EIGEN_PREDICT_FALSE(value.innerIndexPtr()[k] < 0 || value.innerIndexPtr()[k] >= header.size)) {
+      const StorageIndex idx = value.innerIndexPtr()[k];
+      if (EIGEN_PREDICT_FALSE(idx < 0 || idx >= header.size)) {
         value.resize(0);
         return nullptr;
+      }
+      if (k > 0 && idx <= value.innerIndexPtr()[k - 1]) ordered = false;
+    }
+    // As for SparseMatrix: the rest of the API relies on sorted inner indices without duplicates. Sort an unsorted
+    // vector; a repeated inner index is a parsing error.
+    if (EIGEN_PREDICT_FALSE(!ordered)) {
+      if (value.innerIndicesAreSorted() != value.outerSize()) value.sortInnerIndices();
+      for (Index k = 1; k < header.num_non_zeros; ++k) {
+        if (EIGEN_PREDICT_FALSE(value.innerIndexPtr()[k] == value.innerIndexPtr()[k - 1])) {
+          value.resize(0);
+          return nullptr;
+        }
       }
     }
     return src;
